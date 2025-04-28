@@ -1,20 +1,23 @@
-# dashboard_api.py
+# ✅ dashboard_api.py — FastAPI version
+
 from fastapi import APIRouter, HTTPException
 from db import get_db_connection
 import logging
 
 router = APIRouter()
+
+# ✅ Logger
 logger = logging.getLogger(__name__)
 
 @router.get("/api/dashboard_data")
 async def get_dashboard_data():
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
+        raise HTTPException(status_code=500, detail="Database connection failed.")
 
     try:
         with conn.cursor() as cur:
-            # ✅ Market data ophalen
+            # ✅ Fetch latest Market Data
             cur.execute("""
                 SELECT symbol, price, volume, change_24h, timestamp
                 FROM market_data
@@ -37,7 +40,7 @@ async def get_dashboard_data():
                         "timestamp": row[4].isoformat() if row[4] else None
                     })
 
-            # ✅ Technical data ophalen
+            # ✅ Fetch latest Technical Data
             cur.execute("""
                 SELECT symbol, rsi, volume, ma_200, timestamp
                 FROM technical_data
@@ -60,7 +63,7 @@ async def get_dashboard_data():
                         "timestamp": row[4].isoformat() if row[4] else None
                     })
 
-            # ✅ Macro data ophalen
+            # ✅ Fetch latest Macro Data
             cur.execute("""
                 SELECT name, value, trend, interpretation, action, timestamp
                 FROM macro_data
@@ -83,7 +86,7 @@ async def get_dashboard_data():
                         "timestamp": row[5].isoformat() if row[5] else None
                     })
 
-            # ✅ Setups ophalen
+            # ✅ Fetch latest Setups
             cur.execute("""
                 SELECT name, status, timestamp
                 FROM setups
@@ -103,6 +106,8 @@ async def get_dashboard_data():
                         "timestamp": row[2].isoformat() if row[2] else None
                     })
 
+        # ✅ Return all dashboard data
+        logger.info(f"✅ Dashboard data successfully retrieved.")
         return {
             "market_data": market_data,
             "technical_data": technical_data,
@@ -111,7 +116,8 @@ async def get_dashboard_data():
         }
 
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen dashboard_data: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen dashboard_data")
+        logger.error(f"❌ Error fetching dashboard data: {e}")
+        raise HTTPException(status_code=500, detail="Error fetching dashboard data.")
+    
     finally:
         conn.close()
