@@ -1,29 +1,31 @@
-# Python standaard
+# Python artifacts
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 *.log
 
-# Virtuele omgeving
+# Virtual environments
 venv/
-.env
+env/
 
-# Database bestanden
-market_data.db
+# Database files
+*.db
 
-# Celery en Redis logs
+# Celery and Redis
 celerybeat-schedule
 *.pid
 
-# MacOS systeemfout
+# MacOS system files
 .DS_Store
 
-# IDE / Editor instellingen
+# IDE/editor settings
 .vscode/
 .idea/
 
-# Docker
+# Environment variables
 *.env
 *.local
+
+# Docker override files (optioneel)
 docker-compose.override.yml
