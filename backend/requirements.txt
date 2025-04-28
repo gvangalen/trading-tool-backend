@@ -1,1 +1,44 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+pydantic
+aiohttp
+celery
+redis
+python-dotenv
+requests
+pandas
+python-multipart
+jinja2
+httpx
+openai
+
+fastapi
+Voor de API server
+uvicorn[standard]
+Om FastAPI te draaien (dev-server)
+sqlalchemy
+Voor database ORM (SQLite)
+pydantic
+Voor data-validatie in FastAPI
+aiohttp
+Voor async HTTP-requests indien nodig
+celery
+Voor achtergrondtaken
+redis
+Message broker voor Celery
+python-dotenv
+Voor .env bestanden (configuratie)
+requests
+Voor simpele HTTP-requests
+pandas
+Voor dataverwerking en -analyse
+python-multipart
+Voor upload-functionaliteit in FastAPI
+jinja2
+Voor templates (bijv. rapporten genereren)
+httpx
+Snellere async API-calls alternatief voor requests
+openai
+Als je OpenAI API gebruikt voor AI-taken
 
