@@ -1,12 +1,11 @@
-# setup_api.py
-import logging
+# ✅ setup_api.py — FastAPI versie
+
+from fastapi import APIRouter, HTTPException, Request
+from typing import List
 import json
-from fastapi import APIRouter, HTTPException
-from fastapi import Request
 from db import get_db_connection
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 # ✅ Setup aanmaken
 @router.post("/api/setups")
@@ -50,11 +49,9 @@ async def save_setup(request: Request):
             setup_id = cur.fetchone()[0]
             conn.commit()
 
-        logger.info(f"✅ Setup '{setup_name}' opgeslagen (ID: {setup_id})")
         return {"message": "Setup succesvol opgeslagen", "id": setup_id}
 
     except Exception as e:
-        logger.error(f"❌ Fout in save_setup: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
@@ -94,7 +91,6 @@ async def get_setups(symbol: str = "BTC"):
         ]
 
     except Exception as e:
-        logger.error(f"❌ Fout in get_setups: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
@@ -118,7 +114,6 @@ async def delete_setup(setup_id: int):
             return {"message": f"Setup {setup_id} verwijderd"}
 
     except Exception as e:
-        logger.error(f"❌ Fout in delete_setup: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
@@ -170,11 +165,9 @@ async def update_setup(setup_id: int, request: Request):
                 raise HTTPException(status_code=404, detail="Setup niet gevonden")
 
             conn.commit()
-            logger.info(f"🔄 Setup {setup_id} succesvol bijgewerkt")
             return {"message": f"Setup {setup_id} geüpdatet"}
 
     except Exception as e:
-        logger.error(f"❌ Fout in update_setup: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
