@@ -1,5 +1,3 @@
-# .dockerignore
-
 # Python artifacts
 __pycache__/
 *.pyc
@@ -10,12 +8,11 @@ __pycache__/
 venv/
 env/
 
+# Database files
+*.db
+
 # Environment variables
 .env
-
-# Docker files die je niet wilt kopiëren
-docker-compose.yml
-.dockerignore
 
 # Git
 .git/
