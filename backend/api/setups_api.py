@@ -1,13 +1,12 @@
-# ✅ setup_api.py — FastAPI versie
+# ✅ setup_api.py — FastAPI version
 
 from fastapi import APIRouter, HTTPException, Request
-from typing import List
 import json
 from db import get_db_connection
 
 router = APIRouter()
 
-# ✅ Setup aanmaken
+# ✅ Create setup
 @router.post("/api/setups")
 async def save_setup(request: Request):
     data = await request.json()
@@ -23,7 +22,7 @@ async def save_setup(request: Request):
     dynamic = data.get("dynamic", False)
 
     if not setup_name or not trend or not indicators or not timeframe:
-        raise HTTPException(status_code=400, detail="Naam, trend, indicatoren en timeframe zijn verplicht.")
+        raise HTTPException(status_code=400, detail="Name, trend, indicators and timeframe are required.")
 
     conditions = {
         "indicators": indicators,
@@ -37,7 +36,7 @@ async def save_setup(request: Request):
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
+        raise HTTPException(status_code=500, detail="Database connection failed.")
 
     try:
         with conn.cursor() as cur:
@@ -49,19 +48,19 @@ async def save_setup(request: Request):
             setup_id = cur.fetchone()[0]
             conn.commit()
 
-        return {"message": "Setup succesvol opgeslagen", "id": setup_id}
+        return {"message": "Setup successfully saved", "id": setup_id}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
-# ✅ Setups ophalen
+# ✅ Fetch setups
 @router.get("/api/setups")
 async def get_setups(symbol: str = "BTC"):
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
+        raise HTTPException(status_code=500, detail="Database connection failed.")
 
     try:
         with conn.cursor() as cur:
@@ -95,12 +94,12 @@ async def get_setups(symbol: str = "BTC"):
     finally:
         conn.close()
 
-# ✅ Setup verwijderen
+# ✅ Delete setup
 @router.delete("/api/setups/{setup_id}")
 async def delete_setup(setup_id: int):
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
+        raise HTTPException(status_code=500, detail="Database connection failed.")
 
     try:
         with conn.cursor() as cur:
@@ -108,17 +107,17 @@ async def delete_setup(setup_id: int):
             deleted = cur.fetchone()
 
             if not deleted:
-                raise HTTPException(status_code=404, detail="Setup niet gevonden")
+                raise HTTPException(status_code=404, detail="Setup not found.")
 
             conn.commit()
-            return {"message": f"Setup {setup_id} verwijderd"}
+            return {"message": f"Setup {setup_id} deleted"}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
-# ✅ Setup bijwerken
+# ✅ Update setup
 @router.put("/api/setups/{setup_id}")
 async def update_setup(setup_id: int, request: Request):
     data = await request.json()
@@ -134,7 +133,7 @@ async def update_setup(setup_id: int, request: Request):
     dynamic = data.get("dynamic", False)
 
     if not setup_name or not trend or not indicators or not timeframe:
-        raise HTTPException(status_code=400, detail="Naam, trend, indicatoren en timeframe zijn verplicht.")
+        raise HTTPException(status_code=400, detail="Name, trend, indicators and timeframe are required.")
 
     conditions = {
         "indicators": indicators,
@@ -148,7 +147,7 @@ async def update_setup(setup_id: int, request: Request):
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
+        raise HTTPException(status_code=500, detail="Database connection failed.")
 
     try:
         with conn.cursor() as cur:
@@ -162,10 +161,10 @@ async def update_setup(setup_id: int, request: Request):
             updated = cur.fetchone()
 
             if not updated:
-                raise HTTPException(status_code=404, detail="Setup niet gevonden")
+                raise HTTPException(status_code=404, detail="Setup not found.")
 
             conn.commit()
-            return {"message": f"Setup {setup_id} geüpdatet"}
+            return {"message": f"Setup {setup_id} updated"}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
