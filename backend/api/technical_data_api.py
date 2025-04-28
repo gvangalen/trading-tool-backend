@@ -1,10 +1,10 @@
-# technical_data_api.py
+# ✅ technical_data_api.py — FastAPI version
+
 import logging
 import os
 from fastapi import APIRouter, HTTPException, Request
 from db import get_db_connection
 from celery import Celery
-from datetime import datetime
 
 router = APIRouter()
 
@@ -19,11 +19,11 @@ celery.conf.update(
     backend=os.getenv("CELERY_RESULT_BACKEND", "redis://market_dashboard-redis:6379/0"),
 )
 
-# ✅ Data opslaan in database
+# ✅ Helper: Save technical data to the database
 def save_technical_data(symbol, rsi, volume, ma_200, price):
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Databaseverbinding faalde")
+        logger.error("❌ Failed to connect to the database.")
         return False
 
     try:
@@ -33,30 +33,33 @@ def save_technical_data(symbol, rsi, volume, ma_200, price):
                 VALUES (%s, %s, %s, %s, %s, TRUE, NOW())
             """, (symbol, float(rsi), float(volume), float(ma_200), float(price)))
             conn.commit()
-        logger.info(f"✅ Technische data opgeslagen voor {symbol}")
+
+        logger.info(f"✅ Technical data saved for {symbol}")
         return True
+
     except Exception as e:
-        logger.error(f"❌ Databasefout: {e}")
+        logger.error(f"❌ Database error while saving technical data: {e}")
         return False
+
     finally:
         conn.close()
 
 # ✅ Celery task
 @celery.task(name="save_technical_data_task")
 def save_technical_data_task(symbol, rsi, volume, ma_200, price):
-    logger.info(f"📡 Celery taak gestart voor {symbol}")
+    logger.info(f"📡 Celery task started for {symbol}")
     success = save_technical_data(symbol, rsi, volume, ma_200, price)
     if success:
-        logger.info(f"✅ Celery taak voltooid voor {symbol}")
+        logger.info(f"✅ Celery task completed for {symbol}")
     else:
-        logger.error(f"❌ Celery taak mislukt voor {symbol}")
+        logger.error(f"❌ Celery task failed for {symbol}")
 
-# ✅ Webhook endpoint van TradingView
+# ✅ Webhook endpoint from TradingView
 @router.post("/api/tradingview_webhook")
 async def tradingview_webhook(request: Request):
     try:
         data = await request.json()
-        logger.info(f"📩 Webhook ontvangen: {data}")
+        logger.info(f"📩 Webhook received: {data}")
 
         symbol = data.get("symbol", "BTC")
         rsi = data.get("rsi")
@@ -65,21 +68,22 @@ async def tradingview_webhook(request: Request):
         price = data.get("price")
 
         if None in (rsi, volume, ma_200, price):
-            raise HTTPException(status_code=400, detail="Incomplete webhook data")
+            raise HTTPException(status_code=400, detail="Incomplete webhook data.")
 
         save_technical_data_task.delay(symbol, rsi, volume, ma_200, price)
 
-        return {"message": "Webhook succesvol ontvangen en verwerkt"}
+        return {"message": "Webhook successfully received and processed"}
+
     except Exception as e:
-        logger.error(f"❌ Webhook verwerkingsfout: {e}")
+        logger.error(f"❌ Error processing webhook: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ Endpoint: Technische data ophalen
+# ✅ Endpoint: Fetch technical data
 @router.get("/api/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+        raise HTTPException(status_code=500, detail="Failed to connect to the database.")
 
     try:
         with conn.cursor() as cur:
@@ -104,10 +108,12 @@ async def get_technical_data():
             for row in rows
         ]
 
-        logger.info(f"📊 {len(data)} technische records opgehaald")
+        logger.info(f"📊 {len(data)} technical records fetched")
         return data
+
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen technische data: {e}")
+        logger.error(f"❌ Error fetching technical data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
     finally:
         conn.close()
