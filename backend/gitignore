@@ -1,0 +1,29 @@
+# Python standaard
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Virtuele omgeving
+venv/
+.env
+
+# Database bestanden
+market_data.db
+
+# Celery en Redis logs
+celerybeat-schedule
+*.pid
+
+# MacOS systeemfout
+.DS_Store
+
+# IDE / Editor instellingen
+.vscode/
+.idea/
+
+# Docker
+*.env
+*.local
+docker-compose.override.yml
