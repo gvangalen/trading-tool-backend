@@ -24,11 +24,19 @@ celerybeat-schedule
 .idea/
 
 # Environment variables
-*.env
+.env
 *.local
 
 # Docker override files (optioneel)
 docker-compose.override.yml
 
-# .gitignore
-celerybeat-schedule
+# Backup & temp files
+*.bak
+*.swp
+*.tmp
+
+# Jupyter Notebooks checkpoints (voor als je ooit Jupyter gebruikt)
+.ipynb_checkpoints/
+
+# Node.js artifacts (voor het geval je later frontend dingen toevoegt)
+node_modules/
