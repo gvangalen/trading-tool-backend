@@ -29,3 +29,6 @@ celerybeat-schedule
 
 # Docker override files (optioneel)
 docker-compose.override.yml
+
+# .gitignore
+celerybeat-schedule
