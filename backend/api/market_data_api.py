@@ -1,12 +1,12 @@
-# ✅ market_data_api.py — FastAPI router voor marktdata (opslaan en interpreteren)
+# ✅ market_data_api.py — FastAPI router voor marktdata (opslaan, interpreteren, ophalen)
 
 import logging
 import json
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from datetime import datetime
 from db import get_db_connection
-from utils.market_interpreter import interpret_market_data  # ✅ Interpretatielogica importeren
+from utils.market_interpreter import interpret_market_data
 
 router = APIRouter()
 
@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 COINGECKO_API = "https://api.coingecko.com/api/v3/simple/price"
-MARKET_CONFIG_PATH = "market_data_config.json"  # ✅ Configuratie voor interpretatie
+MARKET_CONFIG_PATH = "market_data_config.json"
 
 
 # ✅ POST: Marktdata ophalen en opslaan (BTC en SOL)
@@ -75,7 +75,7 @@ async def save_market_data():
         conn.close()
 
 
-# ✅ GET: Live geïnterpreteerde marktdata ophalen (alleen BTC)
+# ✅ GET: Geïnterpreteerde marktdata ophalen (BTC)
 @router.get("/api/market_data/interpreted")
 async def get_interpreted_market_data():
     conn = get_db_connection()
@@ -125,7 +125,44 @@ async def get_interpreted_market_data():
         conn.close()
 
 
-# ✅ Eenvoudige test endpoint
+# ✅ GET: Alle opgeslagen marktdata ophalen (BTC en SOL)
+@router.get("/api/market_data/list")
+async def list_market_data():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, price, volume, change_24h, timestamp
+                FROM market_data
+                ORDER BY timestamp DESC
+                LIMIT 100
+            """)
+            rows = cur.fetchall()
+
+        data = [
+            {
+                "symbol": row[0],
+                "price": float(row[1]),
+                "volume": float(row[2]),
+                "change_24h": float(row[3]),
+                "timestamp": row[4].isoformat() if row[4] else None
+            }
+            for row in rows
+        ]
+
+        return data
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen market data lijst: {e}")
+        raise HTTPException(status_code=500, detail="Databasefout.")
+    finally:
+        conn.close()
+
+
+# ✅ Test endpoint
 @router.get("/api/market_data/test")
 async def test_market_data():
     conn = get_db_connection()
