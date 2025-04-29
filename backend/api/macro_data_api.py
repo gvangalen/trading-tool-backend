@@ -1,43 +1,23 @@
-# ✅ macro_data_api.py — FastAPI version
+# macro_data_api.py — FastAPI API voor macro-indicatoren
 
 import logging
 import json
-import httpx
-from fastapi import APIRouter, HTTPException, Request
 from datetime import datetime
+from fastapi import APIRouter, HTTPException, Request
+
 from db import get_db_connection
+from utils.macro_interpreter import process_macro_indicator
 
 router = APIRouter()
 
-# ✅ Logging
+# ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ✅ Path to macro indicators configuration
+# ✅ Pad naar configuratiebestand
 CONFIG_PATH = "macro_indicators_config.json"
 
-# ✅ Helper: Extract value from nested JSON path
-def extract_from_path(data, path):
-    try:
-        keys = path.split(".")
-        for key in keys:
-            if isinstance(data, list) and key.isdigit():
-                data = data[int(key)]
-            else:
-                data = data.get(key)
-        return float(data)
-    except Exception as e:
-        logger.error(f"❌ Failed to extract value for path '{path}': {e}")
-        return None
-
-# ✅ Helper: Interpret value according to defined rules
-def interpret_value(value, rules):
-    for rule in sorted(rules, key=lambda x: -x["threshold"]):
-        if value >= rule["threshold"]:
-            return rule["interpretation"], rule["action"]
-    return "Unknown", "No action"
-
-# ✅ POST: Add a macro indicator
+# ✅ POST: Macro-indicator toevoegen
 @router.post("/api/macro_data")
 async def add_macro_indicator(request: Request):
     data = await request.json()
@@ -49,45 +29,20 @@ async def add_macro_indicator(request: Request):
         with open(CONFIG_PATH) as f:
             config = json.load(f)
     except Exception as e:
-        logger.error(f"❌ Failed to load config: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load configuration file.")
+        logger.error(f"❌ Config laden mislukt: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load macro config.")
 
     if name not in config:
         raise HTTPException(status_code=400, detail=f"Indicator '{name}' not found in config.")
 
-    indicator = config[name]
-    api_url = indicator.get("api_url")
-    extract_key = indicator.get("extract_key")
-    rules = indicator.get("interpretation_rules", [])
-
-    if not api_url or not extract_key:
-        raise HTTPException(status_code=400, detail="Invalid configuration for this indicator.")
-
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(api_url)
-            response.raise_for_status()
-            json_data = response.json()
+        result = await process_macro_indicator(name, config[name])
     except Exception as e:
-        logger.error(f"❌ Failed API call to {api_url}: {e}")
-        raise HTTPException(status_code=500, detail="API call failed.")
+        logger.error(f"❌ Verwerking indicator mislukt: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process macro indicator.")
 
-    # Special case for custom DXY calculation
-    if extract_key == "custom_dxy_calculation":
-        try:
-            rates = json_data["rates"]
-            basket = ["EUR", "GBP", "JPY", "CAD", "SEK", "CHF"]
-            value = sum(rates.get(cur, 1) for cur in basket) / len(basket)
-        except Exception as e:
-            logger.error(f"❌ DXY calculation failed: {e}")
-            raise HTTPException(status_code=500, detail="DXY calculation failed.")
-    else:
-        value = extract_from_path(json_data, extract_key)
-
-    if value is None:
-        raise HTTPException(status_code=500, detail="Failed to extract value from API response.")
-
-    interpretation, action = interpret_value(value, rules)
+    if not result:
+        raise HTTPException(status_code=500, detail="No result from interpreter")
 
     conn = get_db_connection()
     if not conn:
@@ -98,20 +53,19 @@ async def add_macro_indicator(request: Request):
             cur.execute("""
                 INSERT INTO macro_data (name, value, trend, interpretation, action, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s)
-            """, (name, value, "", interpretation, action, datetime.utcnow()))
+            """, (result["name"], result["value"], "", result["interpretation"], result["action"], datetime.utcnow()))
             conn.commit()
 
-        logger.info(f"✅ Indicator '{name}' successfully saved with value {value}")
+        logger.info(f"✅ '{name}' opgeslagen met waarde {result['value']}")
         return {"message": f"Indicator '{name}' successfully saved."}
 
     except Exception as e:
-        logger.error(f"❌ Database error while saving macro indicator: {e}")
+        logger.error(f"❌ Databasefout bij opslaan: {e}")
         raise HTTPException(status_code=500, detail="Database error while saving macro indicator.")
-
     finally:
         conn.close()
 
-# ✅ GET: Retrieve macro indicators
+# ✅ GET: Macro-indicatoren ophalen
 @router.get("/api/macro_data")
 async def get_macro_indicators():
     conn = get_db_connection()
@@ -128,7 +82,7 @@ async def get_macro_indicators():
             """)
             rows = cur.fetchall()
 
-        indicators = [
+        result = [
             {
                 "id": row[0],
                 "name": row[1],
@@ -140,12 +94,10 @@ async def get_macro_indicators():
             }
             for row in rows
         ]
-        logger.info(f"📈 Retrieved {len(indicators)} macro indicators.")
-        return indicators
+        return result
 
     except Exception as e:
-        logger.error(f"❌ Error retrieving macro indicators: {e}")
-        raise HTTPException(status_code=500, detail="Database error while retrieving macro indicators.")
-
+        logger.error(f"❌ Databasefout bij ophalen: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch macro indicators.")
     finally:
         conn.close()
