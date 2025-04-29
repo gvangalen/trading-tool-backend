@@ -1,1 +1,78 @@
+services:  # Correcte key voor de services
+  market_data_api:
+    container_name: market_dashboard-market_data_api
+    build: .
+    ports:
+      - "5002:5002"
+    env_file:
+      - .env
+    volumes:
+      - ~/.aws:/root/.aws  # ✅ AWS credentials beschikbaar maken in deze container
+      - .:/app  # ✅ Code live bijwerken in de container
+    restart: always  # ✅ Container herstarten bij crash
+    depends_on:
+      - redis
+    networks:
+      - market_dashboard_network  # ✅ Specifiek netwerk toevoegen
 
+  redis:
+    image: "redis:alpine"
+    container_name: market_dashboard-redis
+    ports:
+      - "6379:6379"
+    restart: always  # ✅ Redis opnieuw starten als het crasht
+    networks:
+      - market_dashboard_network  # ✅ Specifiek netwerk toevoegen
+
+  celery_worker:
+    build: .
+    container_name: market_dashboard-celery_worker
+    command: ["celery", "-A", "celery_worker.celery", "worker", "--loglevel=info"]
+    depends_on:
+      - redis
+      - market_data_api
+    restart: always
+    environment:
+      - DB_HOST=${DB_HOST}  # Voeg de RDS-host toe als omgevingsvariabele
+      - DB_NAME=${DB_NAME}  # Gebruik de juiste DB-naam
+      - DB_USER=${DB_USER}  # Gebruik de juiste DB-gebruiker
+      - DB_PASS=${DB_PASS}  # Gebruik het wachtwoord uit .env bestand
+      - API_BASE_URL=http://market_dashboard-market_data_api:5002/api
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}  # ✅ AWS credentials expliciet toegevoegd
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_PROFILE=default
+    volumes:
+      - .:/app  # ✅ Zorgt ervoor dat code-updates direct beschikbaar zijn in Celery
+    networks:
+      - market_dashboard_network  # ✅ Specifiek netwerk toevoegen
+
+  celery_beat:
+    build: .
+    container_name: market_dashboard-celery_beat
+    command: ["celery", "-A", "celery_worker.celery", "beat", "--loglevel=info"]
+    depends_on:
+      - redis
+      - celery_worker
+    restart: always
+    environment:
+      - DB_HOST=${DB_HOST}  # Voeg de RDS-host toe als omgevingsvariabele
+      - DB_NAME=${DB_NAME}  # Gebruik de juiste DB-naam
+      - DB_USER=${DB_USER}  # Gebruik de juiste DB-gebruiker
+      - DB_PASS=${DB_PASS}  # Gebruik het wachtwoord uit .env bestand
+      - API_BASE_URL=http://market_dashboard-market_data_api:5002/api
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}  # ✅ AWS credentials expliciet toegevoegd
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - AWS_PROFILE=default
+    volumes:
+      - .:/app  # ✅ Zorgt ervoor dat code-updates direct beschikbaar zijn in Celery Beat
+    networks:
+      - market_dashboard_network  # ✅ Specifiek netwerk toevoegen
+
+volumes:
+  db_data:  # Dit kan worden verwijderd als de lokale database wordt verwijderd
+
+networks:
+  market_dashboard_network:  # ✅ Gedefinieerd netwerk
+    driver: bridge
