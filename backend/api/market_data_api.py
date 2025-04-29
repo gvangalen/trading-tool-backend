@@ -1,20 +1,24 @@
-# ✅ market_data_api.py — FastAPI version
+# ✅ market_data_api.py — FastAPI router voor marktdata (opslaan en interpreteren)
 
-from fastapi import APIRouter, HTTPException
-import httpx
 import logging
+import json
+import httpx
+from fastapi import APIRouter, HTTPException, Request
+from datetime import datetime
 from db import get_db_connection
+from utils.market_interpreter import interpret_market_data  # ✅ Interpretatielogica importeren
 
 router = APIRouter()
 
-# ✅ Logger
+# ✅ Basisinstellingen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ✅ CoinGecko API endpoint
 COINGECKO_API = "https://api.coingecko.com/api/v3/simple/price"
+MARKET_CONFIG_PATH = "market_data_config.json"  # ✅ Configuratie voor interpretatie
 
-# ✅ Save market data (BTC and SOL)
+
+# ✅ POST: Marktdata ophalen en opslaan (BTC en SOL)
 @router.post("/api/market_data/save")
 async def save_market_data():
     try:
@@ -70,7 +74,58 @@ async def save_market_data():
     finally:
         conn.close()
 
-# ✅ Test endpoint to verify API is working
+
+# ✅ GET: Live geïnterpreteerde marktdata ophalen (alleen BTC)
+@router.get("/api/market_data/interpreted")
+async def get_interpreted_market_data():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+
+    try:
+        with open(MARKET_CONFIG_PATH) as f:
+            config = json.load(f)
+    except Exception as e:
+        logger.error(f"❌ Config laden mislukt: {e}")
+        raise HTTPException(status_code=500, detail="Configbestand ontbreekt of is ongeldig.")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, price, change_24h, timestamp
+                FROM market_data
+                WHERE symbol = 'BTC'
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Geen marktdata gevonden.")
+
+            raw_data = {
+                "price": float(row[1]),
+                "change_24h": float(row[2])
+            }
+
+            interpreted = interpret_market_data(raw_data, config)
+
+            return {
+                "symbol": row[0],
+                "price": raw_data["price"],
+                "change_24h": raw_data["change_24h"],
+                "score": interpreted["score"],
+                "labels": interpreted["labels"],
+                "timestamp": row[3].isoformat() if row[3] else None
+            }
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen marktdata: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen marktdata.")
+    finally:
+        conn.close()
+
+
+# ✅ Eenvoudige test endpoint
 @router.get("/api/market_data/test")
 async def test_market_data():
     conn = get_db_connection()
