@@ -1,8 +1,10 @@
 import logging
-from db import get_db_connection
+from scripts.database import get_db_connection  # ⬅️ Aangepaste import
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# ✅ Rest van de code blijft gelijk...
 
 def create_setups_table(conn):
     with conn.cursor() as cur:
