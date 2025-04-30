@@ -1,0 +1,6 @@
+tenancy_ocid        = "ocid1.tenancy.oc1..xxxxx"
+compartment_ocid    = "ocid1.compartment.oc1..xxxxx"
+user_ocid           = "ocid1.user.oc1..xxxxx"
+fingerprint         = "aa:bb:cc:dd:ee:ff:..."
+private_key_path    = "~/.oci/oci_api_key.pem"
+postgres_password   = "SecurePassword123"
