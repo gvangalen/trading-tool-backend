@@ -1,15 +1,34 @@
+# ✅ Web Framework
 fastapi
 uvicorn[standard]
+
+# ✅ Database
+psycopg2-binary     # Voor PostgreSQL-verbindingen
 sqlalchemy
 pydantic
-aiohttp
+
+# ✅ Background Tasks
 celery
 redis
+
+# ✅ Environment & HTTP
 python-dotenv
+httpx
 requests
+aiohttp
+
+# ✅ Data
 pandas
+
+# ✅ File uploads & templating
 python-multipart
 jinja2
-httpx
+
+# ✅ AI
 openai
 
+# ✅ AWS CLI (indien lokaal gebruikt met boto3)
+boto3
+
+# ✅ Utils
+loguru  # optioneel: betere logging dan standaard logging
