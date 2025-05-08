@@ -1,5 +1,5 @@
 import logging
-from scripts.database import get_db_connection  # ⬅️ Aangepaste import
+from utils.db import get_db_connection
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
