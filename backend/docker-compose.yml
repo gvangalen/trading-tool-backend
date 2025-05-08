@@ -27,7 +27,7 @@ services:
     networks:
       - market_dashboard_network
 
-  # ✅ Backend API (bijv. market_data_api)
+  # ✅ Backend API
   market_data_api:
     container_name: market_dashboard-market_data_api
     build: .
@@ -36,7 +36,7 @@ services:
     env_file:
       - .env
     volumes:
-      - .:/app
+      - .:/app  # ✅ realtime sync met je backend-code
     restart: always
     depends_on:
       - redis
