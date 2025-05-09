@@ -14,15 +14,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: SSH Deploy to Oracle
+      - name: SSH naar Oracle en draai deploy.sh
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT || '22' }}
-          script: |
-            cd /home/ubuntu/trading-tool-backend/backend
-            git pull origin main
-            docker compose down
-            docker compose up --build -d
+          script: bash ~/deploy.sh
