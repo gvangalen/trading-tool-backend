@@ -1,0 +1,30 @@
+name: Auto Deploy Backend to Oracle
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.py'
+      - '**.yml'
+      - '**.txt'
+      - 'Dockerfile'
+      - '.github/workflows/deploy-backend.yml'
+
+jobs:
+  deploy:
+    name: SSH Deploy Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: SSH and run deploy-backend.sh
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.PORT || '22' }}
+          script: bash ~/deploy.sh
