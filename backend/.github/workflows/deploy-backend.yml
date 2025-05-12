@@ -20,5 +20,5 @@ jobs:
           host: ${{ secrets.HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.PORT || '22' }}
+          port: 22
           script: bash ~/deploy.sh
