@@ -1,26 +1,26 @@
-# ✅ Gebruik een lichte base image
 FROM python:3.9-slim
 
-# ✅ Stel werkdirectory in
+# ✅ Werkdirectory op rootniveau
 WORKDIR /app
 
-# ✅ Benodigde packages installeren
+# ✅ Installeer systeempakketten
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libpq-dev \
     awscli \
  && rm -rf /var/lib/apt/lists/*
 
-# ✅ Kopieer requirements en installeer afhankelijkheden
-COPY requirements.txt .
+# ✅ Kopieer alleen requirements en installeer Python dependencies
+COPY backend/requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ✅ Kopieer projectbestanden
-COPY . .
+# ✅ Kopieer volledige backend map
+COPY backend /app/backend
 
-# ✅ Standaardpoort voor FastAPI (kan overschreven worden per service)
-EXPOSE 5002
+# ✅ Zet juiste werkmap en PYTHONPATH
+ENV PYTHONPATH=/app/backend
+WORKDIR /app/backend
 
-# ✅ Standaard commando voor FastAPI-app (overschrijfbaar via docker-compose)
+# ✅ Start FastAPI-app
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5002"]
-
