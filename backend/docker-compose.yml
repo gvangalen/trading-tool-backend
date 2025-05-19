@@ -1,7 +1,6 @@
 version: '3.9'
 
 services:
-  # ✅ PostgreSQL container (eigen database)
   postgres:
     image: postgres:14
     container_name: market_dashboard-postgres
@@ -17,7 +16,6 @@ services:
     networks:
       - market_dashboard_network
 
-  # ✅ Redis (voor Celery)
   redis:
     image: redis:7
     container_name: market_dashboard-redis
@@ -27,16 +25,16 @@ services:
     networks:
       - market_dashboard_network
 
-  # ✅ Backend API
   market_data_api:
     container_name: market_dashboard-market_data_api
-    build: .
+    build:
+      context: ./backend
     ports:
       - "5002:5002"
     env_file:
-      - .env
+      - ./backend/.env
     volumes:
-      - .:/app  # ✅ realtime sync met je backend-code
+      - ./backend:/app  # realtime sync met backend map
     restart: always
     depends_on:
       - redis
@@ -44,9 +42,9 @@ services:
     networks:
       - market_dashboard_network
 
-  # ✅ Celery Worker
   celery_worker:
-    build: .
+    build:
+      context: ./backend
     container_name: market_dashboard-celery_worker
     command: ["celery", "-A", "celery_worker.celery", "worker", "--loglevel=info"]
     depends_on:
@@ -54,15 +52,15 @@ services:
       - market_data_api
     restart: always
     env_file:
-      - .env
+      - ./backend/.env
     volumes:
-      - .:/app
+      - ./backend:/app
     networks:
       - market_dashboard_network
 
-  # ✅ Celery Beat Scheduler
   celery_beat:
-    build: .
+    build:
+      context: ./backend
     container_name: market_dashboard-celery_beat
     command: ["celery", "-A", "celery_worker.celery", "beat", "--loglevel=info"]
     depends_on:
@@ -70,9 +68,9 @@ services:
       - celery_worker
     restart: always
     env_file:
-      - .env
+      - ./backend/.env
     volumes:
-      - .:/app
+      - ./backend:/app
     networks:
       - market_dashboard_network
 
