@@ -3,7 +3,7 @@ import logging
 import os
 import json
 from fastapi import APIRouter, HTTPException, Request
-from db import get_db_connection
+from utils.db import get_db_connection  ✅  # correct
 from celery import Celery
 from utils.technical_interpreter import process_technical_indicator
 
