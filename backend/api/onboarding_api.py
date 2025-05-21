@@ -1,7 +1,7 @@
 # ✅ onboarding_status_api.py — FastAPI versie
 
 from fastapi import APIRouter, HTTPException
-from utils.db import get_db_connection  ✅  # correct
+from utils.db import get_db_connection    # correct
 import logging
 
 router = APIRouter()
