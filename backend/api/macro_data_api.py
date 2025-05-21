@@ -4,7 +4,7 @@ import logging
 import json
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
-from utils.db import get_db_connection  ✅  # correct
+from utils.db import get_db_connection    # correct
 from utils.macro_interpreter import process_macro_indicator
 
 router = APIRouter()
