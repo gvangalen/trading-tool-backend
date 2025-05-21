@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Request
 import json
-from utils.db import get_db_connection  ✅  # correct
+from utils.db import get_db_connection    # correct
 
 router = APIRouter()
 
