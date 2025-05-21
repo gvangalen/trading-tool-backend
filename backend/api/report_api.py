@@ -1,7 +1,7 @@
 # report_api.py
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from db import get_db_connection
+from utils.db import get_db_connection  ✅  # correct
 from datetime import datetime
 import logging
 import io
