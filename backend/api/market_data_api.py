@@ -5,7 +5,7 @@ import json
 import httpx
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
-from utils.db import get_db_connection
+from utils.db import get_db_connection  ✅  # correct
 from utils.market_interpreter import interpret_market_data
 
 router = APIRouter()
