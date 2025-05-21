@@ -3,7 +3,7 @@
 import logging
 import json
 from flask import Blueprint, request, jsonify
-from db import get_db_connection
+from utils.db import get_db_connection  ✅  # correct
 from celery.result import AsyncResult
 from tasks import generate_strategy_for_setup, generate_strategies_automatically
 from celery_worker import celery
