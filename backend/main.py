@@ -13,7 +13,7 @@ from api.dashboard_api import router as dashboard_router
 from api.report_api import router as report_router
 from api.ai.ai_explain_api import router as ai_explain_router
 from api.ai.ai_strategy_api import router as ai_strategy_router
-from api.onboarding_status_api import router as onboarding_router
+from api.onboarding_api import router as onboarding_router  
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
