@@ -27,4 +27,4 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.PORT || '22' }}
-          script: bash ~/deploy.sh
+          script: bash ~/trading-tool-backend/deploy-backend.sh
