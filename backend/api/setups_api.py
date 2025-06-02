@@ -1,13 +1,11 @@
-# ✅ setup_api.py — FastAPI version
-
 from fastapi import APIRouter, HTTPException, Request
 import json
-from utils.db import get_db_connection    # correct
+from utils.db import get_db_connection
 
 router = APIRouter()
 
-# ✅ Create setup
-@router.post("/api/setups")
+# ✅ Setup toevoegen
+@router.post("/api/setups", status_code=201)
 async def save_setup(request: Request):
     data = await request.json()
 
@@ -47,15 +45,14 @@ async def save_setup(request: Request):
             """, (symbol, setup_name, json.dumps(conditions)))
             setup_id = cur.fetchone()[0]
             conn.commit()
-
-        return {"message": "Setup successfully saved", "id": setup_id}
+            return {"message": "Setup successfully saved", "id": setup_id}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
     finally:
         conn.close()
 
-# ✅ Fetch setups
+# ✅ Setups ophalen
 @router.get("/api/setups")
 async def get_setups(symbol: str = "BTC"):
     conn = get_db_connection()
@@ -73,28 +70,37 @@ async def get_setups(symbol: str = "BTC"):
             """, (symbol,))
             rows = cur.fetchall()
 
-        return [
-            {
+        setups = []
+        for row in rows:
+            conditions = row[3]
+            if isinstance(conditions, str):
+                try:
+                    conditions = json.loads(conditions)
+                except json.JSONDecodeError:
+                    conditions = {}
+
+            setups.append({
                 "id": row[0],
                 "symbol": row[1],
                 "name": row[2],
-                "indicators": row[3].get("indicators"),
-                "trend": row[3].get("trend"),
-                "timeframe": row[3].get("timeframe"),
-                "account_type": row[3].get("account_type"),
-                "strategy_type": row[3].get("strategy_type"),
-                "min_investment": row[3].get("min_investment"),
-                "dynamic": row[3].get("dynamic"),
-                "created_at": str(row[4])
-            } for row in rows
-        ]
+                "indicators": conditions.get("indicators"),
+                "trend": conditions.get("trend"),
+                "timeframe": conditions.get("timeframe"),
+                "account_type": conditions.get("account_type"),
+                "strategy_type": conditions.get("strategy_type"),
+                "min_investment": conditions.get("min_investment"),
+                "dynamic": conditions.get("dynamic"),
+                "created_at": row[4].isoformat()
+            })
+
+        return setups
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
     finally:
         conn.close()
 
-# ✅ Delete setup
+# ✅ Setup verwijderen
 @router.delete("/api/setups/{setup_id}")
 async def delete_setup(setup_id: int):
     conn = get_db_connection()
@@ -113,11 +119,11 @@ async def delete_setup(setup_id: int):
             return {"message": f"Setup {setup_id} deleted"}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
     finally:
         conn.close()
 
-# ✅ Update setup
+# ✅ Setup bewerken
 @router.put("/api/setups/{setup_id}")
 async def update_setup(setup_id: int, request: Request):
     data = await request.json()
@@ -167,6 +173,6 @@ async def update_setup(setup_id: int, request: Request):
             return {"message": f"Setup {setup_id} updated"}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
     finally:
         conn.close()
