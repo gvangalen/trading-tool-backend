@@ -1,4 +1,3 @@
-# ✅ main.py — Veilige en uitbreidbare FastAPI setup
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
@@ -7,13 +6,14 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ✅ App initialiseren
+# ✅ FastAPI app initialiseren
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# ✅ CORS instellen
+# ✅ CORS instellen (alleen wat nu relevant is)
 origins = [
-    "https://market-dashboard-frontend.s3-website.eu-north-1.amazonaws.com",
-    "http://localhost:3000"
+    "http://localhost:3000",
+    "http://143.47.186.148",     # frontend op Oracle IP
+    "http://143.47.186.148:80",  # expliciet poort 80 voor zekerheid
 ]
 
 app.add_middleware(
@@ -24,16 +24,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Helperfunctie om routers veilig te includen
+# ✅ Router importen (veilig en schaalbaar)
 def safe_include(import_path, router_name, prefix="/api"):
     try:
-        module = __import__(import_path, fromlist=['router'])
+        module = __import__(import_path, fromlist=["router"])
         app.include_router(module.router, prefix=prefix)
         logger.info(f"✅ Router geladen: {router_name}")
     except Exception as e:
         logger.warning(f"❌ Kon router '{router_name}' niet laden ({import_path}): {e}")
 
-# ✅ Routers koppelen via veilige import
+# ✅ Routers includen
 safe_include("api.market_data_api", "market_data_api")
 safe_include("api.macro_data_api", "macro_data_api")
 safe_include("api.technical_data_api", "technical_data_api")
@@ -44,7 +44,7 @@ safe_include("api.ai.ai_explain_api", "ai_explain_api")
 safe_include("api.ai.ai_strategy_api", "ai_strategy_api")
 safe_include("api.onboarding_api", "onboarding_api")
 
-# ✅ Health endpoint
+# ✅ Health check
 @app.get("/api/health")
 def health_check():
     logger.info("📡 Health check aangeroepen.")
