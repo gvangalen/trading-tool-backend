@@ -4,37 +4,33 @@ import logging
 import os
 import traceback
 import json
+from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
-from ai_strategy_generator import generate_strategy, generate_strategy_from_setup  # ✅ AI generator importeren
+from ai_strategy_generator import generate_strategy, generate_strategy_from_setup  # ✅ AI generator
 
-# ✅ Logging instellen
+# ✅ Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ Celery instellen
+# ✅ Celery
 celery = Celery(
     "celery_worker",
     broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
     backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
 )
-
 celery.conf.timezone = "UTC"
 celery.conf.enable_utc = True
 
-# ✅ API Base URL en config path
+# ✅ Config
 API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
-CONFIG_PATH = "macro_indicators_config.json"
+CONFIG_PATH = os.getenv("MACRO_CONFIG_PATH", "macro_indicators_config.json")
 TIMEOUT = 10
+HEADERS = {"Content-Type": "application/json"}
 
-# ✅ Retry wrapper voor veilige API-calls
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=5, min=5, max=20),
-    reraise=True,
-)
+# ✅ Safe API call
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="POST", payload=None):
-    headers = {"Content-Type": "application/json"}
     try:
-        response = requests.request(method, url, json=payload, headers=headers, timeout=TIMEOUT)
+        response = requests.request(method, url, json=payload, headers=HEADERS, timeout=TIMEOUT)
         response.raise_for_status()
         logging.info(f"✅ API-call succesvol: {url}")
         return response.json()
@@ -47,49 +43,47 @@ def safe_request(url, method="POST", payload=None):
         logging.error(traceback.format_exc())
         raise
 
-# ✅ Marktdata ophalen
+# ✅ Marktdata
 @celery.task(name="celery_worker.fetch_market_data")
 def fetch_market_data():
     try:
-        data = safe_request(f"{API_BASE_URL}/save_market_data")
+        data = safe_request(urljoin(API_BASE_URL, "/save_market_data"))
         logging.info(f"✅ Marktdata succesvol opgeslagen: {data}")
     except RetryError:
         logging.error("❌ Alle retries mislukt voor fetch_market_data!")
         logging.error(traceback.format_exc())
 
-# ✅ Macrodata ophalen (via config)
+# ✅ Macrodata
 @celery.task(name="celery_worker.fetch_macro_data")
 def fetch_macro_data():
     logging.info("📡 Start ophalen macrodata")
 
     if not os.path.exists(CONFIG_PATH):
-        logging.error("❌ macro_indicators_config.json niet gevonden")
+        logging.error(f"❌ Configbestand niet gevonden: {CONFIG_PATH}")
         return
 
     try:
         with open(CONFIG_PATH) as f:
             config = json.load(f)
     except Exception as e:
-        logging.error(f"❌ Config laden mislukt: {e}")
+        logging.error(f"❌ Fout bij laden config: {e}")
         return
 
     for name in config.keys():
         try:
-            response = safe_request(f"{API_BASE_URL}/macro_data", method="POST", payload={"name": name})
+            response = safe_request(urljoin(API_BASE_URL, "/macro_data"), method="POST", payload={"name": name})
             logging.info(f"✅ Macrodata '{name}' opgeslagen: {response}")
         except RetryError:
             logging.error(f"❌ Alle retries mislukt voor macrodata '{name}'")
-            logging.error(traceback.format_exc())
         except Exception as e:
             logging.error(f"❌ Fout bij macrodata '{name}': {e}")
-            logging.error(traceback.format_exc())
 
-# ✅ Technische data ophalen (optioneel)
+# ✅ Technische data
 @celery.task(name="celery_worker.fetch_technical_data")
 def fetch_technical_data():
     try:
         payload = {"symbol": "BTC"}
-        data = safe_request(f"{API_BASE_URL}/save_technical_data", method="POST", payload=payload)
+        data = safe_request(urljoin(API_BASE_URL, "/save_technical_data"), method="POST", payload=payload)
         logging.info(f"✅ Technische data succesvol opgeslagen: {data}")
     except RetryError:
         logging.error("❌ Alle retries mislukt voor fetch_technical_data!")
@@ -99,23 +93,26 @@ def fetch_technical_data():
 @celery.task(name="celery_worker.generate_strategieën_automatisch")
 def generate_strategieën_automatisch():
     try:
-        setups = safe_request(f"{API_BASE_URL}/setups", method="GET")
+        setups = safe_request(urljoin(API_BASE_URL, "/setups"), method="GET")
         if not setups:
-            logging.warning("⚠️ Geen setups gevonden om strategieën voor te genereren")
+            logging.warning("⚠️ Geen setups gevonden")
             return
 
         for setup in setups:
             if setup.get("strategy_generated"):
-                continue  # Skip als al strategie aanwezig is
+                continue
+            if not setup.get("name") or not setup.get("symbol"):
+                logging.warning(f"⚠️ Setup incompleet: {setup}")
+                continue
 
             strategie = generate_strategy(setup)
             if not strategie:
-                logging.warning(f"⚠️ Geen strategie gegenereerd voor setup {setup.get('name')}")
+                logging.warning(f"⚠️ AI kon geen strategie genereren voor {setup['name']}")
                 continue
 
             payload = {
                 "setup_name": setup["name"],
-                "type": setup.get("strategy_type", "Algemeen"),
+                "type": setup.get("strategy_type", "Auto gegenereerd"),
                 "asset": setup.get("symbol", "BTC"),
                 "timeframe": setup.get("timeframe", "1D"),
                 "score": setup.get("score", 0),
@@ -127,8 +124,8 @@ def generate_strategieën_automatisch():
             }
 
             try:
-                result = safe_request(f"{API_BASE_URL}/strategieën", method="POST", payload=payload)
-                logging.info(f"✅ Strategie opgeslagen voor setup {setup['name']}: {result}")
+                result = safe_request(urljoin(API_BASE_URL, "/strategieën"), method="POST", payload=payload)
+                logging.info(f"✅ Strategie opgeslagen: {setup['name']} → {result}")
             except Exception as e:
                 logging.error(f"❌ Fout bij opslaan strategie: {e}")
 
@@ -136,12 +133,12 @@ def generate_strategieën_automatisch():
         logging.error(f"❌ Fout in generate_strategieën_automatisch: {e}")
         logging.error(traceback.format_exc())
 
-# ✅ Strategie genereren per specifieke setup (met overwrite-optie)
+# ✅ Strategie genereren voor specifieke setup
 @celery.task(name="celery_worker.generate_strategie_voor_setup")
 def generate_strategie_voor_setup(setup_id, overwrite=True):
     try:
-        logging.info(f"🔍 Setup ophalen voor ID {setup_id}...")
-        setup_res = requests.get(f"{API_BASE_URL}/setups/{setup_id}")
+        logging.info(f"🔍 Setup ophalen: {setup_id}")
+        setup_res = requests.get(urljoin(API_BASE_URL, f"/setups/{setup_id}"))
         if setup_res.status_code != 200:
             logging.error(f"❌ Setup niet gevonden: {setup_id}")
             return {"error": "Setup niet gevonden"}
@@ -149,8 +146,7 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         setup = setup_res.json()
         strategie = generate_strategy_from_setup(setup)
         if not strategie:
-            logging.error("❌ Strategie generatie mislukt")
-            return {"error": "AI-strategie kon niet gegenereerd worden"}
+            return {"error": "Strategie-generatie mislukt"}
 
         payload = {
             "setup_name": setup.get("name"),
@@ -166,28 +162,20 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         }
 
         if overwrite:
-            logging.info("✏️ Bestaande strategie overschrijven...")
-            put_res = requests.put(f"{API_BASE_URL}/strategieën/van_setup/{setup_id}", json=payload)
-            if put_res.status_code != 200:
-                logging.error(f"❌ Mislukt bij overschrijven strategie: {put_res.text}")
-                return {"error": put_res.text}
+            res = requests.put(urljoin(API_BASE_URL, f"/strategieën/van_setup/{setup_id}"), json=payload)
         else:
-            logging.info("➕ Nieuwe strategie aanmaken...")
-            post_res = requests.post(f"{API_BASE_URL}/strategieën", json=payload)
-            if post_res.status_code != 201:
-                logging.error(f"❌ Mislukt bij toevoegen strategie: {post_res.text}")
-                return {"error": post_res.text}
+            res = requests.post(urljoin(API_BASE_URL, "/strategieën"), json=payload)
 
-        logging.info("✅ Strategie succesvol gegenereerd")
+        if res.status_code not in [200, 201]:
+            return {"error": res.text}
+
+        logging.info("✅ Strategie succesvol opgeslagen")
         return {"success": True, "strategie": payload}
 
     except Exception as e:
-        logging.error(f"❌ Fout in generate_strategie_voor_setup: {e}")
-        logging.error(traceback.format_exc())
+        logging.error(f"❌ Fout bij strategie generatie voor setup: {e}")
         return {"error": str(e)}
 
-# ✅ Startbericht voor debug
+# ✅ Debug start
 if __name__ == "__main__":
     logging.info("🚀 Celery Task-module gestart!")
-
-
