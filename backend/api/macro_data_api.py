@@ -1,86 +1,87 @@
-# macro_data_api.py — FastAPI API voor macro-indicatoren
-
 import logging
 import json
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
-from utils.db import get_db_connection    # correct
+from utils.db import get_db_connection
 from utils.macro_interpreter import process_macro_indicator
 
 router = APIRouter()
-
-# ✅ Logging instellen
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ Pad naar configuratiebestand
 CONFIG_PATH = "macro_indicators_config.json"
+
+# ✅ DB helper
+def get_db_cursor():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
+    return conn, conn.cursor()
 
 # ✅ POST: Macro-indicator toevoegen
 @router.post("/api/macro_data")
 async def add_macro_indicator(request: Request):
+    logger.info("📥 [add] Nieuwe macro-indicator toevoegen...")
     data = await request.json()
     name = data.get("name")
+
     if not name:
-        raise HTTPException(status_code=400, detail="Indicator name is required.")
+        raise HTTPException(status_code=400, detail="❌ [REQ01] Naam van indicator is verplicht.")
 
     try:
         with open(CONFIG_PATH) as f:
             config = json.load(f)
     except Exception as e:
-        logger.error(f"❌ Config laden mislukt: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load macro config.")
+        logger.error(f"❌ [CFG01] Config laden mislukt: {e}")
+        raise HTTPException(status_code=500, detail="❌ [CFG01] Configbestand ongeldig of ontbreekt.")
 
     if name not in config:
-        raise HTTPException(status_code=400, detail=f"Indicator '{name}' not found in config.")
+        raise HTTPException(status_code=400, detail=f"❌ [CFG02] Indicator '{name}' niet gevonden in config.")
 
     try:
         result = await process_macro_indicator(name, config[name])
+        if not result or "value" not in result or "interpretation" not in result or "action" not in result:
+            raise ValueError("Incomplete result from macro interpreter")
     except Exception as e:
-        logger.error(f"❌ Verwerking indicator mislukt: {e}")
-        raise HTTPException(status_code=500, detail="Failed to process macro indicator.")
+        logger.error(f"❌ [INT01] Interpreterfout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [INT01] Verwerking macro-indicator mislukt.")
 
-    if not result:
-        raise HTTPException(status_code=500, detail="No result from interpreter")
-
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Database connection failed.")
-
+    conn, cur = get_db_cursor()
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO macro_data (name, value, trend, interpretation, action, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (result["name"], result["value"], "", result["interpretation"], result["action"], datetime.utcnow()))
-            conn.commit()
-
-        logger.info(f"✅ '{name}' opgeslagen met waarde {result['value']}")
-        return {"message": f"Indicator '{name}' successfully saved."}
+        cur.execute("""
+            INSERT INTO macro_data (name, value, trend, interpretation, action, timestamp)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            result["name"],
+            result["value"],
+            "",  # trend wordt later berekend of geüpdatet
+            result["interpretation"],
+            result["action"],
+            datetime.utcnow()
+        ))
+        conn.commit()
+        logger.info(f"✅ [add] '{name}' opgeslagen met waarde {result['value']}")
+        return {"message": f"Indicator '{name}' succesvol opgeslagen."}
 
     except Exception as e:
-        logger.error(f"❌ Databasefout bij opslaan: {e}")
-        raise HTTPException(status_code=500, detail="Database error while saving macro indicator.")
+        logger.error(f"❌ [DB02] Fout bij opslaan macro data: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB02] Databasefout bij opslaan.")
     finally:
         conn.close()
 
 # ✅ GET: Macro-indicatoren ophalen
 @router.get("/api/macro_data")
 async def get_macro_indicators():
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Database connection failed.")
-
+    logger.info("📤 [get] Ophalen macro-indicatoren...")
+    conn, cur = get_db_cursor()
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, name, value, trend, interpretation, action, timestamp
-                FROM macro_data
-                ORDER BY timestamp DESC
-                LIMIT 100
-            """)
-            rows = cur.fetchall()
-
+        cur.execute("""
+            SELECT id, name, value, trend, interpretation, action, timestamp
+            FROM macro_data
+            ORDER BY timestamp DESC
+            LIMIT 100
+        """)
+        rows = cur.fetchall()
         result = [
             {
                 "id": row[0],
@@ -94,9 +95,8 @@ async def get_macro_indicators():
             for row in rows
         ]
         return result
-
     except Exception as e:
-        logger.error(f"❌ Databasefout bij ophalen: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch macro indicators.")
+        logger.error(f"❌ [get] Databasefout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB03] Ophalen macro-data mislukt.")
     finally:
         conn.close()
