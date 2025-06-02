@@ -1,17 +1,16 @@
-# ✅ technical_data_api.py — FastAPI version
 import logging
 import os
 import json
 from fastapi import APIRouter, HTTPException, Request
-from utils.db import get_db_connection    # correct
 from celery import Celery
+from utils.db import get_db_connection
 from utils.technical_interpreter import process_technical_indicator
 
 router = APIRouter()
 
-# ✅ Logging instellen
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# ✅ Logging
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ✅ Celery setup
 celery = Celery(__name__)
@@ -20,64 +19,61 @@ celery.conf.update(
     backend=os.getenv("CELERY_RESULT_BACKEND", "redis://market_dashboard-redis:6379/0"),
 )
 
-# ✅ Configuratiepad
 CONFIG_PATH = "technical_indicators_config.json"
 
-# ✅ Helper: Load config
+# ✅ Config loader
 def load_technical_config():
     try:
         with open(CONFIG_PATH, "r") as f:
             return json.load(f)
     except Exception as e:
-        logger.error(f"❌ Fout bij laden technical config: {e}")
-        return {}
+        logger.warning(f"⚠️ TECH01: Kan config niet laden: {e}")
+        return {}  # fallback naar lege config
 
-# ✅ Helper: Save technical data to database
-def save_technical_data(symbol, rsi, volume, ma_200, price, rsi_interpretation, volume_interpretation, ma200_interpretation):
+# ✅ DB save helper
+def save_technical_data(symbol, rsi, volume, ma_200, price, rsi_i, vol_i, ma_i):
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Failed to connect to database.")
+        logger.error("❌ TECH02: Geen DB-verbinding.")
         return False
-
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_data 
                 (symbol, rsi, rsi_interpretation, volume, volume_interpretation, ma_200, ma200_interpretation, price, is_updated, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW())
-            """, (symbol, float(rsi), rsi_interpretation, float(volume), volume_interpretation, float(ma_200), ma200_interpretation, float(price)))
+            """, (symbol, float(rsi), rsi_i, float(volume), vol_i, float(ma_200), ma_i, float(price)))
             conn.commit()
-        logger.info(f"✅ Technical data saved for {symbol}")
+        logger.info(f"✅ TECH03: Data opgeslagen voor {symbol}")
         return True
-
     except Exception as e:
-        logger.error(f"❌ Database error: {e}")
+        logger.error(f"❌ TECH04: Opslaan DB-fout: {e}")
         return False
-
     finally:
         conn.close()
 
-# ✅ Celery Task
+# ✅ Celery task
 @celery.task(name="save_technical_data_task")
 def save_technical_data_task(symbol, rsi, volume, ma_200, price):
+    logger.info(f"⚙️ [celery] Start taak voor {symbol}")
     config = load_technical_config()
 
     rsi_result = process_technical_indicator("rsi", rsi, config.get("rsi", {}))
     volume_result = process_technical_indicator("volume", volume, config.get("volume", {}))
     ma200_result = process_technical_indicator("ma_200", ma_200, config.get("ma_200", {}))
 
-    rsi_interpretation = rsi_result["interpretation"] if rsi_result else None
-    volume_interpretation = volume_result["interpretation"] if volume_result else None
-    ma200_interpretation = ma200_result["interpretation"] if ma200_result else None
+    rsi_i = rsi_result.get("interpretation") if rsi_result else None
+    vol_i = volume_result.get("interpretation") if volume_result else None
+    ma_i = ma200_result.get("interpretation") if ma200_result else None
 
-    save_technical_data(symbol, rsi, volume, ma_200, price, rsi_interpretation, volume_interpretation, ma200_interpretation)
+    save_technical_data(symbol, rsi, volume, ma_200, price, rsi_i, vol_i, ma_i)
 
 # ✅ Webhook endpoint van TradingView
 @router.post("/api/tradingview_webhook")
 async def tradingview_webhook(request: Request):
     try:
         data = await request.json()
-        logger.info(f"📩 Webhook ontvangen: {data}")
+        logger.info(f"📩 [webhook] Ontvangen: {data}")
 
         symbol = data.get("symbol", "BTC")
         rsi = data.get("rsi")
@@ -86,23 +82,22 @@ async def tradingview_webhook(request: Request):
         price = data.get("price")
 
         if None in (rsi, volume, ma_200, price):
-            raise HTTPException(status_code=400, detail="Incomplete webhook data.")
+            raise HTTPException(status_code=400, detail="WEBHOOK01: Incomplete webhook data.")
 
         save_technical_data_task.delay(symbol, rsi, volume, ma_200, price)
 
         return {"message": "Webhook ontvangen en verwerkt."}
 
     except Exception as e:
-        logger.error(f"❌ Fout bij verwerken webhook: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ WEBHOOK02: Fout: {e}")
+        raise HTTPException(status_code=500, detail=f"WEBHOOK02: {e}")
 
-# ✅ Ophalen van laatste technische data
+# ✅ Ophalen laatste technische data
 @router.get("/api/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-
+        raise HTTPException(status_code=500, detail="TECH05: Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -113,7 +108,7 @@ async def get_technical_data():
             """)
             rows = cur.fetchall()
 
-        technical_data = [
+        result = [
             {
                 "id": row[0],
                 "symbol": row[1],
@@ -129,12 +124,11 @@ async def get_technical_data():
             for row in rows
         ]
 
-        logger.info(f"📊 {len(technical_data)} technische records opgehaald")
-        return technical_data
+        logger.info(f"📊 [get] {len(result)} technische records opgehaald")
+        return result
 
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen technische data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        logger.error(f"❌ TECH06: Ophalen mislukt: {e}")
+        raise HTTPException(status_code=500, detail=f"TECH06: {e}")
     finally:
         conn.close()
