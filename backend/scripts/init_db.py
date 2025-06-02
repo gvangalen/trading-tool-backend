@@ -3,8 +3,7 @@ from utils.db import get_db_connection
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-# ✅ Rest van de code blijft gelijk...
+logger = logging.getLogger(__name__)
 
 def create_setups_table(conn):
     with conn.cursor() as cur:
@@ -17,7 +16,7 @@ def create_setups_table(conn):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-        logging.info("✅ Tabel 'setups' succesvol aangemaakt.")
+        logger.info("✅ Tabel 'setups' succesvol aangemaakt.")
 
 def create_market_data_table(conn):
     with conn.cursor() as cur:
@@ -32,7 +31,7 @@ def create_market_data_table(conn):
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-        logging.info("✅ Tabel 'market_data' succesvol aangemaakt.")
+        logger.info("✅ Tabel 'market_data' succesvol aangemaakt.")
 
 def create_technical_data_table(conn):
     with conn.cursor() as cur:
@@ -48,7 +47,7 @@ def create_technical_data_table(conn):
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-        logging.info("✅ Tabel 'technical_data' succesvol aangemaakt.")
+        logger.info("✅ Tabel 'technical_data' succesvol aangemaakt.")
 
 def create_macro_data_table(conn):
     with conn.cursor() as cur:
@@ -63,23 +62,25 @@ def create_macro_data_table(conn):
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
-        logging.info("✅ Tabel 'macro_data' succesvol aangemaakt.")
+        logger.info("✅ Tabel 'macro_data' succesvol aangemaakt.")
 
 def run_all():
     conn = get_db_connection()
     if not conn:
-        logging.error("❌ Kan geen verbinding maken met de database.")
+        logger.error("❌ Kan geen verbinding maken met de database.")
         return
 
     try:
+        conn.autocommit = False  # ✅ Duidelijk maken dat we zelf committen
         create_setups_table(conn)
         create_market_data_table(conn)
         create_technical_data_table(conn)
         create_macro_data_table(conn)
         conn.commit()
-        logging.info("✅ Alle tabellen succesvol gecreëerd of gecontroleerd.")
+        logger.info("✅ Alle tabellen succesvol gecreëerd of gecontroleerd.")
     except Exception as e:
-        logging.error(f"❌ Fout bij aanmaken tabellen: {e}")
+        conn.rollback()
+        logger.error(f"❌ Fout bij aanmaken tabellen: {e}")
     finally:
         conn.close()
 
