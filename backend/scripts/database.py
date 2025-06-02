@@ -3,10 +3,10 @@ import psycopg2
 import logging
 from dotenv import load_dotenv
 
-# ✅ Laad omgevingsvariabelen
+# ✅ Laad .env-variabelen
 load_dotenv()
 
-# ✅ Logging instellen
+# ✅ Logging configureren
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -20,9 +20,13 @@ def get_db_connection():
         "port": int(os.getenv("DB_PORT", 5432)),
     }
 
+    # 🔒 Beveiligingscheck op standaardwaarden
+    if db_config["host"] in ["localhost", "127.0.0.1"] or db_config["password"] in ["password", "", "admin"]:
+        logger.warning("⚠️ Waarschuwing: Mogelijk onveilige of standaard databaseconfiguratie gebruikt.")
+
     try:
         conn = psycopg2.connect(**db_config)
-        logger.info("✅ Verbonden met de database.")
+        logger.info(f"✅ Verbonden met de database ({db_config['host']}:{db_config['port']})")
         return conn
     except psycopg2.Error as e:
         logger.error(f"❌ Databaseverbinding mislukt: {e}")
