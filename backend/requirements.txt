@@ -2,33 +2,30 @@
 fastapi
 uvicorn[standard]
 
-# ✅ Database
-psycopg2-binary     # Voor PostgreSQL-verbindingen
-sqlalchemy
-pydantic
+# ✅ Database & ORM
+sqlalchemy>=1.4
+psycopg2-binary
+pydantic>=1.10,<2.0  # v2 vereist migratie
 
 # ✅ Background Tasks
-celery
-redis
+celery>=5.3
+redis>=4.5
 
 # ✅ Environment & HTTP
 python-dotenv
-httpx
+httpx>=0.24
 requests
 aiohttp
 
-# ✅ Data
-pandas
+# ✅ Data & Analysis
+pandas>=2.0
 
 # ✅ File uploads & templating
 python-multipart
 jinja2
 
 # ✅ AI
-openai
+openai>=1.0
 
-# ✅ AWS CLI (indien lokaal gebruikt met boto3)
-boto3
-
-# ✅ Utils
-loguru  # optioneel: betere logging dan standaard logging
+# ✅ Logging & utils
+loguru
