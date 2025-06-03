@@ -16,14 +16,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: 📦 Checkout code
         uses: actions/checkout@v3
 
-      - name: SSH and run deploy-backend.sh
+      - name: 🚀 SSH en draai deploy-backend.sh op server
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.PORT || '22' }}
-          script: bash ~/trading-tool-backend/deploy-backend.sh
+          # Alleen nodig als je poort anders is dan 22:
+          # port: ${{ secrets.PORT }}
+          script: |
+            echo "🎯 Start remote deployment..."
+            bash ~/trading-tool-backend/deploy-backend.sh
