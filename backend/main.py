@@ -9,11 +9,11 @@ logger = logging.getLogger(__name__)
 # ✅ FastAPI app initialiseren
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# ✅ CORS instellen (alleen wat nu relevant is)
+# ✅ Alleen toegang vanaf Oracle frontend en lokale development
 origins = [
-    "http://localhost:3000",
-    "http://143.47.186.148",     # frontend op Oracle IP
-    "http://143.47.186.148:80",  # expliciet poort 80 voor zekerheid
+    "http://localhost:3000",        # lokaal testen
+    "http://143.47.186.148",        # Oracle IP
+    "http://143.47.186.148:80",     # expliciet poort 80
 ]
 
 app.add_middleware(
@@ -24,7 +24,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Router importen (veilig en schaalbaar)
+# ✅ Routers includen
 def safe_include(import_path, router_name, prefix="/api"):
     try:
         module = __import__(import_path, fromlist=["router"])
@@ -33,7 +33,6 @@ def safe_include(import_path, router_name, prefix="/api"):
     except Exception as e:
         logger.warning(f"❌ Kon router '{router_name}' niet laden ({import_path}): {e}")
 
-# ✅ Routers includen
 safe_include("api.market_data_api", "market_data_api")
 safe_include("api.macro_data_api", "macro_data_api")
 safe_include("api.technical_data_api", "technical_data_api")
@@ -44,13 +43,13 @@ safe_include("api.ai.ai_explain_api", "ai_explain_api")
 safe_include("api.ai.ai_strategy_api", "ai_strategy_api")
 safe_include("api.onboarding_api", "onboarding_api")
 
-# ✅ Health check
+# ✅ Health endpoint
 @app.get("/api/health")
 def health_check():
     logger.info("📡 Health check aangeroepen.")
     return {"status": "ok", "message": "API is running"}
 
-# ✅ CORS test
+# ✅ Testendpoint om CORS te testen
 @app.get("/api/test-cors")
 def test_cors():
     logger.info("🧪 CORS test endpoint aangeroepen.")
