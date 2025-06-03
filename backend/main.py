@@ -11,9 +11,10 @@ app = FastAPI(title="Market Dashboard API", version="1.0")
 
 # ✅ Alleen toegang vanaf Oracle frontend en lokale development
 origins = [
-    "http://localhost:3000",        # lokaal testen
-    "http://143.47.186.148",        # Oracle IP
-    "http://143.47.186.148:80",     # expliciet poort 80
+    "http://localhost:3000",          # lokaal testen
+    "http://143.47.186.148",          # zonder poort
+    "http://143.47.186.148:80",       # statisch op poort 80
+    "http://143.47.186.148:3000",     # ✅ Next.js frontend draait op poort 3000!
 ]
 
 app.add_middleware(
