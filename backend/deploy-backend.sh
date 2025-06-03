@@ -21,12 +21,16 @@ pip install -r requirements.txt || {
   exit 1
 }
 
-echo "🔁 Herstart backend met PM2..."
-pm2 delete backend || echo "ℹ️ Backend draaide nog niet"
+echo "💀 Stop oude backend (indien actief)..."
+pm2 delete backend || echo "ℹ️ Geen bestaand backend-proces"
 
-pm2 start "uvicorn main:app --host 0.0.0.0 --port 8000 --reload" --name backend || {
+echo "🚀 Start backend op via Uvicorn (ASGI)..."
+pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002 --reload" --name backend || {
   echo "❌ Start backend mislukt."
   exit 1
 }
 
-echo "✅ Backend succesvol gedeployed!"
+echo "💾 PM2-config bewaren..."
+pm2 save
+
+echo "✅ Backend succesvol gedeployed op poort 5002!"
