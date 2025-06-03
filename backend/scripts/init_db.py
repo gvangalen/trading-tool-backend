@@ -1,5 +1,10 @@
 import logging
 from utils.db import get_db_connection
+from dotenv import load_dotenv  # ✅ Toegevoegd
+import os
+
+# ✅ .env-bestand laden
+load_dotenv()
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -71,7 +76,7 @@ def run_all():
         return
 
     try:
-        conn.autocommit = False  # ✅ Duidelijk maken dat we zelf committen
+        conn.autocommit = False
         create_setups_table(conn)
         create_market_data_table(conn)
         create_technical_data_table(conn)
