@@ -1,12 +1,14 @@
-from fastapi import APIRouter, HTTPException
+import logging
+from fastapi import APIRouter, HTTPException, Request
 from utils.db import get_db_connection
 import psycopg2.extras
-import logging
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-@router.get("/api/dashboard_data")
+# ✅ 1. Gecombineerde dashboarddata
+@router.get("/api/dashboard")
 async def get_dashboard_data():
     conn = get_db_connection()
     if not conn:
@@ -56,7 +58,7 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH03: Macro data fout: {e}")
                 macro_data = []
 
-            # ✅ Setups
+            # ✅ Setup status
             try:
                 cur.execute("""
                     SELECT DISTINCT ON (name) name, status, timestamp
@@ -66,7 +68,7 @@ async def get_dashboard_data():
                 setups = [dict(row) for row in cur.fetchall()]
                 logger.info(f"📋 DASH04: Setups geladen ({len(setups)} rijen)")
             except Exception as e:
-                logger.warning(f"⚠️ DASH04: Setups data fout: {e}")
+                logger.warning(f"⚠️ DASH04: Setups fout: {e}")
                 setups = []
 
         return {
@@ -77,7 +79,64 @@ async def get_dashboard_data():
         }
 
     except Exception as e:
-        logger.error(f"❌ DASH05: Algemeen dashboard-fout: {e}")
-        raise HTTPException(status_code=500, detail="DASH05: Fout bij ophalen dashboard data.")
+        logger.error(f"❌ DASH05: Dashboard error: {e}")
+        raise HTTPException(status_code=500, detail="DASH05: Dashboard data ophalen mislukt.")
+    finally:
+        conn.close()
+
+# ✅ 2. Healthcheck endpoint
+@router.get("/api/health")
+async def health_check():
+    try:
+        conn = get_db_connection()
+        if not conn:
+            raise HTTPException(status_code=500, detail="HEALTH01: DB-connectie faalt.")
+        conn.close()
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"❌ HEALTH02: {e}")
+        raise HTTPException(status_code=500, detail="HEALTH02: Interne fout")
+
+# ✅ 3. Tradingadvies per asset
+@router.get("/api/trading_advice")
+async def get_trading_advice(symbol: str = "BTC"):
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT asset, advice, explanation, timestamp
+                FROM trading_advice
+                WHERE asset = %s
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (symbol,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail=f"Geen advies voor {symbol}.")
+            return dict(row)
+    except Exception as e:
+        logger.error(f"❌ ADVICE01: {e}")
+        raise HTTPException(status_code=500, detail="ADVICE01: Ophalen advies mislukt.")
+    finally:
+        conn.close()
+
+# ✅ 4. Top setups ophalen (voor TopSetupsMini component)
+@router.get("/api/top_setups")
+async def get_top_setups():
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT name, score, timeframe, asset, explanation, timestamp
+                FROM strategies
+                WHERE data->>'score' IS NOT NULL
+                ORDER BY CAST(data->>'score' AS FLOAT) DESC
+                LIMIT 5
+            """)
+            rows = cur.fetchall()
+            return [dict(row) for row in rows]
+    except Exception as e:
+        logger.error(f"❌ SETUPS01: {e}")
+        raise HTTPException(status_code=500, detail="SETUPS01: Ophalen top setups mislukt.")
     finally:
         conn.close()
