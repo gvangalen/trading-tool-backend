@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from utils.db import get_db_connection
 from utils.macro_interpreter import process_macro_indicator
 
-router = APIRouter()
+router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
