@@ -6,7 +6,7 @@ from datetime import datetime
 from utils.db import get_db_connection
 from utils.market_interpreter import interpret_market_data
 
-router = APIRouter()
+router = APIRouter(prefix="/api")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
