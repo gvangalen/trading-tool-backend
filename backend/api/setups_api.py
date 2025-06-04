@@ -18,6 +18,7 @@ async def save_setup(request: Request):
     symbol = data.get("symbol", "BTC")
     min_investment = data.get("min_investment")
     dynamic = data.get("dynamic", False)
+    score = data.get("score")  # optioneel
 
     if not setup_name or not trend or not indicators or not timeframe:
         raise HTTPException(status_code=400, detail="Name, trend, indicators and timeframe are required.")
@@ -29,7 +30,8 @@ async def save_setup(request: Request):
         "account_type": account_type,
         "strategy_type": strategy_type,
         "min_investment": min_investment,
-        "dynamic": dynamic
+        "dynamic": dynamic,
+        "score": score
     }
 
     conn = get_db_connection()
@@ -90,6 +92,7 @@ async def get_setups(symbol: str = "BTC"):
                 "strategy_type": conditions.get("strategy_type"),
                 "min_investment": conditions.get("min_investment"),
                 "dynamic": conditions.get("dynamic"),
+                "score": conditions.get("score"),
                 "created_at": row[4].isoformat()
             })
 
@@ -123,7 +126,7 @@ async def delete_setup(setup_id: int):
     finally:
         conn.close()
 
-# ✅ Setup bewerken
+# ✅ Setup bijwerken
 @router.put("/api/setups/{setup_id}")
 async def update_setup(setup_id: int, request: Request):
     data = await request.json()
@@ -137,6 +140,7 @@ async def update_setup(setup_id: int, request: Request):
     symbol = data.get("symbol", "BTC")
     min_investment = data.get("min_investment")
     dynamic = data.get("dynamic", False)
+    score = data.get("score")
 
     if not setup_name or not trend or not indicators or not timeframe:
         raise HTTPException(status_code=400, detail="Name, trend, indicators and timeframe are required.")
@@ -148,7 +152,8 @@ async def update_setup(setup_id: int, request: Request):
         "account_type": account_type,
         "strategy_type": strategy_type,
         "min_investment": min_investment,
-        "dynamic": dynamic
+        "dynamic": dynamic,
+        "score": score
     }
 
     conn = get_db_connection()
@@ -160,10 +165,11 @@ async def update_setup(setup_id: int, request: Request):
             cur.execute("""
                 UPDATE setups
                 SET setup_name = %s,
+                    symbol = %s,
                     conditions = %s::jsonb
                 WHERE id = %s
                 RETURNING id;
-            """, (setup_name, json.dumps(conditions), setup_id))
+            """, (setup_name, symbol, json.dumps(conditions), setup_id))
             updated = cur.fetchone()
 
             if not updated:
@@ -174,5 +180,49 @@ async def update_setup(setup_id: int, request: Request):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    finally:
+        conn.close()
+
+# ✅ Top setups ophalen op basis van hoogste score
+@router.get("/api/setups/top")
+async def get_top_setups(limit: int = 3):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Database connection failed.")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, symbol, setup_name, conditions, created_at
+                FROM setups
+                WHERE conditions->>'score' IS NOT NULL
+                ORDER BY CAST(conditions->>'score' AS FLOAT) DESC
+                LIMIT %s;
+            """, (limit,))
+            rows = cur.fetchall()
+
+        setups = []
+        for row in rows:
+            conditions = row[3]
+            if isinstance(conditions, str):
+                try:
+                    conditions = json.loads(conditions)
+                except json.JSONDecodeError:
+                    conditions = {}
+
+            setups.append({
+                "id": row[0],
+                "symbol": row[1],
+                "name": row[2],
+                "score": conditions.get("score"),
+                "trend": conditions.get("trend"),
+                "timeframe": conditions.get("timeframe"),
+                "created_at": row[4].isoformat()
+            })
+
+        return setups
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Top setups ophalen mislukt: {e}")
     finally:
         conn.close()
