@@ -11,7 +11,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 CONFIG_PATH = "macro_indicators_config.json"
 
-# ✅ DB helper
 def get_db_cursor():
     conn = get_db_connection()
     if not conn:
@@ -19,7 +18,7 @@ def get_db_cursor():
     return conn, conn.cursor()
 
 # ✅ POST: Macro-indicator toevoegen
-@router.post("/api/macro_data")
+@router.post("/macro_data")
 async def add_macro_indicator(request: Request):
     logger.info("📥 [add] Nieuwe macro-indicator toevoegen...")
     data = await request.json()
@@ -54,7 +53,7 @@ async def add_macro_indicator(request: Request):
         """, (
             result["name"],
             result["value"],
-            "",  # trend wordt later berekend of geüpdatet
+            "",  # trend wordt later berekend
             result["interpretation"],
             result["action"],
             datetime.utcnow()
@@ -62,7 +61,6 @@ async def add_macro_indicator(request: Request):
         conn.commit()
         logger.info(f"✅ [add] '{name}' opgeslagen met waarde {result['value']}")
         return {"message": f"Indicator '{name}' succesvol opgeslagen."}
-
     except Exception as e:
         logger.error(f"❌ [DB02] Fout bij opslaan macro data: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB02] Databasefout bij opslaan.")
@@ -70,7 +68,7 @@ async def add_macro_indicator(request: Request):
         conn.close()
 
 # ✅ GET: Macro-indicatoren ophalen
-@router.get("/api/macro_data")
+@router.get("/macro_data")
 async def get_macro_indicators():
     logger.info("📤 [get] Ophalen macro-indicatoren...")
     conn, cur = get_db_cursor()
