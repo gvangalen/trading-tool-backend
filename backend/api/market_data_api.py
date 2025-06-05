@@ -6,7 +6,7 @@ from datetime import datetime
 from utils.db import get_db_connection
 from utils.market_interpreter import interpret_market_data
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api/market_data")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -21,7 +21,7 @@ def get_db_cursor():
     return conn, conn.cursor()
 
 # ✅ POST: Marktdata ophalen en opslaan
-@router.post("/api/market_data/save")
+@router.post("/save")
 async def save_market_data():
     logger.info("📡 [save] Ophalen van BTC & SOL market data...")
     try:
@@ -37,7 +37,6 @@ async def save_market_data():
             response.raise_for_status()
             data = response.json()
 
-        # Validatie
         if "bitcoin" not in data or "solana" not in data:
             raise HTTPException(status_code=502, detail="❌ [API01] Onvolledige CoinGecko-data.")
 
@@ -74,9 +73,8 @@ async def save_market_data():
     finally:
         conn.close()
 
-
 # ✅ GET: Geïnterpreteerde BTC-marktdata
-@router.get("/api/market_data/interpreted")
+@router.get("/interpreted")
 async def get_interpreted_market_data():
     logger.info("📊 [interpreted] Ophalen geïnterpreteerde BTC-data")
     conn, cur = get_db_cursor()
@@ -122,9 +120,8 @@ async def get_interpreted_market_data():
     finally:
         conn.close()
 
-
 # ✅ GET: Lijst met alle marktdata
-@router.get("/api/market_data/list")
+@router.get("/list")
 async def list_market_data():
     logger.info("📦 [list] Ophalen van marktdata lijst")
     conn, cur = get_db_cursor()
@@ -153,9 +150,13 @@ async def list_market_data():
     finally:
         conn.close()
 
+# ✅ GET: Root alias voor '/list' (optioneel)
+@router.get("")
+async def get_recent_market_data():
+    return await list_market_data()
 
 # ✅ GET: Test endpoint
-@router.get("/api/market_data/test")
+@router.get("/test")
 async def test_market_data():
     try:
         conn = get_db_connection()
