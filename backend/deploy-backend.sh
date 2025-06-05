@@ -15,7 +15,7 @@ git reset --hard origin/main || {
   exit 1
 }
 
-echo "🐍 Installeer dependencies..."
+echo "🐍 Installeer Python dependencies..."
 pip install -r requirements.txt || {
   echo "❌ Installeren dependencies mislukt."
   exit 1
@@ -24,8 +24,14 @@ pip install -r requirements.txt || {
 echo "💀 Stop oude backend (indien actief)..."
 pm2 delete backend || echo "ℹ️ Geen bestaand backend-proces"
 
-echo "🚀 Start backend op via Uvicorn (ASGI)..."
-pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002 --reload" --name backend || {
+echo "🚀 Start backend met Uvicorn via PM2..."
+pm2 start uvicorn \
+  --name backend \
+  --interpreter python3 \
+  -- "backend.main:app" \
+  --host 0.0.0.0 \
+  --port 5002 \
+  --workers 1 || {
   echo "❌ Start backend mislukt."
   exit 1
 }
@@ -33,4 +39,4 @@ pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002 --reload" --name 
 echo "💾 PM2-config bewaren..."
 pm2 save
 
-echo "✅ Backend succesvol gedeployed op poort 5002!"
+echo "✅ Backend succesvol gedeployed op http://localhost:5002/api/health"
