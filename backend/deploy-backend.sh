@@ -1,5 +1,4 @@
 #!/bin/bash
-
 set -e  # 🛑 Stop script bij fouten
 
 echo "📁 Ga naar backend map..."
