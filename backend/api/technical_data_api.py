@@ -56,7 +56,7 @@ def save_technical_data_task(symbol, rsi, volume, ma_200, price):
     save_technical_data(symbol, rsi, volume, ma_200, price, rsi_i, vol_i, ma_i)
 
 # ✅ Webhook endpoint
-@router.post("/api/tradingview_webhook")
+@router.post("/tradingview_webhook")
 async def tradingview_webhook(request: Request):
     try:
         data = await request.json()
@@ -74,7 +74,7 @@ async def tradingview_webhook(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ GET: laatste technische data
-@router.get("/api/technical_data")
+@router.get("/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
     try:
@@ -103,7 +103,7 @@ async def get_technical_data():
         conn.close()
 
 # ✅ POST: handmatig toevoegen
-@router.post("/api/technical_data")
+@router.post("/technical_data")
 async def add_technical_data(request: Request):
     try:
         data = await request.json()
@@ -133,7 +133,7 @@ async def add_technical_data(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ DELETE
-@router.delete("/api/technical_data/{id}")
+@router.delete("/technical_data/{id}")
 async def delete_technical_data(id: int):
     conn = get_db_connection()
     try:
@@ -150,7 +150,7 @@ async def delete_technical_data(id: int):
         conn.close()
 
 # ✅ GET: filteren op asset + timeframe
-@router.get("/api/technical_data/{symbol}/{timeframe}")
+@router.get("/technical_data/{symbol}/{timeframe}")
 async def get_data_for_asset_timeframe(symbol: str, timeframe: str):
     conn = get_db_connection()
     try:
