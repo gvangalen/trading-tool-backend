@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from utils.db import get_db_connection
 from utils.macro_interpreter import process_macro_indicator
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api/macro_data")
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -17,8 +17,8 @@ def get_db_cursor():
         raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
     return conn, conn.cursor()
 
-# ✅ POST: Macro-indicator toevoegen
-@router.post("/macro_data")
+# ✅ POST: Nieuwe macro-indicator
+@router.post("")
 async def add_macro_indicator(request: Request):
     logger.info("📥 [add] Nieuwe macro-indicator toevoegen...")
     data = await request.json()
@@ -67,8 +67,8 @@ async def add_macro_indicator(request: Request):
     finally:
         conn.close()
 
-# ✅ GET: Macro-indicatoren ophalen
-@router.get("/macro_data")
+# ✅ GET: Alle macro-indicatoren ophalen
+@router.get("")
 async def get_macro_indicators():
     logger.info("📤 [get] Ophalen macro-indicatoren...")
     conn, cur = get_db_cursor()
@@ -80,7 +80,7 @@ async def get_macro_indicators():
             LIMIT 100
         """)
         rows = cur.fetchall()
-        result = [
+        return [
             {
                 "id": row[0],
                 "name": row[1],
@@ -92,9 +92,13 @@ async def get_macro_indicators():
             }
             for row in rows
         ]
-        return result
     except Exception as e:
         logger.error(f"❌ [get] Databasefout: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB03] Ophalen macro-data mislukt.")
     finally:
         conn.close()
+
+# ✅ GET: Alias /list → fallback voor frontend
+@router.get("/list")
+async def get_macro_data_list():
+    return await get_macro_indicators()
