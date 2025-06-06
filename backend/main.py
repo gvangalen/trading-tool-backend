@@ -26,25 +26,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Routers includen – zonder prefix, de routers zelf definiëren "/api/..."
+# ✅ Routers includen – zonder prefix, routers bevatten zelf "/api/..."
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
-        app.include_router(module.router)  # <-- géén prefix hier
+        app.include_router(module.router)
         logger.info(f"✅ Router geladen: {name or import_path}")
     except Exception as e:
         logger.warning(f"❌ Kon router '{name}' niet laden ({import_path}): {e}")
 
-# ✅ Router imports
-safe_include("api.market_data_api", "market_data_api")
-safe_include("api.macro_data_api", "macro_data_api")
-safe_include("api.technical_data_api", "technical_data_api")
-safe_include("api.setups_api", "setups_api")
-safe_include("api.dashboard_api", "dashboard_api")
-safe_include("api.report_api", "report_api")
-safe_include("api.ai.ai_explain_api", "ai_explain_api")
-safe_include("api.ai.ai_strategy_api", "ai_strategy_api")
-safe_include("api.onboarding_api", "onboarding_api")
+# ✅ Router imports (🟡 let op: met prefix 'backend.')
+safe_include("backend.api.market_data_api", "market_data_api")
+safe_include("backend.api.macro_data_api", "macro_data_api")
+safe_include("backend.api.technical_data_api", "technical_data_api")
+safe_include("backend.api.setups_api", "setups_api")
+safe_include("backend.api.dashboard_api", "dashboard_api")
+safe_include("backend.api.report_api", "report_api")
+safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
+safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
+safe_include("backend.api.onboarding_api", "onboarding_api")
 
 # ✅ Health check
 @app.get("/api/health")
