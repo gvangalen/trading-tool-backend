@@ -69,7 +69,7 @@ async def save_market_data():
     finally:
         conn.close()
 
-# ✅ GET: Laatste 100 entries
+# ✅ GET: Laatste 100 entries (met veilige float-casting)
 @router.get("/list")
 async def list_market_data():
     logger.info("📦 [list] Ophalen van marktdata lijst...")
@@ -85,11 +85,11 @@ async def list_market_data():
         return [
             {
                 "symbol": row[0],
-                "price": float(row[1]),
-                "open": float(row[2]),
-                "high": float(row[3]),
-                "low": float(row[4]),
-                "change_24h": float(row[5]),
+                "price": float(row[1]) if row[1] is not None else None,
+                "open": float(row[2]) if row[2] is not None else None,
+                "high": float(row[3]) if row[3] is not None else None,
+                "low": float(row[4]) if row[4] is not None else None,
+                "change_24h": float(row[5]) if row[5] is not None else None,
                 "timestamp": row[6].isoformat() if row[6] else None
             }
             for row in rows
