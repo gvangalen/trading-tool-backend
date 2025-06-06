@@ -9,6 +9,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1"
+VOLUME_URL = "https://api.coingecko.com/api/v3/coins/{}?localization=false&tickers=false&market_data=true"
+
 ASSETS = {
     "BTC": "bitcoin",
     "SOL": "solana"
@@ -21,14 +23,15 @@ def get_db_cursor():
         raise HTTPException(status_code=500, detail="❌ [DB] Geen databaseverbinding.")
     return conn, conn.cursor()
 
-# ✅ POST: Haal OHLC-data op van CoinGecko en sla op
+# ✅ POST: Haal OHLC-data + volume op en sla op
 @router.post("/save")
 async def save_market_data():
-    logger.info("📡 [save] Ophalen van marktdata via OHLC endpoint...")
+    logger.info("📡 [save] Ophalen van marktdata via CoinGecko...")
     try:
         crypto_data = {}
         async with httpx.AsyncClient(timeout=10) as client:
             for symbol, coingecko_id in ASSETS.items():
+                # OHLC voor prijs
                 url = COINGECKO_URL.format(id=coingecko_id)
                 response = await client.get(url)
                 response.raise_for_status()
@@ -41,25 +44,40 @@ async def save_market_data():
                 open_, high, low, close = map(float, latest[1:5])
                 change = ((close - open_) / open_) * 100
 
+                # Volume ophalen
+                vol_response = await client.get(VOLUME_URL.format(coingecko_id))
+                vol_response.raise_for_status()
+                market_data = vol_response.json()
+                volume = market_data.get("market_data", {}).get("total_volume", {}).get("usd", None)
+
                 crypto_data[symbol] = {
                     "price": close,
                     "open": open_,
                     "high": high,
                     "low": low,
                     "change_24h": round(change, 2),
+                    "volume": float(volume) if volume else None
                 }
 
     except Exception as e:
-        logger.error(f"❌ [save] Fout bij ophalen CoinGecko OHLC: {e}")
+        logger.error(f"❌ [save] Fout bij ophalen van CoinGecko-data: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van marktdata.")
 
     conn, cur = get_db_cursor()
     try:
         for symbol, data in crypto_data.items():
             cur.execute("""
-                INSERT INTO market_data (symbol, price, open, high, low, change_24h, timestamp, is_updated)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW(), TRUE)
-            """, (symbol, data["price"], data["open"], data["high"], data["low"], data["change_24h"]))
+                INSERT INTO market_data (symbol, price, open, high, low, change_24h, volume, timestamp, is_updated)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), TRUE)
+            """, (
+                symbol,
+                data["price"],
+                data["open"],
+                data["high"],
+                data["low"],
+                data["change_24h"],
+                data["volume"]
+            ))
         conn.commit()
         logger.info("✅ [save] Marktdata succesvol opgeslagen.")
         return {"message": "✅ Marktdata opgeslagen"}
@@ -69,14 +87,14 @@ async def save_market_data():
     finally:
         conn.close()
 
-# ✅ GET: Laatste 100 entries (met veilige float-casting)
+# ✅ GET: Laatste 100 entries
 @router.get("/list")
 async def list_market_data():
     logger.info("📦 [list] Ophalen van marktdata lijst...")
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
-            SELECT symbol, price, open, high, low, change_24h, timestamp
+            SELECT symbol, price, open, high, low, change_24h, volume, timestamp
             FROM market_data
             ORDER BY timestamp DESC
             LIMIT 100
@@ -90,7 +108,8 @@ async def list_market_data():
                 "high": float(row[3]) if row[3] is not None else None,
                 "low": float(row[4]) if row[4] is not None else None,
                 "change_24h": float(row[5]) if row[5] is not None else None,
-                "timestamp": row[6].isoformat() if row[6] else None
+                "volume": float(row[6]) if row[6] is not None else None,
+                "timestamp": row[7].isoformat() if row[7] else None
             }
             for row in rows
         ]
