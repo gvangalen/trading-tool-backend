@@ -1,8 +1,8 @@
 # start_backend.py
 import sys, os
-sys.path.insert(0, os.path.abspath("backend"))
+sys.path.insert(0, os.path.abspath("."))  # Voegt ./backend toe aan sys.path
 
-from backend.main import app
+from main import app
 import uvicorn
 
 if __name__ == "__main__":
