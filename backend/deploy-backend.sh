@@ -1,7 +1,7 @@
 #!/bin/bash
-set -e  # 🛑 Stop script bij fouten
+set -e  # 🛑 Stop bij fouten
 
-# ✅ Zorg dat NVM/Node/PM2 werkt in non-interactieve shell
+# ✅ Activeer NVM en PM2 pad
 export NVM_DIR="$HOME/.nvm"
 source "$NVM_DIR/nvm.sh"
 export PATH="$NVM_DIR/versions/node/v18.20.8/bin:$PATH"
@@ -19,7 +19,7 @@ git reset --hard origin/main || {
   exit 1
 }
 
-echo "🐍 Installeer dependencies..."
+echo "🐍 Installeer Python dependencies..."
 pip install --user -r requirements.txt || {
   echo "❌ Installeren dependencies mislukt."
   exit 1
@@ -28,13 +28,13 @@ pip install --user -r requirements.txt || {
 echo "💀 Stop oude backend (indien actief)..."
 pm2 delete backend || echo "ℹ️ Geen bestaand backend-proces actief"
 
-echo "🚀 Start backend op via Uvicorn (ASGI)..."
-pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002 --reload" --name backend || {
+echo "🚀 Start backend opnieuw via Uvicorn (ASGI)..."
+pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002" --interpreter python3 --name backend || {
   echo "❌ Start backend mislukt."
   exit 1
 }
 
-echo "💾 PM2-config bewaren..."
+echo "💾 Sla PM2-config op (voor herstart na reboot)..."
 pm2 save
 
-echo "✅ Backend succesvol gedeployed op poort 5002!"
+echo "✅ Backend succesvol gedeployed op http://localhost:5002"
