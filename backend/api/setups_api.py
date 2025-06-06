@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException, Request
-import json
 from utils.db import get_db_connection
 
 router = APIRouter()
@@ -9,30 +8,19 @@ router = APIRouter()
 async def save_setup(request: Request):
     data = await request.json()
 
-    setup_name = data.get("name")
-    trend = data.get("trend")
-    indicators = data.get("indicators")
+    name = data.get("name")
+    symbol = data.get("symbol", "BTC")
     timeframe = data.get("timeframe")
     account_type = data.get("account_type")
     strategy_type = data.get("strategy_type")
-    symbol = data.get("symbol", "BTC")
     min_investment = data.get("min_investment")
     dynamic = data.get("dynamic", False)
-    score = data.get("score")  # optioneel
+    score = data.get("score")
+    description = data.get("description")
+    tags = data.get("tags", [])
 
-    if not setup_name or not trend or not indicators or not timeframe:
-        raise HTTPException(status_code=400, detail="Name, trend, indicators and timeframe are required.")
-
-    conditions = {
-        "indicators": indicators,
-        "trend": trend,
-        "timeframe": timeframe,
-        "account_type": account_type,
-        "strategy_type": strategy_type,
-        "min_investment": min_investment,
-        "dynamic": dynamic,
-        "score": score
-    }
+    if not name or not timeframe:
+        raise HTTPException(status_code=400, detail="Name and timeframe are required.")
 
     conn = get_db_connection()
     if not conn:
@@ -41,13 +29,18 @@ async def save_setup(request: Request):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO setups (symbol, setup_name, conditions, created_at)
-                VALUES (%s, %s, %s::jsonb, NOW())
+                INSERT INTO setups (
+                    name, symbol, timeframe, account_type, strategy_type,
+                    min_investment, dynamic_investment, score, description, tags, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 RETURNING id;
-            """, (symbol, setup_name, json.dumps(conditions)))
+            """, (
+                name, symbol, timeframe, account_type, strategy_type,
+                min_investment, dynamic, score, description, tags
+            ))
             setup_id = cur.fetchone()[0]
             conn.commit()
-            return {"message": "Setup successfully saved", "id": setup_id}
+            return {"message": "Setup succesvol opgeslagen", "id": setup_id}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
@@ -64,7 +57,8 @@ async def get_setups(symbol: str = "BTC"):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, symbol, setup_name, conditions, created_at
+                SELECT id, name, symbol, timeframe, account_type, strategy_type,
+                       min_investment, dynamic_investment, score, description, tags, created_at
                 FROM setups
                 WHERE symbol = %s
                 ORDER BY created_at DESC
@@ -74,26 +68,19 @@ async def get_setups(symbol: str = "BTC"):
 
         setups = []
         for row in rows:
-            conditions = row[3]
-            if isinstance(conditions, str):
-                try:
-                    conditions = json.loads(conditions)
-                except json.JSONDecodeError:
-                    conditions = {}
-
             setups.append({
                 "id": row[0],
-                "symbol": row[1],
-                "name": row[2],
-                "indicators": conditions.get("indicators"),
-                "trend": conditions.get("trend"),
-                "timeframe": conditions.get("timeframe"),
-                "account_type": conditions.get("account_type"),
-                "strategy_type": conditions.get("strategy_type"),
-                "min_investment": conditions.get("min_investment"),
-                "dynamic": conditions.get("dynamic"),
-                "score": conditions.get("score"),
-                "created_at": row[4].isoformat()
+                "name": row[1],
+                "symbol": row[2],
+                "timeframe": row[3],
+                "account_type": row[4],
+                "strategy_type": row[5],
+                "min_investment": float(row[6]) if row[6] is not None else None,
+                "dynamic": row[7],
+                "score": float(row[8]) if row[8] is not None else None,
+                "description": row[9],
+                "tags": row[10],
+                "created_at": row[11].isoformat()
             })
 
         return setups
@@ -116,10 +103,10 @@ async def delete_setup(setup_id: int):
             deleted = cur.fetchone()
 
             if not deleted:
-                raise HTTPException(status_code=404, detail="Setup not found.")
+                raise HTTPException(status_code=404, detail="Setup niet gevonden.")
 
             conn.commit()
-            return {"message": f"Setup {setup_id} deleted"}
+            return {"message": f"Setup {setup_id} verwijderd"}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
@@ -131,52 +118,51 @@ async def delete_setup(setup_id: int):
 async def update_setup(setup_id: int, request: Request):
     data = await request.json()
 
-    setup_name = data.get("name")
-    trend = data.get("trend")
-    indicators = data.get("indicators")
+    name = data.get("name")
+    symbol = data.get("symbol", "BTC")
     timeframe = data.get("timeframe")
     account_type = data.get("account_type")
     strategy_type = data.get("strategy_type")
-    symbol = data.get("symbol", "BTC")
     min_investment = data.get("min_investment")
     dynamic = data.get("dynamic", False)
     score = data.get("score")
+    description = data.get("description")
+    tags = data.get("tags", [])
 
-    if not setup_name or not trend or not indicators or not timeframe:
-        raise HTTPException(status_code=400, detail="Name, trend, indicators and timeframe are required.")
-
-    conditions = {
-        "indicators": indicators,
-        "trend": trend,
-        "timeframe": timeframe,
-        "account_type": account_type,
-        "strategy_type": strategy_type,
-        "min_investment": min_investment,
-        "dynamic": dynamic,
-        "score": score
-    }
+    if not name or not timeframe:
+        raise HTTPException(status_code=400, detail="Name en timeframe zijn vereist.")
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Database connection failed.")
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
 
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE setups
-                SET setup_name = %s,
+                SET name = %s,
                     symbol = %s,
-                    conditions = %s::jsonb
+                    timeframe = %s,
+                    account_type = %s,
+                    strategy_type = %s,
+                    min_investment = %s,
+                    dynamic_investment = %s,
+                    score = %s,
+                    description = %s,
+                    tags = %s
                 WHERE id = %s
                 RETURNING id;
-            """, (setup_name, symbol, json.dumps(conditions), setup_id))
+            """, (
+                name, symbol, timeframe, account_type, strategy_type,
+                min_investment, dynamic, score, description, tags, setup_id
+            ))
             updated = cur.fetchone()
 
             if not updated:
-                raise HTTPException(status_code=404, detail="Setup not found.")
+                raise HTTPException(status_code=404, detail="Setup niet gevonden.")
 
             conn.commit()
-            return {"message": f"Setup {setup_id} updated"}
+            return {"message": f"Setup {setup_id} bijgewerkt"}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
@@ -193,31 +179,23 @@ async def get_top_setups(limit: int = 3):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, symbol, setup_name, conditions, created_at
+                SELECT id, name, symbol, timeframe, score, created_at
                 FROM setups
-                WHERE conditions->>'score' IS NOT NULL
-                ORDER BY CAST(conditions->>'score' AS FLOAT) DESC
+                WHERE score IS NOT NULL
+                ORDER BY score DESC
                 LIMIT %s;
             """, (limit,))
             rows = cur.fetchall()
 
         setups = []
         for row in rows:
-            conditions = row[3]
-            if isinstance(conditions, str):
-                try:
-                    conditions = json.loads(conditions)
-                except json.JSONDecodeError:
-                    conditions = {}
-
             setups.append({
                 "id": row[0],
-                "symbol": row[1],
-                "name": row[2],
-                "score": conditions.get("score"),
-                "trend": conditions.get("trend"),
-                "timeframe": conditions.get("timeframe"),
-                "created_at": row[4].isoformat()
+                "name": row[1],
+                "symbol": row[2],
+                "timeframe": row[3],
+                "score": float(row[4]) if row[4] is not None else None,
+                "created_at": row[5].isoformat()
             })
 
         return setups
