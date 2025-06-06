@@ -26,7 +26,7 @@ def load_technical_config():
         logger.warning(f"⚠️ TECH01: Config load failed: {e}")
         return {}
 
-def save_technical_data(symbol, rsi, volume, ma_200, price, rsi_i, vol_i, ma_i, timeframe=None):
+def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe=None):
     conn = get_db_connection()
     if not conn:
         logger.error("❌ TECH02: No DB connection.")
@@ -35,9 +35,9 @@ def save_technical_data(symbol, rsi, volume, ma_200, price, rsi_i, vol_i, ma_i, 
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_data 
-                (symbol, rsi, rsi_interpretation, volume, volume_interpretation, ma_200, ma200_interpretation, price, timeframe, is_updated, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW())
-            """, (symbol, float(rsi), rsi_i, float(volume), vol_i, float(ma_200), ma_i, float(price), timeframe))
+                (symbol, rsi, volume, ma_200, score, advies, timeframe, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            """, (symbol, float(rsi), float(volume), float(ma_200), float(score), advies, timeframe))
             conn.commit()
         logger.info(f"✅ TECH03: Saved data for {symbol}")
         return True
@@ -48,14 +48,15 @@ def save_technical_data(symbol, rsi, volume, ma_200, price, rsi_i, vol_i, ma_i, 
         conn.close()
 
 @celery.task(name="save_technical_data_task")
-def save_technical_data_task(symbol, rsi, volume, ma_200, price):
+def save_technical_data_task(symbol, rsi, volume, ma_200):
     config = load_technical_config()
-    rsi_i = process_technical_indicator("rsi", rsi, config.get("rsi", {})).get("interpretation")
-    vol_i = process_technical_indicator("volume", volume, config.get("volume", {})).get("interpretation")
-    ma_i = process_technical_indicator("ma_200", ma_200, config.get("ma_200", {})).get("interpretation")
-    save_technical_data(symbol, rsi, volume, ma_200, price, rsi_i, vol_i, ma_i)
+    rsi_score = process_technical_indicator("rsi", rsi, config.get("rsi", {})).get("score", 0)
+    vol_score = process_technical_indicator("volume", volume, config.get("volume", {})).get("score", 0)
+    ma_score = process_technical_indicator("ma_200", ma_200, config.get("ma_200", {})).get("score", 0)
+    totaal_score = round((rsi_score + vol_score + ma_score) / 3, 2)
+    advies = "Bullish" if totaal_score >= 60 else "Bearish" if totaal_score < 40 else "Neutraal"
+    save_technical_data(symbol, rsi, volume, ma_200, totaal_score, advies)
 
-# ✅ Webhook endpoint
 @router.post("/tradingview_webhook")
 async def tradingview_webhook(request: Request):
     try:
@@ -64,24 +65,21 @@ async def tradingview_webhook(request: Request):
         rsi = data.get("rsi")
         volume = data.get("volume")
         ma_200 = data.get("ma_200")
-        price = data.get("price")
-        if None in (rsi, volume, ma_200, price):
+        if None in (rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="Incomplete webhook data.")
-        save_technical_data_task.delay(symbol, rsi, volume, ma_200, price)
+        save_technical_data_task.delay(symbol, rsi, volume, ma_200)
         return {"message": "Webhook received"}
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ GET: laatste technische data
 @router.get("/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, symbol, rsi, rsi_interpretation, volume, volume_interpretation,
-                       ma_200, ma200_interpretation, price, timeframe, timestamp
+                SELECT id, symbol, rsi, volume, ma_200, score, advies, timeframe, timestamp
                 FROM technical_data
                 ORDER BY timestamp DESC
                 LIMIT 20
@@ -89,11 +87,10 @@ async def get_technical_data():
             rows = cur.fetchall()
         return [
             {
-                "id": row[0], "symbol": row[1], "rsi": float(row[2]), "rsi_interpretation": row[3],
-                "volume": float(row[4]), "volume_interpretation": row[5],
-                "ma_200": float(row[6]), "ma200_interpretation": row[7],
-                "price": float(row[8]), "timeframe": row[9],
-                "timestamp": row[10].isoformat() if row[10] else None
+                "id": row[0], "symbol": row[1], "rsi": float(row[2]), "volume": float(row[3]),
+                "ma_200": float(row[4]), "score": float(row[5]),
+                "advies": row[6], "timeframe": row[7],
+                "timestamp": row[8].isoformat() if row[8] else None
             } for row in rows
         ]
     except Exception as e:
@@ -102,7 +99,6 @@ async def get_technical_data():
     finally:
         conn.close()
 
-# ✅ POST: handmatig toevoegen
 @router.post("/technical_data")
 async def add_technical_data(request: Request):
     try:
@@ -111,18 +107,19 @@ async def add_technical_data(request: Request):
         rsi = data.get("rsi")
         volume = data.get("volume")
         ma_200 = data.get("ma_200")
-        price = data.get("price")
         timeframe = data.get("timeframe", "1D")
 
-        if None in (symbol, rsi, volume, ma_200, price):
+        if None in (symbol, rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="TECH07: Incomplete data.")
 
         config = load_technical_config()
-        rsi_i = process_technical_indicator("rsi", rsi, config.get("rsi", {})).get("interpretation")
-        vol_i = process_technical_indicator("volume", volume, config.get("volume", {})).get("interpretation")
-        ma_i = process_technical_indicator("ma_200", ma_200, config.get("ma_200", {})).get("interpretation")
+        rsi_score = process_technical_indicator("rsi", rsi, config.get("rsi", {})).get("score", 0)
+        vol_score = process_technical_indicator("volume", volume, config.get("volume", {})).get("score", 0)
+        ma_score = process_technical_indicator("ma_200", ma_200, config.get("ma_200", {})).get("score", 0)
+        totaal_score = round((rsi_score + vol_score + ma_score) / 3, 2)
+        advies = "Bullish" if totaal_score >= 60 else "Bearish" if totaal_score < 40 else "Neutraal"
 
-        success = save_technical_data(symbol, rsi, volume, ma_200, price, rsi_i, vol_i, ma_i, timeframe)
+        success = save_technical_data(symbol, rsi, volume, ma_200, totaal_score, advies, timeframe)
         if success:
             return {"message": f"Manually saved data for {symbol}"}
         else:
@@ -132,7 +129,6 @@ async def add_technical_data(request: Request):
         logger.error(f"❌ TECH09: Add failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ DELETE
 @router.delete("/technical_data/{id}")
 async def delete_technical_data(id: int):
     conn = get_db_connection()
@@ -149,15 +145,13 @@ async def delete_technical_data(id: int):
     finally:
         conn.close()
 
-# ✅ GET: filteren op asset + timeframe
 @router.get("/technical_data/{symbol}/{timeframe}")
 async def get_data_for_asset_timeframe(symbol: str, timeframe: str):
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, symbol, rsi, rsi_interpretation, volume, volume_interpretation,
-                       ma_200, ma200_interpretation, price, timeframe, timestamp
+                SELECT id, symbol, rsi, volume, ma_200, score, advies, timeframe, timestamp
                 FROM technical_data
                 WHERE symbol = %s AND timeframe = %s
                 ORDER BY timestamp DESC
@@ -166,11 +160,10 @@ async def get_data_for_asset_timeframe(symbol: str, timeframe: str):
             rows = cur.fetchall()
         return [
             {
-                "id": row[0], "symbol": row[1], "rsi": float(row[2]), "rsi_interpretation": row[3],
-                "volume": float(row[4]), "volume_interpretation": row[5],
-                "ma_200": float(row[6]), "ma200_interpretation": row[7],
-                "price": float(row[8]), "timeframe": row[9],
-                "timestamp": row[10].isoformat() if row[10] else None
+                "id": row[0], "symbol": row[1], "rsi": float(row[2]), "volume": float(row[3]),
+                "ma_200": float(row[4]), "score": float(row[5]),
+                "advies": row[6], "timeframe": row[7],
+                "timestamp": row[8].isoformat() if row[8] else None
             } for row in rows
         ]
     except Exception as e:
