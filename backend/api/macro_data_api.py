@@ -17,7 +17,7 @@ def get_db_cursor():
         raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
     return conn, conn.cursor()
 
-# ✅ POST: Nieuwe macro-indicator
+# ✅ POST: Nieuwe macro-indicator toevoegen
 @router.post("")
 async def add_macro_indicator(request: Request):
     logger.info("📥 [add] Nieuwe macro-indicator toevoegen...")
@@ -27,6 +27,7 @@ async def add_macro_indicator(request: Request):
     if not name:
         raise HTTPException(status_code=400, detail="❌ [REQ01] Naam van indicator is verplicht.")
 
+    # Config ophalen
     try:
         with open(CONFIG_PATH) as f:
             config = json.load(f)
@@ -37,29 +38,35 @@ async def add_macro_indicator(request: Request):
     if name not in config:
         raise HTTPException(status_code=400, detail=f"❌ [CFG02] Indicator '{name}' niet gevonden in config.")
 
+    # Interpreter verwerken
     try:
         result = await process_macro_indicator(name, config[name])
         if not result or "value" not in result or "interpretation" not in result or "action" not in result:
-            raise ValueError("Incomplete result from macro interpreter")
+            raise ValueError("❌ Interpreterresultaat incompleet")
     except Exception as e:
         logger.error(f"❌ [INT01] Interpreterfout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [INT01] Verwerking macro-indicator mislukt.")
+        raise HTTPException(status_code=500, detail="❌ [INT01] Verwerking indicator mislukt.")
 
+    # Score ophalen of berekenen
+    score = result.get("score", 0)
+
+    # Opslaan in database
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
-            INSERT INTO macro_data (name, value, trend, interpretation, action, timestamp)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO macro_data (name, value, trend, interpretation, action, score, timestamp)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
             result["name"],
             result["value"],
-            "",  # trend wordt later berekend
+            "",  # trend kan eventueel later berekend worden
             result["interpretation"],
             result["action"],
+            score,
             datetime.utcnow()
         ))
         conn.commit()
-        logger.info(f"✅ [add] '{name}' opgeslagen met waarde {result['value']}")
+        logger.info(f"✅ [add] '{name}' opgeslagen met waarde {result['value']} en score {score}")
         return {"message": f"Indicator '{name}' succesvol opgeslagen."}
     except Exception as e:
         logger.error(f"❌ [DB02] Fout bij opslaan macro data: {e}")
@@ -74,7 +81,7 @@ async def get_macro_indicators():
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
-            SELECT id, name, value, trend, interpretation, action, timestamp
+            SELECT id, name, value, trend, interpretation, action, score, timestamp
             FROM macro_data
             ORDER BY timestamp DESC
             LIMIT 100
@@ -88,7 +95,8 @@ async def get_macro_indicators():
                 "trend": row[3],
                 "interpretation": row[4],
                 "action": row[5],
-                "timestamp": row[6].isoformat() if row[6] else None
+                "score": row[6],
+                "timestamp": row[7].isoformat() if row[7] else None
             }
             for row in rows
         ]
