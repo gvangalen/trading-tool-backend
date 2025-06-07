@@ -59,17 +59,17 @@ async def get_dashboard_data():
                 macro_data = []
 
             # ✅ Setup status
-            try:
-                cur.execute("""
-                    SELECT DISTINCT ON (name) name, status, timestamp
-                    FROM setups
-                    ORDER BY name, timestamp DESC
-                """)
-                setups = [dict(row) for row in cur.fetchall()]
-                logger.info(f"📋 DASH04: Setups geladen ({len(setups)} rijen)")
-            except Exception as e:
-                logger.warning(f"⚠️ DASH04: Setups fout: {e}")
-                setups = []
+           try:
+    cur.execute("""
+        SELECT DISTINCT ON (name) name, created_at AS timestamp
+        FROM setups
+        ORDER BY name, created_at DESC
+    """)
+    setups = [dict(row) for row in cur.fetchall()]
+    logger.info(f"📋 DASH04: Setups geladen ({len(setups)} rijen)")
+except Exception as e:
+    logger.warning(f"⚠️ DASH04: Setups fout: {e}")
+    setups = []
 
         # ✅ Dummy scoreberekening (vervang later door AI/logica)
         macro_score = len(macro_data) * 10 if macro_data else 0
