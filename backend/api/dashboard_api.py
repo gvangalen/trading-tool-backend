@@ -163,3 +163,23 @@ async def get_top_setups():
         raise HTTPException(status_code=500, detail="SETUPS01: Ophalen top setups mislukt.")
     finally:
         conn.close()
+
+
+# ✅ 5. Setup summary ophalen (laatste timestamp per unieke naam)
+@router.get("/setup_summary")
+async def get_setup_summary():
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (name) name, created_at AS timestamp
+                FROM setups
+                ORDER BY name, created_at DESC
+            """)
+            rows = cur.fetchall()
+            return [{"name": row["name"], "timestamp": row["timestamp"].isoformat()} for row in rows]
+    except Exception as e:
+        logger.warning(f"⚠️ DASH06: Fout bij ophalen setup summary: {e}")
+        return []
+    finally:
+        conn.close()
