@@ -28,8 +28,3 @@ jobs:
           script: |
             echo "🎯 Start remote deployment..."
             bash ~/trading-tool-backend/deploy-backend.sh
-
-            echo "♻️ PM2 restart backend..."
-            export PATH=$PATH:/home/ubuntu/.nvm/versions/node/v18.20.8/bin
-            pm2 restart backend
-            
