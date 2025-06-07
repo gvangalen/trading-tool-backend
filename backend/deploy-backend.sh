@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e  # 🛑 Stop bij fouten
+set -e  # 🛑 Stop script bij fouten
 
 # ✅ Activeer NVM en zorg dat pm2 in PATH zit
 export NVM_DIR="$HOME/.nvm"
@@ -33,7 +33,7 @@ else
 fi
 
 echo "🚀 Start backend opnieuw via Uvicorn (ASGI)..."
-pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
+pm2 start "uvicorn start_backend:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
   --name backend || {
     echo "❌ Start backend mislukt."
