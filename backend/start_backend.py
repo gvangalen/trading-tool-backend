@@ -21,6 +21,7 @@ from api.dashboard_api import router as dashboard_router
 from api.report_api import router as report_router
 from api.ai.ai_explain_api import router as ai_explain_router
 from api.ai.ai_strategy_api import router as ai_strategy_router
+from api.ai.ai_trading_api import router as ai_trading_router
 from api.onboarding_api import router as onboarding_router
 
 app = FastAPI()
@@ -42,6 +43,7 @@ app.include_router(dashboard_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(ai_explain_router, prefix="/api")
 app.include_router(ai_strategy_router, prefix="/api")
+app.include_router(ai_trading_router, prefix="/api") 
 app.include_router(onboarding_router, prefix="/api")
 
 # ✅ Healthcheck route
