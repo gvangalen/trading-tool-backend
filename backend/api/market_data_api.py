@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from datetime import datetime
 from utils.db import get_db_connection
 
-router = APIRouter(prefix="/api/market_data")
+router = APIRouter()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
