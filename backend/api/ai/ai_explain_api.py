@@ -5,7 +5,7 @@ import openai
 import os
 import logging
 
-router = APIRouter()
+router = APIRouter(prefix="/ai/explain")
 logger = logging.getLogger(__name__)
 
 # ✅ OpenAI API key instellen
