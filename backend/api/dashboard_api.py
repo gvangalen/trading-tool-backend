@@ -58,7 +58,7 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH03: Macro data fout: {e}")
                 macro_data = []
 
-             # ✅ Setup status
+            # ✅ Setup status
             try:
                 cur.execute("""
                     SELECT DISTINCT ON (name) name, created_at AS timestamp
