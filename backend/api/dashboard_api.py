@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from utils.db import get_db_connection
 import psycopg2.extras
 
-router = APIRouter(prefix="/api")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
