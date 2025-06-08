@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # ✅ Strategy opslaan
-@strategy_api.route('/api/strategies', methods=['POST'])
+@strategy_api.route('/strategies', methods=['POST'])
 def save_strategy():
     try:
         data = request.get_json()
@@ -68,7 +68,7 @@ def save_strategy():
 
 
 # ✅ Strategy bijwerken
-@strategy_api.route('/api/strategies/<int:strategy_id>', methods=['PUT'])
+@strategy_api.route('/strategies/<int:strategy_id>', methods=['PUT'])
 def update_strategy(strategy_id):
     try:
         data = request.get_json()
@@ -93,7 +93,7 @@ def update_strategy(strategy_id):
 
 
 # ✅ Strategy verwijderen
-@strategy_api.route('/api/strategies/<int:strategy_id>', methods=['DELETE'])
+@strategy_api.route('/strategies/<int:strategy_id>', methods=['DELETE'])
 def delete_strategy(strategy_id):
     try:
         conn = get_db_connection()
@@ -107,7 +107,7 @@ def delete_strategy(strategy_id):
 
 
 # ✅ Favorite toggle
-@strategy_api.route('/api/strategies/<int:strategy_id>/favorite', methods=['PATCH'])
+@strategy_api.route('/strategies/<int:strategy_id>/favorite', methods=['PATCH'])
 def toggle_favorite(strategy_id):
     try:
         conn = get_db_connection()
@@ -129,7 +129,7 @@ def toggle_favorite(strategy_id):
 
 
 # ✅ Filterstrategieën
-@strategy_api.route('/api/strategies/filter', methods=['GET'])
+@strategy_api.route('/strategies/filter', methods=['GET'])
 def filter_strategies():
     try:
         asset = request.args.get("asset")
@@ -163,7 +163,7 @@ def filter_strategies():
 
 
 # ✅ Strategy-uitleg ophalen
-@strategy_api.route('/api/strategies/<int:strategy_id>/explanation', methods=['GET'])
+@strategy_api.route('/strategies/<int:strategy_id>/explanation', methods=['GET'])
 def get_explanation(strategy_id):
     try:
         conn = get_db_connection()
@@ -187,7 +187,7 @@ def get_explanation(strategy_id):
 
 
 # ✅ Summary endpoint
-@strategy_api.route('/api/strategies/summary', methods=['GET'])
+@strategy_api.route('/strategies/summary', methods=['GET'])
 def strategy_summary():
     try:
         conn = get_db_connection()
@@ -224,7 +224,7 @@ def strategy_summary():
 
 
 # ✅ Scorematrix (asset × timeframe)
-@strategy_api.route('/api/strategies/score_matrix', methods=['GET'])
+@strategy_api.route('/strategies/score_matrix', methods=['GET'])
 def score_matrix():
     try:
         conn = get_db_connection()
@@ -259,7 +259,7 @@ def score_matrix():
 
 
 # ✅ CSV export
-@strategy_api.route('/api/strategies/export', methods=['GET'])
+@strategy_api.route('/strategies/export', methods=['GET'])
 def export_strategies():
     try:
         conn = get_db_connection()
