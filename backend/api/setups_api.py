@@ -1,7 +1,9 @@
 from fastapi import APIRouter, HTTPException, Request
 from utils.db import get_db_connection
 
-router = APIRouter()
+router = APIRouter(prefix="/setups")
+
+# ✅ Setup toevoegen)
 
 # ✅ Setup toevoegen
 @router.post("/setups", status_code=201)
