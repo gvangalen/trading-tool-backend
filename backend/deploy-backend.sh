@@ -32,10 +32,10 @@ else
   echo "ℹ️ Geen bestaand backend-proces actief."
 fi
 
-echo "🚀 Start backend opnieuw via Uvicorn (ASGI)..."
 pm2 start "uvicorn start_backend:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
-  --name backend || {
+  --name backend \
+  --cwd ~/trading-tool-backend/backend || {
     echo "❌ Start backend mislukt."
     exit 1
   }
