@@ -7,7 +7,7 @@ import logging
 import io
 from fpdf import FPDF
 
-router = APIRouter()
+router = APIRouter(prefix="/report")
 logger = logging.getLogger(__name__)
 
 # ✅ Laatste rapport ophalen
