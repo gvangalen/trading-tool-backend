@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from utils.db import get_db_connection    # correct
 import logging
 
-router = APIRouter()
+router = APIRouter(prefix="/onboarding")
 logger = logging.getLogger(__name__)
 
 # ✅ Ophalen van onboarding status
