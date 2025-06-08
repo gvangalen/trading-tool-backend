@@ -20,7 +20,7 @@ def fallback_explanation(name, indicators, trend):
     )
 
 # ✅ AI-explain endpoint
-@router.post("/api/ai/explain_setup")
+@router.post("/ai/explain_setup")
 async def explain_setup(request: Request):
     try:
         data = await request.json()
