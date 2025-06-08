@@ -11,7 +11,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # ✅ Laatste rapport ophalen
-@router.get("/api/daily_report/latest")
+@router.get("/daily_report/latest")
 async def get_latest_daily_report():
     conn = get_db_connection()
     if not conn:
@@ -32,7 +32,7 @@ async def get_latest_daily_report():
         conn.close()
 
 # ✅ Rapportgeschiedenis ophalen
-@router.get("/api/daily_report/history")
+@router.get("/daily_report/history")
 async def get_daily_report_history(limit: int = 7):
     conn = get_db_connection()
     if not conn:
@@ -51,7 +51,7 @@ async def get_daily_report_history(limit: int = 7):
         conn.close()
 
 # ✅ Rapport van specifieke dag ophalen
-@router.get("/api/daily_report/{date}")
+@router.get("/daily_report/{date}")
 async def get_daily_report_by_date(date: str):
     try:
         datetime.strptime(date, "%Y-%m-%d")
@@ -77,7 +77,7 @@ async def get_daily_report_by_date(date: str):
         conn.close()
 
 # ✅ Rapport exporteren als PDF
-@router.get("/api/daily_report/export/pdf")
+@router.get("/daily_report/export/pdf")
 async def export_daily_report_pdf():
     conn = get_db_connection()
     if not conn:
