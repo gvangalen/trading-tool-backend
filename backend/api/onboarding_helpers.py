@@ -27,7 +27,7 @@ export async function markStepDone(step) {
   const payload = { step: stepKey, done: true };
 
   try {
-    const res = await fetch(`/api/onboarding_status/${userId}`, {
+    const res = await fetch(`/onboarding_status/${userId}`, {
       method: "PUT", // ✅ Gebruik PUT i.p.v. PATCH
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
