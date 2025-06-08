@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Request
 from utils.ai_strategy_utils import generate_strategy_from_setup
 import logging
 
-router = APIRouter()
+router = APIRouter(prefix="/ai/strategy")
 logger = logging.getLogger(__name__)
 
 @router.post("/ai/strategy")
