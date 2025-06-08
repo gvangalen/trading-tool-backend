@@ -8,7 +8,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # ✅ Ophalen van onboarding status
-@router.get("/api/onboarding_status/{user_id}")
+@router.get("/onboarding_status/{user_id}")
 async def get_onboarding_status(user_id: int):
     conn = get_db_connection()
     if not conn:
@@ -40,7 +40,7 @@ async def get_onboarding_status(user_id: int):
         conn.close()
 
 # ✅ Updaten van een stap in de onboarding
-@router.put("/api/onboarding_status/{user_id}")
+@router.put("/onboarding_status/{user_id}")
 async def update_onboarding_status(user_id: int, update_data: dict):
     step = update_data.get("step")
     done = update_data.get("done")
