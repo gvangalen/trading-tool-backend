@@ -6,7 +6,7 @@ from celery import Celery
 from utils.db import get_db_connection
 from utils.technical_interpreter import process_technical_indicator
 
-router = APIRouter(prefix="/api")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
