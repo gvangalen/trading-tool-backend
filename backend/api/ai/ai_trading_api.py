@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException
 from utils.db import get_db_connection
 import psycopg2.extras
 
-router = APIRouter()
+router = APIRouter(prefix="/ai/trading")
 logger = logging.getLogger(__name__)
 
 # ✅ Tradingadvies ophalen per asset
