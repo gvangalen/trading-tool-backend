@@ -1,18 +1,15 @@
-# start_backend.py
-
 import sys, os
 import logging
-
-# ✅ Voeg de huidige map toe aan sys.path, zodat relatieve imports werken
-sys.path.insert(0, os.path.abspath("."))
-
-# ✅ Logging instellen
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ Routers importeren (zonder 'backend.')
+# Zorg dat relative imports werken
+sys.path.insert(0, os.path.abspath("."))
+
+# Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Routers importeren
 from api.market_data_api import router as market_data_router
 from api.macro_data_api import router as macro_data_router
 from api.technical_data_api import router as technical_data_router
@@ -26,7 +23,7 @@ from api.onboarding_api import router as onboarding_router
 
 app = FastAPI()
 
-# ✅ CORS-middleware
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,24 +31,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Routers koppelen
-app.include_router(market_data_router, prefix="/api")
-app.include_router(macro_data_router, prefix="/api")
-app.include_router(technical_data_router, prefix="/api")
-app.include_router(setups_router, prefix="/api")
-app.include_router(dashboard_router, prefix="/api")
-app.include_router(report_router, prefix="/api")
-app.include_router(ai_explain_router, prefix="/api")
-app.include_router(ai_strategy_router, prefix="/api")
-app.include_router(ai_trading_router, prefix="/api") 
-app.include_router(onboarding_router, prefix="/api")
+# ✅ Zonder /api prefix!
+app.include_router(market_data_router)
+app.include_router(macro_data_router)
+app.include_router(technical_data_router)
+app.include_router(setups_router)
+app.include_router(dashboard_router)
+app.include_router(report_router)
+app.include_router(ai_explain_router)
+app.include_router(ai_strategy_router)
+app.include_router(ai_trading_router)
+app.include_router(onboarding_router)
 
-# ✅ Healthcheck route
-@app.get("/api/health")
+# Healthcheck route (eventueel ook zonder /api)
+@app.get("/health")
 def health():
     return {"status": "ok"}
 
-# ✅ Server starten
+# Start backend
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=5002)
