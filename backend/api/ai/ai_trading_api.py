@@ -8,7 +8,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # ✅ Tradingadvies ophalen per asset
-@router.get("/api/trading_advice")
+@router.get("/trading_advice")
 async def get_trading_advice(symbol: str = "BTC"):
     conn = get_db_connection()
     if not conn:
