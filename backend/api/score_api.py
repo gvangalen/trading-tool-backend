@@ -20,7 +20,7 @@ dummy_data = {
 }
 
 # ✅ /api/score/macro
-@router.get("/api/score/macro")
+@router.get("/score/macro")
 async def macro_score():
     try:
         config = load_config("config/macro_indicators_config.json")
@@ -31,7 +31,7 @@ async def macro_score():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ /api/score/technical
-@router.get("/api/score/technical")
+@router.get("/score/technical")
 async def technical_score():
     try:
         config = load_config("config/technical_indicators_config.json")
@@ -42,7 +42,7 @@ async def technical_score():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ /api/score/market
-@router.get("/api/score/market")
+@router.get("/score/market")
 async def market_score():
     try:
         config = load_config("config/market_data_config.json")
