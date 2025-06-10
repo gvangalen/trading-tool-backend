@@ -1,7 +1,6 @@
-# report_api.py
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from utils.db import get_db_connection   # correct
+from utils.db import get_db_connection
 from datetime import datetime
 import logging
 import io
@@ -9,9 +8,10 @@ from fpdf import FPDF
 
 router = APIRouter(prefix="/report")
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ✅ Laatste rapport ophalen
-@router.get("/daily_report/latest")
+@router.get("/daily/latest")
 async def get_latest_daily_report():
     conn = get_db_connection()
     if not conn:
@@ -26,13 +26,13 @@ async def get_latest_daily_report():
             columns = [desc[0] for desc in cur.description]
             return dict(zip(columns, row))
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen laatste rapport: {e}")
+        logger.error(f"❌ RAP01: Fout bij ophalen laatste rapport: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
 # ✅ Rapportgeschiedenis ophalen
-@router.get("/daily_report/history")
+@router.get("/daily/history")
 async def get_daily_report_history(limit: int = 7):
     conn = get_db_connection()
     if not conn:
@@ -45,13 +45,13 @@ async def get_daily_report_history(limit: int = 7):
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen rapportgeschiedenis: {e}")
+        logger.error(f"❌ RAP02: Fout bij ophalen rapportgeschiedenis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
-# ✅ Rapport van specifieke dag ophalen
-@router.get("/daily_report/{date}")
+# ✅ Rapport van specifieke datum ophalen
+@router.get("/daily/{date}")
 async def get_daily_report_by_date(date: str):
     try:
         datetime.strptime(date, "%Y-%m-%d")
@@ -71,13 +71,13 @@ async def get_daily_report_by_date(date: str):
             columns = [desc[0] for desc in cur.description]
             return dict(zip(columns, row))
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen rapport van datum {date}: {e}")
+        logger.error(f"❌ RAP03: Fout bij ophalen rapport van {date}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
 # ✅ Rapport exporteren als PDF
-@router.get("/daily_report/export/pdf")
+@router.get("/daily/export/pdf")
 async def export_daily_report_pdf():
     conn = get_db_connection()
     if not conn:
@@ -95,8 +95,8 @@ async def export_daily_report_pdf():
             pdf = FPDF()
             pdf.add_page()
             pdf.set_font("Arial", size=12)
-
             pdf.cell(200, 10, txt=f"Dagrapport {report['report_date']}", ln=True, align="C")
+
             for key, value in report.items():
                 if key != "report_date":
                     pdf.multi_cell(0, 10, txt=f"{key.replace('_', ' ').capitalize()}:\n{value}\n")
@@ -111,7 +111,7 @@ async def export_daily_report_pdf():
                 headers={"Content-Disposition": "attachment; filename=dagrapport.pdf"}
             )
     except Exception as e:
-        logger.error(f"❌ Fout bij exporteren rapport naar PDF: {e}")
+        logger.error(f"❌ RAP04: Fout bij PDF-export: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
