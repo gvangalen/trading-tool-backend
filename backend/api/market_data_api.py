@@ -5,10 +5,9 @@ import json
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 import httpx
-
 from utils.db import get_db_connection
 
-router = APIRouter(prefix="/market_data")  # ✅ Prefix toegevoegd!
+router = APIRouter(prefix="/market_data")  # ✅ Standaard prefix
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -21,14 +20,14 @@ ASSETS = {
     "SOL": "solana"
 }
 
-# ✅ DB helper
+# ✅ Helper om cursor te krijgen
 def get_db_cursor():
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="❌ [DB] Geen databaseverbinding.")
     return conn, conn.cursor()
 
-# ✅ POST: Haal OHLC-data + volume op en sla op
+# ✅ POST: CoinGecko → DB
 @router.post("/save")
 async def save_market_data():
     logger.info("📡 [save] Ophalen van marktdata via CoinGecko...")
@@ -122,8 +121,8 @@ async def list_market_data():
     finally:
         conn.close()
 
-# ✅ GET: Root alias
-@router.get("")
+# ✅ Alias: /market_data → laatste lijst
+@router.get("/")
 async def get_recent_market_data():
     return await list_market_data()
 
