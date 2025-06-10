@@ -1,5 +1,3 @@
-# ✅ ai_trading_api.py
-
 import logging
 from fastapi import APIRouter, HTTPException
 from utils.db import get_db_connection
@@ -8,21 +6,16 @@ import psycopg2.extras
 router = APIRouter(prefix="/ai/trading")
 logger = logging.getLogger(__name__)
 
-# ✅ Tradingadvies ophalen per asset
 @router.get("/trading_advice")
 async def get_trading_advice(symbol: str = "BTC"):
+    """
+    Haalt het laatste AI-tradingadvies op voor een specifieke asset.
+    """
     symbol = symbol.upper()
     conn = get_db_connection()
     if not conn:
         logger.error("❌ DB01: Geen databaseverbinding.")
-        return {
-            "symbol": symbol,
-            "advice": "⚠️ Geen verbinding met database.",
-            "score": 0,
-            "setup": None,
-            "targets": [],
-            "risk_profile": None
-        }
+        raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -43,7 +36,8 @@ async def get_trading_advice(symbol: str = "BTC"):
                     "score": 0,
                     "setup": None,
                     "targets": [],
-                    "risk_profile": None
+                    "risk_profile": None,
+                    "timestamp": None
                 }
 
             return {
@@ -52,9 +46,9 @@ async def get_trading_advice(symbol: str = "BTC"):
                 "explanation": row["explanation"],
                 "risk_profile": row["risk_profile"],
                 "timestamp": row["created_at"].isoformat(),
-                "score": 100,               # 👉 optioneel, kan dynamisch
-                "setup": "A-Plus Setup",    # 👉 optioneel, kan via extra join of kolom
-                "targets": [                # 👉 optioneel, hardcoded of los ophalen
+                "score": 100,               # ➕ eventueel berekend of gekoppeld
+                "setup": "A-Plus Setup",    # ➕ later dynamisch ophalen
+                "targets": [                # ➕ eventueel query uit andere tabel
                     {"price": 69000, "type": "TP1"},
                     {"price": 72000, "type": "TP2"}
                 ]
@@ -62,13 +56,7 @@ async def get_trading_advice(symbol: str = "BTC"):
 
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen tradingadvies voor {symbol}: {e}")
-        return {
-            "symbol": symbol,
-            "advice": "❌ Interne fout bij ophalen advies.",
-            "score": 0,
-            "setup": None,
-            "targets": [],
-            "risk_profile": None
-        }
+        raise HTTPException(status_code=500, detail=f"Interne fout: {str(e)}")
+
     finally:
         conn.close()
