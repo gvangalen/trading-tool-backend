@@ -1,18 +1,17 @@
-# ✅ onboarding_status_api.py — FastAPI versie
-
-from fastapi import APIRouter, HTTPException
-from utils.db import get_db_connection    # correct
+from fastapi import APIRouter, HTTPException, Request
+from utils.db import get_db_connection
 import logging
 
 router = APIRouter(prefix="/onboarding")
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ Ophalen van onboarding status
-@router.get("/onboarding_status/{user_id}")
+# ✅ GET: Onboarding-status per gebruiker ophalen
+@router.get("/status/{user_id}")
 async def get_onboarding_status(user_id: int):
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Database connection failed.")
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
 
     try:
         with conn.cursor() as cur:
@@ -24,7 +23,7 @@ async def get_onboarding_status(user_id: int):
             row = cur.fetchone()
 
         if not row:
-            return {}, 404
+            raise HTTPException(status_code=404, detail="Onboarding-status niet gevonden.")
 
         return {
             "setup_done": row[0],
@@ -34,23 +33,23 @@ async def get_onboarding_status(user_id: int):
         }
 
     except Exception as e:
-        logger.error(f"❌ Error fetching onboarding status: {e}")
+        logger.error(f"❌ ONB01: Fout bij ophalen onboarding status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
-# ✅ Updaten van een stap in de onboarding
-@router.put("/onboarding_status/{user_id}")
+# ✅ PUT: Specifieke onboarding-stap updaten
+@router.put("/status/{user_id}")
 async def update_onboarding_status(user_id: int, update_data: dict):
     step = update_data.get("step")
     done = update_data.get("done")
 
     if step not in ["setup_done", "technical_done", "macro_done", "dashboard_done"]:
-        raise HTTPException(status_code=400, detail="Invalid onboarding step.")
+        raise HTTPException(status_code=400, detail="❌ Ongeldige onboarding-stap.")
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Database connection failed.")
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
 
     try:
         with conn.cursor() as cur:
@@ -61,11 +60,11 @@ async def update_onboarding_status(user_id: int, update_data: dict):
             """, (done, user_id))
             conn.commit()
 
-        logger.info(f"✅ Onboarding step '{step}' updated for user {user_id}")
-        return {"message": f"Step '{step}' successfully updated."}
+        logger.info(f"✅ ONB02: Stap '{step}' geüpdatet voor gebruiker {user_id}")
+        return {"message": f"Stap '{step}' succesvol bijgewerkt."}
 
     except Exception as e:
-        logger.error(f"❌ Error updating onboarding status: {e}")
+        logger.error(f"❌ ONB02: Fout bij bijwerken onboarding status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
