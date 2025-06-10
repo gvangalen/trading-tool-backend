@@ -1,3 +1,5 @@
+# backend/api/macro_data_api.py
+
 import logging
 import json
 from datetime import datetime
@@ -17,8 +19,8 @@ def get_db_cursor():
         raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
     return conn, conn.cursor()
 
-# ✅ POST: Nieuwe macro-indicator toevoegen
-@router.post("")
+# ✅ POST: Macro-indicator toevoegen op basis van config
+@router.post("/")
 async def add_macro_indicator(request: Request):
     logger.info("📥 [add] Nieuwe macro-indicator toevoegen...")
     data = await request.json()
@@ -27,7 +29,7 @@ async def add_macro_indicator(request: Request):
     if not name:
         raise HTTPException(status_code=400, detail="❌ [REQ01] Naam van indicator is verplicht.")
 
-    # Config ophalen
+    # Config laden
     try:
         with open(CONFIG_PATH) as f:
             config = json.load(f)
@@ -38,7 +40,7 @@ async def add_macro_indicator(request: Request):
     if name not in config:
         raise HTTPException(status_code=400, detail=f"❌ [CFG02] Indicator '{name}' niet gevonden in config.")
 
-    # Interpreter verwerken
+    # Interpreter uitvoeren
     try:
         result = await process_macro_indicator(name, config[name])
         if not result or "value" not in result or "interpretation" not in result or "action" not in result:
@@ -47,7 +49,6 @@ async def add_macro_indicator(request: Request):
         logger.error(f"❌ [INT01] Interpreterfout: {e}")
         raise HTTPException(status_code=500, detail="❌ [INT01] Verwerking indicator mislukt.")
 
-    # Score ophalen of berekenen
     score = result.get("score", 0)
 
     # Opslaan in database
@@ -59,7 +60,7 @@ async def add_macro_indicator(request: Request):
         """, (
             result["name"],
             result["value"],
-            "",  # trend kan eventueel later berekend worden
+            "",  # trend eventueel later berekenen
             result["interpretation"],
             result["action"],
             score,
@@ -74,8 +75,8 @@ async def add_macro_indicator(request: Request):
     finally:
         conn.close()
 
-# ✅ GET: Alle macro-indicatoren ophalen
-@router.get("")
+# ✅ GET: Laatste macro-indicatoren ophalen
+@router.get("/")
 async def get_macro_indicators():
     logger.info("📤 [get] Ophalen macro-indicatoren...")
     conn, cur = get_db_cursor()
@@ -106,7 +107,7 @@ async def get_macro_indicators():
     finally:
         conn.close()
 
-# ✅ GET: Alias /list → fallback voor frontend
+# ✅ Alias: /macro_data/list → fallback route voor frontend
 @router.get("/list")
 async def get_macro_data_list():
     return await get_macro_indicators()
