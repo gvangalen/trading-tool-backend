@@ -1,8 +1,6 @@
-// ✅ onboarding_helper.js
-
 /**
  * ✅ Markeer een onboarding-stap als voltooid
- * @param {number} step - Bijvoorbeeld 1 voor setup, 2 voor technisch, enz.
+ * @param {number} step - Bijvoorbeeld 1 = setup, 2 = technisch, 3 = macro, 4 = dashboard
  */
 export async function markStepDone(step) {
   const userId = localStorage.getItem("user_id");
@@ -11,7 +9,6 @@ export async function markStepDone(step) {
     return;
   }
 
-  // Stap vertalen naar backend field
   const stepMapping = {
     1: "setup_done",
     2: "technical_done",
@@ -19,8 +16,9 @@ export async function markStepDone(step) {
     4: "dashboard_done"
   };
   const stepKey = stepMapping[step];
+
   if (!stepKey) {
-    console.warn("⚠️ Ongeldige stapnummer");
+    console.warn("⚠️ Ongeldige stapnummer:", step);
     return;
   }
 
@@ -28,15 +26,16 @@ export async function markStepDone(step) {
 
   try {
     const res = await fetch(`/onboarding_status/${userId}`, {
-      method: "PUT", // ✅ Gebruik PUT i.p.v. PATCH
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
-    if (!res.ok) throw new Error("Update mislukt");
-    console.log(`✅ Onboarding stap ${step} (${stepKey}) gemarkeerd als voltooid.`);
+    if (!res.ok) throw new Error(`Serverfout: ${res.status}`);
 
-    // ✅ Lokale status bijwerken
+    console.log(`✅ Stap ${step} (${stepKey}) voltooid.`);
+
+    // ✅ UI bijwerken
     const statusEl = document.getElementById(`step${step}-status`);
     if (statusEl) {
       statusEl.classList.remove("todo");
@@ -44,20 +43,20 @@ export async function markStepDone(step) {
       statusEl.textContent = "✅";
     }
 
-    // ✅ Voortgangsbalk opnieuw berekenen
+    // ✅ Voortgangsbalk berekenen
     const allSteps = document.querySelectorAll(".onboarding-steps li");
-    const doneSteps = document.querySelectorAll(".onboarding-steps li .done").length;
+    const doneSteps = Array.from(allSteps).filter(li => li.querySelector(".done")).length;
     const progress = Math.round((doneSteps / allSteps.length) * 100);
     const bar = document.getElementById("progress");
     if (bar) bar.style.width = `${progress}%`;
 
-    // ✅ Alles voltooid? Laat banner zien
+    // ✅ Toon afrondingsbanner
     if (doneSteps === allSteps.length) {
       const doneBox = document.getElementById("onboarding-done");
       if (doneBox) doneBox.style.display = "block";
     }
 
   } catch (err) {
-    console.error(`❌ Fout bij onboarding update stap ${step}:`, err);
+    console.error(`❌ Fout bij updaten onboarding stap ${step}:`, err);
   }
 }
