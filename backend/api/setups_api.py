@@ -3,10 +3,8 @@ from utils.db import get_db_connection
 
 router = APIRouter(prefix="/setups")
 
-# ✅ Setup toevoegen)
-
 # ✅ Setup toevoegen
-@router.post("/setups", status_code=201)
+@router.post("/", status_code=201)
 async def save_setup(request: Request):
     data = await request.json()
 
@@ -50,7 +48,7 @@ async def save_setup(request: Request):
         conn.close()
 
 # ✅ Setups ophalen
-@router.get("/setups")
+@router.get("/")
 async def get_setups(symbol: str = "BTC"):
     conn = get_db_connection()
     if not conn:
@@ -93,7 +91,7 @@ async def get_setups(symbol: str = "BTC"):
         conn.close()
 
 # ✅ Setup verwijderen
-@router.delete("/setups/{setup_id}")
+@router.delete("/{setup_id}")
 async def delete_setup(setup_id: int):
     conn = get_db_connection()
     if not conn:
@@ -116,7 +114,7 @@ async def delete_setup(setup_id: int):
         conn.close()
 
 # ✅ Setup bijwerken
-@router.put("/setups/{setup_id}")
+@router.put("/{setup_id}")
 async def update_setup(setup_id: int, request: Request):
     data = await request.json()
 
@@ -171,8 +169,8 @@ async def update_setup(setup_id: int, request: Request):
     finally:
         conn.close()
 
-# ✅ Top setups ophalen op basis van hoogste score
-@router.get("/setups/top")
+# ✅ Top setups ophalen
+@router.get("/top")
 async def get_top_setups(limit: int = 3):
     conn = get_db_connection()
     if not conn:
