@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ✅ 1. Gecombineerde dashboarddata
-@router.get("/dashboard")
+@router.get("/")
 async def get_dashboard_data():
     conn = get_db_connection()
     if not conn:
@@ -71,7 +71,7 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH04: Setups fout: {e}")
                 setups = []
 
-        # ✅ Dummy scoreberekening (vervang later door AI/logica)
+        # ✅ Dummy scoreberekening (later vervangen door AI)
         macro_score = len(macro_data) * 10 if macro_data else 0
         technical_score = len(technical_data) * 10 if technical_data else 0
         setup_score = len(setups) * 10 if setups else 0
@@ -104,8 +104,7 @@ async def get_dashboard_data():
     finally:
         conn.close()
 
-
-# ✅ 2. Healthcheck endpoint
+# ✅ 2. Healthcheck
 @router.get("/health")
 async def health_check():
     try:
@@ -117,7 +116,6 @@ async def health_check():
     except Exception as e:
         logger.error(f"❌ HEALTH02: {e}")
         raise HTTPException(status_code=500, detail="HEALTH02: Interne fout")
-
 
 # ✅ 3. Tradingadvies per asset
 @router.get("/trading_advice")
@@ -142,8 +140,7 @@ async def get_trading_advice(symbol: str = "BTC"):
     finally:
         conn.close()
 
-
-# ✅ 4. Top setups ophalen (voor TopSetupsMini component)
+# ✅ 4. Top setups (voor component)
 @router.get("/top_setups")
 async def get_top_setups():
     conn = get_db_connection()
@@ -164,8 +161,7 @@ async def get_top_setups():
     finally:
         conn.close()
 
-
-# ✅ 5. Setup summary ophalen (laatste timestamp per unieke naam)
+# ✅ 5. Setup summary (per unieke naam)
 @router.get("/setup_summary")
 async def get_setup_summary():
     conn = get_db_connection()
