@@ -10,38 +10,46 @@ def generate_daily_report(asset: str = "BTC") -> dict:
     """
     conn = get_db_connection()
     if not conn:
-        return {"error": "DB-verbinding mislukt."}
+        logger.error("❌ RAP10: Databaseverbinding mislukt.")
+        return {"error": "Databaseverbinding mislukt."}
 
     try:
         with conn.cursor() as cur:
-            # Haal meest recente setup op
+            # Haal de laatste setup op voor deze asset
             cur.execute("""
-                SELECT data FROM setups
+                SELECT data
+                FROM setups
                 WHERE data->>'symbol' = %s
                 ORDER BY timestamp DESC
                 LIMIT 1
             """, (asset,))
             row = cur.fetchone()
-            if not row:
-                return {"error": f"Geen setup gevonden voor {asset}"}
-            setup = row[0]
 
-        # Genereer strategie
+        if not row:
+            logger.warning(f"⚠️ RAP11: Geen setup gevonden voor asset '{asset}'")
+            return {"error": f"Geen setup gevonden voor asset '{asset}'"}
+
+        setup = row[0]  # JSONB veld (dict)
+
+        # Genereer strategie op basis van setup
         strategy = generate_strategy_from_setup(setup)
         if not strategy:
-            return {"error": "Strategie-generatie mislukt"}
+            logger.warning("⚠️ RAP12: Strategie-generatie mislukt voor opgehaalde setup.")
+            return {"error": "Strategie-generatie mislukt."}
 
-        # Voeg extra metadata toe aan rapport
+        # Samengesteld rapport
         report = {
             "asset": asset,
-            "setup_name": setup.get("name"),
+            "setup_name": setup.get("name", "Onbekende setup"),
             "strategy": strategy,
-            "timestamp": setup.get("timestamp"),
+            "timestamp": setup.get("timestamp") or None,
         }
+
+        logger.info(f"✅ RAP13: Rapport succesvol gegenereerd voor {asset}")
         return report
 
     except Exception as e:
-        logger.error(f"❌ Fout bij rapportgeneratie: {e}")
+        logger.error(f"❌ RAP14: Fout bij genereren rapport: {e}")
         return {"error": str(e)}
 
     finally:
