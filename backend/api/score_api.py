@@ -1,4 +1,3 @@
-# score_api.py
 import logging
 import json
 from fastapi import APIRouter, HTTPException
@@ -7,7 +6,7 @@ from utils.scoring_utils import load_config, generate_scores
 router = APIRouter(prefix="/score")
 logger = logging.getLogger(__name__)
 
-# ✅ Dummy-data (tijdelijk totdat DB live is)
+# ✅ Tijdelijke dummydata (tot live data vanuit DB/API beschikbaar is)
 dummy_data = {
     "fear_greed_index": 72,
     "btc_dominance": 52.4,
@@ -19,8 +18,8 @@ dummy_data = {
     "change_24h": 2.4
 }
 
-# ✅ /api/score/macro
-@router.get("/score/macro")
+# ✅ GET: Macro score (gebaseerd op config + dummydata)
+@router.get("/macro")
 async def macro_score():
     try:
         config = load_config("config/macro_indicators_config.json")
@@ -30,8 +29,8 @@ async def macro_score():
         logger.error(f"❌ Macro-score fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ /api/score/technical
-@router.get("/score/technical")
+# ✅ GET: Technische score (config + dummydata)
+@router.get("/technical")
 async def technical_score():
     try:
         config = load_config("config/technical_indicators_config.json")
@@ -41,8 +40,8 @@ async def technical_score():
         logger.error(f"❌ Technische score fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ /api/score/market
-@router.get("/score/market")
+# ✅ GET: Markt score (config + dummydata)
+@router.get("/market")
 async def market_score():
     try:
         config = load_config("config/market_data_config.json")
