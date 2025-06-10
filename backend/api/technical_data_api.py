@@ -66,7 +66,8 @@ def save_technical_data_task(symbol, rsi, volume, ma_200, timeframe="1D"):
 
     save_technical_data(symbol, rsi, volume, ma_200, total_score, advies, timeframe)
 
-@router.post("/tradingview_webhook")
+# ✅ Webhook endpoint vanuit TradingView
+@router.post("/webhook")
 async def tradingview_webhook(request: Request):
     try:
         data = await request.json()
@@ -85,7 +86,8 @@ async def tradingview_webhook(request: Request):
         logger.error(f"❌ Webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/technical_data")
+# ✅ Meest recente technische data ophalen
+@router.get("/")
 async def get_technical_data():
     conn = get_db_connection()
     try:
@@ -112,7 +114,8 @@ async def get_technical_data():
     finally:
         conn.close()
 
-@router.post("/technical_data")
+# ✅ Handmatig toevoegen van technische data
+@router.post("/")
 async def add_technical_data(request: Request):
     try:
         data = await request.json()
@@ -149,7 +152,8 @@ async def add_technical_data(request: Request):
         logger.error(f"❌ TECH09: Add failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/technical_data/{id}")
+# ✅ Record verwijderen
+@router.delete("/{id}")
 async def delete_technical_data(id: int):
     conn = get_db_connection()
     try:
@@ -165,7 +169,8 @@ async def delete_technical_data(id: int):
     finally:
         conn.close()
 
-@router.get("/technical_data/{symbol}/{timeframe}")
+# ✅ Data ophalen per asset en timeframe
+@router.get("/{symbol}/{timeframe}")
 async def get_data_for_asset_timeframe(symbol: str, timeframe: str):
     conn = get_db_connection()
     try:
