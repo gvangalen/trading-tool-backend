@@ -31,11 +31,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Veilige router-import functie
+# ✅ Veilige router-import functie met prefix '/api'
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
-        app.include_router(module.router)
+        app.include_router(module.router, prefix="/api")  # <-- Hier zit het verschil
         logger.info(f"✅ Router geladen: {name or import_path}")
     except Exception as e:
         logger.warning(f"❌ Kon router '{name}' niet laden ({import_path}): {e}")
