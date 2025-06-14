@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath("."))
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ Alle routers importeren (zonder /api prefix)
+# ✅ Alle routers importeren
 from api.market_data_api import router as market_data_router
 from api.macro_data_api import router as macro_data_router
 from api.technical_data_api import router as technical_data_router
@@ -32,20 +32,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Routers koppelen — zonder /api prefix
-app.include_router(market_data_router)
-app.include_router(macro_data_router)
-app.include_router(technical_data_router)
-app.include_router(setups_router)
-app.include_router(dashboard_router)
-app.include_router(report_router)
-app.include_router(ai_explain_router)
-app.include_router(ai_strategy_router)
-app.include_router(ai_trading_router)
-app.include_router(onboarding_router)
+# ✅ Routers koppelen met prefix '/api'
+app.include_router(market_data_router, prefix="/api")
+app.include_router(macro_data_router, prefix="/api")
+app.include_router(technical_data_router, prefix="/api")
+app.include_router(setups_router, prefix="/api")
+app.include_router(dashboard_router, prefix="/api")
+app.include_router(report_router, prefix="/api")
+app.include_router(ai_explain_router, prefix="/api")
+app.include_router(ai_strategy_router, prefix="/api")
+app.include_router(ai_trading_router, prefix="/api")
+app.include_router(onboarding_router, prefix="/api")
 
 # ✅ Healthcheck route
-@app.get("/health")
+@app.get("/api/health")
 def health():
     return {"status": "ok"}
 
