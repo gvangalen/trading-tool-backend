@@ -1,7 +1,11 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import sys, os
 import logging
 import importlib
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+# ✅ Zorg dat relative imports werken
+sys.path.insert(0, os.path.abspath("."))
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -10,7 +14,7 @@ logger = logging.getLogger(__name__)
 # ✅ FastAPI app initialiseren
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# ✅ Toegestane origins (CORS)
+# ✅ Toegestane origins (voor jouw IP en localhost)
 origins = [
     "http://localhost:3000",
     "http://143.47.186.148",
@@ -18,6 +22,7 @@ origins = [
     "http://143.47.186.148:3000",
 ]
 
+# ✅ CORS middleware toevoegen
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -26,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Routers includen – zonder prefix, routers bevatten zelf "/api/..."
+# ✅ Veilige router-import functie
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
@@ -35,7 +40,7 @@ def safe_include(import_path, name=""):
     except Exception as e:
         logger.warning(f"❌ Kon router '{name}' niet laden ({import_path}): {e}")
 
-# ✅ Router imports (🟡 let op: met prefix 'backend.')
+# ✅ Routers includen (🟡 gebruik jouw structuur)
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
@@ -44,6 +49,7 @@ safe_include("backend.api.dashboard_api", "dashboard_api")
 safe_include("backend.api.report_api", "report_api")
 safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
 safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
+safe_include("backend.api.ai.ai_trading_api", "ai_trading_api")
 safe_include("backend.api.onboarding_api", "onboarding_api")
 
 # ✅ Health check
@@ -55,3 +61,8 @@ def health_check():
 @app.get("/api/test-cors")
 def test_cors():
     return {"success": True, "message": "CORS werkt correct vanaf frontend."}
+
+# ✅ Run de server lokaal (optioneel)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=5002, reload=True)
