@@ -111,3 +111,22 @@ async def get_macro_indicators():
 @router.get("/list")
 async def get_macro_data_list():
     return await get_macro_indicators()
+
+# ✅ DELETE: Macro-indicator verwijderen op basis van naam
+@router.delete("/{name}")
+async def delete_macro_indicator(name: str):
+    logger.info(f"🗑️ [delete] Probeer macro-indicator '{name}' te verwijderen...")
+    conn, cur = get_db_cursor()
+    try:
+        cur.execute("DELETE FROM macro_data WHERE name = %s RETURNING id;", (name,))
+        deleted = cur.fetchone()
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Indicator '{name}' niet gevonden.")
+        conn.commit()
+        logger.info(f"✅ [delete] Indicator '{name}' verwijderd")
+        return {"message": f"Indicator '{name}' verwijderd."}
+    except Exception as e:
+        logger.error(f"❌ [delete] Verwijderen mislukt: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB04] Verwijderen mislukt.")
+    finally:
+        conn.close()
