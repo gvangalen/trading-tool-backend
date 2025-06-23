@@ -50,6 +50,7 @@ safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
 safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
 safe_include("backend.api.ai.ai_trading_api", "ai_trading_api")
 safe_include("backend.api.onboarding_api", "onboarding_api")
+safe_include("backend.api.sidebar_api", "sidebar_api")
 
 # ✅ Health endpoint
 @app.get("/api/health")
