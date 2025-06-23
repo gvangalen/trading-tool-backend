@@ -76,6 +76,26 @@ async def get_daily_report_by_date(date: str):
     finally:
         conn.close()
 
+# ✅ Samenvatting ophalen voor de rechterzijbalk
+@router.get("/daily/summary")
+async def get_daily_report_summary():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT summary FROM daily_reports ORDER BY report_date DESC LIMIT 1")
+            row = cur.fetchone()
+            if not row:
+                return {"summary": "Geen samenvatting beschikbaar"}
+            return {"summary": row[0]}
+    except Exception as e:
+        logger.error(f"❌ RAP05: Fout bij ophalen samenvatting: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
 # ✅ Rapport exporteren als PDF
 @router.get("/daily/export/pdf")
 async def export_daily_report_pdf():
