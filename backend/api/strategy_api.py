@@ -1,15 +1,14 @@
-# ✅ strategy_api.py — Volledige versie
-
 import logging
 import json
-from flask import Blueprint, request, jsonify, Response
-from utils.db import get_db_connection
 import csv
 import io
+from flask import Blueprint, request, jsonify, Response
+from utils.db import get_db_connection
 
 strategy_api = Blueprint("strategy_api", __name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
 
 # ✅ Strategy opslaan
 @strategy_api.route('/strategies', methods=['POST'])
@@ -291,4 +290,92 @@ def export_strategies():
 
     except Exception as e:
         logger.error(f"❌ Error exporting strategies: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ✅ Genereer AI-strategie voor 1 setup
+@strategy_api.route('/strategy/generate/<int:setup_id>', methods=['POST'])
+def generate_strategy_for_setup(setup_id):
+    try:
+        overwrite = request.json.get('overwrite', True)
+        conn = get_db_connection()
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, data FROM setups WHERE id = %s", (setup_id,))
+            row = cur.fetchone()
+
+        if not row:
+            return jsonify({"error": "Setup not found"}), 404
+
+        setup_id, setup = row
+        asset = setup.get("asset")
+        timeframe = setup.get("timeframe")
+        setup_name = setup.get("name")
+
+        strategy = {
+            "setup_name": setup_name,
+            "asset": asset,
+            "timeframe": timeframe,
+            "type": "AI-Generated",
+            "explanation": f"Strategie gegenereerd op basis van setup '{setup_name}'",
+            "ai_reason": "Op basis van technische en macrodata is deze strategie voorgesteld",
+            "entry": "100.00",
+            "targets": ["110.00", "120.00"],
+            "stop_loss": "95.00",
+            "risk_reward": "2.0",
+            "score": 7.5,
+            "tags": ["ai", "auto"],
+            "favorite": False,
+            "origin": "AI"
+        }
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id FROM strategies
+                WHERE data->>'setup_name' = %s AND data->>'asset' = %s AND data->>'timeframe' = %s;
+            """, (setup_name, asset, timeframe))
+            existing = cur.fetchone()
+
+        if existing:
+            if overwrite:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE strategies SET data = %s WHERE id = %s",
+                                (json.dumps(strategy), existing[0]))
+                    conn.commit()
+                return jsonify({"message": "Strategy updated", "id": existing[0]}), 200
+            else:
+                return jsonify({"error": "Strategy already exists", "id": existing[0]}), 409
+
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id;",
+                        (json.dumps(strategy),))
+            strategy_id = cur.fetchone()[0]
+            conn.commit()
+
+        return jsonify({"message": "Strategy generated", "id": strategy_id}), 201
+
+    except Exception as e:
+        logger.error(f"❌ Error generating strategy: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ✅ Genereer AI-strategieën voor alle setups
+@strategy_api.route('/strategy/generate_all', methods=['POST'])
+def generate_all_strategies():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM setups")
+            setup_ids = [row[0] for row in cur.fetchall()]
+
+        results = []
+        for setup_id in setup_ids:
+            with strategy_api.test_request_context(json={"overwrite": True}):
+                response = generate_strategy_for_setup(setup_id)
+                results.append(response.get_json())
+
+        return jsonify({"results": results}), 200
+
+    except Exception as e:
+        logger.error(f"❌ Error generating all strategies: {e}")
         return jsonify({"error": str(e)}), 500
