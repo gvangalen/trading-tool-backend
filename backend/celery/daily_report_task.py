@@ -1,10 +1,9 @@
-# daily_report_task.py
 import os
 import json
 import logging
 from datetime import datetime
 from pytz import timezone
-from celery import Celery
+from celery import shared_task
 from db import get_db_connection
 from utils.scoring_utils import generate_scores
 from utils.setup_validator import validate_setups
@@ -13,11 +12,6 @@ from utils.strategy_advice_generator import generate_strategy_advice
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ✅ Celery initialisatie met fallback
-celery = Celery(__name__)
-celery.conf.broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-celery.conf.result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 
 # ✅ Opslaan in database met ON CONFLICT
 def save_report_to_db(date, report_data):
@@ -70,7 +64,7 @@ def save_report_to_db(date, report_data):
         conn.close()
 
 # ✅ Celery taak: Dagelijks rapport genereren
-@celery.task(name="generate_daily_report")
+@shared_task(name="generate_daily_report")
 def generate_daily_report():
     logger.info("📝 Genereren van dagelijks rapport gestart...")
 
