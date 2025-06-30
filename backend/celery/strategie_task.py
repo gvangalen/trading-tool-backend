@@ -1,24 +1,15 @@
-from celery import Celery
 import logging
 import os
 import traceback
 import requests
 from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+from celery import shared_task
 from ai_strategy_generator import generate_strategy, generate_strategy_from_setup
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ✅ Celery
-celery = Celery(
-    "strategie_task",
-    broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
-    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
-)
-celery.conf.timezone = "UTC"
-celery.conf.enable_utc = True
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
 HEADERS = {"Content-Type": "application/json"}
@@ -36,8 +27,8 @@ def safe_request(url, method="POST", payload=None):
         logger.error(traceback.format_exc())
         raise
 
-# ✅ Genereer strategieën automatisch voor alle setups
-@celery.task(name="celery_worker.generate_strategieën_automatisch")
+# ✅ Taak: Genereer strategieën automatisch voor alle setups
+@shared_task(name="strategie.generate_all")
 def generate_strategieën_automatisch():
     try:
         setups = safe_request(urljoin(API_BASE_URL, "/setups"), method="GET")
@@ -80,8 +71,8 @@ def generate_strategieën_automatisch():
         logger.error(f"❌ Fout in generate_strategieën_automatisch: {e}")
         logger.error(traceback.format_exc())
 
-# ✅ Genereer strategie voor specifieke setup
-@celery.task(name="celery_worker.generate_strategie_voor_setup")
+# ✅ Taak: Genereer strategie voor specifieke setup
+@shared_task(name="strategie.generate_for_setup")
 def generate_strategie_voor_setup(setup_id, overwrite=True):
     try:
         logger.info(f"🔍 Setup ophalen: {setup_id}")
