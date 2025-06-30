@@ -1,24 +1,14 @@
-from celery import Celery
-import os
 import logging
 import traceback
+from celery import shared_task
 from utils.setup_validator import validate_setups
 
-# ✅ Logging
+# ✅ Logging instellen
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ Celery initialisatie
-celery = Celery(
-    "setup_task",
-    broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
-    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
-)
-celery.conf.timezone = "UTC"
-celery.conf.enable_utc = True
-
 # ✅ Setup validatie taak
-@celery.task(name="celery_worker.validate_setups_task")
+@shared_task(name="setup.validate_setups_task")
 def validate_setups_task():
     try:
         logger.info("🔎 Start setup-validatie taak...")
