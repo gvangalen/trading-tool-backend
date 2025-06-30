@@ -1,20 +1,16 @@
-from celery import Celery
 import os
 import logging
 import traceback
 import requests
 from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+from celery import shared_task
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ Celery-configuratie
-celery = Celery(__name__)
-celery.conf.broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-celery.conf.result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
-
+# ✅ Configuratie
 API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
@@ -37,7 +33,7 @@ def safe_request(url, method="POST", payload=None):
         raise
 
 # ✅ Celery taak: Macrodata ophalen en opslaan
-@celery.task(name="macro.fetch_macro_data")
+@shared_task(name="macro.fetch_macro_data")
 def fetch_macro_data():
     logger.info("📊 Macrodata ophalen gestart...")
     try:
