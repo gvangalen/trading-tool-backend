@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from utils.db import get_db_connection
 from datetime import datetime
@@ -31,7 +31,7 @@ async def get_latest_daily_report():
     finally:
         conn.close()
 
-# ✅ Rapportgeschiedenis ophalen
+# ✅ Rapportgeschiedenis ophalen (alleen datums)
 @router.get("/daily/history")
 async def get_daily_report_history(limit: int = 7):
     conn = get_db_connection()
@@ -40,10 +40,9 @@ async def get_daily_report_history(limit: int = 7):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM daily_reports ORDER BY report_date DESC LIMIT %s", (limit,))
+            cur.execute("SELECT report_date FROM daily_reports ORDER BY report_date DESC LIMIT %s", (limit,))
             rows = cur.fetchall()
-            columns = [desc[0] for desc in cur.description]
-            return [dict(zip(columns, row)) for row in rows]
+            return [row[0].isoformat() for row in rows]  # Alleen datum als string
     except Exception as e:
         logger.error(f"❌ RAP02: Fout bij ophalen rapportgeschiedenis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -76,7 +75,7 @@ async def get_daily_report_by_date(date: str):
     finally:
         conn.close()
 
-# ✅ Samenvatting ophalen voor de rechterzijbalk
+# ✅ Samenvatting ophalen voor de zijbalk
 @router.get("/daily/summary")
 async def get_daily_report_summary():
     conn = get_db_connection()
@@ -96,30 +95,41 @@ async def get_daily_report_summary():
     finally:
         conn.close()
 
-# ✅ Rapport exporteren als PDF
+# ✅ Rapport exporteren als PDF (laatste of specifieke datum)
 @router.get("/daily/export/pdf")
-async def export_daily_report_pdf():
+async def export_daily_report_pdf(date: str = Query(default=None)):
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Geen databaseverbinding")
 
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM daily_reports ORDER BY report_date DESC LIMIT 1")
+            if date:
+                try:
+                    datetime.strptime(date, "%Y-%m-%d")
+                except ValueError:
+                    raise HTTPException(status_code=400, detail="Ongeldige datum. Gebruik formaat YYYY-MM-DD")
+                cur.execute("SELECT * FROM daily_reports WHERE report_date = %s", (date,))
+            else:
+                cur.execute("SELECT * FROM daily_reports ORDER BY report_date DESC LIMIT 1")
+
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Geen rapport beschikbaar")
             columns = [desc[0] for desc in cur.description]
             report = dict(zip(columns, row))
 
+            # 📄 PDF genereren
             pdf = FPDF()
             pdf.add_page()
             pdf.set_font("Arial", size=12)
             pdf.cell(200, 10, txt=f"Dagrapport {report['report_date']}", ln=True, align="C")
+            pdf.ln(10)
 
             for key, value in report.items():
                 if key != "report_date":
-                    pdf.multi_cell(0, 10, txt=f"{key.replace('_', ' ').capitalize()}:\n{value}\n")
+                    text = f"{key.replace('_', ' ').capitalize()}:\n{value}\n"
+                    pdf.multi_cell(0, 10, txt=text)
 
             pdf_output = io.BytesIO()
             pdf.output(pdf_output)
@@ -128,7 +138,7 @@ async def export_daily_report_pdf():
             return StreamingResponse(
                 pdf_output,
                 media_type="application/pdf",
-                headers={"Content-Disposition": "attachment; filename=dagrapport.pdf"}
+                headers={"Content-Disposition": f"attachment; filename=dagrapport_{report['report_date']}.pdf"}
             )
     except Exception as e:
         logger.error(f"❌ RAP04: Fout bij PDF-export: {e}")
