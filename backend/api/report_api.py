@@ -1,10 +1,13 @@
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from utils.db import get_db_connection
-from utils.pdf_generator import generate_pdf_report  # 👈 nieuwe import
+from utils.pdf_generator import generate_pdf_report  # PDF export functie
 from datetime import datetime
 import logging
 import io
+
+# ✅ Celery-taak importeren met alias
+from backend.tasks.report import generate_daily_report as generate_daily_report_task
 
 router = APIRouter(prefix="/report")
 logger = logging.getLogger(__name__)
@@ -145,3 +148,17 @@ async def export_daily_report_pdf(date: str = Query(default=None)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+# ✅ Rapport automatisch laten genereren via Celery
+@router.post("/generate/daily")
+async def trigger_daily_report():
+    try:
+        task = generate_daily_report_task.delay()
+        return {
+            "success": True,
+            "message": "Rapportgeneratie gestart",
+            "task_id": task.id
+        }
+    except Exception as e:
+        logger.error(f"❌ RAP06: Fout bij starten Celery-taak: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
