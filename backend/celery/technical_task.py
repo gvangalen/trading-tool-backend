@@ -1,19 +1,14 @@
-from celery import Celery
-import os
 import logging
+import os
 import traceback
 import requests
 from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+from celery import shared_task
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ✅ Celery-instellingen
-celery = Celery(__name__)
-celery.conf.broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-celery.conf.result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
 TIMEOUT = 10
@@ -37,7 +32,7 @@ def safe_request(url, method="POST", payload=None):
         raise
 
 # ✅ Celery taak: Technische data ophalen en opslaan
-@celery.task(name="technical.fetch_technical_data")
+@shared_task(name="technical.fetch_technical_data")
 def fetch_technical_data():
     logger.info("📈 Technische data ophalen gestart...")
     try:
