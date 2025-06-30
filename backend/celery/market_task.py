@@ -1,5 +1,3 @@
-# 📁 backend/celery/market_task.py
-
 from celery import Celery
 import os
 import logging
