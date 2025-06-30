@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from utils.db import get_db_connection
+from utils.pdf_generator import generate_pdf_report  # 👈 nieuwe import
 from datetime import datetime
 import logging
 import io
-from fpdf import FPDF
 
 router = APIRouter(prefix="/report")
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ async def get_daily_report_history(limit: int = 7):
         with conn.cursor() as cur:
             cur.execute("SELECT report_date FROM daily_reports ORDER BY report_date DESC LIMIT %s", (limit,))
             rows = cur.fetchall()
-            return [row[0].isoformat() for row in rows]  # Alleen datum als string
+            return [row[0].isoformat() for row in rows]
     except Exception as e:
         logger.error(f"❌ RAP02: Fout bij ophalen rapportgeschiedenis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -95,7 +95,7 @@ async def get_daily_report_summary():
     finally:
         conn.close()
 
-# ✅ Rapport exporteren als PDF (laatste of specifieke datum)
+# ✅ Rapport exporteren als PDF met styling (laatste of specifieke datum)
 @router.get("/daily/export/pdf")
 async def export_daily_report_pdf(date: str = Query(default=None)):
     conn = get_db_connection()
@@ -116,24 +116,24 @@ async def export_daily_report_pdf(date: str = Query(default=None)):
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Geen rapport beschikbaar")
+
             columns = [desc[0] for desc in cur.description]
             report = dict(zip(columns, row))
 
-            # 📄 PDF genereren
-            pdf = FPDF()
-            pdf.add_page()
-            pdf.set_font("Arial", size=12)
-            pdf.cell(200, 10, txt=f"Dagrapport {report['report_date']}", ln=True, align="C")
-            pdf.ln(10)
+            # 🔧 Structureren voor PDF secties
+            structured = {
+                "summary": report.get("btc_summary", ""),
+                "macro": report.get("macro_summary", ""),
+                "technical": report.get("setup_checklist", ""),
+                "setups": report.get("priorities", ""),
+                "strategy": report.get("wyckoff_analysis", ""),
+                "recommendation": report.get("recommendations", ""),
+                "conclusion": report.get("conclusion", ""),
+                "outlook": report.get("outlook", ""),
+            }
 
-            for key, value in report.items():
-                if key != "report_date":
-                    text = f"{key.replace('_', ' ').capitalize()}:\n{value}\n"
-                    pdf.multi_cell(0, 10, txt=text)
-
-            pdf_output = io.BytesIO()
-            pdf.output(pdf_output)
-            pdf_output.seek(0)
+            # 📄 PDF genereren via externe utils
+            pdf_output = generate_pdf_report(structured)
 
             return StreamingResponse(
                 pdf_output,
