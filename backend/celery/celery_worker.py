@@ -1,5 +1,4 @@
 from celery import Celery
-from celery.schedules import crontab
 import logging
 import requests
 import os
@@ -10,6 +9,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from db import get_db_connection
 from ai_setup_validator import validate_setups
 from ai_trading_advice import generate_strategy_advice
+from utils.pdf_generator import generate_pdf_from_advice  # ⬅️ Zorg dat dit bestand bestaat
 
 # === 🛠️ Config & Logging ===
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -27,26 +27,6 @@ celery = Celery(
 )
 celery.conf.timezone = "UTC"
 celery.conf.enable_utc = True
-
-# === ⏰ Celery Beat Schedule ===
-celery.conf.beat_schedule = {
-    "fetch_market_data": {
-        "task": "celery_worker.fetch_market_data",
-        "schedule": crontab(minute="*/5"),
-    },
-    "fetch_macro_data": {
-        "task": "celery_worker.fetch_macro_data",
-        "schedule": crontab(minute="*/10"),
-    },
-    "validate_setups": {
-        "task": "celery_worker.validate_setups_task",
-        "schedule": crontab(minute=0, hour="*/6"),
-    },
-    "generate_trading_advice_task": {
-        "task": "celery_worker.generate_trading_advice_task",
-        "schedule": crontab(minute=5, hour="*/6"),
-    },
-}
 
 # === 🔁 Retry wrapper voor API-calls ===
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=60), reraise=True)
@@ -132,6 +112,10 @@ def generate_trading_advice_task():
             row = cur.fetchone()
         conn.close()
 
+        if not row:
+            logger.warning("⚠️ Geen marktdata beschikbaar voor BTC")
+            return
+
         market_data = {"symbol": "BTC", "price": float(row[0]), "change_24h": float(row[1])}
         advice = generate_strategy_advice(setups, macro_score, technical_score, market_data)
 
@@ -142,6 +126,26 @@ def generate_trading_advice_task():
 
     except Exception as e:
         logger.error(f"❌ Fout in generate_trading_advice_task: {e}")
+        logger.error(traceback.format_exc())
+
+# === 📄 PDF-rapport genereren ===
+@celery.task(name="celery_worker.generate_daily_report_pdf")
+def generate_daily_report_pdf():
+    logger.info("📝 Start PDF-generatie van dagrapport")
+    try:
+        if not os.path.exists("trading_advice.json"):
+            logger.warning("⚠️ Geen trading_advice.json gevonden")
+            return
+
+        with open("trading_advice.json") as f:
+            advice = json.load(f)
+
+        output_path = f"pdfs/report_{advice['date']}.pdf" if "date" in advice else "pdfs/report_latest.pdf"
+        generate_pdf_from_advice(advice, output_path)
+
+        logger.info(f"✅ PDF gegenereerd: {output_path}")
+    except Exception as e:
+        logger.error(f"❌ Fout in generate_daily_report_pdf: {e}")
         logger.error(traceback.format_exc())
 
 # === 🧮 Scorehulp ===
