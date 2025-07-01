@@ -1,13 +1,11 @@
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from utils.db import get_db_connection
-from utils.pdf_generator import generate_pdf_report  # PDF export functie
+from utils.pdf_generator import generate_pdf_report
 from datetime import datetime
+from backend.celery.daily_report_task import generate_daily_report  # ✅ FIXED
 import logging
 import io
-
-# ✅ Celery-taak importeren met alias
-from backend.celery.daily_report_task import generate_daily_report as generate_daily_report_task
 
 router = APIRouter(prefix="/report")
 logger = logging.getLogger(__name__)
@@ -34,13 +32,12 @@ async def get_latest_daily_report():
     finally:
         conn.close()
 
-# ✅ Rapportgeschiedenis ophalen (alleen datums)
+# ✅ Rapportgeschiedenis ophalen
 @router.get("/daily/history")
 async def get_daily_report_history(limit: int = 7):
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Geen databaseverbinding")
-
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT report_date FROM daily_reports ORDER BY report_date DESC LIMIT %s", (limit,))
@@ -78,7 +75,7 @@ async def get_daily_report_by_date(date: str):
     finally:
         conn.close()
 
-# ✅ Samenvatting ophalen voor de zijbalk
+# ✅ Samenvatting ophalen
 @router.get("/daily/summary")
 async def get_daily_report_summary():
     conn = get_db_connection()
@@ -98,7 +95,7 @@ async def get_daily_report_summary():
     finally:
         conn.close()
 
-# ✅ Rapport exporteren als PDF met styling (laatste of specifieke datum)
+# ✅ PDF export
 @router.get("/daily/export/pdf")
 async def export_daily_report_pdf(date: str = Query(default=None)):
     conn = get_db_connection()
@@ -123,7 +120,6 @@ async def export_daily_report_pdf(date: str = Query(default=None)):
             columns = [desc[0] for desc in cur.description]
             report = dict(zip(columns, row))
 
-            # 🔧 Structureren voor PDF secties
             structured = {
                 "summary": report.get("btc_summary", ""),
                 "macro": report.get("macro_summary", ""),
@@ -135,7 +131,6 @@ async def export_daily_report_pdf(date: str = Query(default=None)):
                 "outlook": report.get("outlook", ""),
             }
 
-            # 📄 PDF genereren via externe utils
             pdf_output = generate_pdf_report(structured)
 
             return StreamingResponse(
@@ -148,17 +143,3 @@ async def export_daily_report_pdf(date: str = Query(default=None)):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
-
-# ✅ Rapport automatisch laten genereren via Celery
-@router.post("/generate/daily")
-async def trigger_daily_report():
-    try:
-        task = generate_daily_report_task.delay()
-        return {
-            "success": True,
-            "message": "Rapportgeneratie gestart",
-            "task_id": task.id
-        }
-    except Exception as e:
-        logger.error(f"❌ RAP06: Fout bij starten Celery-taak: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
