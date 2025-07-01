@@ -7,7 +7,7 @@ import logging
 import io
 
 # ✅ Celery-taak importeren met alias
-from backend.tasks.report import generate_daily_report as generate_daily_report_task
+from backend.celery.daily_report_task import generate_daily_report as generate_daily_report_task
 
 router = APIRouter(prefix="/report")
 logger = logging.getLogger(__name__)
