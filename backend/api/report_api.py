@@ -7,12 +7,15 @@ from backend.celery.daily_report_task import generate_daily_report  # ✅ FIXED
 import logging
 import io
 
-router = APIRouter(prefix="/report")
+# ✅ Prefix gewijzigd naar /daily_report zodat frontend blijft werken
+router = APIRouter(prefix="/daily_report")
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+
 # ✅ Laatste rapport ophalen
-@router.get("/daily/latest")
+@router.get("/latest")
 async def get_latest_daily_report():
     conn = get_db_connection()
     if not conn:
@@ -32,8 +35,9 @@ async def get_latest_daily_report():
     finally:
         conn.close()
 
+
 # ✅ Rapportgeschiedenis ophalen
-@router.get("/daily/history")
+@router.get("/history")
 async def get_daily_report_history(limit: int = 7):
     conn = get_db_connection()
     if not conn:
@@ -49,8 +53,9 @@ async def get_daily_report_history(limit: int = 7):
     finally:
         conn.close()
 
+
 # ✅ Rapport van specifieke datum ophalen
-@router.get("/daily/{date}")
+@router.get("/{date}")
 async def get_daily_report_by_date(date: str):
     try:
         datetime.strptime(date, "%Y-%m-%d")
@@ -75,8 +80,9 @@ async def get_daily_report_by_date(date: str):
     finally:
         conn.close()
 
+
 # ✅ Samenvatting ophalen
-@router.get("/daily/summary")
+@router.get("/summary")
 async def get_daily_report_summary():
     conn = get_db_connection()
     if not conn:
@@ -95,8 +101,9 @@ async def get_daily_report_summary():
     finally:
         conn.close()
 
+
 # ✅ PDF export
-@router.get("/daily/export/pdf")
+@router.get("/export/pdf")
 async def export_daily_report_pdf(date: str = Query(default=None)):
     conn = get_db_connection()
     if not conn:
