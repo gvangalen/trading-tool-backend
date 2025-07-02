@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # ✅ FastAPI app initialiseren
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# ✅ Toegestane origins (voeg eventueel je domein toe)
+# ✅ Toegestane origins (pas aan indien nodig)
 origins = [
     "http://localhost:3000",
     "http://143.47.186.148",
@@ -39,7 +39,7 @@ def safe_include(import_path, name=""):
     except Exception as e:
         logger.warning(f"❌ Kon router '{name}' niet laden ({import_path}): {e}")
 
-# ✅ Routers includen (let op jouw mapstructuur!)
+# ✅ Routers includen
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
@@ -49,6 +49,7 @@ safe_include("backend.api.report_api", "report_api")
 safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
 safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
 safe_include("backend.api.ai.ai_trading_api", "ai_trading_api")
+safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")  # ✅ Toegevoegd
 safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.sidebar_api", "sidebar_api")
 
@@ -62,7 +63,7 @@ def health_check():
 def test_cors():
     return {"success": True, "message": "CORS werkt correct vanaf frontend."}
 
-# ✅ Startserver (zonder reload!)
+# ✅ Startserver
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=5002)
