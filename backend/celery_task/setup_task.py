@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ✅ Setup validatie taak
-@shared_task(name="setup.validate_setups_task")
+@shared_task(name="celery_task.setup_task.validate_setups_task")
 def validate_setups_task():
     try:
         logger.info("🔎 Start setup-validatie taak...")
