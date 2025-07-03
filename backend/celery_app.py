@@ -14,12 +14,12 @@ celery.conf.enable_utc = True
 
 # ✅ Automatisch alle taken uit submodules inladen
 celery.autodiscover_tasks([
-    "celery.market_task",
-    "celery.macro_task",
-    "celery.technical_task",
-    "celery.setup_task",
-    "celery.strategy_task",
-    "celery.daily_report_task",            # ✅ correcte naam
-    "ai_tasks.trading_advice_task",        # ✅ nieuwe taken
+    "celery_task.market_task",
+    "celery_task.macro_task",
+    "celery_task.technical_task",
+    "celery_task.setup_task",
+    "celery_task.strategie_task",
+    "celery_task.daily_report_task",
+    "ai_tasks.trading_advice_task",
     "ai_tasks.validation_task"
 ])
