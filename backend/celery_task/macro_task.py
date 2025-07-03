@@ -33,7 +33,7 @@ def safe_request(url, method="POST", payload=None):
         raise
 
 # ✅ Celery taak: Macrodata ophalen en opslaan
-@shared_task(name="macro.fetch_macro_data")
+@shared_task(name="celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
     logger.info("📊 Macrodata ophalen gestart...")
     try:
