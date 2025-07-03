@@ -72,7 +72,7 @@ def generate_strategieën_automatisch():
         logger.error(traceback.format_exc())
 
 # ✅ Taak: Genereer strategie voor specifieke setup
-@shared_task(name="strategie.generate_for_setup")
+@shared_task(name="celery_task.strategie_task.generate_for_setup")
 def generate_strategie_voor_setup(setup_id, overwrite=True):
     try:
         logger.info(f"🔍 Setup ophalen: {setup_id}")
