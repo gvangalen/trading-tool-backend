@@ -11,6 +11,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 CONFIG_PATH = "technical_indicators_config.json"
 
+
 def load_technical_config():
     try:
         with open(CONFIG_PATH, "r") as f:
@@ -18,6 +19,7 @@ def load_technical_config():
     except Exception as e:
         logger.warning(f"⚠️ TECH01: Config load failed: {e}")
         return {}
+
 
 def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1D"):
     conn = get_db_connection()
@@ -40,6 +42,7 @@ def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1
     finally:
         conn.close()
 
+
 # ✅ Webhook endpoint vanuit TradingView
 @router.post("/webhook")
 async def tradingview_webhook(request: Request):
@@ -59,6 +62,7 @@ async def tradingview_webhook(request: Request):
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ✅ Handmatige trigger via dashboard
 @router.post("/trigger")
@@ -80,11 +84,100 @@ async def trigger_technical_task(request: Request):
         logger.error(f"❌ Trigger error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 # ✅ Meest recente technische data ophalen
 @router.get("/")
 async def get_technical_data():
-    # ... [zelfde als in jouw code]
-    pass
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
 
-# ✅ Toevoegen, verwijderen, per asset ophalen
-# ... [alles onderaan blijft ongewijzigd]
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, rsi, volume, ma_200, score, advies, timeframe, timestamp
+                FROM technical_data
+                ORDER BY timestamp DESC
+                LIMIT 50;
+            """)
+            rows = cur.fetchall()
+
+        result = []
+        for row in rows:
+            result.append({
+                "symbol": row[0],
+                "rsi": float(row[1]),
+                "volume": float(row[2]),
+                "ma_200": float(row[3]),
+                "score": float(row[4]) if row[4] is not None else None,
+                "advies": row[5],
+                "timeframe": row[6],
+                "timestamp": row[7].isoformat()
+            })
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ TECH05: Fetch error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ✅ Verwijder technische data (optioneel per symbool)
+@router.delete("/{symbol}")
+async def delete_technical_data(symbol: str):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM technical_data WHERE symbol = %s", (symbol,))
+            conn.commit()
+            return {"message": f"Technische data voor {symbol} verwijderd."}
+    except Exception as e:
+        logger.error(f"❌ TECH06: Delete error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ✅ Technische data per asset ophalen
+@router.get("/{symbol}")
+async def get_technical_for_symbol(symbol: str):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, rsi, volume, ma_200, score, advies, timeframe, timestamp
+                FROM technical_data
+                WHERE symbol = %s
+                ORDER BY timestamp DESC
+                LIMIT 25;
+            """, (symbol,))
+            rows = cur.fetchall()
+
+        result = []
+        for row in rows:
+            result.append({
+                "symbol": row[0],
+                "rsi": float(row[1]),
+                "volume": float(row[2]),
+                "ma_200": float(row[3]),
+                "score": float(row[4]) if row[4] is not None else None,
+                "advies": row[5],
+                "timeframe": row[6],
+                "timestamp": row[7].isoformat()
+            })
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ TECH07: Fetch symbol error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
