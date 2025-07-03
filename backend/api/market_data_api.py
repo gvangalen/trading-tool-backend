@@ -1,13 +1,12 @@
-# backend/api/market_data_api.py
-
 import logging
 import json
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 import httpx
 from utils.db import get_db_connection
+from celery_task.market_task import fetch_market_data  # ✅ Celery-taak importeren
 
-router = APIRouter(prefix="/market_data")  # ✅ Standaard prefix
+router = APIRouter(prefix="/market_data")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -20,7 +19,6 @@ ASSETS = {
     "SOL": "solana"
 }
 
-# ✅ Helper om cursor te krijgen
 def get_db_cursor():
     conn = get_db_connection()
     if not conn:
@@ -138,3 +136,13 @@ async def test_market_data():
     except Exception as e:
         logger.error(f"❌ [test] Interne fout: {e}")
         raise HTTPException(status_code=500, detail="❌ Test endpoint faalde.")
+
+# ✅ POST: Start Celery-task om automatisch market data op te halen
+@router.post("/trigger")
+def trigger_market_data_task():
+    """
+    Start een achtergrondtaak om marktdata op te halen via Celery.
+    """
+    fetch_market_data.delay()
+    logger.info("🚀 Celery-taak 'fetch_market_data' gestart via API.")
+    return {"message": "📡 Marktdata taak gestart via Celery."}
