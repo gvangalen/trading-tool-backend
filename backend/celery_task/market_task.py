@@ -33,7 +33,7 @@ def safe_request(url, method="POST", payload=None):
         raise
 
 # ✅ Celery taak: Marktdata ophalen en opslaan
-@shared_task(name="market.fetch_market_data")
+@shared_task(name="celery_task.market_task.fetch_market_data")
 def fetch_market_data():
     logger.info("🌍 Marktdata ophalen gestart...")
     try:
