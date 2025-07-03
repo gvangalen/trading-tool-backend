@@ -28,7 +28,7 @@ def safe_request(url, method="POST", payload=None):
         raise
 
 # ✅ Taak: Genereer strategieën automatisch voor alle setups
-@shared_task(name="strategie.generate_all")
+@shared_task(name="celery_task.strategie_task.generate_all")
 def generate_strategieën_automatisch():
     try:
         setups = safe_request(urljoin(API_BASE_URL, "/setups"), method="GET")
