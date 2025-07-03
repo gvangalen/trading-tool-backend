@@ -1,20 +1,22 @@
 import logging
 import os
 import traceback
+import json
 import requests
 from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
 
-# ✅ Logging
+# ✅ Logging instellen
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ✅ Basisconfiguratie
 API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
-# ✅ Veilige API-call met retry
+# ✅ Retry wrapper
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="POST", payload=None):
     try:
@@ -31,13 +33,20 @@ def safe_request(url, method="POST", payload=None):
         logger.error(traceback.format_exc())
         raise
 
-# ✅ Celery taak: Technische data ophalen en opslaan
-@shared_task(name="celery_task.technical_task.fetch_technical_data")
-def fetch_technical_data():
-    logger.info("📈 Technische data ophalen gestart...")
+# ✅ Celery taak: Opslaan technische data via POST /technical_data
+@shared_task(name="celery_task.technical_task.save_technical_data")
+def save_technical_data(symbol, rsi, volume, ma_200, timeframe="1D"):
+    payload = {
+        "symbol": symbol,
+        "rsi": rsi,
+        "volume": volume,
+        "ma_200": ma_200,
+        "timeframe": timeframe
+    }
     try:
-        data = safe_request(urljoin(API_BASE_URL, "/save_technical_data"))
-        logger.info(f"✅ Technische data succesvol opgeslagen: {data}")
+        url = urljoin(API_BASE_URL, "/technical_data")
+        data = safe_request(url, method="POST", payload=payload)
+        logger.info(f"✅ Technische data opgeslagen: {data}")
     except RetryError:
-        logger.error("❌ Alle retries mislukt voor fetch_technical_data!")
+        logger.error("❌ Alle retries mislukt voor save_technical_data!")
         logger.error(traceback.format_exc())
