@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-# ✅ Strategy opslaan
+# ✅ Strategie opslaan
 @strategy_api.route('/strategies', methods=['POST'])
 def save_strategy():
     try:
@@ -44,35 +44,29 @@ def save_strategy():
                 WHERE data->>'setup_name' = %s AND data->>'asset' = %s AND data->>'timeframe' = %s;
             """, (strategy_data["setup_name"], strategy_data["asset"], strategy_data["timeframe"]))
             if cur.fetchone():
-                return jsonify({"error": "Strategy with this setup/asset/timeframe already exists."}), 409
+                return jsonify({"error": "Strategy already exists"}), 409
 
         keywords = ["breakout", "scalp", "swing", "reversal"]
         found_tags = [k for k in keywords if k in (strategy_data["setup_name"] + strategy_data["explanation"]).lower()]
         strategy_data["tags"] = list(set(strategy_data["tags"] + found_tags))
 
         with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO strategies (data, created_at)
-                VALUES (%s::jsonb, NOW()) RETURNING id;
-            """, (json.dumps(strategy_data),))
+            cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id;", (json.dumps(strategy_data),))
             strategy_id = cur.fetchone()[0]
             conn.commit()
 
-        logger.info(f"✅ Strategy saved (ID: {strategy_id})")
-        return jsonify({"message": "Strategy saved successfully", "id": strategy_id}), 201
-
+        return jsonify({"message": "Strategy saved", "id": strategy_id}), 201
     except Exception as e:
         logger.error(f"❌ Error saving strategy: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-# ✅ Strategy bijwerken
+# ✅ Strategie bijwerken
 @strategy_api.route('/strategies/<int:strategy_id>', methods=['PUT'])
 def update_strategy(strategy_id):
     try:
         data = request.get_json()
         conn = get_db_connection()
-
         with conn.cursor() as cur:
             cur.execute("SELECT data FROM strategies WHERE id = %s", (strategy_id,))
             row = cur.fetchone()
@@ -84,14 +78,13 @@ def update_strategy(strategy_id):
 
             cur.execute("UPDATE strategies SET data = %s WHERE id = %s", (json.dumps(strategy_data), strategy_id))
             conn.commit()
-
-        return jsonify({"message": "Strategy updated successfully"}), 200
+        return jsonify({"message": "Strategy updated"}), 200
     except Exception as e:
         logger.error(f"❌ Error updating strategy: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-# ✅ Strategy verwijderen
+# ✅ Strategie verwijderen
 @strategy_api.route('/strategies/<int:strategy_id>', methods=['DELETE'])
 def delete_strategy(strategy_id):
     try:
@@ -99,13 +92,12 @@ def delete_strategy(strategy_id):
         with conn.cursor() as cur:
             cur.execute("DELETE FROM strategies WHERE id = %s", (strategy_id,))
             conn.commit()
-        return jsonify({"message": "Strategy deleted successfully"}), 200
+        return jsonify({"message": "Strategy deleted"}), 200
     except Exception as e:
-        logger.error(f"❌ Error deleting strategy: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-# ✅ Favorite toggle
+# ✅ Toggle favorite
 @strategy_api.route('/strategies/<int:strategy_id>/favorite', methods=['PATCH'])
 def toggle_favorite(strategy_id):
     try:
@@ -123,11 +115,10 @@ def toggle_favorite(strategy_id):
             conn.commit()
         return jsonify({"message": "Favorite toggled", "favorite": strategy["favorite"]}), 200
     except Exception as e:
-        logger.error(f"❌ Error toggling favorite: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-# ✅ Filterstrategieën
+# ✅ Strategie filteren
 @strategy_api.route('/strategies/filter', methods=['GET'])
 def filter_strategies():
     try:
@@ -150,162 +141,23 @@ def filter_strategies():
                 continue
             if tag and tag not in strategy.get("tags", []):
                 continue
-            if min_score and (float(strategy.get("score", 0)) < min_score):
+            if min_score is not None and (float(strategy.get("score", 0)) < min_score):
                 continue
             strategy["id"] = id_
             filtered.append(strategy)
 
         return jsonify(filtered), 200
     except Exception as e:
-        logger.error(f"❌ Error filtering strategies: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-# ✅ Strategy-uitleg ophalen
-@strategy_api.route('/strategies/<int:strategy_id>/explanation', methods=['GET'])
-def get_explanation(strategy_id):
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT data FROM strategies WHERE id = %s", (strategy_id,))
-            row = cur.fetchone()
-
+# ✅ AI-strategie genereren (logica apart)
+def generate_strategy_logic(setup_id, conn, overwrite=True):
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, data FROM setups WHERE id = %s", (setup_id,))
+        row = cur.fetchone()
         if not row:
-            return jsonify({"error": "Strategy not found"}), 404
-
-        data = row[0]
-        return jsonify({
-            "setup_name": data.get("setup_name"),
-            "explanation": data.get("explanation"),
-            "ai_reason": data.get("ai_reason")
-        }), 200
-
-    except Exception as e:
-        logger.error(f"❌ Error getting explanation: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# ✅ Summary endpoint
-@strategy_api.route('/strategies/summary', methods=['GET'])
-def strategy_summary():
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT data FROM strategies")
-            rows = cur.fetchall()
-
-        summary = {"total": 0, "assets": {}}
-        for row in rows:
-            data = row[0]
-            asset = data.get("asset")
-            score = data.get("score", 0)
-            favorite = data.get("favorite", False)
-
-            summary["total"] += 1
-            if asset not in summary["assets"]:
-                summary["assets"][asset] = {"count": 0, "score_sum": 0, "favorites": 0}
-
-            summary["assets"][asset]["count"] += 1
-            summary["assets"][asset]["score_sum"] += score
-            if favorite:
-                summary["assets"][asset]["favorites"] += 1
-
-        for asset in summary["assets"]:
-            count = summary["assets"][asset]["count"]
-            score_sum = summary["assets"][asset]["score_sum"]
-            summary["assets"][asset]["avg_score"] = round(score_sum / count, 2) if count else 0
-
-        return jsonify(summary), 200
-
-    except Exception as e:
-        logger.error(f"❌ Error in strategy summary: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# ✅ Scorematrix (asset × timeframe)
-@strategy_api.route('/strategies/score_matrix', methods=['GET'])
-def score_matrix():
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT data FROM strategies")
-            rows = cur.fetchall()
-
-        matrix = {}
-        for row in rows:
-            data = row[0]
-            asset = data.get("asset")
-            timeframe = data.get("timeframe")
-            score = data.get("score", 0)
-
-            if asset not in matrix:
-                matrix[asset] = {}
-            if timeframe not in matrix[asset]:
-                matrix[asset][timeframe] = []
-
-            matrix[asset][timeframe].append(score)
-
-        for asset in matrix:
-            for timeframe in matrix[asset]:
-                scores = matrix[asset][timeframe]
-                matrix[asset][timeframe] = round(sum(scores) / len(scores), 2) if scores else 0
-
-        return jsonify(matrix), 200
-
-    except Exception as e:
-        logger.error(f"❌ Error in score matrix: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# ✅ CSV export
-@strategy_api.route('/strategies/export', methods=['GET'])
-def export_strategies():
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, data, created_at FROM strategies")
-            rows = cur.fetchall()
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-        header = ["ID", "Asset", "Timeframe", "Setup Name", "Score", "Favorite", "Created At"]
-        writer.writerow(header)
-
-        for row in rows:
-            strategy = row[1]
-            writer.writerow([
-                row[0],
-                strategy.get("asset"),
-                strategy.get("timeframe"),
-                strategy.get("setup_name"),
-                strategy.get("score"),
-                strategy.get("favorite"),
-                row[2].strftime("%Y-%m-%d %H:%M:%S")
-            ])
-
-        output.seek(0)
-        return Response(output.getvalue(), mimetype="text/csv", headers={
-            "Content-Disposition": "attachment; filename=strategies_export.csv"
-        })
-
-    except Exception as e:
-        logger.error(f"❌ Error exporting strategies: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# ✅ Genereer AI-strategie voor 1 setup
-@strategy_api.route('/strategy/generate/<int:setup_id>', methods=['POST'])
-def generate_strategy_for_setup(setup_id):
-    try:
-        overwrite = request.json.get('overwrite', True)
-        conn = get_db_connection()
-
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, data FROM setups WHERE id = %s", (setup_id,))
-            row = cur.fetchone()
-
-        if not row:
-            return jsonify({"error": "Setup not found"}), 404
+            return {"error": "Setup not found"}, 404
 
         setup_id, setup = row
         asset = setup.get("asset")
@@ -329,38 +181,41 @@ def generate_strategy_for_setup(setup_id):
             "origin": "AI"
         }
 
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id FROM strategies
-                WHERE data->>'setup_name' = %s AND data->>'asset' = %s AND data->>'timeframe' = %s;
-            """, (setup_name, asset, timeframe))
-            existing = cur.fetchone()
+        cur.execute("""
+            SELECT id FROM strategies
+            WHERE data->>'setup_name' = %s AND data->>'asset' = %s AND data->>'timeframe' = %s;
+        """, (setup_name, asset, timeframe))
+        existing = cur.fetchone()
 
         if existing:
             if overwrite:
-                with conn.cursor() as cur:
-                    cur.execute("UPDATE strategies SET data = %s WHERE id = %s",
-                                (json.dumps(strategy), existing[0]))
-                    conn.commit()
-                return jsonify({"message": "Strategy updated", "id": existing[0]}), 200
+                cur.execute("UPDATE strategies SET data = %s WHERE id = %s", (json.dumps(strategy), existing[0]))
+                conn.commit()
+                return {"message": "Strategy updated", "id": existing[0]}, 200
             else:
-                return jsonify({"error": "Strategy already exists", "id": existing[0]}), 409
+                return {"error": "Strategy already exists", "id": existing[0]}, 409
 
-        with conn.cursor() as cur:
-            cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id;",
-                        (json.dumps(strategy),))
-            strategy_id = cur.fetchone()[0]
-            conn.commit()
+        cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id;",
+                    (json.dumps(strategy),))
+        strategy_id = cur.fetchone()[0]
+        conn.commit()
+        return {"message": "Strategy generated", "id": strategy_id}, 201
 
-        return jsonify({"message": "Strategy generated", "id": strategy_id}), 201
 
+# ✅ Genereer AI-strategie voor 1 setup
+@strategy_api.route('/strategies/generate/<int:setup_id>', methods=['POST'])
+def generate_strategy_for_setup(setup_id):
+    try:
+        overwrite = request.json.get('overwrite', True)
+        conn = get_db_connection()
+        result, status = generate_strategy_logic(setup_id, conn, overwrite)
+        return jsonify(result), status
     except Exception as e:
-        logger.error(f"❌ Error generating strategy: {e}")
         return jsonify({"error": str(e)}), 500
 
 
 # ✅ Genereer AI-strategieën voor alle setups
-@strategy_api.route('/strategy/generate_all', methods=['POST'])
+@strategy_api.route('/strategies/generate_all', methods=['POST'])
 def generate_all_strategies():
     try:
         conn = get_db_connection()
@@ -370,12 +225,44 @@ def generate_all_strategies():
 
         results = []
         for setup_id in setup_ids:
-            with strategy_api.test_request_context(json={"overwrite": True}):
-                response = generate_strategy_for_setup(setup_id)
-                results.append(response.get_json())
+            result, _ = generate_strategy_logic(setup_id, conn, overwrite=True)
+            results.append(result)
 
         return jsonify({"results": results}), 200
-
     except Exception as e:
-        logger.error(f"❌ Error generating all strategies: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ✅ CSV export (met extra kolommen)
+@strategy_api.route('/strategies/export', methods=['GET'])
+def export_strategies():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, data, created_at FROM strategies")
+            rows = cur.fetchall()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Asset", "Timeframe", "Setup", "Score", "Entry", "Stop Loss", "Origin", "Created"])
+
+        for row in rows:
+            s = row[1]
+            writer.writerow([
+                row[0],
+                s.get("asset"),
+                s.get("timeframe"),
+                s.get("setup_name"),
+                s.get("score"),
+                s.get("entry"),
+                s.get("stop_loss"),
+                s.get("origin"),
+                row[2].strftime("%Y-%m-%d %H:%M:%S")
+            ])
+
+        output.seek(0)
+        return Response(output.getvalue(), mimetype="text/csv", headers={
+            "Content-Disposition": "attachment; filename=strategies.csv"
+        })
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
