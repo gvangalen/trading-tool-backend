@@ -32,7 +32,7 @@ def safe_request(url, method="POST", payload=None):
         raise
 
 # ✅ Celery taak: Technische data ophalen en opslaan
-@shared_task(name="technical.fetch_technical_data")
+@shared_task(name="celery_task.technical_task.fetch_technical_data")
 def fetch_technical_data():
     logger.info("📈 Technische data ophalen gestart...")
     try:
