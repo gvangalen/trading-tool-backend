@@ -1,17 +1,18 @@
 from utils.db import get_db_connection
 import logging
+from typing import Dict, Union
 
 logger = logging.getLogger(__name__)
 
-def calculate_combined_score(symbol: str = "BTC") -> dict:
+def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Union[str, float, int]]:
     """
     Haalt macro-, technische- en sentiment-score op uit setup_scores tabel.
-    Berekent ook een totale AI-score.
+    Berekent ook een gecombineerde AI-score (totaal) als gemiddelde.
     """
     conn = get_db_connection()
     if not conn:
         logger.error("❌ COMB01: Geen databaseverbinding.")
-        return {"error": "Geen databaseverbinding"}
+        return {"symbol": symbol, "error": "Geen databaseverbinding", "total_score": 0}
 
     try:
         with conn.cursor() as cur:
@@ -24,14 +25,20 @@ def calculate_combined_score(symbol: str = "BTC") -> dict:
             """, (symbol,))
             row = cur.fetchone()
 
-        if not row:
-            logger.warning(f"⚠️ COMB02: Geen score gevonden voor {symbol}")
-            return {"error": f"Geen score gevonden voor {symbol}"}
+        if not row or len(row) != 3:
+            logger.warning(f"⚠️ COMB02: Geen volledige score gevonden voor {symbol}")
+            return {"symbol": symbol, "error": "Incomplete scoregegevens", "total_score": 0}
 
         macro, technical, sentiment = row
-        total = round((macro + technical + sentiment) / 3, 2)
 
-        logger.info(f"✅ COMB03: Score geladen voor {symbol}: totaal={total}")
+        # ✅ Controleer of alles numeriek is
+        if not all(isinstance(val, (int, float)) for val in (macro, technical, sentiment)):
+            logger.warning(f"⚠️ COMB03: Ongeldige scoretypes voor {symbol}")
+            return {"symbol": symbol, "error": "Niet-numerieke waarden", "total_score": 0}
+
+        total = round((macro + technical + sentiment) / 3, 2)
+        logger.info(f"✅ COMB04: Totale score voor {symbol} = {total}")
+
         return {
             "symbol": symbol,
             "macro_score": macro,
@@ -41,8 +48,8 @@ def calculate_combined_score(symbol: str = "BTC") -> dict:
         }
 
     except Exception as e:
-        logger.error(f"❌ COMB04: Fout bij scoreberekening: {e}")
-        return {"error": str(e)}
+        logger.error(f"❌ COMB05: Fout bij scoreberekening voor {symbol}: {e}")
+        return {"symbol": symbol, "error": str(e), "total_score": 0}
 
     finally:
         conn.close()
