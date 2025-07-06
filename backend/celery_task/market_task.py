@@ -4,7 +4,7 @@ import traceback
 import requests
 from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
-from celery import shared_task  # ✅ juiste manier voor opgesplitste taken
+from celery import shared_task
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
@@ -37,8 +37,12 @@ def safe_request(url, method="POST", payload=None):
 def fetch_market_data():
     logger.info("🌍 Marktdata ophalen gestart...")
     try:
-        data = safe_request(urljoin(API_BASE_URL, "/save_market_data"))
-        logger.info(f"✅ Marktdata succesvol opgeslagen: {data}")
+        url = urljoin(API_BASE_URL, "/save_market_data")
+        response = safe_request(url)
+        logger.info(f"✅ Marktdata succesvol opgeslagen: {response}")
     except RetryError:
         logger.error("❌ Alle retries mislukt voor fetch_market_data!")
+        logger.error(traceback.format_exc())
+    except Exception as e:
+        logger.error(f"❌ Onverwachte fout bij fetch_market_data: {e}")
         logger.error(traceback.format_exc())
