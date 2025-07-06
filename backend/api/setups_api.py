@@ -1,15 +1,16 @@
 from fastapi import APIRouter, HTTPException, Request
 from utils.db import get_db_connection
 from datetime import datetime
+import logging
+from celery_task.setup_task import validate_setups_task  # Celery trigger
 
 router = APIRouter(prefix="/setups")
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # ✅ Nieuwe setup opslaan
 @router.post("/", status_code=201)
 async def save_setup(request: Request):
-    """
-    Voeg een nieuwe setup toe aan de database.
-    """
     data = await request.json()
 
     name = data.get("name")
@@ -28,7 +29,7 @@ async def save_setup(request: Request):
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+        raise HTTPException(status_code=500, detail="❌ Databaseverbinding mislukt.")
 
     try:
         with conn.cursor() as cur:
@@ -50,6 +51,7 @@ async def save_setup(request: Request):
                 "created_at": created_at.isoformat()
             }
     except Exception as e:
+        logger.error(f"❌ [save_setup] Fout: {e}")
         raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan setup: {e}")
     finally:
         conn.close()
@@ -57,15 +59,58 @@ async def save_setup(request: Request):
 # ✅ Setup-lijst ophalen (default = BTC)
 @router.get("/")
 async def get_setups(symbol: str = "BTC"):
-    """
-    Haal de laatste 50 setups op voor een specifieke asset (default: BTC).
-    """
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+        raise HTTPException(status_code=500, detail="❌ Databaseverbinding mislukt.")
 
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, name, symbol, timeframe, account_type, strategy_type,
                        min_investment, dynamic_investment, score, description, tags, created_at
+                FROM setups
+                WHERE symbol = %s
+                ORDER BY created_at DESC
+                LIMIT 50;
+            """, (symbol,))
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "name": row[1],
+                    "symbol": row[2],
+                    "timeframe": row[3],
+                    "account_type": row[4],
+                    "strategy_type": row[5],
+                    "min_investment": row[6],
+                    "dynamic": row[7],
+                    "score": row[8],
+                    "description": row[9],
+                    "tags": row[10],
+                    "created_at": row[11].isoformat() if row[11] else None
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"❌ [get_setups] Fout: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij ophalen setups.")
+    finally:
+        conn.close()
+
+# ✅ Test endpoint
+@router.get("/test")
+async def test_setup_api():
+    try:
+        conn = get_db_connection()
+        conn.close()
+        return {"message": "✅ Setup API werkt correct."}
+    except Exception as e:
+        logger.error(f"❌ [test] Fout: {e}")
+        raise HTTPException(status_code=500, detail="❌ Test endpoint faalde.")
+
+# ✅ Start Celery taak via API
+@router.post("/trigger")
+def trigger_setup_task():
+    validate_setups_task.delay()
+    logger.info("🚀 Celery-taak 'validate_setups_task' gestart via API.")
+    return {"message": "📡 Setup-validatie gestart via Celery."}
