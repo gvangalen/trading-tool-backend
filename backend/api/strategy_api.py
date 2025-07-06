@@ -16,6 +16,7 @@ def save_strategy():
     try:
         data = request.get_json()
         strategy_data = {
+            "setup_id": data.get("setup_id"),
             "setup_name": data.get("setup_name"),
             "type": data.get("type"),
             "explanation": data.get("explanation"),
@@ -32,7 +33,7 @@ def save_strategy():
             "ai_reason": data.get("ai_reason", "")
         }
 
-        required_fields = ["setup_name", "asset", "timeframe", "entry", "targets", "stop_loss"]
+        required_fields = ["setup_id", "setup_name", "asset", "timeframe", "entry", "targets", "stop_loss"]
         for field in required_fields:
             if not strategy_data.get(field):
                 return jsonify({"error": f"'{field}' is required."}), 400
@@ -41,8 +42,8 @@ def save_strategy():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id FROM strategies
-                WHERE data->>'setup_name' = %s AND data->>'asset' = %s AND data->>'timeframe' = %s;
-            """, (strategy_data["setup_name"], strategy_data["asset"], strategy_data["timeframe"]))
+                WHERE data->>'setup_id' = %s;
+            """, (str(strategy_data["setup_id"]),))
             if cur.fetchone():
                 return jsonify({"error": "Strategy already exists"}), 409
 
@@ -153,58 +154,60 @@ def filter_strategies():
 
 # ✅ AI-strategie genereren (logica apart)
 def generate_strategy_logic(setup_id, conn, overwrite=True):
-    with conn.cursor() as cur:
-        cur.execute("SELECT id, data FROM setups WHERE id = %s", (setup_id,))
-        row = cur.fetchone()
-        if not row:
-            return {"error": "Setup not found"}, 404
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, data FROM setups WHERE id = %s", (setup_id,))
+            row = cur.fetchone()
+            if not row:
+                return {"error": "Setup not found"}, 404
 
-        setup_id, setup = row
-        asset = setup.get("asset")
-        timeframe = setup.get("timeframe")
-        setup_name = setup.get("name")
+            setup_id, setup = row
+            asset = setup.get("asset")
+            timeframe = setup.get("timeframe")
+            setup_name = setup.get("name")
 
-        strategy = {
-            "setup_name": setup_name,
-            "asset": asset,
-            "timeframe": timeframe,
-            "type": "AI-Generated",
-            "explanation": f"Strategie gegenereerd op basis van setup '{setup_name}'",
-            "ai_reason": "Op basis van technische en macrodata is deze strategie voorgesteld",
-            "entry": "100.00",
-            "targets": ["110.00", "120.00"],
-            "stop_loss": "95.00",
-            "risk_reward": "2.0",
-            "score": 7.5,
-            "tags": ["ai", "auto"],
-            "favorite": False,
-            "origin": "AI"
-        }
+            strategy = {
+                "setup_id": setup_id,
+                "setup_name": setup_name,
+                "asset": asset,
+                "timeframe": timeframe,
+                "type": "AI-Generated",
+                "explanation": f"Strategie gegenereerd op basis van setup '{setup_name}'",
+                "ai_reason": "Op basis van technische en macrodata is deze strategie voorgesteld",
+                "entry": "100.00",
+                "targets": ["110.00", "120.00"],
+                "stop_loss": "95.00",
+                "risk_reward": "2.0",
+                "score": 7.5,
+                "tags": ["ai", "auto"],
+                "favorite": False,
+                "origin": "AI"
+            }
 
-        cur.execute("""
-            SELECT id FROM strategies
-            WHERE data->>'setup_name' = %s AND data->>'asset' = %s AND data->>'timeframe' = %s;
-        """, (setup_name, asset, timeframe))
-        existing = cur.fetchone()
+            cur.execute("SELECT id FROM strategies WHERE data->>'setup_id' = %s", (str(setup_id),))
+            existing = cur.fetchone()
 
-        if existing:
-            if overwrite:
-                cur.execute("UPDATE strategies SET data = %s WHERE id = %s", (json.dumps(strategy), existing[0]))
-                conn.commit()
-                return {"message": "Strategy updated", "id": existing[0]}, 200
-            else:
-                return {"error": "Strategy already exists", "id": existing[0]}, 409
+            if existing:
+                if overwrite:
+                    cur.execute("UPDATE strategies SET data = %s WHERE id = %s", (json.dumps(strategy), existing[0]))
+                    conn.commit()
+                    return {"message": "Strategy updated", "id": existing[0]}, 200
+                else:
+                    return {"error": "Strategy already exists", "id": existing[0]}, 409
 
-        cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id;",
-                    (json.dumps(strategy),))
-        strategy_id = cur.fetchone()[0]
-        conn.commit()
-        return {"message": "Strategy generated", "id": strategy_id}, 201
+            cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id;",
+                        (json.dumps(strategy),))
+            strategy_id = cur.fetchone()[0]
+            conn.commit()
+            return {"message": "Strategy generated", "id": strategy_id}, 201
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 
 # ✅ Genereer AI-strategie voor 1 setup
 @strategy_api.route('/strategies/generate/<int:setup_id>', methods=['POST'])
 def generate_strategy_for_setup(setup_id):
+    conn = None
     try:
         overwrite = request.json.get('overwrite', True)
         conn = get_db_connection()
@@ -212,6 +215,9 @@ def generate_strategy_for_setup(setup_id):
         return jsonify(result), status
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
 
 
 # ✅ Genereer AI-strategieën voor alle setups
