@@ -1,11 +1,12 @@
 import logging
 import json
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from utils.db import get_db_connection
 from utils.technical_interpreter import process_technical_indicator
 from celery_task.technical_task import save_technical_data_task  # ✅ Celery taak importeren
 
-router = APIRouter(prefix="/technical_data")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -44,7 +45,7 @@ def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1
 
 
 # ✅ Webhook endpoint vanuit TradingView
-@router.post("/webhook")
+@router.post("/technical_data/webhook")
 async def tradingview_webhook(request: Request):
     try:
         data = await request.json()
@@ -65,7 +66,7 @@ async def tradingview_webhook(request: Request):
 
 
 # ✅ Handmatige trigger via dashboard
-@router.post("/trigger")
+@router.post("/technical_data/trigger")
 async def trigger_technical_task(request: Request):
     try:
         data = await request.json()
@@ -86,7 +87,7 @@ async def trigger_technical_task(request: Request):
 
 
 # ✅ Meest recente technische data ophalen
-@router.get("/")
+@router.get("/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
     if not conn:
@@ -124,27 +125,14 @@ async def get_technical_data():
         conn.close()
 
 
-# ✅ Verwijder technische data (optioneel per symbool)
-@router.delete("/{symbol}")
-async def delete_technical_data(symbol: str):
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM technical_data WHERE symbol = %s", (symbol,))
-            conn.commit()
-            return {"message": f"Technische data voor {symbol} verwijderd."}
-    except Exception as e:
-        logger.error(f"❌ TECH06: Delete error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
+# ✅ Alias route voor frontend
+@router.get("/technical_data/list")
+async def get_technical_data_list():
+    return await get_technical_data()
 
 
 # ✅ Technische data per asset ophalen
-@router.get("/{symbol}")
+@router.get("/technical_data/{symbol}")
 async def get_technical_for_symbol(symbol: str):
     conn = get_db_connection()
     if not conn:
@@ -178,6 +166,25 @@ async def get_technical_for_symbol(symbol: str):
 
     except Exception as e:
         logger.error(f"❌ TECH07: Fetch symbol error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+# ✅ Verwijder technische data (optioneel per symbool)
+@router.delete("/technical_data/{symbol}")
+async def delete_technical_data(symbol: str):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM technical_data WHERE symbol = %s", (symbol,))
+            conn.commit()
+            return {"message": f"Technische data voor {symbol} verwijderd."}
+    except Exception as e:
+        logger.error(f"❌ TECH06: Delete error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
