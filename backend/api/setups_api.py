@@ -4,12 +4,13 @@ from datetime import datetime
 import logging
 from celery_task.setup_task import validate_setups_task  # Celery trigger
 
-router = APIRouter(prefix="/setups")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+
 # ✅ Nieuwe setup opslaan
-@router.post("/", status_code=201)
+@router.post("/setups")
 async def save_setup(request: Request):
     data = await request.json()
 
@@ -56,8 +57,9 @@ async def save_setup(request: Request):
     finally:
         conn.close()
 
+
 # ✅ Setup-lijst ophalen (default = BTC)
-@router.get("/")
+@router.get("/setups")
 async def get_setups(symbol: str = "BTC"):
     conn = get_db_connection()
     if not conn:
@@ -97,8 +99,9 @@ async def get_setups(symbol: str = "BTC"):
     finally:
         conn.close()
 
+
 # ✅ Test endpoint
-@router.get("/test")
+@router.get("/setups/test")
 async def test_setup_api():
     try:
         conn = get_db_connection()
@@ -108,8 +111,9 @@ async def test_setup_api():
         logger.error(f"❌ [test] Fout: {e}")
         raise HTTPException(status_code=500, detail="❌ Test endpoint faalde.")
 
+
 # ✅ Start Celery taak via API
-@router.post("/trigger")
+@router.post("/setups/trigger")
 def trigger_setup_task():
     validate_setups_task.delay()
     logger.info("🚀 Celery-taak 'validate_setups_task' gestart via API.")
