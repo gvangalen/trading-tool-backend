@@ -3,8 +3,7 @@ import json
 from fastapi import APIRouter, HTTPException
 from utils.scoring_utils import load_config, generate_scores
 
-# ✅ Router instellen
-router = APIRouter(prefix="/score")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -21,7 +20,7 @@ dummy_data = {
 }
 
 # ✅ Macro score ophalen
-@router.get("/macro")
+@router.get("/score/macro")
 async def macro_score():
     try:
         config = load_config("config/macro_indicators_config.json")
@@ -32,7 +31,7 @@ async def macro_score():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ Technische score ophalen
-@router.get("/technical")
+@router.get("/score/technical")
 async def technical_score():
     try:
         config = load_config("config/technical_indicators_config.json")
@@ -43,7 +42,7 @@ async def technical_score():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ Markt score ophalen
-@router.get("/market")
+@router.get("/score/market")
 async def market_score():
     try:
         config = load_config("config/market_data_config.json")
