@@ -6,7 +6,7 @@ from fpdf import FPDF
 
 logger = logging.getLogger(__name__)
 
-# 🎨 Kleuren per sectie (lichtgrijze achtergrond + accent)
+# 🎨 Kleuren per sectie (lichtgrijze achtergrond + accentkleur)
 SECTION_COLORS = {
     "summary": (70, 130, 180),         # Steel Blue
     "macro": (105, 105, 105),          # Dim Gray
@@ -18,7 +18,7 @@ SECTION_COLORS = {
     "outlook": (112, 128, 144),        # Slate Gray
 }
 
-# 📄 PDF structuur
+# 📄 PDF Klasse met custom layout
 class PDF(FPDF):
     def header(self):
         self.set_font("Helvetica", "B", 14)
@@ -30,9 +30,9 @@ class PDF(FPDF):
     def section_title(self, title, rgb=(200, 200, 200)):
         self.set_fill_color(*rgb)
         self.set_font("Helvetica", "B", 12)
-        self.set_text_color(255, 255, 255)  # wit op gekleurde achtergrond
+        self.set_text_color(255, 255, 255)
         self.cell(0, 8, f" {title}", ln=True, fill=True)
-        self.set_text_color(0, 0, 0)  # zwart voor body
+        self.set_text_color(0, 0, 0)
         self.ln(2)
 
     def section_body(self, text):
@@ -41,12 +41,11 @@ class PDF(FPDF):
         self.ln(2)
 
 
-# 🧠 Hooffunctie om JSON-data naar PDF te converteren (voor FastAPI)
+# 🧠 Hooffunctie om JSON-data om te zetten naar PDF
 def generate_pdf_report(data: dict) -> io.BytesIO:
     pdf = PDF()
     pdf.add_page()
 
-    # ✅ Doorloop bekende secties met aangepaste layout
     for section in [
         "summary",
         "macro",
@@ -62,14 +61,25 @@ def generate_pdf_report(data: dict) -> io.BytesIO:
             color = SECTION_COLORS.get(section, (128, 128, 128))  # fallback kleur
             pdf.section_title(title, rgb=color)
 
-            body = (
-                json.dumps(data[section], indent=2)
-                if isinstance(data[section], dict)
-                else str(data[section])
-            )
+            try:
+                body = (
+                    json.dumps(data[section], indent=2, ensure_ascii=False)
+                    if isinstance(data[section], dict)
+                    else str(data[section])
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Fout bij converteren van sectie '{section}': {e}")
+                body = f"[Fout bij renderen van deze sectie: {e}]"
+
             pdf.section_body(body)
 
+    # Genereer PDF in geheugen
     output = io.BytesIO()
-    pdf.output(output)
-    output.seek(0)
-    return output
+    try:
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')  # FPDF returns Latin-1 encoded string
+        output.write(pdf_bytes)
+        output.seek(0)
+        return output
+    except Exception as e:
+        logger.error(f"❌ PDF-generatie mislukt: {e}")
+        raise
