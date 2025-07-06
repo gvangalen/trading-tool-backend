@@ -1,11 +1,22 @@
 module.exports = {
   apps: [
     {
-      name: 'celery',
+      name: 'backend',
+      script: 'python3',
+      args: 'app.py',
       cwd: '/home/ubuntu/trading-tool-backend',
-      script: 'venv/bin/celery',
+      interpreter: 'python3',
+      watch: false,
+      env: {
+        ENV: 'production',
+      },
+    },
+    {
+      name: 'celery',
+      script: 'celery',
       args: '-A celery_app worker --loglevel=info',
-      interpreter: 'none',
+      cwd: '/home/ubuntu/trading-tool-backend',
+      interpreter: '/bin/bash',
       env: {
         CELERY_BROKER_URL: 'redis://localhost:6379/0',
         CELERY_RESULT_BACKEND: 'redis://localhost:6379/0',
