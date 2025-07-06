@@ -2,12 +2,12 @@ from fastapi import APIRouter, HTTPException, Request
 from utils.db import get_db_connection
 import logging
 
-router = APIRouter(prefix="/onboarding")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ✅ GET: Onboarding-status per gebruiker ophalen
-@router.get("/status/{user_id}")
+@router.get("/onboarding/status/{user_id}")
 async def get_onboarding_status(user_id: int):
     conn = get_db_connection()
     if not conn:
@@ -39,7 +39,7 @@ async def get_onboarding_status(user_id: int):
         conn.close()
 
 # ✅ PUT: Specifieke onboarding-stap updaten
-@router.put("/status/{user_id}")
+@router.put("/onboarding/status/{user_id}")
 async def update_onboarding_status(user_id: int, update_data: dict):
     step = update_data.get("step")
     done = update_data.get("done")
