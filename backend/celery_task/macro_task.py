@@ -1,3 +1,5 @@
+# backend/celery_task/macro_task.py
+
 import os
 import logging
 import traceback
@@ -6,7 +8,7 @@ from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
 
-# ✅ Logging
+# ✅ Logging instellen
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -15,7 +17,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
-# ✅ Robuuste API-aanroep met retries
+# ✅ Robuuste API-aanroep met retry-logica
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="POST", payload=None):
     try:
@@ -24,7 +26,7 @@ def safe_request(url, method="POST", payload=None):
         logger.info(f"✅ API-call succesvol: {url}")
         return response.json()
     except requests.exceptions.RequestException as e:
-        logger.error(f"❌ RequestException bij {url}: {e}")
+        logger.error(f"❌ Fout bij verzoek naar {url}: {e}")
         logger.error(traceback.format_exc())
         raise
     except Exception as e:
@@ -35,10 +37,10 @@ def safe_request(url, method="POST", payload=None):
 # ✅ Celery taak: Macrodata ophalen en opslaan
 @shared_task(name="celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
-    logger.info("📊 Macrodata ophalen gestart...")
+    logger.info("📊 Start ophalen van macrodata via API...")
     try:
         data = safe_request(urljoin(API_BASE_URL, "/save_macro_data"))
         logger.info(f"✅ Macrodata succesvol opgeslagen: {data}")
     except RetryError:
-        logger.error("❌ Alle retries mislukt voor fetch_macro_data!")
+        logger.error("❌ Alle retry-pogingen mislukt voor fetch_macro_data.")
         logger.error(traceback.format_exc())
