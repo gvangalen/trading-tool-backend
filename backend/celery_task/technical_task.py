@@ -1,10 +1,10 @@
 import os
 import logging
 import traceback
-import requests
 from urllib.parse import urljoin
-from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
+from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+import requests
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO)
