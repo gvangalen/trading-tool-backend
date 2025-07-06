@@ -13,11 +13,17 @@ logger = logging.getLogger(__name__)
 def validate_setups_task():
     try:
         logger.info("🔎 Start setup-validatie taak...")
+
         resultaat = validate_setups(asset="BTC")
-        if resultaat:
+
+        if isinstance(resultaat, list) and resultaat:
             logger.info(f"✅ {len(resultaat)} setups gevalideerd.")
-        else:
+        elif isinstance(resultaat, list):
             logger.warning("⚠️ Geen geldige setups gevonden.")
+        else:
+            logger.error(f"❌ Ongeldig resultaat ontvangen van validate_setups(): {type(resultaat)}")
+            logger.debug(f"Inhoud resultaat: {resultaat}")
+        
     except Exception as e:
         logger.error(f"❌ Fout bij setup-validatie: {e}")
         logger.error(traceback.format_exc())
