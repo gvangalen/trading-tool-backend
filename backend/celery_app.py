@@ -23,3 +23,6 @@ celery.autodiscover_tasks([
     "backend.ai_tasks.trading_advice_task",
     "backend.ai_tasks.validation_task"
 ])
+
+# ✅ Belangrijk: exporteer de app zodat `celery -A celery_app worker` werkt
+app = celery
