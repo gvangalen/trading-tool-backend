@@ -3,12 +3,12 @@ from fastapi import APIRouter, HTTPException
 from utils.db import get_db_connection
 import psycopg2.extras
 
-router = APIRouter(prefix="/dashboard")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ✅ 1. Gecombineerde dashboarddata
-@router.get("/")
+@router.get("/dashboard")
 async def get_dashboard_data():
     conn = get_db_connection()
     if not conn:
@@ -104,8 +104,9 @@ async def get_dashboard_data():
     finally:
         conn.close()
 
+
 # ✅ 2. Healthcheck
-@router.get("/health")
+@router.get("/dashboard/health")
 async def health_check():
     try:
         conn = get_db_connection()
@@ -117,8 +118,9 @@ async def health_check():
         logger.error(f"❌ HEALTH02: {e}")
         raise HTTPException(status_code=500, detail="HEALTH02: Interne fout")
 
+
 # ✅ 3. Tradingadvies per asset
-@router.get("/trading_advice")
+@router.get("/dashboard/trading_advice")
 async def get_trading_advice(symbol: str = "BTC"):
     conn = get_db_connection()
     try:
@@ -140,8 +142,9 @@ async def get_trading_advice(symbol: str = "BTC"):
     finally:
         conn.close()
 
+
 # ✅ 4. Top setups (voor component)
-@router.get("/top_setups")
+@router.get("/dashboard/top_setups")
 async def get_top_setups():
     conn = get_db_connection()
     try:
@@ -161,8 +164,9 @@ async def get_top_setups():
     finally:
         conn.close()
 
+
 # ✅ 5. Setup summary (per unieke naam)
-@router.get("/setup_summary")
+@router.get("/dashboard/setup_summary")
 async def get_setup_summary():
     conn = get_db_connection()
     try:
