@@ -3,10 +3,10 @@ from fastapi import APIRouter, HTTPException
 from utils.db import get_db_connection
 import psycopg2.extras
 
-router = APIRouter(prefix="/ai/trading")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.get("/trading_advice")
+@router.get("/ai/trading_advice")
 async def get_trading_advice(symbol: str = "BTC"):
     """
     Haalt het laatste AI-tradingadvies op voor een specifieke asset.
@@ -46,9 +46,9 @@ async def get_trading_advice(symbol: str = "BTC"):
                 "explanation": row["explanation"],
                 "risk_profile": row["risk_profile"],
                 "timestamp": row["created_at"].isoformat(),
-                "score": 100,               # ➕ eventueel berekend of gekoppeld
-                "setup": "A-Plus Setup",    # ➕ later dynamisch ophalen
-                "targets": [                # ➕ eventueel query uit andere tabel
+                "score": 100,
+                "setup": "A-Plus Setup",
+                "targets": [
                     {"price": 69000, "type": "TP1"},
                     {"price": 72000, "type": "TP2"}
                 ]
