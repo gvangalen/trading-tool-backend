@@ -1,15 +1,19 @@
 import os
+import sys
 import json
 import logging
 from datetime import datetime
 from pytz import timezone
 from celery import shared_task
 
-# ✅ Juiste imports gebruiken uit utils
-from utils.db import get_db_connection
-from utils.scoring_utils import generate_scores
-from utils.setup_validator import validate_setups
-from utils.strategy_advice_generator import generate_strategy_advice
+# 🛠️ Voeg het pad toe zodat backend.* modules werken
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+# ✅ Correcte imports met backend prefix
+from backend.utils.db import get_db_connection
+from backend.utils.scoring_utils import generate_scores
+from backend.utils.setup_validator import validate_setups
+from backend.utils.strategy_advice_generator import generate_strategy_advice
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO)
@@ -66,7 +70,7 @@ def save_report_to_db(date, report_data):
         conn.close()
 
 # ✅ Celery taak: Dagelijks rapport genereren
-@shared_task(name="celery_task.daily_report_task.generate_daily_report_pdf")
+@shared_task(name="celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
     logger.info("📝 Genereren van dagelijks rapport gestart...")
 
@@ -83,7 +87,7 @@ def generate_daily_report():
     if not scores or not setups or not strategy:
         logger.warning("⚠️ Incomplete data voor rapport. Mogelijk ontbrekende scores of setups.")
 
-    # 📅 Datum bepalen (met UTC timezone)
+    # 📅 Datum bepalen (UTC)
     today = datetime.now(timezone("UTC")).date()
 
     # 🧠 AI-tradingadvies opstellen als tekstblok
