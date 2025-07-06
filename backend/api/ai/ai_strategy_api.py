@@ -2,10 +2,10 @@ from fastapi import APIRouter, HTTPException, Request
 from utils.ai_strategy_utils import generate_strategy_from_setup
 import logging
 
-router = APIRouter(prefix="/ai/strategy")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.post("")
+@router.post("/ai/strategy")
 async def generate_strategy(request: Request):
     """
     Genereert een AI-tradingstrategie op basis van een meegegeven setup.
