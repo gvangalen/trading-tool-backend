@@ -20,12 +20,15 @@ aiohttp
 # ✅ Data & Analysis
 pandas>=2.0
 
-# ✅ File uploads & templating
+# ✅ File Uploads & Templates
 python-multipart
 jinja2
 
 # ✅ AI
 openai>=1.0
 
-# ✅ Logging & utils
+# ✅ Logging & Utils
 loguru
+
+# ✅ Retry Logic
+tenacity>=8.2
