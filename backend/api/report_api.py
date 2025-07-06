@@ -9,18 +9,14 @@ from fastapi.responses import StreamingResponse
 
 from utils.db import get_db_connection
 from utils.pdf_generator import generate_pdf_report
-from celery_task.daily_report_task import generate_daily_report  # ✅ Celery-task import
+from celery_task.daily_report_task import generate_daily_report
 
-# ✅ Router met prefix
-router = APIRouter(prefix="/daily_report")
-
-# ✅ Logging instellen
+router = APIRouter()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-# ✅ Laatste rapport ophalen
-@router.get("/latest")
+@router.get("/daily_report/latest")
 async def get_latest_daily_report():
     conn = get_db_connection()
     if not conn:
@@ -41,8 +37,7 @@ async def get_latest_daily_report():
         conn.close()
 
 
-# ✅ Rapportgeschiedenis ophalen (alleen datums)
-@router.get("/history")
+@router.get("/daily_report/history")
 async def get_daily_report_history(limit: int = 7):
     conn = get_db_connection()
     if not conn:
@@ -59,8 +54,7 @@ async def get_daily_report_history(limit: int = 7):
         conn.close()
 
 
-# ✅ Rapport op specifieke datum ophalen
-@router.get("/{date}")
+@router.get("/daily_report/{date}")
 async def get_daily_report_by_date(date: str):
     try:
         datetime.strptime(date, "%Y-%m-%d")
@@ -86,8 +80,7 @@ async def get_daily_report_by_date(date: str):
         conn.close()
 
 
-# ✅ Samenvatting ophalen (voor dashboard)
-@router.get("/summary")
+@router.get("/daily_report/summary")
 async def get_daily_report_summary():
     conn = get_db_connection()
     if not conn:
@@ -107,8 +100,7 @@ async def get_daily_report_summary():
         conn.close()
 
 
-# ✅ PDF-export van rapport (laatste of specifieke datum)
-@router.get("/export/pdf")
+@router.get("/daily_report/export/pdf")
 async def export_daily_report_pdf(date: str = Query(default=None)):
     conn = get_db_connection()
     if not conn:
@@ -132,7 +124,6 @@ async def export_daily_report_pdf(date: str = Query(default=None)):
             columns = [desc[0] for desc in cur.description]
             report = dict(zip(columns, row))
 
-            # ✅ Structuur mappen voor PDF
             structured = {
                 "summary": report.get("btc_summary", ""),
                 "macro": report.get("macro_summary", ""),
@@ -158,8 +149,7 @@ async def export_daily_report_pdf(date: str = Query(default=None)):
         conn.close()
 
 
-# ✅ Handmatig rapport genereren via Celery
-@router.post("/generate")
+@router.post("/daily_report/generate")
 async def trigger_generate_daily_report():
     try:
         task = generate_daily_report.delay()
