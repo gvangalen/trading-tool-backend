@@ -1,5 +1,3 @@
-# backend/celery_task/macro_task.py
-
 import os
 import logging
 import traceback
@@ -39,8 +37,12 @@ def safe_request(url, method="POST", payload=None):
 def fetch_macro_data():
     logger.info("📊 Start ophalen van macrodata via API...")
     try:
-        data = safe_request(urljoin(API_BASE_URL, "/save_macro_data"))
+        url = urljoin(API_BASE_URL, "/save_macro_data")
+        data = safe_request(url)
         logger.info(f"✅ Macrodata succesvol opgeslagen: {data}")
     except RetryError:
         logger.error("❌ Alle retry-pogingen mislukt voor fetch_macro_data.")
+        logger.error(traceback.format_exc())
+    except Exception as e:
+        logger.error(f"❌ Onverwachte fout bij fetch_macro_data: {e}")
         logger.error(traceback.format_exc())
