@@ -1,3 +1,5 @@
+# backend/celery_task/daily_report_task.py
+
 import os
 import sys
 import json
@@ -19,7 +21,6 @@ from backend.utils.strategy_advice_generator import generate_strategy_advice
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ Opslaan in database met ON CONFLICT
 def save_report_to_db(date, report_data):
     conn = get_db_connection()
     if not conn:
@@ -69,7 +70,6 @@ def save_report_to_db(date, report_data):
     finally:
         conn.close()
 
-# ✅ Celery taak: Dagelijks rapport genereren
 @shared_task(name="celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
     logger.info("📝 Genereren van dagelijks rapport gestart...")
@@ -78,19 +78,15 @@ def generate_daily_report():
         logger.error("❌ Dagrapport geannuleerd: databaseverbinding faalt.")
         return
 
-    # 🔍 Data ophalen
     scores = generate_scores(asset="BTC")
     setups = validate_setups(asset="BTC")
     strategy = generate_strategy_advice(asset="BTC", scores=scores, setups=setups)
 
-    # ✅ Fallback bij incomplete data
     if not scores or not setups or not strategy:
         logger.warning("⚠️ Incomplete data voor rapport. Mogelijk ontbrekende scores of setups.")
 
-    # 📅 Datum bepalen (UTC)
     today = datetime.now(timezone("UTC")).date()
 
-    # 🧠 AI-tradingadvies opstellen als tekstblok
     advies_blok = (
         f"📋 Setup: {strategy.get('setup', 'n.v.t.')}\n"
         f"📈 Trend: {strategy.get('trend', 'n.v.t.')}\n"
@@ -101,7 +97,6 @@ def generate_daily_report():
         f"💬 Opmerking: {strategy.get('reden', '—')}"
     )
 
-    # 📄 Rapportgegevens samenstellen
     report_data = {
         "btc_summary": strategy.get("btc_summary", "Samenvatting BTC volgt..."),
         "macro_summary": strategy.get("macro_summary", "Macro-overzicht niet beschikbaar."),
@@ -113,7 +108,6 @@ def generate_daily_report():
         "outlook": strategy.get("outlook", "Vooruitblik niet beschikbaar.")
     }
 
-    # 💾 Backup JSON maken
     try:
         with open(f"daily_report_{today}.json", "w") as f:
             json.dump(report_data, f, indent=2)
@@ -121,7 +115,6 @@ def generate_daily_report():
     except Exception as e:
         logger.warning(f"⚠️ Backup json maken mislukt: {e}")
 
-    # 💾 Opslaan in de database
-    logger.info("🧠 Rapportinhoud gegenereerd. Opslaan...")
+    logger.info("💾 Rapportinhoud gegenereerd. Opslaan...")
     save_report_to_db(today, report_data)
     return report_data
