@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException
 from ai_tasks.validation_task import validate_setups_task
 
-router = APIRouter(prefix="/setups")
+router = APIRouter()
 
 # ✅ Setup-validatie starten via Celery
-@router.post("/validate")
+@router.post("/setups/validate")
 async def trigger_setup_validation():
     try:
         task = validate_setups_task.delay()
