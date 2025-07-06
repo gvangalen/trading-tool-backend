@@ -32,17 +32,24 @@ def safe_request(url, method="POST", payload=None):
         logger.error(traceback.format_exc())
         raise
 
-# ✅ Celery taak: Macrodata ophalen en opslaan
-@shared_task(name="celery_task.macro_task.fetch_macro_data")
-def fetch_macro_data():
-    logger.info("📊 Start ophalen van macrodata via API...")
+# ✅ Celery taak: Macrodata opslaan via API
+@shared_task(name="celery_task.macro_task.save_macro_data_task")
+def save_macro_data_task(indicator, value, trend=None, interpretation=None, action=None, score=None):
+    payload = {
+        "indicator": indicator,
+        "value": value,
+        "trend": trend,
+        "interpretation": interpretation,
+        "action": action,
+        "score": score
+    }
     try:
-        url = urljoin(API_BASE_URL, "/save_macro_data")
-        data = safe_request(url)
-        logger.info(f"✅ Macrodata succesvol opgeslagen: {data}")
+        url = urljoin(API_BASE_URL, "/macro_data")
+        response = safe_request(url, method="POST", payload=payload)
+        logger.info(f"✅ Macrodata succesvol opgeslagen: {response}")
     except RetryError:
-        logger.error("❌ Alle retry-pogingen mislukt voor fetch_macro_data.")
+        logger.error("❌ Alle retries mislukt voor save_macro_data_task!")
         logger.error(traceback.format_exc())
     except Exception as e:
-        logger.error(f"❌ Onverwachte fout bij fetch_macro_data: {e}")
+        logger.error(f"❌ Onverwachte fout bij opslaan macrodata: {e}")
         logger.error(traceback.format_exc())
