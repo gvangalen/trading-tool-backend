@@ -4,7 +4,6 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from utils.db import get_db_connection
 from utils.macro_interpreter import process_macro_indicator
-from celery_task.macro_task import fetch_macro_data  # ✅ Celery-taak importeren
 
 router = APIRouter(prefix="/macro_data")
 logger = logging.getLogger(__name__)
@@ -129,13 +128,3 @@ async def delete_macro_indicator(name: str):
         raise HTTPException(status_code=500, detail="❌ [DB04] Verwijderen mislukt.")
     finally:
         conn.close()
-
-# ✅ POST: Start Celery-task om macrodata automatisch op te halen
-@router.post("/trigger")
-def trigger_macro_data_task():
-    """
-    Start een achtergrondtaak om macrodata op te halen via Celery.
-    """
-    fetch_macro_data.delay()
-    logger.info("🚀 Celery-taak 'fetch_macro_data' gestart via API.")
-    return {"message": "📡 Macrodata taak gestart via Celery."}
