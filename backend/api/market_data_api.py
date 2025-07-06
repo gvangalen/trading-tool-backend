@@ -4,12 +4,12 @@ from backend.db.connection import get_db_cursor
 from backend.config.settings import COINGECKO_URL, VOLUME_URL, ASSETS
 import httpx
 
-router = APIRouter(prefix="/market_data")  # ✅ correcte prefix voor frontend calls
+router = APIRouter()  # ✅ Geen prefix — routes zijn volledig gedefinieerd
 
 logger = logging.getLogger(__name__)
 
 
-@router.get("/list")
+@router.get("/market_data/list")
 async def list_market_data():
     try:
         conn, cur = get_db_cursor()
@@ -40,7 +40,7 @@ async def list_market_data():
         raise HTTPException(status_code=500, detail="❌ Kon marktdata niet ophalen.")
 
 
-@router.post("/save")
+@router.post("/market_data/save")
 async def save_market_data():
     logger.info("📡 [save] Ophalen van marktdata via CoinGecko...")
     crypto_data = {}
@@ -107,18 +107,18 @@ async def save_market_data():
         conn.close()
 
 
-@router.get("/interpreted")
+@router.get("/market_data/interpreted")
 async def fetch_interpreted_data():
     # Placeholder - implementeer logica voor interpretatie en score
     return {"message": "✅ Interpretatiedata ophalen werkt (nog geen scoreberekening geïmplementeerd)."}
 
 
-@router.get("/test")
+@router.get("/market_data/test")
 async def test_market_api():
     return {"success": True, "message": "🧪 Market API test werkt!"}
 
 
-@router.delete("/{id}")
+@router.delete("/market_data/{id}")
 async def delete_market_asset(id: int):
     try:
         conn, cur = get_db_cursor()
