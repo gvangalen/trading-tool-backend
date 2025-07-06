@@ -39,28 +39,28 @@ def safe_include(import_path, name=""):
     except Exception as e:
         logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
 
-# ✅ Core API routers
-safe_include("backend.api.market_data_api", "market_data_api")
-safe_include("backend.api.macro_data_api", "macro_data_api")
-safe_include("backend.api.technical_data_api", "technical_data_api")
-safe_include("backend.api.setups_api", "setups_api")
-safe_include("backend.api.dashboard_api", "dashboard_api")
-safe_include("backend.api.report_api", "report_api")
-safe_include("backend.api.sidebar_api", "sidebar_api")
-safe_include("backend.api.onboarding_api", "onboarding_api")
-safe_include("backend.api.score_api", "score_api")
-safe_include("backend.api.strategy_api", "strategy_api")
+# ✅ Core API routers (GEEN 'backend.' gebruiken!)
+safe_include("api.market_data_api", "market_data_api")
+safe_include("api.macro_data_api", "macro_data_api")
+safe_include("api.technical_data_api", "technical_data_api")
+safe_include("api.setups_api", "setups_api")
+safe_include("api.dashboard_api", "dashboard_api")
+safe_include("api.report_api", "report_api")
+safe_include("api.sidebar_api", "sidebar_api")
+safe_include("api.onboarding_api", "onboarding_api")
+safe_include("api.score_api", "score_api")
+safe_include("api.strategy_api", "strategy_api")
 
-# ✅ AI API-routers
-safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
-safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
-safe_include("backend.api.ai.ai_trading_api", "ai_trading_api")
-safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")
+# ✅ AI API routers
+safe_include("api.ai.ai_explain_api", "ai_explain_api")
+safe_include("api.ai.ai_strategy_api", "ai_strategy_api")
+safe_include("api.ai.ai_trading_api", "ai_trading_api")
+safe_include("api.ai.validate_setups_api", "validate_setups_api")
 
-# ✅ AI helper-modules met router
-safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
-safe_include("backend.api.ai.ai_setup_validator", "ai_setup_validator")
-safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
+# ✅ AI helper-routers (met APIRouter in bestand)
+safe_include("api.ai.ai_score_generator", "ai_score_generator")
+safe_include("api.ai.ai_setup_validator", "ai_setup_validator")
+safe_include("api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 
 # ✅ Health check
 @app.get("/api/health")
