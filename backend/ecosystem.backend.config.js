@@ -14,7 +14,7 @@ module.exports = {
     {
       name: 'celery',
       script: 'celery',
-      args: '-A celery_app worker --loglevel=info',
+      args: '-A backend.celery_task.celery_app worker --loglevel=info',
       cwd: '/home/ubuntu/trading-tool-backend',
       interpreter: '/bin/bash',
       env: {
