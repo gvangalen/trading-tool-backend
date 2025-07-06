@@ -22,7 +22,11 @@ def safe_request(url, method="POST", payload=None):
         response = requests.request(method, url, json=payload, headers=HEADERS, timeout=TIMEOUT)
         response.raise_for_status()
         logger.info(f"✅ API-call succesvol: {url}")
-        return response.json()
+        try:
+            return response.json()
+        except Exception:
+            logger.warning("⚠️ API-call gaf geen geldige JSON terug.")
+            return {"message": "Non-JSON response"}
     except requests.exceptions.RequestException as e:
         logger.error(f"❌ RequestException bij {url}: {e}")
         logger.error(traceback.format_exc())
