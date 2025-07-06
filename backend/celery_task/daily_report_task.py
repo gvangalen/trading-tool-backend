@@ -4,7 +4,9 @@ import logging
 from datetime import datetime
 from pytz import timezone
 from celery import shared_task
-from db import get_db_connection
+
+# ✅ Juiste imports gebruiken uit utils
+from utils.db import get_db_connection
 from utils.scoring_utils import generate_scores
 from utils.setup_validator import validate_setups
 from utils.strategy_advice_generator import generate_strategy_advice
