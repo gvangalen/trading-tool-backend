@@ -1,36 +1,8 @@
-import logging
-import json
-from datetime import datetime
-from fastapi import APIRouter, HTTPException
-import httpx
-from utils.db import get_db_connection
-from celery_task.market_task import fetch_market_data  # ✅ Celery-taak importeren
-
-router = APIRouter(prefix="/market_data")
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
-
-COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1"
-VOLUME_URL = "https://api.coingecko.com/api/v3/coins/{}?localization=false&tickers=false&market_data=true"
-
-ASSETS = {
-    "BTC": "bitcoin",
-    "SOL": "solana"
-}
-
-def get_db_cursor():
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="❌ [DB] Geen databaseverbinding.")
-    return conn, conn.cursor()
-
-# ✅ POST: CoinGecko → DB
 @router.post("/save")
 async def save_market_data():
     logger.info("📡 [save] Ophalen van marktdata via CoinGecko...")
+    crypto_data = {}
     try:
-        crypto_data = {}
         async with httpx.AsyncClient(timeout=10) as client:
             for symbol, coingecko_id in ASSETS.items():
                 url = COINGECKO_URL.format(id=coingecko_id)
@@ -39,7 +11,8 @@ async def save_market_data():
                 ohlc = response.json()
 
                 if not ohlc:
-                    raise HTTPException(status_code=502, detail=f"❌ [API] Geen OHLC-data voor {symbol}")
+                    logger.warning(f"⚠️ Geen OHLC-data voor {symbol}")
+                    continue  # skip deze asset
 
                 latest = ohlc[-1]
                 open_, high, low, close = map(float, latest[1:5])
@@ -62,6 +35,10 @@ async def save_market_data():
     except Exception as e:
         logger.error(f"❌ [save] Fout bij ophalen van CoinGecko-data: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van marktdata.")
+
+    if not crypto_data:
+        logger.warning("⚠️ Geen geldige crypto-data ontvangen, niets opgeslagen.")
+        return {"message": "⚠️ Geen marktdata opgeslagen (lege respons van CoinGecko)."}
 
     conn, cur = get_db_cursor()
     try:
@@ -86,63 +63,3 @@ async def save_market_data():
         raise HTTPException(status_code=500, detail="❌ DB-fout bij opslaan.")
     finally:
         conn.close()
-
-# ✅ GET: Laatste 100 entries
-@router.get("/list")
-async def list_market_data():
-    logger.info("📦 [list] Ophalen van marktdata lijst...")
-    conn, cur = get_db_cursor()
-    try:
-        cur.execute("""
-            SELECT symbol, price, open, high, low, change_24h, volume, timestamp
-            FROM market_data
-            ORDER BY timestamp DESC
-            LIMIT 100
-        """)
-        rows = cur.fetchall()
-        return [
-            {
-                "symbol": row[0],
-                "price": float(row[1]) if row[1] is not None else None,
-                "open": float(row[2]) if row[2] is not None else None,
-                "high": float(row[3]) if row[3] is not None else None,
-                "low": float(row[4]) if row[4] is not None else None,
-                "change_24h": float(row[5]) if row[5] is not None else None,
-                "volume": float(row[6]) if row[6] is not None else None,
-                "timestamp": row[7].isoformat() if row[7] else None
-            }
-            for row in rows
-        ]
-    except Exception as e:
-        logger.error(f"❌ [list] DB-fout: {e}")
-        raise HTTPException(status_code=500, detail="❌ Fout bij ophalen data.")
-    finally:
-        conn.close()
-
-# ✅ Alias: /market_data → laatste lijst
-@router.get("/")
-async def get_recent_market_data():
-    return await list_market_data()
-
-# ✅ GET: Test endpoint
-@router.get("/test")
-async def test_market_data():
-    try:
-        conn = get_db_connection()
-        if not conn:
-            raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
-        conn.close()
-        return {"message": "✅ Market Data API werkt correct."}
-    except Exception as e:
-        logger.error(f"❌ [test] Interne fout: {e}")
-        raise HTTPException(status_code=500, detail="❌ Test endpoint faalde.")
-
-# ✅ POST: Start Celery-task om automatisch market data op te halen
-@router.post("/trigger")
-def trigger_market_data_task():
-    """
-    Start een achtergrondtaak om marktdata op te halen via Celery.
-    """
-    fetch_market_data.delay()
-    logger.info("🚀 Celery-taak 'fetch_market_data' gestart via API.")
-    return {"message": "📡 Marktdata taak gestart via Celery."}
