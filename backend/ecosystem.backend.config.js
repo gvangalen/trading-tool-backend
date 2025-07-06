@@ -2,10 +2,9 @@ module.exports = {
   apps: [
     {
       name: 'backend',
-      script: 'python3',
-      args: 'app.py',
+      script: 'backend/start_backend.py', // ⬅️ Dit is je echte script
+      interpreter: '/usr/bin/python3',    // ⬅️ Gebruik expliciete Python path
       cwd: '/home/ubuntu/trading-tool-backend',
-      interpreter: 'python3',
       watch: false,
       env: {
         ENV: 'production',
