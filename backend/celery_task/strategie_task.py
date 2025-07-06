@@ -1,11 +1,13 @@
-import logging
 import os
+import logging
 import traceback
 import requests
 from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
-from ai_strategy_generator import generate_strategy, generate_strategy_from_setup
+
+# ✅ AI logica importeren uit backend map (pas aan indien pad anders is)
+from backend.utils.ai_strategy_generator import generate_strategy, generate_strategy_from_setup
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
@@ -13,12 +15,13 @@ logger = logging.getLogger(__name__)
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
 HEADERS = {"Content-Type": "application/json"}
+TIMEOUT = 10
 
-# ✅ Safe API call
+# ✅ Robuuste API-call met retries
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="POST", payload=None):
     try:
-        response = requests.request(method, url, json=payload, headers=HEADERS, timeout=10)
+        response = requests.request(method, url, json=payload, headers=HEADERS, timeout=TIMEOUT)
         response.raise_for_status()
         logger.info(f"✅ API-call succesvol: {url}")
         return response.json()
@@ -27,13 +30,13 @@ def safe_request(url, method="POST", payload=None):
         logger.error(traceback.format_exc())
         raise
 
-# ✅ Taak: Genereer strategieën automatisch voor alle setups
+# ✅ Celery taak: Genereer strategieën automatisch voor ALLE setups
 @shared_task(name="celery_task.strategie_task.generate_all")
 def generate_strategieën_automatisch():
     try:
         setups = safe_request(urljoin(API_BASE_URL, "/setups"), method="GET")
         if not setups:
-            logger.warning("⚠️ Geen setups gevonden")
+            logger.warning("⚠️ Geen setups gevonden.")
             return
 
         for setup in setups:
@@ -66,22 +69,23 @@ def generate_strategieën_automatisch():
                 logger.info(f"✅ Strategie opgeslagen: {setup['name']} → {result}")
             except Exception as e:
                 logger.error(f"❌ Fout bij opslaan strategie: {e}")
+                logger.error(traceback.format_exc())
 
     except Exception as e:
         logger.error(f"❌ Fout in generate_strategieën_automatisch: {e}")
         logger.error(traceback.format_exc())
 
-# ✅ Taak: Genereer strategie voor specifieke setup
+# ✅ Celery taak: Genereer strategie voor specifieke setup
 @shared_task(name="celery_task.strategie_task.generate_for_setup")
 def generate_strategie_voor_setup(setup_id, overwrite=True):
     try:
         logger.info(f"🔍 Setup ophalen: {setup_id}")
-        setup_res = requests.get(urljoin(API_BASE_URL, f"/setups/{setup_id}"))
-        if setup_res.status_code != 200:
+        res = requests.get(urljoin(API_BASE_URL, f"/setups/{setup_id}"), timeout=TIMEOUT)
+        if res.status_code != 200:
             logger.error(f"❌ Setup niet gevonden: {setup_id}")
             return {"error": "Setup niet gevonden"}
 
-        setup = setup_res.json()
+        setup = res.json()
         strategie = generate_strategy_from_setup(setup)
         if not strategie:
             return {"error": "Strategie-generatie mislukt"}
@@ -100,16 +104,17 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         }
 
         if overwrite:
-            res = requests.put(urljoin(API_BASE_URL, f"/strategieën/van_setup/{setup_id}"), json=payload)
+            res = requests.put(urljoin(API_BASE_URL, f"/strategieën/van_setup/{setup_id}"), json=payload, timeout=TIMEOUT)
         else:
-            res = requests.post(urljoin(API_BASE_URL, "/strategieën"), json=payload)
+            res = requests.post(urljoin(API_BASE_URL, "/strategieën"), json=payload, timeout=TIMEOUT)
 
         if res.status_code not in [200, 201]:
             return {"error": res.text}
 
-        logger.info("✅ Strategie succesvol opgeslagen")
+        logger.info("✅ Strategie succesvol opgeslagen.")
         return {"success": True, "strategie": payload}
 
     except Exception as e:
         logger.error(f"❌ Fout bij strategie generatie voor setup: {e}")
+        logger.error(traceback.format_exc())
         return {"error": str(e)}
