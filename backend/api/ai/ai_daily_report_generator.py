@@ -15,7 +15,6 @@ def generate_daily_report(asset: str = "BTC") -> dict:
 
     try:
         with conn.cursor() as cur:
-            # Haal de laatste setup op voor deze asset
             cur.execute("""
                 SELECT data
                 FROM setups
@@ -25,31 +24,35 @@ def generate_daily_report(asset: str = "BTC") -> dict:
             """, (asset,))
             row = cur.fetchone()
 
-        if not row:
-            logger.warning(f"⚠️ RAP11: Geen setup gevonden voor asset '{asset}'")
-            return {"error": f"Geen setup gevonden voor asset '{asset}'"}
+        if not row or not isinstance(row[0], dict):
+            logger.warning(f"⚠️ RAP11: Geen geldige setup gevonden voor asset '{asset}'")
+            return {"error": f"Geen geldige setup gevonden voor asset '{asset}'"}
 
-        setup = row[0]  # JSONB veld (dict)
+        setup = row[0]
 
-        # Genereer strategie op basis van setup
+        # ✅ Strategie genereren
         strategy = generate_strategy_from_setup(setup)
-        if not strategy:
+        if not strategy or not isinstance(strategy, dict):
             logger.warning("⚠️ RAP12: Strategie-generatie mislukt voor opgehaalde setup.")
             return {"error": "Strategie-generatie mislukt."}
 
-        # Samengesteld rapport
+        # ✅ Rapportstructuur samenstellen
         report = {
             "asset": asset,
             "setup_name": setup.get("name", "Onbekende setup"),
+            "timestamp": setup.get("timestamp", None),
             "strategy": strategy,
-            "timestamp": setup.get("timestamp") or None,
+            # Toekomstige uitbreidingen:
+            # "scores": { ... },
+            # "ai_explanation": "...",
+            # "trend_analysis": "...",
         }
 
-        logger.info(f"✅ RAP13: Rapport succesvol gegenereerd voor {asset}")
+        logger.info(f"✅ RAP13: Dagrapport succesvol gegenereerd voor {asset}")
         return report
 
     except Exception as e:
-        logger.error(f"❌ RAP14: Fout bij genereren rapport: {e}")
+        logger.error(f"❌ RAP14: Fout bij genereren dagrapport: {e}")
         return {"error": str(e)}
 
     finally:
