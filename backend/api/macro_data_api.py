@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request
 from utils.db import get_db_connection
 from utils.macro_interpreter import process_macro_indicator
 
-router = APIRouter(prefix="/macro_data")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -18,7 +18,7 @@ def get_db_cursor():
     return conn, conn.cursor()
 
 # ✅ POST: Macro-indicator toevoegen op basis van config
-@router.post("/")
+@router.post("/macro_data")
 async def add_macro_indicator(request: Request):
     logger.info("📥 [add] Nieuwe macro-indicator toevoegen...")
     data = await request.json()
@@ -74,7 +74,7 @@ async def add_macro_indicator(request: Request):
         conn.close()
 
 # ✅ GET: Laatste macro-indicatoren ophalen
-@router.get("/")
+@router.get("/macro_data")
 async def get_macro_indicators():
     logger.info("📤 [get] Ophalen macro-indicatoren...")
     conn, cur = get_db_cursor()
@@ -106,12 +106,12 @@ async def get_macro_indicators():
         conn.close()
 
 # ✅ Alias: /macro_data/list → fallback route voor frontend
-@router.get("/list")
+@router.get("/macro_data/list")
 async def get_macro_data_list():
     return await get_macro_indicators()
 
 # ✅ DELETE: Macro-indicator verwijderen op basis van naam
-@router.delete("/{name}")
+@router.delete("/macro_data/{name}")
 async def delete_macro_indicator(name: str):
     logger.info(f"🗑️ [delete] Probeer macro-indicator '{name}' te verwijderen...")
     conn, cur = get_db_cursor()
