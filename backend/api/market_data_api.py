@@ -1,3 +1,45 @@
+import logging
+from fastapi import APIRouter, HTTPException
+from backend.db.connection import get_db_cursor
+from backend.config.settings import COINGECKO_URL, VOLUME_URL, ASSETS
+import httpx
+
+router = APIRouter(prefix="/market_data")  # ✅ correcte prefix voor frontend calls
+
+logger = logging.getLogger(__name__)
+
+
+@router.get("/list")
+async def list_market_data():
+    try:
+        conn, cur = get_db_cursor()
+        cur.execute("""
+            SELECT id, symbol, price, open, high, low, change_24h, volume, timestamp
+            FROM market_data
+            ORDER BY timestamp DESC
+        """)
+        rows = cur.fetchall()
+        conn.close()
+
+        data = [
+            {
+                "id": r[0],
+                "symbol": r[1],
+                "price": r[2],
+                "open": r[3],
+                "high": r[4],
+                "low": r[5],
+                "change_24h": r[6],
+                "volume": r[7],
+                "timestamp": r[8],
+            } for r in rows
+        ]
+        return data
+    except Exception as e:
+        logger.error(f"❌ [list] DB-fout: {e}")
+        raise HTTPException(status_code=500, detail="❌ Kon marktdata niet ophalen.")
+
+
 @router.post("/save")
 async def save_market_data():
     logger.info("📡 [save] Ophalen van marktdata via CoinGecko...")
@@ -12,7 +54,7 @@ async def save_market_data():
 
                 if not ohlc:
                     logger.warning(f"⚠️ Geen OHLC-data voor {symbol}")
-                    continue  # skip deze asset
+                    continue
 
                 latest = ohlc[-1]
                 open_, high, low, close = map(float, latest[1:5])
@@ -63,3 +105,28 @@ async def save_market_data():
         raise HTTPException(status_code=500, detail="❌ DB-fout bij opslaan.")
     finally:
         conn.close()
+
+
+@router.get("/interpreted")
+async def fetch_interpreted_data():
+    # Placeholder - implementeer logica voor interpretatie en score
+    return {"message": "✅ Interpretatiedata ophalen werkt (nog geen scoreberekening geïmplementeerd)."}
+
+
+@router.get("/test")
+async def test_market_api():
+    return {"success": True, "message": "🧪 Market API test werkt!"}
+
+
+@router.delete("/{id}")
+async def delete_market_asset(id: int):
+    try:
+        conn, cur = get_db_cursor()
+        cur.execute("DELETE FROM market_data WHERE id = %s", (id,))
+        conn.commit()
+        conn.close()
+        logger.info(f"🗑️ [delete] Markt asset met ID {id} verwijderd.")
+        return {"message": f"🗑️ Asset {id} verwijderd."}
+    except Exception as e:
+        logger.error(f"❌ [delete] Fout bij verwijderen: {e}")
+        raise HTTPException(status_code=500, detail="❌ Kon asset niet verwijderen.")
