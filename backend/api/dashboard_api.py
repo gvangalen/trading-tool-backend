@@ -1,6 +1,6 @@
 import logging
 from fastapi import APIRouter, HTTPException
-from utils.db import get_db_connection
+from backend.utils.db import get_db_connection  # ✅ Fix import
 import psycopg2.extras
 
 router = APIRouter()
