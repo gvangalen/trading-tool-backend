@@ -1,7 +1,7 @@
 import logging
 import json
 from fastapi import APIRouter, HTTPException
-from utils.scoring_utils import load_config, generate_scores
+from backend.utils.scoring_utils import load_config, generate_scores
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
