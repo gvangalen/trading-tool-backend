@@ -3,8 +3,11 @@ from ai_tasks.validation_task import validate_setups_task
 from typing import Dict, Any
 import logging
 
-router = APIRouter()
+# ✅ Logging instellen
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+router = APIRouter()
 
 # ✅ Interne validator
 def is_valid_setup(setup: Dict[str, Any]) -> bool:
@@ -28,11 +31,13 @@ def is_valid_setup(setup: Dict[str, Any]) -> bool:
 async def trigger_setup_validation():
     try:
         task = validate_setups_task.delay()
+        logger.info("✅ Celery-validatie gestart via /setups/validate")
         return {
             "message": "Setup-validatie gestart.",
             "task_id": task.id
         }
     except Exception as e:
+        logger.error(f"❌ Fout bij starten van Celery-validatie: {e}")
         raise HTTPException(status_code=500, detail=f"Fout bij starten van validatie: {e}")
 
 # ✅ 2. Valideer 1 losse setup direct via API
@@ -40,9 +45,11 @@ async def trigger_setup_validation():
 async def validate_single_setup(setup: Dict[str, Any] = Body(...)):
     try:
         result = is_valid_setup(setup)
+        logger.info(f"✅ Validatie uitgevoerd voor setup '{setup.get('name', '-')}' → Resultaat: {result}")
         return {
             "valid": result,
             "message": "✅ Geldige setup." if result else "❌ Ongeldige setup – controleer velden en scores."
         }
     except Exception as e:
+        logger.error(f"❌ Fout bij single setup-validatie: {e}")
         raise HTTPException(status_code=400, detail=f"Fout bij setup-validatie: {e}")
