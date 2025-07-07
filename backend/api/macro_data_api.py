@@ -11,11 +11,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 CONFIG_PATH = "macro_indicators_config.json"
 
+
 def get_db_cursor():
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
     return conn, conn.cursor()
+
 
 # ✅ POST: Macro-indicator toevoegen op basis van config
 @router.post("/macro_data")
@@ -73,6 +75,7 @@ async def add_macro_indicator(request: Request):
     finally:
         conn.close()
 
+
 # ✅ GET: Laatste macro-indicatoren ophalen
 @router.get("/macro_data")
 async def get_macro_indicators():
@@ -105,10 +108,12 @@ async def get_macro_indicators():
     finally:
         conn.close()
 
+
 # ✅ Alias: /macro_data/list → fallback route voor frontend
 @router.get("/macro_data/list")
 async def get_macro_data_list():
     return await get_macro_indicators()
+
 
 # ✅ DELETE: Macro-indicator verwijderen op basis van naam
 @router.delete("/macro_data/{name}")
@@ -126,5 +131,29 @@ async def delete_macro_indicator(name: str):
     except Exception as e:
         logger.error(f"❌ [delete] Verwijderen mislukt: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB04] Verwijderen mislukt.")
+    finally:
+        conn.close()
+
+
+# ✅ PATCH: Macro-indicator bijwerken (waarde)
+@router.patch("/macro_data/{name}")
+async def update_macro_value(name: str, request: Request):
+    logger.info(f"✏️ [patch] Bijwerken van '{name}'...")
+    conn, cur = get_db_cursor()
+    try:
+        data = await request.json()
+        value = float(data.get("value"))
+
+        cur.execute("UPDATE macro_data SET value = %s, timestamp = %s WHERE name = %s RETURNING id;",
+                    (value, datetime.utcnow(), name))
+        updated = cur.fetchone()
+        if not updated:
+            raise HTTPException(status_code=404, detail=f"Indicator '{name}' niet gevonden.")
+        conn.commit()
+        logger.info(f"✅ [patch] Indicator '{name}' bijgewerkt naar {value}")
+        return {"message": f"{name} bijgewerkt naar {value}."}
+    except Exception as e:
+        logger.error(f"❌ [patch] Bijwerken mislukt: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB05] Bijwerken mislukt.")
     finally:
         conn.close()
