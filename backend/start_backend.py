@@ -1,12 +1,11 @@
-import sys
-import os
+import sys, os
 import logging
 import importlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ Voeg 'backend/' toe aan sys.path zodat imports zoals 'backend.api.xxx' werken
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "backend")))
+# ✅ Voeg rootpad toe zodat 'api' en 'ai_tasks' goed gevonden worden
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -21,7 +20,6 @@ origins = [
     "http://143.47.186.148",
     "http://143.47.186.148:3000",
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -39,40 +37,35 @@ def safe_include(import_path, name=""):
     except Exception as e:
         logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
 
-# ✅ Routers (in backend/api/)
-safe_include("backend.api.market_data_api", "market_data_api")
-safe_include("backend.api.macro_data_api", "macro_data_api")
-safe_include("backend.api.technical_data_api", "technical_data_api")
-safe_include("backend.api.setups_api", "setups_api")
-safe_include("backend.api.dashboard_api", "dashboard_api")
-safe_include("backend.api.report_api", "report_api")
-safe_include("backend.api.sidebar_api", "sidebar_api")
-safe_include("backend.api.onboarding_api", "onboarding_api")
-safe_include("backend.api.score_api", "score_api")
-safe_include("backend.api.strategy_api", "strategy_api")
+# ✅ Routers importeren (zonder 'backend.' prefix!)
+safe_include("api.market_data_api", "market_data_api")
+safe_include("api.macro_data_api", "macro_data_api")
+safe_include("api.technical_data_api", "technical_data_api")
+safe_include("api.setups_api", "setups_api")
+safe_include("api.dashboard_api", "dashboard_api")
+safe_include("api.report_api", "report_api")
+safe_include("api.sidebar_api", "sidebar_api")
+safe_include("api.onboarding_api", "onboarding_api")
+safe_include("api.score_api", "score_api")
+safe_include("api.strategy_api", "strategy_api")
 
-# ✅ AI routes (in backend/api/ai/)
-safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
-safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
-safe_include("backend.api.ai.ai_trading_api", "ai_trading_api")
-safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")
+# ✅ AI routes (ook zonder 'backend.')
+safe_include("api.ai.ai_explain_api", "ai_explain_api")
+safe_include("api.ai.ai_strategy_api", "ai_strategy_api")
+safe_include("api.ai.ai_trading_api", "ai_trading_api")
+safe_include("api.ai.validate_setups_api", "validate_setups_api")
 
-# ✅ AI helpers (geen router vereist, maar als ze wel een router bevatten werkt dit ook)
-safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
-safe_include("backend.api.ai.ai_setup_validator", "ai_setup_validator")
-safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
+# ✅ AI helpers als routers
+safe_include("api.ai.ai_score_generator", "ai_score_generator")
+safe_include("api.ai.ai_setup_validator", "ai_setup_validator")
+safe_include("api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 
 # ✅ Health check
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API draait ✅"}
 
-# ✅ CORS test route
-@app.get("/api/test-cors")
-def test_cors():
-    return {"success": True, "message": "CORS werkt correct vanaf frontend."}
-
-# ✅ Lokale run optie
+# ✅ Lokaal starten
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("start_backend:app", host="0.0.0.0", port=5002, reload=True)
