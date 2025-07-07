@@ -1,49 +1,61 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional
 import openai
 import os
 import logging
 
-router = APIRouter(prefix="/ai/explain")
+# ✅ Logging instellen
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ OpenAI API key instellen
+# ✅ OpenAI API key en modus instellen
 openai.api_key = os.getenv("OPENAI_API_KEY")
 AI_MODE = os.getenv("AI_MODE", "live").lower()  # "live" of "mock"
 
+# ✅ Router
+router = APIRouter(prefix="/ai/explain")
+
+# ✅ Input model
+class SetupExplainRequest(BaseModel):
+    name: str
+    trend: str
+    indicators: List[str]
+
 # ✅ Fallback uitlegfunctie
-def fallback_explanation(name, indicators, trend):
+def fallback_explanation(name: Optional[str], indicators: Optional[List[str]], trend: Optional[str]) -> str:
+    name = name or "deze setup"
+    indicators_str = ", ".join(indicators or ["onbekend"])
+    trend = trend or "neutrale"
     return (
         f"De setup '{name}' is gericht op een {trend}-markttrend en gebruikt indicatoren zoals: "
-        f"{indicators}. Deze combinatie kan helpen om kansen te signaleren in deze marktomstandigheden."
+        f"{indicators_str}. Deze combinatie kan helpen om kansen te signaleren in deze marktomstandigheden."
     )
 
 # ✅ POST: Uitleg genereren voor een trading setup
 @router.post("/setup")
-async def explain_setup(request: Request):
+async def explain_setup(payload: SetupExplainRequest):
+    name = payload.name
+    trend = payload.trend
+    indicators = payload.indicators
+
+    # ✅ Fallback modus
+    if AI_MODE == "mock":
+        logger.info("🤖 AIEX01: Fallback uitleg actief (AI_MODE=mock).")
+        return {"explanation": fallback_explanation(name, indicators, trend)}
+
     try:
-        data = await request.json()
-        name = data.get("name")
-        indicators = data.get("indicators")
-        trend = data.get("trend")
-
-        if not name or not indicators or not trend:
-            logger.warning("⚠️ AIEX01: Ongeldige input ontvangen.")
-            raise HTTPException(status_code=400, detail="Ongeldige input: naam, indicatoren en trend zijn verplicht.")
-
-        # ✅ Fallback modus (mock)
-        if AI_MODE == "mock":
-            logger.info("🤖 AIEX02: Fallback uitleg actief (AI_MODE=mock).")
-            return {"explanation": fallback_explanation(name, indicators, trend)}
-
         # ✅ Prompt bouwen
+        indicators_str = ", ".join(indicators)
         prompt = (
             f"Geef een beknopte en begrijpelijke uitleg over de trading setup '{name}' "
             f"met de volgende kenmerken:\n"
             f"- Marktconditie: {trend}\n"
-            f"- Indicatoren: {indicators}\n"
+            f"- Indicatoren: {indicators_str}\n"
             f"Antwoord in maximaal 3 zinnen in het Nederlands. Gebruik eenvoudige taal."
         )
+
+        logger.debug(f"📤 AIEX-PROMPT: {prompt}")
 
         # ✅ AI-aanroep
         response = openai.ChatCompletion.create(
@@ -54,9 +66,9 @@ async def explain_setup(request: Request):
         )
 
         explanation = response['choices'][0]['message']['content'].strip()
-        logger.info(f"✅ AIEX03: Uitleg succesvol gegenereerd voor setup '{name}'.")
+        logger.info(f"✅ AIEX02: Uitleg succesvol gegenereerd voor setup '{name}'.")
         return {"explanation": explanation}
 
     except Exception as e:
-        logger.warning(f"⚠️ AIEX04: Fout bij AI-aanroep: {e}. Fallback wordt gebruikt.")
+        logger.warning(f"⚠️ AIEX03: Fout bij AI-aanroep: {e}. Fallback wordt gebruikt.")
         return {"explanation": fallback_explanation(name, indicators, trend)}
