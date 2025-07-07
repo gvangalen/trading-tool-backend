@@ -1,8 +1,8 @@
 from fastapi import APIRouter, HTTPException, Request
-from utils.db import get_db_connection
+from backend.utils.db import get_db_connection
 from datetime import datetime
 import logging
-from celery_task.setup_task import validate_setups_task  # Celery trigger
+from backend.celery_task.setup_task import validate_setups_task  # Celery trigger
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
