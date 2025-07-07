@@ -1,4 +1,4 @@
-from utils.db import get_db_connection
+from backend.utils.db import get_db_connection
 import logging
 from typing import Dict, Union
 
@@ -25,15 +25,16 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Union[str, float,
             """, (symbol,))
             row = cur.fetchone()
 
-        if not row or len(row) != 3:
-            logger.warning(f"⚠️ COMB02: Geen volledige score gevonden voor {symbol}")
-            return {"symbol": symbol, "error": "Incomplete scoregegevens", "total_score": 0}
+        if not row:
+            logger.warning(f"⚠️ COMB02: Geen scoregegevens gevonden voor {symbol}")
+            return {"symbol": symbol, "error": "Geen scoregegevens", "total_score": 0}
 
-        macro, technical, sentiment = row
-
-        # ✅ Controleer of alles numeriek is
-        if not all(isinstance(val, (int, float)) for val in (macro, technical, sentiment)):
-            logger.warning(f"⚠️ COMB03: Ongeldige scoretypes voor {symbol}")
+        try:
+            macro = float(row[0])
+            technical = float(row[1])
+            sentiment = float(row[2])
+        except (ValueError, TypeError):
+            logger.warning(f"⚠️ COMB03: Ongeldige waarden (niet-numeriek) voor {symbol}")
             return {"symbol": symbol, "error": "Niet-numerieke waarden", "total_score": 0}
 
         total = round((macro + technical + sentiment) / 3, 2)
