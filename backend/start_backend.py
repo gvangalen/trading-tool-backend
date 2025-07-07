@@ -1,11 +1,12 @@
-import sys, os
+import sys
+import os
 import logging
 import importlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ Zorg dat de rootmap ('trading-tool') in sys.path staat
-sys.path.insert(0, os.path.abspath("."))
+# ✅ Voeg 'backend/' toe aan sys.path zodat imports zoals 'backend.api.xxx' werken
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "backend")))
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 # ✅ FastAPI app aanmaken
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# ✅ CORS-instellingen (pas aan indien nodig)
+# ✅ CORS-instellingen
 origins = [
     "http://localhost:3000",
     "http://143.47.186.148",
@@ -38,7 +39,7 @@ def safe_include(import_path, name=""):
     except Exception as e:
         logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
 
-# ✅ Routers (allemaal met prefix 'backend.api...')
+# ✅ Routers (in backend/api/)
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
@@ -50,13 +51,13 @@ safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
 
-# ✅ AI gerelateerde routes
+# ✅ AI routes (in backend/api/ai/)
 safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
 safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
 safe_include("backend.api.ai.ai_trading_api", "ai_trading_api")
 safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")
 
-# ✅ AI helper modules
+# ✅ AI helpers (geen router vereist, maar als ze wel een router bevatten werkt dit ook)
 safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
 safe_include("backend.api.ai.ai_setup_validator", "ai_setup_validator")
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
@@ -71,7 +72,7 @@ def health_check():
 def test_cors():
     return {"success": True, "message": "CORS werkt correct vanaf frontend."}
 
-# ✅ Lokale startoptie (voor debugging)
+# ✅ Lokale run optie
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.start_backend:app", host="0.0.0.0", port=5002, reload=True)
+    uvicorn.run("start_backend:app", host="0.0.0.0", port=5002, reload=True)
