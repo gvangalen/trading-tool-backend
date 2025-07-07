@@ -1,11 +1,15 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from typing import Dict, Any
 import logging
 
-router = APIRouter()
+router = APIRouter(prefix="/ai/validate")
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def is_valid_setup(setup: Dict[str, Any]) -> bool:
+    """
+    Valideert of een setup geldig is: bevat verplichte velden en correcte types.
+    """
     required_fields = ["name", "symbol", "trend", "timeframe", "indicators"]
     for field in required_fields:
         if field not in setup or not setup[field]:
@@ -21,13 +25,21 @@ def is_valid_setup(setup: Dict[str, Any]) -> bool:
 
     return True
 
-@router.post("/validate/setup")
-def validate_setup_api(setup: Dict[str, Any]):
+@router.post("/setup")
+async def validate_setup_api(request: Request):
     """
-    ✅ Valideer setup via API.
+    ✅ Valideer één trading setup via AI-validatieregels.
     """
-    if not isinstance(setup, dict):
-        raise HTTPException(status_code=400, detail="Setup moet een JSON object zijn.")
-    
-    result = is_valid_setup(setup)
-    return {"valid": result}
+    try:
+        setup: Dict[str, Any] = await request.json()
+
+        if not isinstance(setup, dict):
+            raise HTTPException(status_code=400, detail="Input moet een JSON-object zijn.")
+
+        result = is_valid_setup(setup)
+        logger.info(f"✅ Setup validatie uitgevoerd – resultaat: {result}")
+        return {"valid": result}
+
+    except Exception as e:
+        logger.error(f"❌ Validatiefout: {e}")
+        raise HTTPException(status_code=500, detail="Fout tijdens setup-validatie.")
