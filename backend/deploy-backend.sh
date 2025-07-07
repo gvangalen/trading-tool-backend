@@ -32,6 +32,11 @@ else
   echo "ℹ️ Geen bestaand backend-proces actief."
 fi
 
+echo "🌱 Laad .env met DB-gegevens..."
+set -o allexport
+source .env
+set +o allexport
+
 echo "🚀 Start nieuwe backend..."
 pm2 start "uvicorn start_backend:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
