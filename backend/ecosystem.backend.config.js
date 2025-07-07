@@ -2,26 +2,23 @@ module.exports = {
   apps: [
     {
       name: 'backend',
-      script: 'start_backend.py',              // ⬅️ Geen 'backend/' prefix meer
+      script: 'start_backend.py',               // ⬅️ draait in backend-map
       interpreter: '/usr/bin/python3',
-      cwd: '/home/ubuntu/trading-tool-backend/backend', // ⬅️ Ga direct naar de /backend map
+      cwd: '/home/ubuntu/trading-tool-backend/backend',
       watch: false,
       env: {
         ENV: 'production',
-        PYTHONUNBUFFERED: '1',
-        PYTHONPATH: '.',                        // ✅ Hierdoor werken imports als api.setups_api
       },
     },
     {
       name: 'celery',
       script: 'celery',
-      args: '-A celery_task.celery_app worker --loglevel=info', // ⬅️ Geen 'backend.' prefix
-      cwd: '/home/ubuntu/trading-tool-backend/backend',
+      args: '-A backend.celery_task.celery_app worker --loglevel=info',
       interpreter: '/bin/bash',
+      cwd: '/home/ubuntu/trading-tool-backend',
       env: {
         CELERY_BROKER_URL: 'redis://localhost:6379/0',
         CELERY_RESULT_BACKEND: 'redis://localhost:6379/0',
-        PYTHONPATH: '.',                        // ✅ Ook nodig voor celery
       },
     },
   ],
