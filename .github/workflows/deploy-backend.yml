@@ -8,6 +8,7 @@ on:
       - '**.py'
       - '**.yml'
       - '**.txt'
+      - '**.js'                     # ✅ ecosystem.config.js wordt nu meegenomen
       - '.github/workflows/deploy-backend.yml'
 
 jobs:
@@ -27,4 +28,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             echo "🎯 Start remote deployment..."
-            bash ~/trading-tool-backend/deploy-backend.sh
+            cd ~/trading-tool-backend
+            git pull origin main       # ✅ nieuwste code
+            pm2 restart ecosystem.config.js || pm2 start ecosystem.config.js
+            echo "✅ Deploy afgerond"
