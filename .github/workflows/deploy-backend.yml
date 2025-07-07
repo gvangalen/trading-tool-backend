@@ -8,7 +8,8 @@ on:
       - '**.py'
       - '**.yml'
       - '**.txt'
-      - '**.js'                     # ✅ ecosystem.config.js wordt nu meegenomen
+      - '**.js'
+      - 'deploy-backend.sh'
       - '.github/workflows/deploy-backend.yml'
 
 jobs:
@@ -29,6 +30,6 @@ jobs:
           script: |
             echo "🎯 Start remote deployment..."
             cd ~/trading-tool-backend
-            git pull origin main       # ✅ nieuwste code
-            pm2 restart ecosystem.config.js || pm2 start ecosystem.config.js
+            git pull origin main
+            bash deploy-backend.sh
             echo "✅ Deploy afgerond"
