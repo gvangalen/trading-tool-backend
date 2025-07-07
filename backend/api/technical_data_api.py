@@ -2,9 +2,9 @@ import logging
 import json
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
-from utils.db import get_db_connection
-from utils.technical_interpreter import process_technical_indicator
-from celery_task.technical_task import save_technical_data_task  # ✅ Celery taak importeren
+from backend.utils.db import get_db_connection
+from backend.utils.technical_interpreter import process_technical_indicator
+from backend.celery_task.technical_task import save_technical_data_task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
