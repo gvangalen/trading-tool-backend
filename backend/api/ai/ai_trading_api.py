@@ -1,15 +1,16 @@
 import logging
 from fastapi import APIRouter, HTTPException
-from utils.db import get_db_connection
+from backend.utils.db import get_db_connection
 import psycopg2.extras
 
-router = APIRouter()
+router = APIRouter(prefix="/ai/trading_advice")
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-@router.get("/ai/trading_advice")
+@router.get("")
 async def get_trading_advice(symbol: str = "BTC"):
     """
-    Haalt het laatste AI-tradingadvies op voor een specifieke asset.
+    ✅ Haalt het laatste AI-tradingadvies op voor een specifieke asset.
     """
     symbol = symbol.upper()
     conn = get_db_connection()
@@ -47,7 +48,7 @@ async def get_trading_advice(symbol: str = "BTC"):
                 "risk_profile": row["risk_profile"],
                 "timestamp": row["created_at"].isoformat(),
                 "score": 100,
-                "setup": "A-Plus Setup",
+                "setup": "A-Plus Setup",  # ⬅️ dit mag eventueel dynamisch worden later
                 "targets": [
                     {"price": 69000, "type": "TP1"},
                     {"price": 72000, "type": "TP2"}
