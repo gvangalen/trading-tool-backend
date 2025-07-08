@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException
 from backend.utils.db import get_db_connection
 import logging
 
-router = APIRouter(prefix="/sidebar")
+router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
