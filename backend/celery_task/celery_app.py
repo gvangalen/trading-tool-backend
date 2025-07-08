@@ -1,5 +1,9 @@
 import os
+import sys
 from celery import Celery
+
+# ✅ Voeg rootpad toe voor veilige import bij standalone run
+sys.path.insert(0, os.path.abspath("."))
 
 # ✅ Celery app initialiseren
 celery = Celery(
@@ -24,5 +28,5 @@ celery.autodiscover_tasks([
     "backend.ai_tasks.validation_task"
 ])
 
-# ✅ Belangrijk: exporteer de app zodat `celery -A celery_app worker` werkt
+# ✅ Belangrijk: exporteer de app zodat `celery -A backend.celery_app worker --loglevel=info` werkt
 app = celery
