@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.utils.db import get_db_connection
-from utils.pdf_generator import generate_pdf_report
+from backend.utils.pdf_generator import generate_pdf_report
 from celery_task.daily_report_task import generate_daily_report
 
 router = APIRouter()
