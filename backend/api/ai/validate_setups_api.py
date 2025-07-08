@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Body
-from ai_tasks.validation_task import validate_setups_task
+from backend.ai_tasks.validation_task import validate_setups_task
 from typing import Dict, Any
 import logging
 
