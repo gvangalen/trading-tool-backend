@@ -7,7 +7,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ✅ Tijdelijke dummydata (tot live data via DB/API komt)
+# ✅ Tijdelijke dummydata (wordt later vervangen door live data via DB/API)
 dummy_data = {
     "fear_greed_index": 72,
     "btc_dominance": 52.4,
@@ -22,6 +22,10 @@ dummy_data = {
 # ✅ Macro score ophalen
 @router.get("/score/macro")
 async def macro_score():
+    """
+    Retourneert de macro-economische score en interpretatie op basis van dummydata.
+    Configuratie wordt geladen uit `macro_indicators_config.json`.
+    """
     try:
         config = load_config("config/macro_indicators_config.json")
         result = generate_scores(dummy_data, config)
@@ -33,6 +37,10 @@ async def macro_score():
 # ✅ Technische score ophalen
 @router.get("/score/technical")
 async def technical_score():
+    """
+    Retourneert de technische analyse score en interpretatie op basis van dummydata.
+    Configuratie wordt geladen uit `technical_indicators_config.json`.
+    """
     try:
         config = load_config("config/technical_indicators_config.json")
         result = generate_scores(dummy_data, config)
@@ -44,6 +52,10 @@ async def technical_score():
 # ✅ Markt score ophalen
 @router.get("/score/market")
 async def market_score():
+    """
+    Retourneert de marktscore en interpretatie op basis van dummydata.
+    Configuratie wordt geladen uit `market_data_config.json`.
+    """
     try:
         config = load_config("config/market_data_config.json")
         result = generate_scores(dummy_data, config)
