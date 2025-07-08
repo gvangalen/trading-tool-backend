@@ -14,7 +14,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 AI_MODE = os.getenv("AI_MODE", "live").lower()  # "live" of "mock"
 
 # ✅ Router
-router = APIRouter(prefix="/ai/explain")
+router = APIRouter()
 
 # ✅ Input model
 class SetupExplainRequest(BaseModel):
