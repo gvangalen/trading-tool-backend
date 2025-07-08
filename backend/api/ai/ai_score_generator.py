@@ -1,8 +1,16 @@
-from backend.utils.db import get_db_connection
+import sys
+import os
 import logging
 from typing import Dict, Union
 
+# ✅ Zorg dat imports uit backend werken, ook bij standalone run
+sys.path.insert(0, os.path.abspath('.'))
+
+from backend.utils.db import get_db_connection
+
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
 
 def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Union[str, float, int]]:
     """
@@ -54,3 +62,9 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Union[str, float,
 
     finally:
         conn.close()
+
+
+# ✅ Standalone testmogelijkheid
+if __name__ == "__main__":
+    score = calculate_combined_score("BTC")
+    print(score)
