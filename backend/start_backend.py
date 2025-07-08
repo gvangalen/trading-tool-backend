@@ -28,16 +28,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Router import wrapper
+# ✅ Router import wrapper met extra console-output
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
         app.include_router(module.router, prefix="/api")
         logger.info(f"✅ Router geladen: {name or import_path}")
+        print(f"🧪 Router geladen: {name or import_path}")
     except Exception as e:
         logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
+        print(f"❌ Router FOUT: {name or import_path} — {e}")
 
-# ✅ Routers importeren met volledige pad
+# ✅ Routers importeren met logging
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
