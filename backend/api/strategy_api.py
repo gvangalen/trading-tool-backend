@@ -217,3 +217,34 @@ async def export_strategies():
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ Groeperen per setup
+@router.get("/strategies/grouped_by_setup")
+async def grouped_by_setup():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    data->>'setup_id' AS setup_id,
+                    COUNT(*) AS strategy_count,
+                    MAX(created_at) AS last_created
+                FROM strategies
+                GROUP BY data->>'setup_id'
+                ORDER BY last_created DESC
+            """)
+            rows = cur.fetchall()
+
+        grouped = [
+            {
+                "setup_id": int(r[0]),
+                "strategy_count": r[1],
+                "last_created": r[2].isoformat()
+            }
+            for r in rows
+        ]
+        return grouped
+    except Exception as e:
+        logger.error(f"[grouped_by_setup] ❌ {e}")
+        raise HTTPException(status_code=500, detail="Kon strategie-overzicht niet ophalen.")
