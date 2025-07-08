@@ -4,15 +4,15 @@ from backend.utils.db import get_db_connection  # ✅ juist
 from backend.config.settings import COINGECKO_URL, VOLUME_URL, ASSETS
 import httpx
 
-router = APIRouter()  # ✅ Geen prefix — routes zijn volledig gedefinieerd
-
+router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
 @router.get("/market_data/list")
 async def list_market_data():
     try:
-        conn, cur = get_db_cursor()
+        conn = get_db_connection()
+        cur = conn.cursor()
         cur.execute("""
             SELECT id, symbol, price, open, high, low, change_24h, volume, timestamp
             FROM market_data
@@ -21,7 +21,7 @@ async def list_market_data():
         rows = cur.fetchall()
         conn.close()
 
-        data = [
+        return [
             {
                 "id": r[0],
                 "symbol": r[1],
@@ -34,7 +34,6 @@ async def list_market_data():
                 "timestamp": r[8],
             } for r in rows
         ]
-        return data
     except Exception as e:
         logger.error(f"❌ [list] DB-fout: {e}")
         raise HTTPException(status_code=500, detail="❌ Kon marktdata niet ophalen.")
@@ -82,7 +81,8 @@ async def save_market_data():
         logger.warning("⚠️ Geen geldige crypto-data ontvangen, niets opgeslagen.")
         return {"message": "⚠️ Geen marktdata opgeslagen (lege respons van CoinGecko)."}
 
-    conn, cur = get_db_cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     try:
         for symbol, data in crypto_data.items():
             cur.execute("""
@@ -109,7 +109,6 @@ async def save_market_data():
 
 @router.get("/market_data/interpreted")
 async def fetch_interpreted_data():
-    # Placeholder - implementeer logica voor interpretatie en score
     return {"message": "✅ Interpretatiedata ophalen werkt (nog geen scoreberekening geïmplementeerd)."}
 
 
@@ -121,7 +120,8 @@ async def test_market_api():
 @router.delete("/market_data/{id}")
 async def delete_market_asset(id: int):
     try:
-        conn, cur = get_db_cursor()
+        conn = get_db_connection()
+        cur = conn.cursor()
         cur.execute("DELETE FROM market_data WHERE id = %s", (id,))
         conn.commit()
         conn.close()
