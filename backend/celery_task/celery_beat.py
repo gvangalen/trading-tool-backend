@@ -1,15 +1,22 @@
-from celery import Celery
-from celery.schedules import crontab
 import os
+import sys
 import logging
 import traceback
+from celery import Celery
+from celery.schedules import crontab
 
+# ✅ Zorg dat backend.* import werkt (ook vanuit root)
+sys.path.insert(0, os.path.abspath("."))
+
+# ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# ✅ Omgevingsvariabelen of fallback naar localhost Redis
 CELERY_BROKER = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 
+# ✅ Celery App initialiseren
 celery = Celery(
     "market_dashboard",
     broker=CELERY_BROKER,
@@ -26,9 +33,11 @@ celery = Celery(
     ]
 )
 
+# ✅ Configuratie
 celery.conf.enable_utc = True
 celery.conf.timezone = "UTC"
 
+# ✅ Beat scheduler met geplande taken
 celery.conf.beat_schedule = {
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -60,7 +69,7 @@ celery.conf.beat_schedule = {
     },
 }
 
-# ✅ Taken importeren (voor logging en debugging)
+# ✅ Taken expliciet importeren (voor debug/logging)
 try:
     import backend.celery_task.market_task
     import backend.celery_task.macro_task
@@ -70,9 +79,13 @@ try:
     import backend.celery_task.daily_report_task
     import backend.ai_tasks.trading_advice_task
     import backend.ai_tasks.validation_task
-    logger.info("✅ Celery taken correct geïmporteerd.")
+    logger.info("✅ Alle Celery taken succesvol geïmporteerd.")
 except ImportError:
     logger.error("❌ Fout bij importeren van Celery taken:")
     logger.error(traceback.format_exc())
 
-logger.info(f"🚀 Celery Beat actief met broker: {CELERY_BROKER}")
+# ✅ Laatste statusmelding
+logger.info(f"🚀 Celery en Beat draaien met broker: {CELERY_BROKER}")
+
+# ✅ Nodig voor 'celery -A backend.celery_app worker'
+app = celery
