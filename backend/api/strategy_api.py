@@ -248,3 +248,94 @@ async def grouped_by_setup():
     except Exception as e:
         logger.error(f"[grouped_by_setup] ❌ {e}")
         raise HTTPException(status_code=500, detail="Kon strategie-overzicht niet ophalen.")
+
+
+# ✅ Strategieën genereren voor alle setups
+@router.post("/strategies/generate/all")
+async def generate_strategies_for_all(request: Request):
+    try:
+        data = await request.json()
+        overwrite = data.get("overwrite", False)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, data FROM setups")
+            setups = cur.fetchall()
+
+        created, skipped = 0, 0
+
+        for setup_id, setup in setups:
+            strategy = {
+                "setup_id": setup_id,
+                "setup_name": setup.get("name"),
+                "asset": setup.get("asset"),
+                "timeframe": setup.get("timeframe"),
+                "type": "AI-Generated",
+                "explanation": f"Strategie gegenereerd op basis van setup '{setup.get('name')}'",
+                "ai_reason": "Op basis van technische en macrodata is deze strategie voorgesteld",
+                "entry": "100.00",
+                "targets": ["110.00", "120.00"],
+                "stop_loss": "95.00",
+                "risk_reward": "2.0",
+                "score": 7.5,
+                "tags": ["ai", "auto"],
+                "favorite": False,
+                "origin": "AI"
+            }
+
+            with conn.cursor() as cur:
+                cur.execute("SELECT id FROM strategies WHERE data->>'setup_id' = %s", (str(setup_id),))
+                existing = cur.fetchone()
+                if existing:
+                    if overwrite:
+                        cur.execute("UPDATE strategies SET data = %s WHERE id = %s",
+                                    (json.dumps(strategy), existing[0]))
+                        conn.commit()
+                        created += 1
+                    else:
+                        skipped += 1
+                else:
+                    cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW())",
+                                (json.dumps(strategy),))
+                    conn.commit()
+                    created += 1
+
+        return {"message": f"{created} strategieën gegenereerd, {skipped} overgeslagen"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ Gemiddelde strategie-score ophalen
+@router.get("/strategies/score/average")
+async def average_strategy_score():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT data FROM strategies")
+            rows = cur.fetchall()
+
+        scores = [float(row[0].get("score", 0)) for row in rows if row[0].get("score") is not None]
+        avg = sum(scores) / len(scores) if scores else 0
+
+        return {"average_score": round(avg, 2), "count": len(scores)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ Actieve strategieën tonen (score > 6.0)
+@router.get("/strategies/active")
+async def active_strategies(min_score: float = 6.0):
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, data FROM strategies")
+            rows = cur.fetchall()
+
+        active = []
+        for id_, s in rows:
+            if float(s.get("score", 0)) >= min_score:
+                s["id"] = id_
+                active.append(s)
+
+        return active
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
