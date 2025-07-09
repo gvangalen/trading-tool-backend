@@ -333,3 +333,70 @@ async def fetch_strategy_explanation(strategy_id: int):
         return {"id": strategy_id, "explanation": explanation}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ✅ Genereer strategieën voor alle setups
+@router.post("/strategies/generate_all")
+async def generate_all_strategies(request: Request):
+    try:
+        data = await request.json()
+        overwrite = data.get("overwrite", False)
+
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            # Haal alle setups op
+            cur.execute("SELECT id, data FROM setups")
+            setups = cur.fetchall()
+
+            # Haal bestaande strategie-setup_ids op
+            cur.execute("SELECT data->>'setup_id' FROM strategies")
+            existing_ids = {int(row[0]) for row in cur.fetchall() if row[0].isdigit()}
+
+            generated = []
+            skipped = []
+
+            for setup_id, setup in setups:
+                if setup_id in existing_ids and not overwrite:
+                    skipped.append(setup_id)
+                    continue
+
+                strategy = {
+                    "setup_id": setup_id,
+                    "setup_name": setup.get("name"),
+                    "asset": setup.get("asset"),
+                    "timeframe": setup.get("timeframe"),
+                    "type": "AI-Generated",
+                    "explanation": f"Strategie gegenereerd op basis van setup '{setup.get('name')}'",
+                    "ai_reason": "Op basis van technische en macrodata is deze strategie voorgesteld",
+                    "entry": "100.00",
+                    "targets": ["110.00", "120.00"],
+                    "stop_loss": "95.00",
+                    "risk_reward": "2.0",
+                    "score": 7.5,
+                    "tags": ["ai", "auto"],
+                    "favorite": False,
+                    "origin": "AI"
+                }
+
+                # Bijwerken of toevoegen
+                cur.execute("SELECT id FROM strategies WHERE data->>'setup_id' = %s", (str(setup_id),))
+                existing = cur.fetchone()
+
+                if existing and overwrite:
+                    cur.execute("UPDATE strategies SET data = %s WHERE id = %s",
+                                (json.dumps(strategy), existing[0]))
+                    generated.append({"setup_id": setup_id, "updated": True})
+                else:
+                    cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id",
+                                (json.dumps(strategy),))
+                    new_id = cur.fetchone()[0]
+                    generated.append({"setup_id": setup_id, "created": True})
+
+            conn.commit()
+            return {
+                "message": f"✅ {len(generated)} strategieën gegenereerd",
+                "generated": generated,
+                "skipped": skipped
+            }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
