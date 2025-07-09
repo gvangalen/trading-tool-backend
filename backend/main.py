@@ -43,7 +43,7 @@ def safe_include(import_path, name=""):
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
-safe_include("backend.api.setup_api", "setup_api")
+safe_include("backend.api.setups_api", "setup_api")
 safe_include("backend.api.dashboard_api", "dashboard_api")
 safe_include("backend.api.report_api", "report_api")
 safe_include("backend.api.sidebar_api", "sidebar_api")
