@@ -8,7 +8,8 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ✅ Setup opslaan
+
+# ✅ 1. Setup opslaan
 @router.post("/setups")
 async def save_setup(request: Request):
     data = await request.json()
@@ -57,7 +58,7 @@ async def save_setup(request: Request):
         conn.close()
 
 
-# ✅ Setup-lijst ophalen
+# ✅ 2. Setup-lijst ophalen
 @router.get("/setups")
 async def get_setups(symbol: str = "BTC"):
     conn = get_db_connection()
@@ -99,7 +100,7 @@ async def get_setups(symbol: str = "BTC"):
         conn.close()
 
 
-# ✅ Top setups op basis van hoogste score
+# ✅ 3. Top setups ophalen
 @router.get("/setups/top")
 async def get_top_setups(limit: int = 3):
     conn = get_db_connection()
@@ -140,7 +141,66 @@ async def get_top_setups(limit: int = 3):
         conn.close()
 
 
-# ✅ Test endpoint
+# ✅ 4. Setup bijwerken
+@router.patch("/setups/{setup_id}")
+async def update_setup(setup_id: int, request: Request):
+    data = await request.json()
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ Databaseverbinding mislukt.")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE setups SET
+                    name = %s,
+                    symbol = %s,
+                    timeframe = %s,
+                    account_type = %s,
+                    strategy_type = %s,
+                    min_investment = %s,
+                    dynamic_investment = %s,
+                    score = %s,
+                    description = %s,
+                    tags = %s
+                WHERE id = %s
+            """, (
+                data.get("name"), data.get("symbol"), data.get("timeframe"),
+                data.get("account_type"), data.get("strategy_type"),
+                data.get("min_investment"), data.get("dynamic"),
+                data.get("score"), data.get("description"), data.get("tags"),
+                setup_id
+            ))
+            conn.commit()
+            return {"message": "✅ Setup succesvol bijgewerkt."}
+    except Exception as e:
+        logger.error(f"❌ [update_setup] Fout: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij bijwerken setup.")
+    finally:
+        conn.close()
+
+
+# ✅ 5. Setup verwijderen
+@router.delete("/setups/{setup_id}")
+async def delete_setup(setup_id: int):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ Databaseverbinding mislukt.")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM setups WHERE id = %s", (setup_id,))
+            conn.commit()
+            return {"message": "🗑️ Setup verwijderd"}
+    except Exception as e:
+        logger.error(f"❌ [delete_setup] Fout: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij verwijderen setup.")
+    finally:
+        conn.close()
+
+
+# ✅ 6. Test endpoint
 @router.get("/setups/test")
 async def test_setup_api():
     try:
@@ -152,7 +212,7 @@ async def test_setup_api():
         raise HTTPException(status_code=500, detail="❌ Test endpoint faalde.")
 
 
-# ✅ Celery-taak triggeren
+# ✅ 7. Celery-trigger
 @router.post("/setups/trigger")
 def trigger_setup_task():
     validate_setups_task.delay()
