@@ -8,7 +8,6 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-
 # ✅ 1. Setup opslaan
 @router.post("/setups")
 async def save_setup(request: Request):
@@ -24,6 +23,11 @@ async def save_setup(request: Request):
     score = data.get("score")
     description = data.get("description")
     tags = data.get("tags", [])
+    indicators = data.get("indicators")
+    trend = data.get("trend")
+    score_type = data.get("score_type")
+    score_logic = data.get("score_logic")
+    favorite = data.get("favorite", False)
 
     if not name or not timeframe:
         raise HTTPException(status_code=400, detail="Naam en timeframe zijn verplicht.")
@@ -37,12 +41,15 @@ async def save_setup(request: Request):
             cur.execute("""
                 INSERT INTO setups (
                     name, symbol, timeframe, account_type, strategy_type,
-                    min_investment, dynamic_investment, score, description, tags, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    min_investment, dynamic_investment, score, description,
+                    tags, indicators, trend, score_type, score_logic, favorite,
+                    created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 RETURNING id, created_at;
             """, (
                 name, symbol, timeframe, account_type, strategy_type,
-                min_investment, dynamic, score, description, tags
+                min_investment, dynamic, score, description,
+                tags, indicators, trend, score_type, score_logic, favorite
             ))
             setup_id, created_at = cur.fetchone()
             conn.commit()
@@ -69,7 +76,9 @@ async def get_setups(symbol: str = "BTC"):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, name, symbol, timeframe, account_type, strategy_type,
-                       min_investment, dynamic_investment, score, description, tags, created_at
+                       min_investment, dynamic_investment, score, description,
+                       tags, indicators, trend, score_type, score_logic, favorite,
+                       created_at
                 FROM setups
                 WHERE symbol = %s
                 ORDER BY created_at DESC
@@ -89,7 +98,12 @@ async def get_setups(symbol: str = "BTC"):
                     "score": row[8],
                     "description": row[9],
                     "tags": row[10],
-                    "created_at": row[11].isoformat() if row[11] else None
+                    "indicators": row[11],
+                    "trend": row[12],
+                    "score_type": row[13],
+                    "score_logic": row[14],
+                    "favorite": row[15],
+                    "created_at": row[16].isoformat() if row[16] else None
                 }
                 for row in rows
             ]
@@ -111,7 +125,9 @@ async def get_top_setups(limit: int = 3):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, name, symbol, timeframe, account_type, strategy_type,
-                       min_investment, dynamic_investment, score, description, tags, created_at
+                       min_investment, dynamic_investment, score, description,
+                       tags, indicators, trend, score_type, score_logic, favorite,
+                       created_at
                 FROM setups
                 ORDER BY score DESC NULLS LAST
                 LIMIT %s;
@@ -130,7 +146,12 @@ async def get_top_setups(limit: int = 3):
                     "score": row[8],
                     "description": row[9],
                     "tags": row[10],
-                    "created_at": row[11].isoformat() if row[11] else None
+                    "indicators": row[11],
+                    "trend": row[12],
+                    "score_type": row[13],
+                    "score_logic": row[14],
+                    "favorite": row[15],
+                    "created_at": row[16].isoformat() if row[16] else None
                 }
                 for row in rows
             ]
@@ -163,14 +184,21 @@ async def update_setup(setup_id: int, request: Request):
                     dynamic_investment = %s,
                     score = %s,
                     description = %s,
-                    tags = %s
+                    tags = %s,
+                    indicators = %s,
+                    trend = %s,
+                    score_type = %s,
+                    score_logic = %s,
+                    favorite = %s
                 WHERE id = %s
             """, (
                 data.get("name"), data.get("symbol"), data.get("timeframe"),
                 data.get("account_type"), data.get("strategy_type"),
                 data.get("min_investment"), data.get("dynamic"),
                 data.get("score"), data.get("description"), data.get("tags"),
-                setup_id
+                data.get("indicators"), data.get("trend"),
+                data.get("score_type"), data.get("score_logic"),
+                data.get("favorite"), setup_id
             ))
             conn.commit()
             return {"message": "✅ Setup succesvol bijgewerkt."}
