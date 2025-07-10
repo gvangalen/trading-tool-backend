@@ -15,9 +15,16 @@ def create_setups_table(conn):
         cur.execute("""
             CREATE TABLE IF NOT EXISTS setups (
                 id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
                 symbol TEXT NOT NULL,
-                setup_name TEXT NOT NULL,
-                conditions JSONB NOT NULL,
+                timeframe TEXT NOT NULL,
+                account_type TEXT,
+                strategy_type TEXT,
+                min_investment NUMERIC,
+                dynamic_investment BOOLEAN DEFAULT FALSE,
+                score NUMERIC,
+                description TEXT,
+                tags TEXT[],
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
