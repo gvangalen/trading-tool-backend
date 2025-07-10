@@ -82,11 +82,27 @@ async def get_daily_report_summary():
         raise HTTPException(status_code=500, detail="Geen databaseverbinding")
     try:
         cur = conn.cursor()
-        cur.execute("SELECT summary FROM daily_reports ORDER BY report_date DESC LIMIT 1")
+        cur.execute("""
+            SELECT report_date, btc_summary, macro_summary, setup_checklist,
+                   priorities, wyckoff_analysis, recommendations, conclusion, outlook
+            FROM daily_reports
+            ORDER BY report_date DESC
+            LIMIT 1
+        """)
         row = cur.fetchone()
         if not row:
-            return {"summary": "Geen samenvatting beschikbaar"}
-        return {"summary": row[0]}
+            raise HTTPException(status_code=404, detail="Geen samenvatting beschikbaar")
+        return {
+            "report_date": row[0],
+            "btc_summary": row[1],
+            "macro_summary": row[2],
+            "setup_checklist": row[3],
+            "priorities": row[4],
+            "wyckoff_analysis": row[5],
+            "recommendations": row[6],
+            "conclusion": row[7],
+            "outlook": row[8],
+        }
     except Exception as e:
         logger.error(f"❌ RAP05: Fout bij ophalen samenvatting: {e}")
         raise HTTPException(status_code=500, detail=str(e))
