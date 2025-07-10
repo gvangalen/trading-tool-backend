@@ -114,7 +114,7 @@ async def get_setups(symbol: str = "BTC"):
         conn.close()
 
 
-# ✅ 3. Top setups ophalen
+# ✅ 3. Top setups ophalen (met filter op geldige trend)
 @router.get("/setups/top")
 async def get_top_setups(limit: int = 3):
     conn = get_db_connection()
@@ -129,6 +129,7 @@ async def get_top_setups(limit: int = 3):
                        tags, indicators, trend, score_type, score_logic, favorite,
                        created_at
                 FROM setups
+                WHERE trend IN ('bullish', 'bearish', 'neutral')
                 ORDER BY score DESC NULLS LAST
                 LIMIT %s;
             """, (limit,))
