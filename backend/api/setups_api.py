@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # ✅ 1. Setup opslaan
-@router.post("/setups")
+@router.post("/")
 async def save_setup(request: Request):
     data = await request.json()
     required_fields = ["name", "timeframe"]
@@ -53,9 +53,8 @@ async def save_setup(request: Request):
     finally:
         conn.close()
 
-
 # ✅ 2. Alle setups ophalen
-@router.get("/setups")
+@router.get("/")
 async def get_setups(symbol: str = "BTC"):
     conn = get_db_connection()
     if not conn:
@@ -101,9 +100,8 @@ async def get_setups(symbol: str = "BTC"):
     finally:
         conn.close()
 
-
 # ✅ 3. Top setups ophalen
-@router.get("/setups/top")
+@router.get("/top")
 async def get_top_setups(limit: int = 3):
     conn = get_db_connection()
     if not conn:
@@ -148,9 +146,8 @@ async def get_top_setups(limit: int = 3):
     finally:
         conn.close()
 
-
 # ✅ 4. Setup bijwerken
-@router.patch("/setups/{setup_id}")
+@router.patch("/{setup_id}")
 async def update_setup(setup_id: int, request: Request):
     data = await request.json()
     conn = get_db_connection()
@@ -193,9 +190,8 @@ async def update_setup(setup_id: int, request: Request):
     finally:
         conn.close()
 
-
 # ✅ 5. Setup verwijderen
-@router.delete("/setups/{setup_id}")
+@router.delete("/{setup_id}")
 async def delete_setup(setup_id: int):
     conn = get_db_connection()
     if not conn:
@@ -211,15 +207,13 @@ async def delete_setup(setup_id: int):
     finally:
         conn.close()
 
-
 # ✅ 6. Test endpoint
-@router.get("/setups/test")
+@router.get("/test")
 async def test_setup_api():
     return {"message": "✅ Setup API werkt correct."}
 
-
 # ✅ 7. Celery-trigger
-@router.post("/setups/trigger")
+@router.post("/trigger")
 def trigger_setup_task():
     validate_setups_task.delay()
     logger.info("🚀 Celery-taak 'validate_setups_task' gestart via API.")
