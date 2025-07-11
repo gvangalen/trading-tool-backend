@@ -60,6 +60,10 @@ safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
 safe_include("backend.api.ai.ai_setup_validator", "ai_setup_validator")
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 
+# ✅ Extra routers voor trades en rapporten
+safe_include("backend.routes.trades_routes", "trades_routes")
+safe_include("backend.routes.report_routes", "report_routes")
+
 # ✅ Health check
 @app.get("/api/health")
 def health_check():
