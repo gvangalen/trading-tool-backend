@@ -19,6 +19,7 @@ aiohttp
 
 # ✅ Data & Analysis
 pandas>=2.0
+numexpr>=2.8  # 🔧 fix voor setups_api en report_api
 
 # ✅ File Uploads & Templates
 python-multipart
