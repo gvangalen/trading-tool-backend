@@ -1,12 +1,15 @@
+# ✅ backend/utils/calculate_combined_score.py
 import sys
 import os
 import logging
 from typing import Dict, Union
 
-# ✅ Zorg dat imports uit backend werken, ook bij standalone run
-sys.path.insert(0, os.path.abspath('.'))
+# ✅ Zorg dat backend imports altijd werken, ook als script los draait
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
-from backend.utils.db import get_db_connection
+from backend.utils.db import get_db_connection  # Let op juiste pad
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -15,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Union[str, float, int]]:
     """
     Haalt macro-, technische- en sentiment-score op uit setup_scores tabel.
-    Berekent ook een gecombineerde AI-score (totaal) als gemiddelde.
+    Berekent een gecombineerde AI-score (gemiddelde van 3).
     """
     conn = get_db_connection()
     if not conn:
@@ -38,9 +41,9 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Union[str, float,
             return {"symbol": symbol, "error": "Geen scoregegevens", "total_score": 0}
 
         try:
-            macro = float(row[0])
-            technical = float(row[1])
-            sentiment = float(row[2])
+            macro = float(row[0]) if row[0] is not None else 0
+            technical = float(row[1]) if row[1] is not None else 0
+            sentiment = float(row[2]) if row[2] is not None else 0
         except (ValueError, TypeError):
             logger.warning(f"⚠️ COMB03: Ongeldige waarden (niet-numeriek) voor {symbol}")
             return {"symbol": symbol, "error": "Niet-numerieke waarden", "total_score": 0}
@@ -66,5 +69,5 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Union[str, float,
 
 # ✅ Standalone testmogelijkheid
 if __name__ == "__main__":
-    score = calculate_combined_score("BTC")
-    print(score)
+    result = calculate_combined_score("BTC")
+    print(result)
