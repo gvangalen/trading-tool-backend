@@ -1,8 +1,7 @@
-# ✅ utils/setup_validator.py
 import logging
 import json
 import numexpr as ne
-from db import get_db_connection
+from backend.utils.db import get_db_connection  # ✅ correct pad naar db module
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,9 +32,9 @@ def validate_setups(asset="BTC"):
                 ORDER BY name, timestamp DESC
             """)
             macro_raw = cur.fetchall()
-            macro_data = {name: float(value) for name, value in macro_raw}
+            macro_data = {name: float(value) for name, value in macro_raw if value is not None}
 
-            # 🔄 Laatste technische data ophalen per asset
+            # 🔄 Laatste technische data ophalen
             cur.execute("""
                 SELECT DISTINCT ON (symbol) symbol, rsi, volume, ma_200
                 FROM technical_data
@@ -44,12 +43,12 @@ def validate_setups(asset="BTC"):
             """, (asset,))
             technical = cur.fetchone()
             technical_data = {
-                "rsi": float(technical[1]) if technical else None,
-                "volume": float(technical[2]) if technical else None,
-                "ma_200": float(technical[3]) if technical else None,
+                "rsi": float(technical[1]) if technical and technical[1] is not None else None,
+                "volume": float(technical[2]) if technical and technical[2] is not None else None,
+                "ma_200": float(technical[3]) if technical and technical[3] is not None else None,
             }
 
-            # 🔄 Laatste marketdata ophalen per asset
+            # 🔄 Laatste marketdata ophalen
             cur.execute("""
                 SELECT DISTINCT ON (symbol) symbol, price, change_24h
                 FROM market_data
@@ -58,8 +57,8 @@ def validate_setups(asset="BTC"):
             """, (asset,))
             market = cur.fetchone()
             market_data = {
-                "price": float(market[1]) if market else None,
-                "change_24h": float(market[2]) if market else None,
+                "price": float(market[1]) if market and market[1] is not None else None,
+                "change_24h": float(market[2]) if market and market[2] is not None else None,
             }
 
             # 🔍 Setups ophalen
@@ -79,14 +78,13 @@ def validate_setups(asset="BTC"):
                 logger.error(f"❌ JSON-fout in setup '{name}': {e}")
                 continue
 
-            # ➡️ Combineer data
+            # ➕ Combineer alle data
             combined_data = {
                 **macro_data,
                 **technical_data,
                 **market_data
             }
 
-            # ✅ Score per categorie
             category_scores = {}
             total_passed = 0
             total_conditions = 0
@@ -99,10 +97,11 @@ def validate_setups(asset="BTC"):
                         passed += 1
                     else:
                         failed_conditions.append(f"{category.upper()}: {cond}")
+                score = round((passed / len(conditions)) * 10, 1) if conditions else 0
                 category_scores[category] = {
                     "passed": passed,
                     "total": len(conditions),
-                    "score": round((passed / len(conditions)) * 10, 1) if conditions else 0
+                    "score": score
                 }
                 total_passed += passed
                 total_conditions += len(conditions)
@@ -110,7 +109,7 @@ def validate_setups(asset="BTC"):
             overall_score = round((total_passed / total_conditions) * 10, 1) if total_conditions > 0 else 0
             is_active = overall_score >= 7
 
-            result = {
+            results.append({
                 "setup_id": setup_id,
                 "name": name,
                 "asset": asset,
@@ -118,9 +117,7 @@ def validate_setups(asset="BTC"):
                 "score": overall_score,
                 "score_breakdown": category_scores,
                 "failed_conditions": failed_conditions
-            }
-
-            results.append(result)
+            })
 
         logger.info(f"✅ Setup validatie voltooid voor {asset} ({len(results)} setups)")
         return results
