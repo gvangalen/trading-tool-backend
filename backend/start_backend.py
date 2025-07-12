@@ -39,7 +39,7 @@ def safe_include(import_path, name=""):
         logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
         print(f"❌ Router FOUT: {name or import_path} — {e}")
 
-# ✅ Routers importeren met logging
+# ✅ Standaard API routers
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
@@ -51,23 +51,25 @@ safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
 
-# ✅ AI-routes
+# ✅ AI API routers
 safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
 safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
 safe_include("backend.api.ai.ai_trading_api", "ai_trading_api")
 safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")
-
-# ✅ AI helpers
 safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
 safe_include("backend.api.ai.ai_setup_validator", "ai_setup_validator")
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 
-# ✅ Health check
+# ✅ Extra routers uit backend.routes (zoals trades/rapport)
+safe_include("backend.routes.trades_routes", "trades_routes")
+safe_include("backend.routes.report_routes", "report_routes")
+
+# ✅ Health check endpoint
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API draait ✅"}
 
-# ✅ Lokaal starten
+# ✅ Start lokaal met Uvicorn
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("start_backend:app", host="0.0.0.0", port=5002, reload=True)
