@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-@router.get("/trading_advice")
+@router.get("/trading/trading_advice")
 async def get_trading_advice(symbol: str = "BTC"):
     """
     ✅ Haalt het laatste AI-tradingadvies op voor een specifieke asset.
