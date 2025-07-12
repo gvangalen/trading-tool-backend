@@ -1,3 +1,4 @@
+print("🟢 report_routes wordt geladen ✅")
 from fastapi import APIRouter
 import logging
 
