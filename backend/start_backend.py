@@ -59,6 +59,7 @@ safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")
 safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
 safe_include("backend.api.ai.ai_setup_validator", "ai_setup_validator")
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
+safe_include("backend.api.ai.ai_status_api", "ai_status_api")
 
 # ✅ Extra routers uit backend.routes (zoals trades/rapport)
 safe_include("backend.routes.trades_routes", "trades_routes")
