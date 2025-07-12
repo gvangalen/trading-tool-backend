@@ -1,6 +1,7 @@
 import sys, os
 import logging
 import importlib
+import traceback
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -30,14 +31,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Router loader
+# ✅ Router loader met uitgebreide foutmelding
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
         app.include_router(module.router, prefix="/api")
         logger.info(f"✅ Router geladen: {name or import_path}")
     except Exception as e:
-        logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
+        logger.warning(f"❌ Router FOUT: {name or import_path} — {e}")
+        traceback.print_exc()
+
+# ✅ Vooraf imports (helpt bij sommige Python-importstructuren)
+import backend.routes.report_routes
+import backend.routes.trades_routes
 
 # ✅ API routers — LET OP: gebruik 'backend.api...'
 safe_include("backend.api.market_data_api", "market_data_api")
