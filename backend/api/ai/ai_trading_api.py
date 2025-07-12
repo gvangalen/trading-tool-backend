@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-@router.get("")
+@router.get("/trading_advice")
 async def get_trading_advice(symbol: str = "BTC"):
     """
     ✅ Haalt het laatste AI-tradingadvies op voor een specifieke asset.
@@ -48,8 +48,8 @@ async def get_trading_advice(symbol: str = "BTC"):
                 "explanation": row["explanation"],
                 "risk_profile": row["risk_profile"],
                 "timestamp": row["created_at"].isoformat(),
-                "score": 100,  # ⬅️ Later eventueel dynamisch genereren op basis van andere data
-                "setup": "A-Plus Setup",  # ⬅️ Ook dynamisch te maken (via join met setups of strategieën)
+                "score": 100,
+                "setup": "A-Plus Setup",
                 "targets": [
                     {"price": 69000, "type": "TP1"},
                     {"price": 72000, "type": "TP2"}
