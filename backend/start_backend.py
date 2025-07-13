@@ -50,6 +50,7 @@ safe_include("backend.api.sidebar_api", "sidebar_api")
 safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
+safe_include("backend.api.trades_active_api", "trades_active_api")  # ✅ Toegevoegd
 
 # ✅ AI API routers
 safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
@@ -60,17 +61,18 @@ safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
 safe_include("backend.api.ai.ai_setup_validator", "ai_setup_validator")
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 safe_include("backend.api.ai.ai_status_api", "ai_status_api")
+safe_include("backend.api.ai.ai_trading_advice_api", "ai_trading_advice_api")  # ✅ Toegevoegd
 
-# ✅ Extra routers uit backend.routes (zoals trades/rapport)
+# ✅ Extra backend.routes
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
 
-# ✅ Health check endpoint
+# ✅ Health check
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API draait ✅"}
 
-# ✅ Start lokaal met Uvicorn
+# ✅ Start lokaal
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("start_backend:app", host="0.0.0.0", port=5002, reload=True)
