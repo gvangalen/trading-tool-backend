@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # ✅ FastAPI app
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# ✅ Toegestane origins
+# ✅ Toegestane origins (pas aan indien nodig)
 origins = [
     "http://localhost:3000",
     "http://143.47.186.148",
@@ -31,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Router loader met uitgebreide foutmelding
+# ✅ Router loader met logging en fallback
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
@@ -45,7 +45,7 @@ def safe_include(import_path, name=""):
 import backend.routes.report_routes
 import backend.routes.trades_routes
 
-# ✅ API routers — LET OP: gebruik 'backend.api...'
+# ✅ API routers
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
@@ -66,10 +66,12 @@ safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
 safe_include("backend.api.ai.ai_setup_validator", "ai_setup_validator")
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 safe_include("backend.api.ai.ai_status_api", "ai_status_api")
+safe_include("backend.api.ai.ai_trading_advice_api", "ai_trading_advice_api")  # ✅ NIEUW
 
-# ✅ Extra routers voor trades en rapporten
+# ✅ Extra backend routes
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
+safe_include("backend.api.trades_active_api", "trades_active_api")  # ✅ NIEUW
 
 # ✅ Health check
 @app.get("/api/health")
@@ -80,7 +82,7 @@ def health_check():
 def test_cors():
     return {"success": True, "message": "CORS werkt correct vanaf frontend."}
 
-# ✅ Lokaal runnen
+# ✅ Lokale run-optie
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=5002, reload=True)
