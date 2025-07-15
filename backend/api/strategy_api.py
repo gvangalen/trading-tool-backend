@@ -20,6 +20,7 @@ async def save_strategy(request: Request):
         required_fields = ["setup_id", "setup_name", "asset", "timeframe", "entry", "targets", "stop_loss"]
         for field in required_fields:
             if not data.get(field):
+                logger.warning(f"[save_strategy] ❌ '{field}' ontbreekt in data: {data}")
                 raise HTTPException(status_code=400, detail=f"'{field}' is verplicht")
 
         conn = get_db_connection()
