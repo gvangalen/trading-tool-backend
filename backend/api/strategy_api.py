@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from backend.utils.db import get_db_connection
+from backend.tasks.strategy_tasks import generate_strategy_task  # ⬅️ Celery-task
 from typing import Optional
 from datetime import datetime
 import json
@@ -46,6 +47,38 @@ async def save_strategy(request: Request):
     except Exception as e:
         logger.error(f"[save_strategy] ❌ {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ AI-strategie genereren (asynchroon via Celery)
+@router.post("/strategies/generate/{setup_id}")
+async def generate_strategy_for_setup(setup_id: int, request: Request):
+    try:
+        data = await request.json()
+        overwrite = data.get("overwrite", True)
+
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, data FROM setups WHERE id = %s", (setup_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Setup niet gevonden")
+            _, setup = row
+
+        # ✅ Validatie van verplichte setup-velden
+        for field in ["name", "asset", "timeframe"]:
+            if not setup.get(field):
+                raise HTTPException(status_code=400, detail=f"Setup mist verplicht veld: {field}")
+
+        # ✅ Start Celery-task
+        task = generate_strategy_task.delay(setup_id=setup_id, overwrite=overwrite)
+        return {"message": "⏳ Strategie wordt gegenereerd", "task_id": task.id}
+
+    except Exception as e:
+        logger.error(f"[generate_strategy_for_setup] ❌ {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ... alle andere bestaande endpoints blijven hetzelfde (zoals update, delete, filter, export, etc.) ...
 
 
 # ✅ Strategie bijwerken
