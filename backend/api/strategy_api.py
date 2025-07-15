@@ -131,33 +131,36 @@ async def toggle_favorite(strategy_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ Filteren
-@router.get("/strategies/filter")
-async def filter_strategies(asset: Optional[str] = None, timeframe: Optional[str] = None,
-                            tag: Optional[str] = None, min_score: Optional[float] = None):
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, data FROM strategies")
-            rows = cur.fetchall()
+# 📥 2. Strategieën ophalen (POST met filters)
+@router.post("/strategies/filter")
+async def filter_strategies(request: Request):
+    filters = await request.json()
+    asset = filters.get("asset")
+    timeframe = filters.get("timeframe")
+    tag = filters.get("tag")
+    min_score = filters.get("min_score")
 
-        filtered = []
-        for row in rows:
-            id_, strategy = row
-            if asset and strategy.get("asset") != asset:
-                continue
-            if timeframe and strategy.get("timeframe") != timeframe:
-                continue
-            if tag and tag not in strategy.get("tags", []):
-                continue
-            if min_score is not None and (float(strategy.get("score", 0)) < min_score):
-                continue
-            strategy["id"] = id_
-            filtered.append(strategy)
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, data FROM strategies")
+        rows = cur.fetchall()
 
-        return filtered
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    filtered = []
+    for row in rows:
+        id_, strategy = row
+        if asset and strategy.get("asset") != asset:
+            continue
+        if timeframe and strategy.get("timeframe") != timeframe:
+            continue
+        if tag and tag not in strategy.get("tags", []):
+            continue
+        if min_score is not None and float(strategy.get("score", 0)) < float(min_score):
+            continue
+        strategy["id"] = id_
+        filtered.append(strategy)
+
+    return filtered
+
 
 
 # ✅ CSV export
