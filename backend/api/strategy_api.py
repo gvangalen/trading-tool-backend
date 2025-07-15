@@ -77,10 +77,6 @@ async def generate_strategy_for_setup(setup_id: int, request: Request):
         logger.error(f"[generate_strategy_for_setup] ❌ {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ... alle andere bestaande endpoints blijven hetzelfde (zoals update, delete, filter, export, etc.) ...
-
-
 # ✅ Strategie bijwerken
 @router.put("/strategies/{strategy_id}")
 async def update_strategy(strategy_id: int, request: Request):
@@ -160,58 +156,6 @@ async def filter_strategies(asset: Optional[str] = None, timeframe: Optional[str
             filtered.append(strategy)
 
         return filtered
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ✅ AI-strategie genereren voor 1 setup
-@router.post("/strategies/generate/{setup_id}")
-async def generate_strategy_for_setup(setup_id: int, request: Request):
-    try:
-        data = await request.json()
-        overwrite = data.get("overwrite", True)
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, data FROM setups WHERE id = %s", (setup_id,))
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Setup niet gevonden")
-            _, setup = row
-            strategy = {
-                "setup_id": setup_id,
-                "setup_name": setup.get("name"),
-                "asset": setup.get("asset"),
-                "timeframe": setup.get("timeframe"),
-                "type": "AI-Generated",
-                "explanation": f"Strategie gegenereerd op basis van setup '{setup.get('name')}'",
-                "ai_reason": "Op basis van technische en macrodata is deze strategie voorgesteld",
-                "entry": "100.00",
-                "targets": ["110.00", "120.00"],
-                "stop_loss": "95.00",
-                "risk_reward": "2.0",
-                "score": 7.5,
-                "tags": ["ai", "auto"],
-                "favorite": False,
-                "origin": "AI"
-            }
-
-            cur.execute("SELECT id FROM strategies WHERE data->>'setup_id' = %s", (str(setup_id),))
-            existing = cur.fetchone()
-
-            if existing:
-                if overwrite:
-                    cur.execute("UPDATE strategies SET data = %s WHERE id = %s",
-                                (json.dumps(strategy), existing[0]))
-                    conn.commit()
-                    return {"message": "Strategie bijgewerkt", "id": existing[0]}
-                else:
-                    raise HTTPException(status_code=409, detail="Strategie bestaat al")
-            else:
-                cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id",
-                            (json.dumps(strategy),))
-                strategy_id = cur.fetchone()[0]
-                conn.commit()
-                return {"message": "Strategie gegenereerd", "id": strategy_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -434,3 +378,156 @@ async def generate_all_strategies(request: Request):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ✅ CSV export
+@router.get("/strategies/export")
+async def export_strategies():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, data, created_at FROM strategies")
+            rows = cur.fetchall()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Asset", "Timeframe", "Setup", "Score", "Entry", "Stop Loss", "Origin", "Created"])
+
+        for row in rows:
+            s = row[1]
+            writer.writerow([
+                row[0],
+                s.get("asset"),
+                s.get("timeframe"),
+                s.get("setup_name"),
+                s.get("score"),
+                s.get("entry"),
+                s.get("stop_loss"),
+                s.get("origin"),
+                row[2].strftime("%Y-%m-%d %H:%M:%S")
+            ])
+
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=strategies.csv"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ Groeperen per setup
+@router.get("/strategies/grouped_by_setup")
+async def grouped_by_setup():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    data->>'setup_id' AS setup_id,
+                    COUNT(*) AS strategy_count,
+                    MAX(created_at) AS last_created
+                FROM strategies
+                GROUP BY data->>'setup_id'
+                ORDER BY last_created DESC
+            """)
+            rows = cur.fetchall()
+
+        grouped = [
+            {
+                "setup_id": int(r[0]),
+                "strategy_count": r[1],
+                "last_created": r[2].isoformat()
+            }
+            for r in rows
+        ]
+        return grouped
+    except Exception as e:
+        logger.error(f"[grouped_by_setup] ❌ {e}")
+        raise HTTPException(status_code=500, detail="Kon strategie-overzicht niet ophalen.")
+
+
+# ✅ Gemiddelde scores per asset
+@router.get("/strategies/summary")
+async def strategy_summary():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    data->>'asset' AS asset,
+                    AVG(CAST(data->>'score' AS FLOAT)) AS average_score,
+                    COUNT(*) AS count
+                FROM strategies
+                GROUP BY asset
+                ORDER BY average_score DESC
+            """)
+            rows = cur.fetchall()
+
+        return [
+            {"asset": r[0], "average_score": round(r[1], 2), "count": r[2]}
+            for r in rows
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ Score-matrix per asset × timeframe
+@router.get("/strategies/score_matrix")
+async def score_matrix():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT data FROM strategies")
+            rows = cur.fetchall()
+
+        matrix = {}
+        for row in rows:
+            s = row[0]
+            asset = s.get("asset")
+            tf = s.get("timeframe")
+            score = float(s.get("score", 0))
+            if not asset or not tf:
+                continue
+            matrix.setdefault(asset, {})
+            matrix[asset][tf] = round((matrix[asset].get(tf, 0) + score) / 2, 2) if tf in matrix[asset] else score
+
+        return matrix
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ✅ Actieve strategieën tonen (score > 6.0)
+@router.get("/strategies/active")
+async def active_strategies(min_score: float = 6.0):
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, data FROM strategies")
+            rows = cur.fetchall()
+
+        active = []
+        for id_, s in rows:
+            if float(s.get("score", 0)) >= min_score:
+                s["id"] = id_
+                active.append(s)
+
+        return active
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ AI-uitleg bij strategie ophalen
+@router.get("/strategies/{strategy_id}/explanation")
+async def fetch_strategy_explanation(strategy_id: int):
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT data FROM strategies WHERE id = %s", (strategy_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Strategie niet gevonden")
+            explanation = row[0].get("explanation", "")
+        return {"id": strategy_id, "explanation": explanation}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
