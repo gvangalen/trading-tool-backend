@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from backend.utils.db import get_db_connection
-from backend.tasks.strategy_tasks import generate_strategy_task  # ⬅️ Celery-task
+from backend.tasks.strategy_tasks import generate_strategy_task
 from typing import Optional
 from datetime import datetime
 import json
@@ -49,7 +49,7 @@ async def save_strategy(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ AI-strategie genereren (asynchroon via Celery)
+# ✅ AI-strategie genereren (Celery)
 @router.post("/strategies/generate/{setup_id}")
 async def generate_strategy_for_setup(setup_id: int, request: Request):
     try:
@@ -64,18 +64,17 @@ async def generate_strategy_for_setup(setup_id: int, request: Request):
                 raise HTTPException(status_code=404, detail="Setup niet gevonden")
             _, setup = row
 
-        # ✅ Validatie van verplichte setup-velden
         for field in ["name", "asset", "timeframe"]:
             if not setup.get(field):
                 raise HTTPException(status_code=400, detail=f"Setup mist verplicht veld: {field}")
 
-        # ✅ Start Celery-task
         task = generate_strategy_task.delay(setup_id=setup_id, overwrite=overwrite)
         return {"message": "⏳ Strategie wordt gegenereerd", "task_id": task.id}
 
     except Exception as e:
         logger.error(f"[generate_strategy_for_setup] ❌ {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ✅ Strategie bijwerken
 @router.put("/strategies/{strategy_id}")
@@ -131,7 +130,7 @@ async def toggle_favorite(strategy_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 📥 2. Strategieën ophalen (POST met filters)
+# ✅ Strategieën filteren
 @router.post("/strategies/filter")
 async def filter_strategies(request: Request):
     filters = await request.json()
@@ -162,7 +161,6 @@ async def filter_strategies(request: Request):
     return filtered
 
 
-
 # ✅ CSV export
 @router.get("/strategies/export")
 async def export_strategies():
@@ -231,31 +229,6 @@ async def grouped_by_setup():
         raise HTTPException(status_code=500, detail="Kon strategie-overzicht niet ophalen.")
 
 
-# ✅ Gemiddelde scores per asset
-@router.get("/strategies/summary")
-async def strategy_summary():
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    data->>'asset' AS asset,
-                    AVG(CAST(data->>'score' AS FLOAT)) AS average_score,
-                    COUNT(*) AS count
-                FROM strategies
-                GROUP BY asset
-                ORDER BY average_score DESC
-            """)
-            rows = cur.fetchall()
-
-        return [
-            {"asset": r[0], "average_score": round(r[1], 2), "count": r[2]}
-            for r in rows
-        ]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 # ✅ Score-matrix per asset × timeframe
 @router.get("/strategies/score_matrix")
 async def score_matrix():
@@ -280,7 +253,8 @@ async def score_matrix():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ Actieve strategieën tonen (score > 6.0)
+
+# ✅ Actieve strategieën (score > 6)
 @router.get("/strategies/active")
 async def active_strategies(min_score: float = 6.0):
     try:
@@ -300,7 +274,7 @@ async def active_strategies(min_score: float = 6.0):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ AI-uitleg bij strategie ophalen
+# ✅ AI-uitleg ophalen
 @router.get("/strategies/{strategy_id}/explanation")
 async def fetch_strategy_explanation(strategy_id: int):
     try:
@@ -315,7 +289,8 @@ async def fetch_strategy_explanation(strategy_id: int):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ Genereer strategieën voor alle setups
+
+# ✅ Bulk generatie
 @router.post("/strategies/generate_all")
 async def generate_all_strategies(request: Request):
     try:
@@ -324,16 +299,12 @@ async def generate_all_strategies(request: Request):
 
         conn = get_db_connection()
         with conn.cursor() as cur:
-            # Haal alle setups op
             cur.execute("SELECT id, data FROM setups")
             setups = cur.fetchall()
-
-            # Haal bestaande strategie-setup_ids op
             cur.execute("SELECT data->>'setup_id' FROM strategies")
             existing_ids = {int(row[0]) for row in cur.fetchall() if row[0].isdigit()}
 
-            generated = []
-            skipped = []
+            generated, skipped = [], []
 
             for setup_id, setup in setups:
                 if setup_id in existing_ids and not overwrite:
@@ -358,7 +329,6 @@ async def generate_all_strategies(request: Request):
                     "origin": "AI"
                 }
 
-                # Bijwerken of toevoegen
                 cur.execute("SELECT id FROM strategies WHERE data->>'setup_id' = %s", (str(setup_id),))
                 existing = cur.fetchone()
 
@@ -381,119 +351,3 @@ async def generate_all_strategies(request: Request):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-# ✅ CSV export
-@router.get("/strategies/export")
-async def export_strategies():
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, data, created_at FROM strategies")
-            rows = cur.fetchall()
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["ID", "Asset", "Timeframe", "Setup", "Score", "Entry", "Stop Loss", "Origin", "Created"])
-
-        for row in rows:
-            s = row[1]
-            writer.writerow([
-                row[0],
-                s.get("asset"),
-                s.get("timeframe"),
-                s.get("setup_name"),
-                s.get("score"),
-                s.get("entry"),
-                s.get("stop_loss"),
-                s.get("origin"),
-                row[2].strftime("%Y-%m-%d %H:%M:%S")
-            ])
-
-        output.seek(0)
-        return StreamingResponse(
-            iter([output.getvalue()]),
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=strategies.csv"}
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ✅ Groeperen per setup
-@router.get("/strategies/grouped_by_setup")
-async def grouped_by_setup():
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    data->>'setup_id' AS setup_id,
-                    COUNT(*) AS strategy_count,
-                    MAX(created_at) AS last_created
-                FROM strategies
-                GROUP BY data->>'setup_id'
-                ORDER BY last_created DESC
-            """)
-            rows = cur.fetchall()
-
-        grouped = [
-            {
-                "setup_id": int(r[0]),
-                "strategy_count": r[1],
-                "last_created": r[2].isoformat()
-            }
-            for r in rows
-        ]
-        return grouped
-    except Exception as e:
-        logger.error(f"[grouped_by_setup] ❌ {e}")
-        raise HTTPException(status_code=500, detail="Kon strategie-overzicht niet ophalen.")
-
-
-
-
-# ✅ Score-matrix per asset × timeframe
-@router.get("/strategies/score_matrix")
-async def score_matrix():
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT data FROM strategies")
-            rows = cur.fetchall()
-
-        matrix = {}
-        for row in rows:
-            s = row[0]
-            asset = s.get("asset")
-            tf = s.get("timeframe")
-            score = float(s.get("score", 0))
-            if not asset or not tf:
-                continue
-            matrix.setdefault(asset, {})
-            matrix[asset][tf] = round((matrix[asset].get(tf, 0) + score) / 2, 2) if tf in matrix[asset] else score
-
-        return matrix
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# ✅ Actieve strategieën tonen (score > 6.0)
-@router.get("/strategies/active")
-async def active_strategies(min_score: float = 6.0):
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, data FROM strategies")
-            rows = cur.fetchall()
-
-        active = []
-        for id_, s in rows:
-            if float(s.get("score", 0)) >= min_score:
-                s["id"] = id_
-                active.append(s)
-
-        return active
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
