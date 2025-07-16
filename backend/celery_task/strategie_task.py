@@ -4,13 +4,13 @@ import traceback
 import json
 import requests
 from urllib.parse import urljoin
-from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
 
-# ✅ AI logica importeren (pas pad aan indien anders)
+# ✅ AI-logica importeren
 from backend.utils.ai_strategy_generator import generate_strategy, generate_strategy_from_setup
 
-# ✅ Logging
+# ✅ Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
 HEADERS = {"Content-Type": "application/json"}
 TIMEOUT = 10
 
-# ✅ Robuuste API-call met retries
+# ✅ Robuuste fetch-functie
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="POST", payload=None):
     try:
@@ -31,7 +31,7 @@ def safe_request(url, method="POST", payload=None):
         logger.error(traceback.format_exc())
         raise
 
-# ✅ Celery taak: Genereer strategieën automatisch voor ALLE setups
+# ✅ Taak 1: Genereer strategieën voor alle setups
 @shared_task(name="celery_task.strategie_task.generate_all")
 def generate_strategieën_automatisch():
     try:
@@ -43,7 +43,6 @@ def generate_strategieën_automatisch():
             return
 
         for setup in setups:
-            # 👇 Check of er al een strategie is (bijv. via ID of flag die wél bestaat)
             if setup.get("strategy_id"):
                 logger.info(f"⏭️ Strategie al aanwezig voor setup '{setup.get('name')}' → overslaan.")
                 continue
@@ -73,7 +72,7 @@ def generate_strategieën_automatisch():
             logger.info(f"📦 Strategie-payload:\n{json.dumps(payload, indent=2)}")
 
             try:
-                result = safe_request(urljoin(API_BASE_URL, "/strategieën"), method="POST", payload=payload)
+                result = safe_request(urljoin(API_BASE_URL, "/strategies"), method="POST", payload=payload)
                 logger.info(f"✅ Strategie opgeslagen voor {setup['name']}: {result}")
             except Exception as e:
                 logger.error(f"❌ Fout bij opslaan strategie: {e}")
@@ -83,7 +82,7 @@ def generate_strategieën_automatisch():
         logger.error(f"❌ Fout in generate_strategieën_automatisch: {e}")
         logger.error(traceback.format_exc())
 
-# ✅ Celery taak: Genereer strategie voor specifieke setup
+# ✅ Taak 2: Genereer strategie voor specifieke setup
 @shared_task(name="celery_task.strategie_task.generate_for_setup")
 def generate_strategie_voor_setup(setup_id, overwrite=True):
     try:
@@ -120,9 +119,9 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         logger.info(f"📦 Strategie-payload:\n{json.dumps(payload, indent=2)}")
 
         if overwrite:
-            res = requests.put(urljoin(API_BASE_URL, f"/strategieën/van_setup/{setup_id}"), json=payload, timeout=TIMEOUT)
+            res = requests.put(urljoin(API_BASE_URL, f"/strategies/van_setup/{setup_id}"), json=payload, timeout=TIMEOUT)
         else:
-            res = requests.post(urljoin(API_BASE_URL, "/strategieën"), json=payload, timeout=TIMEOUT)
+            res = requests.post(urljoin(API_BASE_URL, "/strategies"), json=payload, timeout=TIMEOUT)
 
         if res.status_code not in [200, 201]:
             logger.error(f"❌ Strategie opslaan faalde: {res.status_code} - {res.text}")
