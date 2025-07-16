@@ -6,7 +6,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-@router.post("/generate")
+@router.post("/strategies/generate")
 async def generate_strategy(request: Request):
     """
     Genereert een AI-tradingstrategie op basis van een meegegeven setup.
