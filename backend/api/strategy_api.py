@@ -450,29 +450,6 @@ async def grouped_by_setup():
         raise HTTPException(status_code=500, detail="Kon strategie-overzicht niet ophalen.")
 
 
-# ✅ Gemiddelde scores per asset
-@router.get("/strategies/summary")
-async def strategy_summary():
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    data->>'asset' AS asset,
-                    AVG(CAST(data->>'score' AS FLOAT)) AS average_score,
-                    COUNT(*) AS count
-                FROM strategies
-                GROUP BY asset
-                ORDER BY average_score DESC
-            """)
-            rows = cur.fetchall()
-
-        return [
-            {"asset": r[0], "average_score": round(r[1], 2), "count": r[2]}
-            for r in rows
-        ]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ✅ Score-matrix per asset × timeframe
@@ -519,18 +496,4 @@ async def active_strategies(min_score: float = 6.0):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ AI-uitleg bij strategie ophalen
-@router.get("/strategies/{strategy_id}/explanation")
-async def fetch_strategy_explanation(strategy_id: int):
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT data FROM strategies WHERE id = %s", (strategy_id,))
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Strategie niet gevonden")
-            explanation = row[0].get("explanation", "")
-        return {"id": strategy_id, "explanation": explanation}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
