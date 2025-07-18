@@ -67,7 +67,7 @@ safe_include("backend.api.ai.ai_trading_advice_api", "ai_trading_advice_api")  #
 # ✅ Extra backend routes
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
-safe_include("backend.api.trades_active_api", "trades_active_api")  # ✅ NIEUW
+
 
 # ✅ Health check
 @app.get("/api/health")
