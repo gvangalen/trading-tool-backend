@@ -5,7 +5,7 @@ from datetime import datetime
 from pytz import timezone
 from celery import shared_task
 
-# ✅ Juiste imports volgens mapstructuur (zonder 'backend.' prefix)
+# ✅ Juiste imports met 'backend.' prefix
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import generate_scores
 from backend.utils.setup_validator import validate_setups
