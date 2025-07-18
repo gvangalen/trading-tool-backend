@@ -1,3 +1,4 @@
+print("✅ strategy_api.py geladen!")  # komt in logs bij opstarten
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from backend.utils.db import get_db_connection
