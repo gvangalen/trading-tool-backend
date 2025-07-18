@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from backend.utils.db import get_db_connection
-from backend.tasks.strategy_tasks import generate_strategy_task
+from celery_task.strategy_task import generate_strategy_task
 from typing import Optional
 from datetime import datetime
 import json
