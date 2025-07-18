@@ -1,5 +1,3 @@
-# backend/celery_task/daily_report_task.py
-
 import os
 import json
 import logging
@@ -8,10 +6,10 @@ from pytz import timezone
 from celery import shared_task
 
 # ✅ Juiste imports volgens mapstructuur (zonder 'backend.' prefix)
-from utils.db import get_db_connection
-from utils.scoring_utils import generate_scores
-from utils.setup_validator import validate_setups
-from utils.strategy_advice_generator import generate_strategy_advice
+from backend.utils.db import get_db_connection
+from backend.utils.scoring_utils import generate_scores
+from backend.utils.setup_validator import validate_setups
+from backend.utils.strategy_advice_generator import generate_strategy_advice
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO)
