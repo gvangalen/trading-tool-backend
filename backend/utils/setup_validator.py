@@ -63,7 +63,7 @@ def validate_setups(asset="BTC"):
 
             # 🔍 Setups ophalen
             cur.execute("""
-                SELECT id, setup_name, conditions
+                SELECT id, name, score_logic
                 FROM setups
                 WHERE symbol = %s
             """, (asset,))
@@ -78,7 +78,6 @@ def validate_setups(asset="BTC"):
                 logger.error(f"❌ JSON-fout in setup '{name}': {e}")
                 continue
 
-            # ➕ Combineer alle data
             combined_data = {
                 **macro_data,
                 **technical_data,
@@ -118,6 +117,13 @@ def validate_setups(asset="BTC"):
                 "score_breakdown": category_scores,
                 "failed_conditions": failed_conditions
             })
+
+            # ✅ Optioneel: score en active-status opslaan in database
+            # with conn.cursor() as cur:
+            #     cur.execute("""
+            #         UPDATE setups SET score = %s, active = %s WHERE id = %s
+            #     """, (overall_score, is_active, setup_id))
+            # conn.commit()
 
         logger.info(f"✅ Setup validatie voltooid voor {asset} ({len(results)} setups)")
         return results
