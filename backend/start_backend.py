@@ -37,9 +37,9 @@ def safe_include(import_path, name=""):
         logger.info(f"✅ Router geladen: {name or import_path}")
         print(f"🧪 Router geladen: {name or import_path}")
     except Exception as e:
-        logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
-        print(f"❌ Router FOUT: {name or import_path} — {e}")
-         traceback.print_exc()
+    logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
+    print(f"❌ Router FOUT: {name or import_path} — {e}")
+    traceback.print_exc()  # ✅ juiste indent
 
 # ✅ Standaard API routers
 safe_include("backend.api.market_data_api", "market_data_api")
