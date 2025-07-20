@@ -1,5 +1,6 @@
 import sys, os
 import logging
+import traceback
 import importlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +39,7 @@ def safe_include(import_path, name=""):
     except Exception as e:
         logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
         print(f"❌ Router FOUT: {name or import_path} — {e}")
+         traceback.print_exc()
 
 # ✅ Standaard API routers
 safe_include("backend.api.market_data_api", "market_data_api")
