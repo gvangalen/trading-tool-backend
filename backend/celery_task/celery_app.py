@@ -22,7 +22,7 @@ celery.autodiscover_tasks([
     "backend.celery_task.macro_task",
     "backend.celery_task.technical_task",
     "backend.celery_task.setup_task",
-    "backend.celery_task.strategie_task",
+    "backend.celery_task.strategy_task",
     "backend.celery_task.daily_report_task",
     "backend.ai_tasks.trading_advice_task",
     "backend.ai_tasks.validation_task"
