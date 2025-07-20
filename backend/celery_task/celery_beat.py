@@ -26,7 +26,7 @@ celery = Celery(
         "backend.celery_task.macro_task",
         "backend.celery_task.technical_task",
         "backend.celery_task.setup_task",
-        "backend.celery_task.strategie_task",
+        "backend.celery_task.strategy_task",  # ✅ GEFIXT
         "backend.celery_task.daily_report_task",
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task",
@@ -60,7 +60,7 @@ celery.conf.beat_schedule = {
         "schedule": crontab(minute=5, hour="*/6"),
     },
     "generate_ai_strategieën": {
-        "task": "backend.celery_task.strategie_task.generate_strategieën_automatisch",
+        "task": "backend.celery_task.strategy_task.generate_strategieën_automatisch",  # ✅ GEFIXT
         "schedule": crontab(hour=8, minute=10),
     },
     "generate_daily_report_pdf": {
@@ -75,7 +75,7 @@ try:
     import backend.celery_task.macro_task
     import backend.celery_task.technical_task
     import backend.celery_task.setup_task
-    import backend.celery_task.strategie_task
+    import backend.celery_task.strategy_task  # ✅ GEFIXT
     import backend.celery_task.daily_report_task
     import backend.ai_tasks.trading_advice_task
     import backend.ai_tasks.validation_task
