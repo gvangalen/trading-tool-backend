@@ -37,9 +37,9 @@ def safe_include(import_path, name=""):
         logger.info(f"✅ Router geladen: {name or import_path}")
         print(f"🧪 Router geladen: {name or import_path}")
     except Exception as e:
-    logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
-    print(f"❌ Router FOUT: {name or import_path} — {e}")
-    traceback.print_exc()  # ✅ juiste indent
+        logger.warning(f"❌ Kon router '{name or import_path}' niet laden: {e}")
+        print(f"❌ Router FOUT: {name or import_path} — {e}")
+        traceback.print_exc()
 
 # ✅ Standaard API routers
 safe_include("backend.api.market_data_api", "market_data_api")
@@ -52,7 +52,7 @@ safe_include("backend.api.sidebar_api", "sidebar_api")
 safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
-safe_include("backend.api.trades_active_api", "trades_active_api")  # ✅ Toegevoegd
+safe_include("backend.api.trades_active_api", "trades_active_api")  # ✅
 
 # ✅ AI API routers
 safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
@@ -63,7 +63,7 @@ safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
 safe_include("backend.api.ai.ai_setup_validator", "ai_setup_validator")
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 safe_include("backend.api.ai.ai_status_api", "ai_status_api")
-safe_include("backend.api.ai.ai_trading_advice_api", "ai_trading_advice_api")  # ✅ Toegevoegd
+safe_include("backend.api.ai.ai_trading_advice_api", "ai_trading_advice_api")  # ✅
 
 # ✅ Extra backend.routes
 safe_include("backend.routes.trades_routes", "trades_routes")
