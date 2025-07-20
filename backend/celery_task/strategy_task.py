@@ -6,8 +6,7 @@ import requests
 from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
-from backend.utils.ai_strategy_utils import generate_strategy, generate_strategy_from_setup
-
+from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 # ✅ Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
