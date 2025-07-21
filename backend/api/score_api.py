@@ -2,6 +2,7 @@ import logging
 import json
 from fastapi import APIRouter, HTTPException
 from backend.utils.scoring_utils import load_config, generate_scores
+from backend.utils.calculate_combined_score import calculate_combined_score  # ✅ Nieuw
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -62,4 +63,17 @@ async def market_score():
         return result
     except Exception as e:
         logger.error(f"❌ Market-score fout: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ✅ Gecombineerde AI-score uit database
+@router.get("/score/combined/{symbol}")
+async def combined_score(symbol: str = "BTC"):
+    """
+    Retourneert gecombineerde AI-score op basis van macro, technical en sentiment uit setup_scores-tabel.
+    """
+    try:
+        result = calculate_combined_score(symbol)
+        return result
+    except Exception as e:
+        logger.error(f"❌ Combined-score fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
