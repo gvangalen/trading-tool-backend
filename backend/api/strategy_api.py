@@ -1,9 +1,10 @@
 print("✅ strategy_api.py geladen!")  # komt in logs bij opstarten
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from backend.utils.db import get_db_connection
-from backend.celery_task.strategy_task import generate_strategie_voor_setup as generate_strategy_task
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
+from backend.celery_task.strategy_task import generate_strategie_voor_setup as generate_strategy_task  # ✅ JUISTE CELERY IMPORT
 from typing import Optional
 from datetime import datetime
 import json
@@ -70,13 +71,12 @@ async def generate_strategy_for_setup(setup_id: int, request: Request):
             if not setup.get(field):
                 raise HTTPException(status_code=400, detail=f"Setup mist verplicht veld: {field}")
 
-        task = generate_strategy_task.delay(setup_id=setup_id, overwrite=overwrite)
+        task = generate_strategy_task.delay(setup_id=setup_id, overwrite=overwrite)  # ✅ JUISTE CELERY AANROEP
         return {"message": "⏳ Strategie wordt gegenereerd", "task_id": task.id}
 
     except Exception as e:
         logger.error(f"[generate_strategy_for_setup] ❌ {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ✅ Strategie bijwerken
 @router.put("/strategies/{strategy_id}")
