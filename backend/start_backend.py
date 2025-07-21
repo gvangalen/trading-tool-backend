@@ -60,7 +60,6 @@ safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
 safe_include("backend.api.ai.ai_trading_api", "ai_trading_api")
 safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")
 safe_include("backend.api.ai.ai_score_generator", "ai_score_generator")
-safe_include("backend.api.validate_setups_api", "validate_setups_api")  
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 safe_include("backend.api.ai.ai_status_api", "ai_status_api")
 
