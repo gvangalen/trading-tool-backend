@@ -52,6 +52,38 @@ async def save_strategy(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ✅ Strategieën ophalen met filters
+@router.post("/strategies/query")
+async def query_strategies(request: Request):
+    try:
+        filters = await request.json()
+        asset = filters.get("asset", "")
+        timeframe = filters.get("timeframe", "")
+        tag = filters.get("tag", "")
+
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            query = "SELECT * FROM strategies WHERE TRUE"
+            params = []
+            if asset:
+                query += " AND data->>'asset' = %s"
+                params.append(asset)
+            if timeframe:
+                query += " AND data->>'timeframe' = %s"
+                params.append(timeframe)
+            if tag:
+                query += " AND data->>'tag' ILIKE %s"
+                params.append(f"%{tag}%")
+            query += " ORDER BY created_at DESC"
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+        return [row[1] for row in rows]  # return alleen de JSON data
+    except Exception as e:
+        logger.error(f"[query_strategies] ❌ {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ✅ AI-strategie genereren (Celery)
 @router.post("/strategies/generate/{setup_id}")
 async def generate_strategy_for_setup(setup_id: int, request: Request):
