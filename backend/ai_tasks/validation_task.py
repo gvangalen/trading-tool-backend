@@ -2,7 +2,7 @@ from celery import shared_task
 import logging
 import traceback
 import json
-from setup_validator import validate_setups
+from backend.utils.setup_validator import validate_setups  # ✅ correct pad
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
