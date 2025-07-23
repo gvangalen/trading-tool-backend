@@ -5,15 +5,16 @@ from datetime import datetime
 from pytz import timezone
 from celery import shared_task
 
-# ✅ Juiste imports met 'backend.' prefix
+# ✅ Correcte imports
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import generate_scores
 from backend.utils.setup_validator import validate_setups
-from backend.utils.strategy_advice_generator import generate_strategy_advice
+from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 def save_report_to_db(date, report_data):
     conn = get_db_connection()
@@ -64,6 +65,7 @@ def save_report_to_db(date, report_data):
     finally:
         conn.close()
 
+
 @shared_task(name="celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
     logger.info("📝 Genereren van dagelijks rapport gestart...")
@@ -74,10 +76,16 @@ def generate_daily_report():
 
     scores = generate_scores(asset="BTC")
     setups = validate_setups(asset="BTC")
-    strategy = generate_strategy_advice(asset="BTC", scores=scores, setups=setups)
 
-    if not scores or not setups or not strategy:
-        logger.warning("⚠️ Incomplete data voor rapport. Mogelijk ontbrekende scores of setups.")
+    if not setups:
+        logger.warning("⚠️ Geen geldige setups gevonden. Rapport wordt niet gegenereerd.")
+        return
+
+    # ✅ Gebruik AI-strategiegeneratie op eerste (recentste) setup
+    strategy = generate_strategy_from_setup(setups[0])
+
+    if not scores or not strategy:
+        logger.warning("⚠️ Incomplete data voor rapport. Mogelijk ontbrekende scores of strategie.")
 
     today = datetime.now(timezone("UTC")).date()
 
