@@ -52,7 +52,7 @@ safe_include("backend.api.sidebar_api", "sidebar_api")
 safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
-safe_include("backend.api.trades_active_api", "trades_active_api")  # ✅
+
 
 # ✅ AI API routers
 safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
