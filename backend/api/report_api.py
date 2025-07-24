@@ -92,17 +92,23 @@ async def get_daily_report_summary():
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Geen samenvatting beschikbaar")
+
+        # ✅ Voeg fallback toe voor None-waarden
+        def safe(val):
+            return val if val is not None else "Niet beschikbaar"
+
         return {
-            "report_date": row[0],
-            "btc_summary": row[1],
-            "macro_summary": row[2],
-            "setup_checklist": row[3],
-            "priorities": row[4],
-            "wyckoff_analysis": row[5],
-            "recommendations": row[6],
-            "conclusion": row[7],
-            "outlook": row[8],
+            "report_date": row[0].isoformat() if row[0] else "onbekend",
+            "btc_summary": safe(row[1]),
+            "macro_summary": safe(row[2]),
+            "setup_checklist": safe(row[3]),
+            "priorities": safe(row[4]),
+            "wyckoff_analysis": safe(row[5]),
+            "recommendations": safe(row[6]),
+            "conclusion": safe(row[7]),
+            "outlook": safe(row[8]),
         }
+
     except Exception as e:
         logger.error(f"❌ RAP05: Fout bij ophalen samenvatting: {e}")
         raise HTTPException(status_code=500, detail=str(e))
