@@ -5,16 +5,15 @@ from datetime import datetime
 from pytz import timezone
 from celery import shared_task
 
-# ✅ Correcte imports
+# ✅ Juiste imports
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import generate_scores
 from backend.utils.setup_validator import validate_setups
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 
-# ✅ Logging instellen
+# ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 def save_report_to_db(date, report_data):
     conn = get_db_connection()
@@ -65,7 +64,6 @@ def save_report_to_db(date, report_data):
     finally:
         conn.close()
 
-
 @shared_task(name="celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
     logger.info("📝 Genereren van dagelijks rapport gestart...")
@@ -76,16 +74,10 @@ def generate_daily_report():
 
     scores = generate_scores(asset="BTC")
     setups = validate_setups(asset="BTC")
+    strategy = generate_strategy_from_setup(setups[0]) if setups else None
 
-    if not setups:
-        logger.warning("⚠️ Geen geldige setups gevonden. Rapport wordt niet gegenereerd.")
-        return
-
-    # ✅ Gebruik AI-strategiegeneratie op eerste (recentste) setup
-    strategy = generate_strategy_from_setup(setups[0])
-
-    if not scores or not strategy:
-        logger.warning("⚠️ Incomplete data voor rapport. Mogelijk ontbrekende scores of strategie.")
+    if not scores or not setups or not strategy:
+        logger.warning("⚠️ Incomplete data voor rapport. Mogelijk ontbrekende scores of setups.")
 
     today = datetime.now(timezone("UTC")).date()
 
@@ -97,17 +89,18 @@ def generate_daily_report():
         f"🛑 Stop-loss: ${strategy.get('stop_loss', 'n.v.t.')}\n"
         f"⚠️ Risico: {strategy.get('risico', 'n.v.t.')}\n"
         f"💬 Opmerking: {strategy.get('reden', '—')}"
-    )
+    ) if strategy else "⚠️ Geen geldige strategie gegenereerd."
 
+    # ⬇️ Tijdelijke invulling voor ontbrekende rapportvelden
     report_data = {
-        "btc_summary": strategy.get("btc_summary", "Samenvatting BTC volgt..."),
-        "macro_summary": strategy.get("macro_summary", "Macro-overzicht niet beschikbaar."),
-        "setup_checklist": strategy.get("setup_checklist", "Geen checklist gegenereerd."),
-        "priorities": strategy.get("priorities", "Nog geen duidelijke focuspunten."),
-        "wyckoff_analysis": strategy.get("wyckoff_analysis", "Wyckoff-analyse nog niet toegevoegd."),
+        "btc_summary": "Samenvatting volgt...",
+        "macro_summary": "Macrodata niet beschikbaar.",
+        "setup_checklist": "Check setups handmatig in dashboard.",
+        "priorities": "Nog geen prioriteiten ingesteld.",
+        "wyckoff_analysis": "Wyckoff-analyse ontbreekt.",
         "recommendations": advies_blok,
-        "conclusion": strategy.get("conclusion", "Conclusie volgt."),
-        "outlook": strategy.get("outlook", "Vooruitblik niet beschikbaar.")
+        "conclusion": "Conclusie volgt...",
+        "outlook": "Vooruitblik nog niet beschikbaar."
     }
 
     try:
