@@ -80,6 +80,7 @@ async def get_daily_report_summary():
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -90,6 +91,9 @@ async def get_daily_report_summary():
             LIMIT 1
         """)
         row = cur.fetchone()
+
+        logger.info(f"🧪 Summary row: {row}")
+
         if not row:
             raise HTTPException(status_code=404, detail="Geen samenvatting beschikbaar")
 
