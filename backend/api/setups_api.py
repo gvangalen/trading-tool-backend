@@ -12,6 +12,8 @@ logging.basicConfig(level=logging.INFO)
 @router.post("/setups")
 async def save_setup(request: Request):
     data = await request.json()
+    print("📦 Ontvangen data:", data)  # ✅ extra logging
+
     required_fields = ["name", "timeframe"]
     for field in required_fields:
         if not data.get(field):
