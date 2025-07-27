@@ -8,63 +8,61 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ✅ 1. Setup opslaan
+# ✅ Setup opslaan
 @router.post("/setups")
 async def save_setup(request: Request):
-    data = await request.json()
-    print("📦 Ontvangen data:", data)  # ✅ extra logging
-
-    required_fields = ["name", "timeframe"]
-    for field in required_fields:
-        if not data.get(field):
-            raise HTTPException(status_code=400, detail=f"'{field}' is verplicht")
-
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="❌ Databaseverbinding mislukt.")
-
     try:
-        with conn.cursor() as cur:
-            # ✅ Check of setup-naam al bestaat voor dit symbool
-            cur.execute("""
-                SELECT id FROM setups
-                WHERE name = %s AND symbol = %s
-            """, (data.get("name"), data.get("symbol", "BTC")))
-            if cur.fetchone():
-                raise HTTPException(status_code=409, detail="❌ Deze setup-naam bestaat al.")
+        data = await request.json()
 
-            # ✅ Insert uitvoeren
+        # ✅ Vereiste velden controleren
+        required_fields = ["name", "symbol", "indicators", "trend"]
+        for field in required_fields:
+            if not data.get(field):
+                logger.warning(f"[save_setup] ❌ '{field}' ontbreekt in data: {data}")
+                raise HTTPException(status_code=400, detail=f"'{field}' is verplicht")
+
+        # ✅ String fallback → lijst
+        if isinstance(data.get("indicators"), str):
+            data["indicators"] = [s.strip() for s in data["indicators"].split(",")]
+        if isinstance(data.get("tags"), str):
+            data["tags"] = [s.strip() for s in data["tags"].split(",")]
+
+        # ✅ Dubbele naam + symbool voorkomen
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM setups WHERE name = %s AND symbol = %s", (data["name"], data["symbol"]))
+            if cur.fetchone():
+                logger.warning(f"[save_setup] ⚠️ Setup bestaat al: {data['name']} ({data['symbol']})")
+                raise HTTPException(status_code=409, detail="Setup met deze naam en symbool bestaat al")
+
             cur.execute("""
                 INSERT INTO setups (
-                    name, symbol, timeframe, account_type, strategy_type,
-                    min_investment, dynamic_investment, score, description,
-                    tags, indicators, trend, score_type, score_logic, favorite,
-                    created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                RETURNING id, created_at;
+                    name, symbol, indicators, trend, account_type, strategy_type,
+                    min_investment, tags, score_logic, dynamic_investment, favorite, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                data.get("name"), data.get("symbol", "BTC"), data.get("timeframe"),
-                data.get("account_type"), data.get("strategy_type"),
-                data.get("min_investment"), data.get("dynamic", False),
-                data.get("score"), data.get("description"), data.get("tags", []),
-                data.get("indicators"), data.get("trend"),
-                data.get("score_type"), data.get("score_logic"),
-                data.get("favorite", False)
+                data["name"],
+                data["symbol"],
+                json.dumps(data.get("indicators")),
+                data["trend"],
+                data.get("account_type"),
+                data.get("strategy_type"),
+                data.get("min_investment"),
+                json.dumps(data.get("tags", [])),
+                data.get("score_logic"),
+                data.get("dynamic_investment", False),
+                data.get("favorite", False),
+                datetime.utcnow()
             ))
-            setup_id, created_at = cur.fetchone()
             conn.commit()
-            return {
-                "message": "✅ Setup succesvol opgeslagen",
-                "id": setup_id,
-                "created_at": created_at.isoformat()
-            }
-    except HTTPException:
-        raise  # Laat expliciete foutcodes door
+
+        logger.info(f"[save_setup] ✅ Setup opgeslagen: {data['name']} ({data['symbol']})")
+        return {"status": "success", "message": "Setup opgeslagen"}
+
     except Exception as e:
-        logger.error(f"❌ [save_setup] Fout: {e}")
-        raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan setup: {e}")
-    finally:
-        conn.close()
+        logger.exception(f"[save_setup] ❌ Fout bij opslaan: {e}")
+        raise HTTPException(status_code=500, detail="Interne fout bij opslaan van setup")
 
 # ✅ 2. Alle setups ophalen
 @router.get("/setups")
