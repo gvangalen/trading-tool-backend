@@ -8,7 +8,6 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ✅ 1. Setup opslaan
 @router.post("/setups")
 async def save_setup(request: Request):
     data = await request.json()
@@ -23,6 +22,15 @@ async def save_setup(request: Request):
 
     try:
         with conn.cursor() as cur:
+            # ✅ Check of setup-naam al bestaat voor dit symbool
+            cur.execute("""
+                SELECT id FROM setups
+                WHERE name = %s AND symbol = %s
+            """, (data.get("name"), data.get("symbol", "BTC")))
+            if cur.fetchone():
+                raise HTTPException(status_code=409, detail="❌ Deze setup-naam bestaat al.")
+
+            # ✅ Insert uitvoeren
             cur.execute("""
                 INSERT INTO setups (
                     name, symbol, timeframe, account_type, strategy_type,
@@ -47,6 +55,8 @@ async def save_setup(request: Request):
                 "id": setup_id,
                 "created_at": created_at.isoformat()
             }
+    except HTTPException:
+        raise  # Laat expliciete foutcodes door
     except Exception as e:
         logger.error(f"❌ [save_setup] Fout: {e}")
         raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan setup: {e}")
