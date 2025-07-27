@@ -8,6 +8,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# ✅ 1. Setup opslaan
 @router.post("/setups")
 async def save_setup(request: Request):
     data = await request.json()
@@ -228,3 +229,20 @@ def trigger_setup_task():
     validate_setups_task.delay()
     logger.info("🚀 Celery-taak 'validate_setups_task' gestart via API.")
     return {"message": "📡 Setup-validatie gestart via Celery."}
+
+# ✅ 8. Naamcontrole endpoint
+@router.get("/setups/check_name/{name}")
+def check_setup_name(name: str):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ Databaseverbinding mislukt.")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM setups WHERE name = %s", (name,))
+            count = cur.fetchone()[0]
+            return {"exists": count > 0}
+    except Exception as e:
+        logger.error(f"❌ [check_setup_name] Fout: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij naamcontrole.")
+    finally:
+        conn.close()
