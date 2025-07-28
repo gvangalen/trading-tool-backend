@@ -50,6 +50,7 @@ async def save_setup(request: Request):
                 data["symbol"],
                 indicators,
                 data["trend"],
+                data.get("timeframe"), 
                 data.get("account_type"),
                 data.get("strategy_type"),
                 data.get("min_investment"),
