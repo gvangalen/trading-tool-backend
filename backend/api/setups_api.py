@@ -9,7 +9,6 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ✅ Setup opslaan
 @router.post("/setups")
 async def save_setup(request: Request):
     try:
@@ -22,20 +21,24 @@ async def save_setup(request: Request):
                 logger.warning(f"[save_setup] ❌ '{field}' ontbreekt in data: {data}")
                 raise HTTPException(status_code=400, detail=f"'{field}' is verplicht")
 
-        # ✅ String fallback → lijst
-        if isinstance(data.get("indicators"), str):
-            data["indicators"] = [s.strip() for s in data["indicators"].split(",")]
-        if isinstance(data.get("tags"), str):
-            data["tags"] = [s.strip() for s in data["tags"].split(",")]
+        # ✅ Fallback: convert strings naar lists
+        indicators = data.get("indicators", [])
+        if isinstance(indicators, str):
+            indicators = [s.strip() for s in indicators.split(",")]
 
-        # ✅ Dubbele naam + symbool voorkomen
+        tags = data.get("tags", [])
+        if isinstance(tags, str):
+            tags = [s.strip() for s in tags.split(",")]
+
         conn = get_db_connection()
         with conn.cursor() as cur:
+            # ✅ Dubbele naam + symbool voorkomen
             cur.execute("SELECT id FROM setups WHERE name = %s AND symbol = %s", (data["name"], data["symbol"]))
             if cur.fetchone():
                 logger.warning(f"[save_setup] ⚠️ Setup bestaat al: {data['name']} ({data['symbol']})")
                 raise HTTPException(status_code=409, detail="Setup met deze naam en symbool bestaat al")
 
+            # ✅ Correcte insert met native Python lists (voor PostgreSQL TEXT[])
             cur.execute("""
                 INSERT INTO setups (
                     name, symbol, indicators, trend, account_type, strategy_type,
@@ -45,12 +48,12 @@ async def save_setup(request: Request):
             """, (
                 data["name"],
                 data["symbol"],
-                json.dumps(data.get("indicators")),
+                indicators,
                 data["trend"],
                 data.get("account_type"),
                 data.get("strategy_type"),
                 data.get("min_investment"),
-                json.dumps(data.get("tags", [])),
+                tags,
                 data.get("score_logic"),
                 data.get("dynamic_investment", False),
                 data.get("favorite", False),
@@ -64,6 +67,7 @@ async def save_setup(request: Request):
     except Exception as e:
         logger.exception(f"[save_setup] ❌ Fout bij opslaan: {e}")
         raise HTTPException(status_code=500, detail="Interne fout bij opslaan van setup")
+
 
 # ✅ 2. Alle setups ophalen
 @router.get("/setups")
