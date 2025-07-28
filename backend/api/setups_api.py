@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from backend.utils.db import get_db_connection
 from datetime import datetime
+import json
 import logging
 from backend.celery_task.setup_task import validate_setups_task
 
