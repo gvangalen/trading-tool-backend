@@ -8,11 +8,11 @@ from backend.celery_task.setup_task import validate_setups_task
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
-
 @router.post("/setups")
 async def save_setup(request: Request):
     try:
         data = await request.json()
+        logger.info(f"[save_setup] Ontvangen data: {data}")
 
         # ✅ Vereiste velden controleren
         required_fields = ["name", "symbol", "indicators", "trend"]
@@ -24,11 +24,11 @@ async def save_setup(request: Request):
         # ✅ Fallback: convert strings naar lists
         indicators = data.get("indicators", [])
         if isinstance(indicators, str):
-            indicators = [s.strip() for s in indicators.split(",")]
+            indicators = [s.strip() for s in indicators.split(",") if s.strip()]
 
         tags = data.get("tags", [])
         if isinstance(tags, str):
-            tags = [s.strip() for s in tags.split(",")]
+            tags = [s.strip() for s in tags.split(",") if s.strip()]
 
         conn = get_db_connection()
         with conn.cursor() as cur:
@@ -38,19 +38,20 @@ async def save_setup(request: Request):
                 logger.warning(f"[save_setup] ⚠️ Setup bestaat al: {data['name']} ({data['symbol']})")
                 raise HTTPException(status_code=409, detail="Setup met deze naam en symbool bestaat al")
 
-            # ✅ Correcte insert met native Python lists (voor PostgreSQL TEXT[])
+            # ✅ Correcte insert met alle 13 placeholders
             cur.execute("""
                 INSERT INTO setups (
-                    name, symbol, indicators, trend, account_type, strategy_type,
-                    min_investment, tags, score_logic, dynamic_investment, favorite, created_at
+                    name, symbol, indicators, trend, timeframe,
+                    account_type, strategy_type, min_investment,
+                    tags, score_logic, dynamic_investment, favorite, created_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 data["name"],
                 data["symbol"],
                 indicators,
                 data["trend"],
-                data.get("timeframe"), 
+                data.get("timeframe"),
                 data.get("account_type"),
                 data.get("strategy_type"),
                 data.get("min_investment"),
@@ -68,7 +69,7 @@ async def save_setup(request: Request):
     except Exception as e:
         logger.exception(f"[save_setup] ❌ Fout bij opslaan: {e}")
         raise HTTPException(status_code=500, detail="Interne fout bij opslaan van setup")
-
+        
 
 # ✅ 2. Alle setups ophalen
 @router.get("/setups")
