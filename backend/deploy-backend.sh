@@ -33,12 +33,12 @@ else
 fi
 
 echo "🌱 Laad .env bestand..."
-if [ -f .env ]; then
+if [ -f backend/.env ]; then
   set -o allexport
-  source .env
+  source backend/.env
   set +o allexport
 else
-  echo "❌ .env bestand niet gevonden in ~/trading-tool-backend"
+  echo "❌ .env bestand niet gevonden in ~/trading-tool-backend/backend"
   exit 1
 fi
 
