@@ -1,14 +1,10 @@
 import os
 import logging
-from openai import OpenAI
 from backend.utils.db import get_db_connection
 
-# ✅ Logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ OpenAI client (v1.0+ syntax)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 AI_MODE = os.getenv("AI_MODE", "live").lower()
 logger.info(f"🧪 AI_MODE geladen: {AI_MODE}")
 
@@ -32,9 +28,13 @@ def generate_ai_explanation(setup_id: int) -> str:
                 indicators = [s.strip() for s in indicators.split(",")]
 
             if AI_MODE == "mock":
+                logger.info(f"🧪 Mock-modus actief: gegenereerde uitleg voor setup '{name}'")
                 return f"De setup '{name}' volgt een {trend}-trend en gebruikt indicatoren zoals: {', '.join(indicators)}."
 
-            # ✅ Prompt bouwen
+            # ✅ Alleen hier de OpenAI client gebruiken
+            from openai import OpenAI
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
             prompt = (
                 f"Geef een korte uitleg over de trading setup '{name}' met deze kenmerken:\n"
                 f"- Marktconditie: {trend}\n"
@@ -42,7 +42,6 @@ def generate_ai_explanation(setup_id: int) -> str:
                 f"Antwoord in 2-3 zinnen in het Nederlands. Gebruik begrijpelijke taal."
             )
 
-            # ✅ Nieuwe manier (v1.0+)
             response = client.chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
