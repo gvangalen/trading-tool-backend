@@ -32,29 +32,12 @@ else
   echo "ℹ️ Geen bestaand backend-proces actief."
 fi
 
-echo "🌱 Laad .env met DB-gegevens..."
-set -o allexport
-source .env
-set +o allexport
-
-echo "🚀 Start nieuwe backend..."
+echo "🚀 Start nieuwe backend met .env bestand..."
 pm2 start "uvicorn start_backend:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
   --name backend \
   --cwd ~/trading-tool-backend/backend \
-  --env PYTHONPATH=./ \
-  --env ENV=production \
-  --env DB_HOST="$DB_HOST" \
-  --env DB_PORT="$DB_PORT" \
-  --env DB_NAME="$DB_NAME" \
-  --env DB_USER="$DB_USER" \
-  --env DB_PASS="$DB_PASS" \
-  --env CELERY_BROKER_URL="$CELERY_BROKER_URL" \
-  --env CELERY_RESULT_BACKEND="$CELERY_RESULT_BACKEND" \
-  --env OPENAI_API_KEY="$OPENAI_API_KEY" \
-  --env AI_MODE="$AI_MODE" \
-  --env API_BASE_URL="$API_BASE_URL" \
-  --env LOG_LEVEL="$LOG_LEVEL" || {
+  --env-file ~/trading-tool-backend/.env || {
     echo "❌ Start backend mislukt."
     exit 1
   }
