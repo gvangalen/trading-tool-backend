@@ -253,3 +253,14 @@ def check_setup_name(name: str):
         raise HTTPException(status_code=500, detail="❌ Fout bij naamcontrole.")
     finally:
         conn.close()
+
+# ✅ 9. AI-uitleg genereren voor een setup
+@router.post("/setups/explanation/{setup_id}")
+async def generate_explanation(setup_id: int):
+    try:
+        from backend.ai.setup_explanation import generate_ai_explanation  # Zorg dat dit pad klopt
+        explanation = generate_ai_explanation(setup_id)
+        return {"explanation": explanation}
+    except Exception as e:
+        logger.exception(f"❌ [generate_explanation] Fout bij AI-uitleg: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij genereren van uitleg.")
