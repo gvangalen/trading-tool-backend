@@ -5,6 +5,10 @@ import traceback
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# ✅ Laad .env voor AI_MODE, API keys etc.
+from dotenv import load_dotenv
+load_dotenv()
+
 # ✅ Voeg rootpad toe aan sys.path zodat backend modules werken
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
