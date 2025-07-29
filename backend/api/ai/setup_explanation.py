@@ -10,6 +10,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # ✅ OpenAI client (v1.0+ syntax)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 AI_MODE = os.getenv("AI_MODE", "live").lower()
+logger.info(f"🧪 AI_MODE geladen: {AI_MODE}")
 
 def generate_ai_explanation(setup_id: int) -> str:
     conn = get_db_connection()
