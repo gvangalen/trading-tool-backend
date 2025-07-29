@@ -1,14 +1,14 @@
-import openai
 import os
 import logging
+from openai import OpenAI
 from backend.utils.db import get_db_connection
 
 # ✅ Logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ OpenAI key
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# ✅ OpenAI client (v1.0+ syntax)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 AI_MODE = os.getenv("AI_MODE", "live").lower()
 
 def generate_ai_explanation(setup_id: int) -> str:
@@ -41,14 +41,15 @@ def generate_ai_explanation(setup_id: int) -> str:
                 f"Antwoord in 2-3 zinnen in het Nederlands. Gebruik begrijpelijke taal."
             )
 
-            response = openai.ChatCompletion.create(
+            # ✅ Nieuwe manier (v1.0+)
+            response = client.chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=150,
             )
 
-            explanation = response['choices'][0]['message']['content'].strip()
+            explanation = response.choices[0].message.content.strip()
             logger.info(f"✅ AI-uitleg gegenereerd voor setup {setup_id}")
             return explanation
 
