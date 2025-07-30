@@ -8,6 +8,8 @@ from backend.celery_task.setup_task import validate_setups_task
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+
+# ✅ 1. Setup opslaan
 @router.post("/setups")
 async def save_setup(request: Request):
     try:
@@ -69,7 +71,6 @@ async def save_setup(request: Request):
     except Exception as e:
         logger.exception(f"[save_setup] ❌ Fout bij opslaan: {e}")
         raise HTTPException(status_code=500, detail="Interne fout bij opslaan van setup")
-        
 
 # ✅ 2. Alle setups ophalen
 @router.get("/setups")
@@ -101,7 +102,7 @@ async def get_setups(symbol: str = "BTC"):
                     "min_investment": row[6],
                     "dynamic": row[7],
                     "score": row[8],
-                    "description": row[9],
+                    "explanation": row[9],  # ✅ Renamed for frontend consistency
                     "tags": row[10],
                     "indicators": row[11],
                     "trend": row[12],
@@ -147,7 +148,7 @@ async def get_top_setups(limit: int = 3):
                     "min_investment": row[6],
                     "dynamic": row[7],
                     "score": row[8],
-                    "description": row[9],
+                    "explanation": row[9],  # ✅ Renamed for frontend consistency
                     "tags": row[10],
                     "indicators": row[11],
                     "trend": row[12],
@@ -195,7 +196,7 @@ async def update_setup(setup_id: int, request: Request):
                 data.get("name"), data.get("symbol"), data.get("timeframe"),
                 data.get("account_type"), data.get("strategy_type"),
                 data.get("min_investment"), data.get("dynamic"),
-                data.get("score"), data.get("description"), data.get("tags"),
+                data.get("score"), data.get("explanation"), data.get("tags"),
                 data.get("indicators"), data.get("trend"),
                 data.get("score_type"), data.get("score_logic"),
                 data.get("favorite"), setup_id
