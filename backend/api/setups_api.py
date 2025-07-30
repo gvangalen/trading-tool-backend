@@ -258,8 +258,16 @@ def check_setup_name(name: str):
 @router.post("/setups/explanation/{setup_id}")
 async def generate_explanation(setup_id: int):
     try:
-        from backend.api.ai.setup_explanation import generate_ai_explanation  # Zorg dat dit pad klopt
+        from backend.api.ai.setup_explanation import generate_ai_explanation
         explanation = generate_ai_explanation(setup_id)
+
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE setups SET description = %s WHERE id = %s
+            """, (explanation, setup_id))
+            conn.commit()
+
         return {"explanation": explanation}
     except Exception as e:
         logger.exception(f"❌ [generate_explanation] Fout bij AI-uitleg: {e}")
