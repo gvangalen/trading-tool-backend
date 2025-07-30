@@ -16,14 +16,12 @@ async def save_setup(request: Request):
         data = await request.json()
         logger.info(f"[save_setup] Ontvangen data: {data}")
 
-        # ✅ Vereiste velden controleren
         required_fields = ["name", "symbol", "indicators", "trend"]
         for field in required_fields:
             if not data.get(field):
                 logger.warning(f"[save_setup] ❌ '{field}' ontbreekt in data: {data}")
                 raise HTTPException(status_code=400, detail=f"'{field}' is verplicht")
 
-        # ✅ Fallback: convert strings naar lists
         indicators = data.get("indicators", [])
         if isinstance(indicators, str):
             indicators = [s.strip() for s in indicators.split(",") if s.strip()]
@@ -34,13 +32,11 @@ async def save_setup(request: Request):
 
         conn = get_db_connection()
         with conn.cursor() as cur:
-            # ✅ Dubbele naam + symbool voorkomen
             cur.execute("SELECT id FROM setups WHERE name = %s AND symbol = %s", (data["name"], data["symbol"]))
             if cur.fetchone():
                 logger.warning(f"[save_setup] ⚠️ Setup bestaat al: {data['name']} ({data['symbol']})")
                 raise HTTPException(status_code=409, detail="Setup met deze naam en symbool bestaat al")
 
-            # ✅ Correcte insert met alle 13 placeholders
             cur.execute("""
                 INSERT INTO setups (
                     name, symbol, indicators, trend, timeframe,
@@ -72,6 +68,7 @@ async def save_setup(request: Request):
         logger.exception(f"[save_setup] ❌ Fout bij opslaan: {e}")
         raise HTTPException(status_code=500, detail="Interne fout bij opslaan van setup")
 
+
 # ✅ 2. Alle setups ophalen
 @router.get("/setups")
 async def get_setups(symbol: str = "BTC"):
@@ -82,7 +79,7 @@ async def get_setups(symbol: str = "BTC"):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, name, symbol, timeframe, account_type, strategy_type,
-                       min_investment, dynamic_investment, score, description,
+                       min_investment, dynamic_investment, score, explanation,
                        tags, indicators, trend, score_type, score_logic, favorite,
                        created_at
                 FROM setups
@@ -102,7 +99,7 @@ async def get_setups(symbol: str = "BTC"):
                     "min_investment": row[6],
                     "dynamic": row[7],
                     "score": row[8],
-                    "explanation": row[9],  # ✅ Renamed for frontend consistency
+                    "explanation": row[9],
                     "tags": row[10],
                     "indicators": row[11],
                     "trend": row[12],
@@ -119,6 +116,7 @@ async def get_setups(symbol: str = "BTC"):
     finally:
         conn.close()
 
+
 # ✅ 3. Top setups ophalen
 @router.get("/setups/top")
 async def get_top_setups(limit: int = 3):
@@ -129,7 +127,7 @@ async def get_top_setups(limit: int = 3):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, name, symbol, timeframe, account_type, strategy_type,
-                       min_investment, dynamic_investment, score, description,
+                       min_investment, dynamic_investment, score, explanation,
                        tags, indicators, trend, score_type, score_logic, favorite,
                        created_at
                 FROM setups
@@ -148,7 +146,7 @@ async def get_top_setups(limit: int = 3):
                     "min_investment": row[6],
                     "dynamic": row[7],
                     "score": row[8],
-                    "explanation": row[9],  # ✅ Renamed for frontend consistency
+                    "explanation": row[9],
                     "tags": row[10],
                     "indicators": row[11],
                     "trend": row[12],
@@ -164,6 +162,7 @@ async def get_top_setups(limit: int = 3):
         raise HTTPException(status_code=500, detail="❌ Fout bij ophalen top setups.")
     finally:
         conn.close()
+
 
 # ✅ 4. Setup bijwerken
 @router.patch("/setups/{setup_id}")
@@ -184,7 +183,7 @@ async def update_setup(setup_id: int, request: Request):
                     min_investment = %s,
                     dynamic_investment = %s,
                     score = %s,
-                    description = %s,
+                    explanation = %s,
                     tags = %s,
                     indicators = %s,
                     trend = %s,
@@ -209,6 +208,7 @@ async def update_setup(setup_id: int, request: Request):
     finally:
         conn.close()
 
+
 # ✅ 5. Setup verwijderen
 @router.delete("/setups/{setup_id}")
 async def delete_setup(setup_id: int):
@@ -226,10 +226,12 @@ async def delete_setup(setup_id: int):
     finally:
         conn.close()
 
+
 # ✅ 6. Test endpoint
 @router.get("/setups/test")
 async def test_setup_api():
     return {"message": "✅ Setup API werkt correct."}
+
 
 # ✅ 7. Celery-trigger
 @router.post("/setups/trigger")
@@ -238,7 +240,8 @@ def trigger_setup_task():
     logger.info("🚀 Celery-taak 'validate_setups_task' gestart via API.")
     return {"message": "📡 Setup-validatie gestart via Celery."}
 
-# ✅ 8. Naamcontrole endpoint
+
+# ✅ 8. Naamcontrole
 @router.get("/setups/check_name/{name}")
 def check_setup_name(name: str):
     conn = get_db_connection()
@@ -255,7 +258,8 @@ def check_setup_name(name: str):
     finally:
         conn.close()
 
-# ✅ 9. AI-uitleg genereren voor een setup
+
+# ✅ 9. AI-uitleg genereren
 @router.post("/setups/explanation/{setup_id}")
 async def generate_explanation(setup_id: int):
     try:
@@ -264,9 +268,7 @@ async def generate_explanation(setup_id: int):
 
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE setups SET description = %s WHERE id = %s
-            """, (explanation, setup_id))
+            cur.execute("UPDATE setups SET explanation = %s WHERE id = %s", (explanation, setup_id))
             conn.commit()
 
         return {"explanation": explanation}
