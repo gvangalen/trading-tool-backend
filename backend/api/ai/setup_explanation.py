@@ -5,6 +5,7 @@ from backend.utils.db import get_db_connection
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# 🔧 Mock of Live modus via omgeving
 AI_MODE = os.getenv("AI_MODE", "live").lower()
 logger.info(f"🧪 AI_MODE geladen: {AI_MODE}")
 
@@ -28,8 +29,18 @@ def generate_ai_explanation(setup_id: int) -> str:
                 indicators = [s.strip() for s in indicators.split(",")]
 
             if AI_MODE == "mock":
+                explanation = f"De setup '{name}' volgt een {trend}-trend en gebruikt indicatoren zoals: {', '.join(indicators)}."
                 logger.info(f"🧪 Mock-modus actief: gegenereerde uitleg voor setup '{name}'")
-                return f"De setup '{name}' volgt een {trend}-trend en gebruikt indicatoren zoals: {', '.join(indicators)}."
+
+                # ✅ Uitleg opslaan in database
+                cur.execute("""
+                    UPDATE setups
+                    SET explanation = %s
+                    WHERE id = %s
+                """, (explanation, setup_id))
+                conn.commit()
+
+                return explanation
 
             # ✅ Alleen hier de OpenAI client gebruiken
             from openai import OpenAI
@@ -51,10 +62,19 @@ def generate_ai_explanation(setup_id: int) -> str:
 
             explanation = response.choices[0].message.content.strip()
             logger.info(f"✅ AI-uitleg gegenereerd voor setup {setup_id}")
+
+            # ✅ Opslaan in database
+            cur.execute("""
+                UPDATE setups
+                SET explanation = %s
+                WHERE id = %s
+            """, (explanation, setup_id))
+            conn.commit()
+
             return explanation
 
     except Exception as e:
-        logger.error(f"[setup_explanation] ❌ Fout: {e}")
+        logger.error(f"[setup_explanation] ❌ Fout bij uitleg genereren: {e}")
         return "Fout bij uitleg genereren."
     finally:
         conn.close()
