@@ -16,11 +16,12 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ✅ Strategie opslaan
 @router.post("/strategies")
 async def save_strategy(request: Request):
     try:
         data = await request.json()
+        
+        # ✅ Vereiste velden
         required_fields = ["setup_id", "setup_name", "asset", "timeframe", "entry", "targets", "stop_loss"]
         for field in required_fields:
             if not data.get(field):
@@ -28,29 +29,38 @@ async def save_strategy(request: Request):
                 raise HTTPException(status_code=400, detail=f"'{field}' is verplicht")
 
         conn = get_db_connection()
+
+        # ✅ Bestaat al?
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM strategies WHERE data->>'setup_id' = %s", (str(data["setup_id"]),))
             if cur.fetchone():
                 raise HTTPException(status_code=409, detail="Strategie bestaat al")
 
-        keywords = ["breakout", "scalp", "swing", "reversal"]
+        # ✅ AI keywords → tags automatisch
+        keywords = ["breakout", "scalp", "swing", "reversal", "dca"]
         found_tags = [k for k in keywords if k in (data["setup_name"] + data.get("explanation", "")).lower()]
         data["tags"] = list(set(data.get("tags", []) + found_tags))
+
+        # ✅ Standaardwaarden aanvullen
         data.setdefault("favorite", False)
         data.setdefault("origin", "Manual")
         data.setdefault("ai_reason", "")
+        data.setdefault("strategy_type", "manual")  # <-- 🔥 HIER TOEGEVOEGD
 
+        # ✅ Insert in database
         with conn.cursor() as cur:
-            cur.execute("INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id",
-                        (json.dumps(data),))
+            cur.execute(
+                "INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id",
+                (json.dumps(data),)
+            )
             strategy_id = cur.fetchone()[0]
             conn.commit()
 
         return {"message": "✅ Strategie opgeslagen", "id": strategy_id}
+    
     except Exception as e:
         logger.error(f"[save_strategy] ❌ {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # ✅ Strategieën ophalen met filters
 @router.post("/strategies/query")
