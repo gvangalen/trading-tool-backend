@@ -57,7 +57,6 @@ safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
 
-
 # ✅ AI API routers
 safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
 safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
@@ -66,10 +65,15 @@ safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 safe_include("backend.api.ai.ai_status_api", "ai_status_api")
 
-
 # ✅ Extra backend.routes
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
+
+# 🚦 Debug: print alle geregistreerde routes en methodes
+print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
+for route in app.routes:
+    print(f"{route.path} - methods: {route.methods}")
+print()
 
 # ✅ Health check
 @app.get("/api/health")
