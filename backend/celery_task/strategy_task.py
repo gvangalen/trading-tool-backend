@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
+
 # ✅ Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
 HEADERS = {"Content-Type": "application/json"}
 TIMEOUT = 10
 
-# ✅ Robuuste fetch-functie
+# ✅ Robuuste fetch-functie met retries
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="POST", payload=None):
     try:
@@ -40,6 +41,7 @@ def generate_strategieën_automatisch():
             return
 
         for setup in setups:
+            # Check of er al een strategie is voor deze setup
             if setup.get("strategy_id"):
                 logger.info(f"⏭️ Strategie al aanwezig voor setup '{setup.get('name')}' → overslaan.")
                 continue
@@ -48,23 +50,37 @@ def generate_strategieën_automatisch():
                 logger.warning(f"⚠️ Setup incompleet: {setup}")
                 continue
 
-            strategie = generate_strategy(setup)
+            strategie = generate_strategy_from_setup(setup)
             if not strategie:
                 logger.warning(f"⚠️ AI kon geen strategie genereren voor '{setup['name']}'")
                 continue
 
+            strategy_type = setup.get("strategy_type", "manual").lower()
+
+            # Basis payload
             payload = {
                 "setup_name": setup["name"],
-                "type": setup.get("strategy_type", "Auto gegenereerd"),
+                "strategy_type": strategy_type,
                 "asset": setup.get("symbol", "BTC"),
                 "timeframe": setup.get("timeframe", "1D"),
                 "score": setup.get("score", 0),
-                "entry": strategie["entry"],
-                "targets": strategie["targets"],
-                "stop_loss": strategie["stop_loss"],
-                "risk_reward": strategie["risk_reward"],
-                "explanation": strategie["explanation"]
+                "explanation": strategie.get("explanation"),
+                "risk_reward": strategie.get("risk_reward"),
             }
+
+            # Payload aanpassen per strategie-type
+            if strategy_type == "dca":
+                payload.update({
+                    "amount": strategie.get("amount", 0),
+                    "frequency": strategie.get("frequency", "weekly"),
+                    # Entry, targets en stop_loss niet verplicht voor DCA
+                })
+            else:
+                payload.update({
+                    "entry": strategie.get("entry"),
+                    "targets": strategie.get("targets"),
+                    "stop_loss": strategie.get("stop_loss"),
+                })
 
             logger.info(f"📦 Strategie-payload:\n{json.dumps(payload, indent=2)}")
 
@@ -74,6 +90,7 @@ def generate_strategieën_automatisch():
             except Exception as e:
                 logger.error(f"❌ Fout bij opslaan strategie: {e}")
                 logger.error(traceback.format_exc())
+                # Optioneel: hier kan je errors verzamelen of opnieuw raise
 
     except Exception as e:
         logger.error(f"❌ Fout in generate_strategieën_automatisch: {e}")
@@ -100,18 +117,29 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         if not strategie:
             return {"error": "Strategie-generatie mislukt"}
 
+        strategy_type = setup.get("strategy_type", "manual").lower()
+
         payload = {
             "setup_name": setup.get("name"),
+            "strategy_type": strategy_type,
             "asset": setup.get("symbol"),
             "timeframe": setup.get("timeframe"),
             "score": setup.get("score"),
-            "entry": strategie.get("entry"),
-            "targets": strategie.get("targets"),
-            "stop_loss": strategie.get("stop_loss"),
-            "risk_reward": strategie.get("risk_reward"),
             "explanation": strategie.get("explanation"),
-            "type": "Auto gegenereerd"
+            "risk_reward": strategie.get("risk_reward"),
         }
+
+        if strategy_type == "dca":
+            payload.update({
+                "amount": strategie.get("amount", 0),
+                "frequency": strategie.get("frequency", "weekly"),
+            })
+        else:
+            payload.update({
+                "entry": strategie.get("entry"),
+                "targets": strategie.get("targets"),
+                "stop_loss": strategie.get("stop_loss"),
+            })
 
         logger.info(f"📦 Strategie-payload:\n{json.dumps(payload, indent=2)}")
 

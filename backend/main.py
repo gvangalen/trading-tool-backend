@@ -1,19 +1,24 @@
-import sys, os
+import sys
+import os
 import logging
 import importlib
 import traceback
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
 # ✅ Laad .env voor AI_MODE, API keys etc.
-from dotenv import load_dotenv
 load_dotenv()
 
 # ✅ Voeg rootpad toe aan sys.path zodat backend modules werken
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# ✅ Logging instellen
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# ✅ Logging instellen op DEBUG met duidelijke formatter
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 logger = logging.getLogger(__name__)
 
 # ✅ FastAPI app
@@ -65,11 +70,9 @@ safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")
 safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 safe_include("backend.api.ai.ai_status_api", "ai_status_api")
 
-
 # ✅ Extra backend routes
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
-
 
 # ✅ Health check
 @app.get("/api/health")
