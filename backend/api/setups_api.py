@@ -3,6 +3,7 @@ from backend.utils.db import get_db_connection
 from datetime import datetime
 import logging
 from backend.celery_task.setup_task import validate_setups_task
+from typing import Optional
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -138,10 +139,10 @@ async def get_dca_setups():
         if conn:
             conn.close()
 
-# 2. Alle setups ophalen zonder filters
+# 2. Alle setups ophalen zonder filters, met optionele filters strategy_type of exclude_strategy_type
 @router.get("/setups")
-async def get_setups():
-    logger.info("[get_setups] Ophalen van alle setups zonder filters")
+async def get_setups(strategy_type: Optional[str] = Query(None), exclude_strategy_type: Optional[str] = Query(None)):
+    logger.info(f"[get_setups] Ophalen setups met filter strategy_type={strategy_type} exclude={exclude_strategy_type}")
     conn = get_db_connection()
     if not conn:
         logger.error("[get_setups] Geen databaseverbinding")
@@ -154,11 +155,19 @@ async def get_setups():
                        tags, indicators, trend, score_type, score_logic, favorite,
                        created_at
                 FROM setups
-                ORDER BY created_at DESC
-                LIMIT 100;  -- eventueel groter limiet
+                WHERE TRUE
             """
-            logger.debug(f"[get_setups] Uitvoeren query: {query}")
-            cur.execute(query)
+            params = []
+            if strategy_type:
+                query += " AND LOWER(strategy_type) = LOWER(%s)"
+                params.append(strategy_type)
+            if exclude_strategy_type:
+                query += " AND LOWER(strategy_type) != LOWER(%s)"
+                params.append(exclude_strategy_type)
+
+            query += " ORDER BY created_at DESC LIMIT 100"
+            logger.debug(f"[get_setups] Uitvoeren query: {query} met params: {params}")
+            cur.execute(query, tuple(params))
             rows = cur.fetchall()
             logger.info(f"[get_setups] Aantal setups opgehaald: {len(rows)}")
 
