@@ -3,10 +3,7 @@ print("✅ strategy_api.py geladen!")  # komt in logs bij opstarten
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from backend.utils.db import get_db_connection
-from backend.utils.ai_strategy_utils import generate_strategy_from_setup
-from backend.celery_task.strategy_task import generate_strategie_voor_setup as generate_strategy_task  # ✅ JUISTE CELERY IMPORT
-from typing import Optional
-from datetime import datetime
+from backend.celery_task.strategy_task import generate_strategie_voor_setup as generate_strategy_task
 import json
 import csv
 import io
@@ -46,17 +43,15 @@ async def save_strategy(request: Request):
             raise HTTPException(status_code=500, detail="Geen databaseverbinding")
 
         try:
-            # Check of strategie al bestaat voor deze setup en strategie-type
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id FROM strategies WHERE data->>'setup_id' = %s AND data->>'strategy_type' = %s",
-                    (str(data["setup_id"]), strategy_type),
+                    "SELECT id FROM strategies WHERE setup_id = %s AND strategy_type = %s",
+                    (int(data["setup_id"]), strategy_type),
                 )
                 if cur.fetchone():
                     logger.warning(f"[save_strategy] Strategie bestaat al voor setup_id {data['setup_id']} en type {strategy_type}")
                     raise HTTPException(status_code=409, detail="Strategie bestaat al voor deze setup en type")
 
-            # Voeg automatisch tags toe
             keywords = ["breakout", "scalp", "swing", "reversal", "dca"]
             combined_text = (data.get("setup_name", "") + " " + data.get("explanation", "")).lower()
             found_tags = [k for k in keywords if k in combined_text]
@@ -65,12 +60,35 @@ async def save_strategy(request: Request):
             data.setdefault("favorite", False)
             data.setdefault("origin", strategy_type.upper())
             data.setdefault("ai_reason", "")
-            data["strategy_type"] = strategy_type  # forceer correcte waarde
+            data["strategy_type"] = strategy_type
+
+            if "targets" in data and not isinstance(data["targets"], list):
+                data["targets"] = [data["targets"]]
+
+            entry_val = str(data.get("entry", ""))
+            target_val = str(data.get("targets", [""])[0])
+            stop_loss_val = str(data.get("stop_loss", ""))
+            explanation_val = data.get("explanation", "")
+            risk_profile_val = data.get("risk_profile", None)
 
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO strategies (data, created_at) VALUES (%s::jsonb, NOW()) RETURNING id",
-                    (json.dumps(data),),
+                    """
+                    INSERT INTO strategies 
+                    (setup_id, entry, target, stop_loss, explanation, risk_profile, strategy_type, data, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, NOW())
+                    RETURNING id
+                    """,
+                    (
+                        int(data["setup_id"]),
+                        entry_val,
+                        target_val,
+                        stop_loss_val,
+                        explanation_val,
+                        risk_profile_val,
+                        strategy_type,
+                        json.dumps(data),
+                    ),
                 )
                 strategy_id = cur.fetchone()[0]
                 conn.commit()
@@ -101,7 +119,7 @@ async def query_strategies(request: Request):
         tag = filters.get("tag", "")
 
         with conn.cursor() as cur:
-            query = "SELECT * FROM strategies WHERE TRUE"
+            query = "SELECT id, data FROM strategies WHERE TRUE"
             params = []
             if symbol:
                 query += " AND data->>'symbol' = %s"
@@ -118,7 +136,13 @@ async def query_strategies(request: Request):
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
 
-        return [row[1] for row in rows]  # return alleen JSON data
+        result = []
+        for row in rows:
+            id_, strategy = row
+            strategy["id"] = id_
+            result.append(strategy)
+
+        return result
     finally:
         conn.close()
 
@@ -136,17 +160,18 @@ async def generate_strategy_for_setup(setup_id: int, request: Request):
 
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT id, data FROM setups WHERE id = %s", (setup_id,))
+                cur.execute("SELECT id, name, symbol, timeframe FROM setups WHERE id = %s", (setup_id,))
                 row = cur.fetchone()
                 if not row:
                     logger.warning(f"[generate_strategy_for_setup] Setup niet gevonden met ID {setup_id}")
                     raise HTTPException(status_code=404, detail="Setup niet gevonden")
-                _, setup = row
+                # unpack values
+                _, name, symbol, timeframe = row
 
-            for field in ["name", "symbol", "timeframe"]:
-                if not setup.get(field):
-                    logger.warning(f"[generate_strategy_for_setup] Setup mist verplicht veld: {field}")
-                    raise HTTPException(status_code=400, detail=f"Setup mist verplicht veld: {field}")
+            for field_name, field_value in [("name", name), ("symbol", symbol), ("timeframe", timeframe)]:
+                if not field_value:
+                    logger.warning(f"[generate_strategy_for_setup] Setup mist verplicht veld: {field_name}")
+                    raise HTTPException(status_code=400, detail=f"Setup mist verplicht veld: {field_name}")
 
             task = generate_strategy_task.delay(setup_id=setup_id, overwrite=overwrite)
             logger.info(f"[generate_strategy_for_setup] Celery taak gestart met ID: {task.id}")
@@ -177,7 +202,6 @@ async def update_strategy(strategy_id: int, request: Request):
                 raise HTTPException(status_code=404, detail="Strategie niet gevonden")
             strategy_data = row[0]
 
-            # Expliciete update: alleen keys in data overschrijven in strategy_data
             for key, value in data.items():
                 strategy_data[key] = value
 
@@ -337,18 +361,18 @@ async def grouped_by_setup():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
-                    data->>'setup_id' AS setup_id,
+                    setup_id,
                     COUNT(*) AS strategy_count,
                     MAX(created_at) AS last_created
                 FROM strategies
-                GROUP BY data->>'setup_id'
+                GROUP BY setup_id
                 ORDER BY last_created DESC
             """)
             rows = cur.fetchall()
 
         grouped = [
             {
-                "setup_id": int(r[0]),
+                "setup_id": r[0],
                 "strategy_count": r[1],
                 "last_created": r[2].isoformat()
             }
