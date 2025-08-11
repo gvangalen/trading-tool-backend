@@ -170,33 +170,6 @@ async def get_setups():
         if conn:
             conn.close()
 
-# **NIEUWE** GET setup details per ID (voorkomt botsing met /setups/dca)
-@router.get("/setups/{setup_id}")
-async def get_setup(setup_id: int = Path(..., title="Setup ID", ge=1)):
-    logger.info(f"[get_setup] Ophalen setup ID {setup_id}")
-    conn = get_db_connection()
-    if not conn:
-        logger.error("[get_setup] Geen databaseverbinding")
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    try:
-        with conn.cursor() as cur:
-            query = """
-                SELECT id, name, symbol, timeframe, account_type, strategy_type,
-                       min_investment, dynamic_investment, score, explanation,
-                       tags, indicators, trend, score_type, score_logic, favorite,
-                       created_at
-                FROM setups
-                WHERE id = %s
-            """
-            cur.execute(query, (setup_id,))
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Setup niet gevonden.")
-            return format_setup_rows([row])[0]
-    finally:
-        if conn:
-            conn.close()
-
 # 3. Top setups ophalen
 @router.get("/setups/top")
 async def get_top_setups(limit: int = Query(3, ge=1, le=100)):
@@ -228,6 +201,35 @@ async def get_top_setups(limit: int = Query(3, ge=1, le=100)):
     finally:
         if conn:
             conn.close()
+
+
+# **NIEUWE** GET setup details per ID (voorkomt botsing met /setups/dca)
+@router.get("/setups/{setup_id}")
+async def get_setup(setup_id: int = Path(..., title="Setup ID", ge=1)):
+    logger.info(f"[get_setup] Ophalen setup ID {setup_id}")
+    conn = get_db_connection()
+    if not conn:
+        logger.error("[get_setup] Geen databaseverbinding")
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+    try:
+        with conn.cursor() as cur:
+            query = """
+                SELECT id, name, symbol, timeframe, account_type, strategy_type,
+                       min_investment, dynamic_investment, score, explanation,
+                       tags, indicators, trend, score_type, score_logic, favorite,
+                       created_at
+                FROM setups
+                WHERE id = %s
+            """
+            cur.execute(query, (setup_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Setup niet gevonden.")
+            return format_setup_rows([row])[0]
+    finally:
+        if conn:
+            conn.close()
+
 
 # 4. Setup bijwerken
 @router.patch("/setups/{setup_id}")
