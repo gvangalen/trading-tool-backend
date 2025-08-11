@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, Path
+from fastapi import APIRouter, HTTPException, Request, Query, Path
 from backend.utils.db import get_db_connection
 from datetime import datetime
 import logging
@@ -199,7 +199,7 @@ async def get_setup(setup_id: int = Path(..., title="Setup ID", ge=1)):
 
 # 3. Top setups ophalen
 @router.get("/setups/top")
-async def get_top_setups(limit: int = 3):
+async def get_top_setups(limit: int = Query(3, ge=1, le=100)):
     logger.info(f"[get_top_setups] Ophalen top {limit} setups")
     conn = get_db_connection()
     if not conn:
