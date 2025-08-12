@@ -61,7 +61,7 @@ def generate_strategieën_automatisch():
             payload = {
                 "setup_name": setup["name"],
                 "strategy_type": strategy_type,
-                "asset": setup.get("symbol", "BTC"),
+                "symbol": setup.get("symbol", "BTC"),  # hier aangepast
                 "timeframe": setup.get("timeframe", "1D"),
                 "score": setup.get("score", 0),
                 "explanation": strategie.get("explanation"),
@@ -122,7 +122,7 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         payload = {
             "setup_name": setup.get("name"),
             "strategy_type": strategy_type,
-            "asset": setup.get("symbol"),
+            "symbol": setup.get("symbol"),  # hier aangepast
             "timeframe": setup.get("timeframe"),
             "score": setup.get("score"),
             "explanation": strategie.get("explanation"),
