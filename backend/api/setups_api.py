@@ -291,29 +291,22 @@ async def update_setup(request: Request, setup_id: int = Path(..., title="Setup 
         if conn:
             conn.close()
 
-# 5. Setup verwijderen
+# ✅ Setup verwijderen + gekoppelde strategieën verwijderen
 @router.delete("/setups/{setup_id}")
-async def delete_setup(setup_id: int = Path(..., title="Setup ID", ge=1)):
-    logger.info(f"[delete_setup] Verwijderen setup ID {setup_id}")
-    conn = get_db_connection()
-    if not conn:
-        logger.error("[delete_setup] Geen databaseverbinding")
-        raise HTTPException(status_code=500, detail="❌ Databaseverbinding mislukt.")
+async def delete_setup(setup_id: int):
     try:
+        conn = get_db_connection()
         with conn.cursor() as cur:
-            query = "DELETE FROM setups WHERE id = %s"
-            params = (setup_id,)
-            logger.debug(f"[delete_setup] Uitvoeren query: {query} met params: {params}")
-            cur.execute(query, params)
-            conn.commit()
-            logger.info(f"[delete_setup] Setup ID {setup_id} succesvol verwijderd")
-            return {"message": "🗑️ Setup verwijderd"}
+            # ⛔️ Verwijder eerst strategieën die aan deze setup gekoppeld zijn
+            cur.execute("DELETE FROM strategies WHERE data->>'setup_id' = %s", (str(setup_id),))
+
+            # ✅ Verwijder daarna pas de setup zelf
+            cur.execute("DELETE FROM setups WHERE id = %s", (setup_id,))
+        conn.commit()
+        return {"status": "success", "message": f"Setup en gekoppelde strategieën verwijderd (setup_id={setup_id})"}
     except Exception as e:
-        logger.error(f"❌ [delete_setup] Fout bij verwijderen setup: {e}")
-        raise HTTPException(status_code=500, detail="❌ Fout bij verwijderen setup.")
-    finally:
-        if conn:
-            conn.close()
+        logger.error(f"[delete_setup] ❌ {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 6. Test endpoint
 @router.get("/setups/test")
