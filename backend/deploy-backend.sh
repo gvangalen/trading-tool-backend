@@ -43,7 +43,7 @@ else
 fi
 
 echo "🚀 Start nieuwe backend met ingeladen variabelen..."
-pm2 start "uvicorn start_backend:app --host 0.0.0.0 --port 5002" \
+pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
   --name backend \
   --cwd ~/trading-tool-backend/backend \
