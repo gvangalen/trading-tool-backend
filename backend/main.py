@@ -73,10 +73,17 @@ safe_include("backend.api.ai.ai_status_api", "ai_status_api")
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
 
+
 # ✅ Health check
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API is running"}
+
+# ✅ Debug: print alle routes
+print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
+for route in app.routes:
+    print(f"{route.path} - methods: {route.methods}")
+print()
 
 @app.get("/api/test-cors")
 def test_cors():
