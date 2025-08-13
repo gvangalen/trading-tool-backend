@@ -26,8 +26,11 @@ celery = Celery(
         "backend.celery_task.macro_task",
         "backend.celery_task.technical_task",
         "backend.celery_task.setup_task",
-        "backend.celery_task.strategy_task",  # ✅ GEFIXT
+        "backend.celery_task.strategy_task",
         "backend.celery_task.daily_report_task",
+        "backend.celery_task.weekly_report_task",     # ✅ Nieuw
+        "backend.celery_task.monthly_report_task",    # ✅ Nieuw
+        "backend.celery_task.quarterly_report_task",  # ✅ Nieuw
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task",
     ]
@@ -60,12 +63,24 @@ celery.conf.beat_schedule = {
         "schedule": crontab(minute=5, hour="*/6"),
     },
     "generate_ai_strategieën": {
-        "task": "backend.celery_task.strategy_task.generate_strategieën_automatisch",  # ✅ GEFIXT
+        "task": "backend.celery_task.strategy_task.generate_strategieën_automatisch",
         "schedule": crontab(hour=8, minute=10),
     },
     "generate_daily_report_pdf": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report_pdf",
         "schedule": crontab(hour=8, minute=15),
+    },
+    "generate_weekly_report": {
+        "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
+        "schedule": crontab(hour=8, minute=20, day_of_week="monday"),
+    },
+    "generate_monthly_report": {
+        "task": "backend.celery_task.monthly_report_task.generate_monthly_report",
+        "schedule": crontab(hour=8, minute=30, day_of_month="1"),
+    },
+    "generate_quarterly_report": {
+        "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
+        "schedule": crontab(hour=8, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
 }
 
@@ -75,8 +90,11 @@ try:
     import backend.celery_task.macro_task
     import backend.celery_task.technical_task
     import backend.celery_task.setup_task
-    import backend.celery_task.strategy_task  # ✅ GEFIXT
+    import backend.celery_task.strategy_task
     import backend.celery_task.daily_report_task
+    import backend.celery_task.weekly_report_task      # ✅ Nieuw
+    import backend.celery_task.monthly_report_task     # ✅ Nieuw
+    import backend.celery_task.quarterly_report_task   # ✅ Nieuw
     import backend.ai_tasks.trading_advice_task
     import backend.ai_tasks.validation_task
     logger.info("✅ Alle Celery taken succesvol geïmporteerd.")
