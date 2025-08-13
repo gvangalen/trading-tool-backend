@@ -83,3 +83,8 @@ print()
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API draait ✅"}
+
+# ✅ Lokale run via Python direct: start op poort 5002
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("start_backend:app", host="0.0.0.0", port=5002, reload=True)
