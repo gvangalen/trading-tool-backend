@@ -17,7 +17,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-# ⬇️ Helper voor rapport ophalen
 def fetch_report(table: str, date: str = None, limit: int = 1, as_options=False):
     conn = get_db_connection()
     if not conn:
@@ -38,13 +37,12 @@ def fetch_report(table: str, date: str = None, limit: int = 1, as_options=False)
         else:
             return [r[0].isoformat() for r in rows]
     except Exception as e:
-        logger.error(f"❌ RAP_FETCH: Fout bij ophalen {table}: {e}")
+        logger.error(f"\u274c RAP_FETCH: Fout bij ophalen {table}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
 
-# ⬇️ Helper voor PDF
 def export_report_pdf(report: dict):
     structured = {
         "summary": report.get("btc_summary", ""),
@@ -59,34 +57,24 @@ def export_report_pdf(report: dict):
     return generate_pdf_report(structured)
 
 
-# ✅ Endpoints per rapporttype (daily, weekly, monthly, quarterly)
-for report_type, table, celery_task in [
-    ("daily",     "daily_reports",     generate_daily_report),
-    ("weekly",    "weekly_reports",    generate_weekly_report),
-    ("monthly",   "monthly_reports",   generate_monthly_report),
-    ("quarterly", "quarterly_reports", generate_quarterly_report),
-]:
+# Helper om routes aan te maken
 
-    # 🟢 LAATSTE
+def create_report_routes(report_type: str, table: str, celery_task):
     @router.get(f"/{report_type}_report/latest")
-    async def get_latest_report(rt=report_type, tbl=table):
-        report = fetch_report(tbl)
-        if not report:
-            return {}
-        return report
+    async def get_latest():
+        report = fetch_report(table)
+        return report or {}
 
-    # 🟢 SAMENVATTING
     @router.get(f"/{report_type}_report/summary")
-    async def get_summary(rt=report_type, tbl=table):
-        report = fetch_report(tbl)
+    async def get_summary():
+        report = fetch_report(table)
         if not report:
             raise HTTPException(status_code=404, detail="Geen samenvatting beschikbaar")
 
-        def safe(val):
-            return val if val is not None else "Niet beschikbaar"
+        def safe(val): return val or "Niet beschikbaar"
 
         return {
-            "report_date": report.get("report_date", "onbekend").isoformat() if report.get("report_date") else "onbekend",
+            "report_date": report["report_date"].isoformat() if report.get("report_date") else "onbekend",
             "btc_summary": safe(report.get("btc_summary")),
             "macro_summary": safe(report.get("macro_summary")),
             "setup_checklist": safe(report.get("setup_checklist")),
@@ -97,46 +85,49 @@ for report_type, table, celery_task in [
             "outlook": safe(report.get("outlook")),
         }
 
-    # 🟢 HISTORIE (Fix: return [{label, value}])
     @router.get(f"/{report_type}_report/history")
-    async def get_history(limit: int = 7, tbl=table):
-        return fetch_report(tbl, limit=limit, as_options=True)
+    async def get_history(limit: int = 10):
+        return fetch_report(table, limit=limit, as_options=True)
 
-    # 🟢 OP DATUM
     @router.get(f"/{report_type}_report/{{date}}")
-    async def get_by_date(date: str, tbl=table):
+    async def get_by_date(date: str):
         try:
             datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(status_code=400, detail="Ongeldige datum. Gebruik formaat YYYY-MM-DD")
-        report = fetch_report(tbl, date=date)
+        report = fetch_report(table, date=date)
         if not report:
             raise HTTPException(status_code=404, detail="Geen rapport gevonden")
         return report
 
-    # 🟢 EXPORT PDF
     @router.get(f"/{report_type}_report/export/pdf")
-    async def export_pdf(date: str = Query(default=None), tbl=table):
+    async def export_pdf(date: str = Query(default=None)):
         if date:
             try:
                 datetime.strptime(date, "%Y-%m-%d")
             except ValueError:
                 raise HTTPException(status_code=400, detail="Ongeldige datum. Gebruik formaat YYYY-MM-DD")
-        report = fetch_report(tbl, date=date)
+        report = fetch_report(table, date=date)
         if not report:
             raise HTTPException(status_code=404, detail="Geen rapport beschikbaar")
         pdf_output = export_report_pdf(report)
-        filename = f"{rt}rapport_{report['report_date']}.pdf"
+        filename = f"{report_type}_report_{report['report_date']}.pdf"
         return StreamingResponse(pdf_output, media_type="application/pdf", headers={
             "Content-Disposition": f"attachment; filename={filename}"
         })
 
-    # 🟢 GENEREREN
     @router.post(f"/{report_type}_report/generate")
-    async def generate_report(task=celery_task):
+    async def generate_report():
         try:
-            t = task.delay()
+            t = celery_task.delay()
             return {"message": f"{report_type.capitalize()}rapport wordt gegenereerd", "task_id": t.id}
         except Exception as e:
-            logger.error(f"❌ RAP06: Fout bij starten Celery-task ({report_type}): {e}")
+            logger.error(f"\u274c RAP_GEN: Fout bij starten Celery-task ({report_type}): {e}")
             raise HTTPException(status_code=500, detail=str(e))
+
+
+# 🔁 Voeg routes toe voor elk type
+create_report_routes("daily", "daily_reports", generate_daily_report)
+create_report_routes("weekly", "weekly_reports", generate_weekly_report)
+create_report_routes("monthly", "monthly_reports", generate_monthly_report)
+create_report_routes("quarterly", "quarterly_reports", generate_quarterly_report)
