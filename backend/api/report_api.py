@@ -17,6 +17,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+# ✅ Zorg dat velden altijd een string zijn
+def sanitize_field(val):
+    if val is None:
+        return ""
+    elif isinstance(val, (dict, list)):
+        return str(val)
+    return str(val)
+
+
 def fetch_report(table: str, date: str = None, limit: int = 1, as_options=False):
     conn = get_db_connection()
     if not conn:
@@ -37,7 +46,7 @@ def fetch_report(table: str, date: str = None, limit: int = 1, as_options=False)
         else:
             return [r[0].isoformat() for r in rows]
     except Exception as e:
-        logger.error(f"\u274c RAP_FETCH: Fout bij ophalen {table}: {e}")
+        logger.error(f"❌ RAP_FETCH: Fout bij ophalen {table}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
@@ -45,25 +54,24 @@ def fetch_report(table: str, date: str = None, limit: int = 1, as_options=False)
 
 def export_report_pdf(report: dict):
     structured = {
-        "summary": report.get("btc_summary", ""),
-        "macro": report.get("macro_summary", ""),
-        "technical": report.get("setup_checklist", ""),
-        "setups": report.get("priorities", ""),
-        "strategy": report.get("wyckoff_analysis", ""),
-        "recommendation": report.get("recommendations", ""),
-        "conclusion": report.get("conclusion", ""),
-        "outlook": report.get("outlook", ""),
+        "summary": sanitize_field(report.get("btc_summary")),
+        "macro": sanitize_field(report.get("macro_summary")),
+        "technical": sanitize_field(report.get("setup_checklist")),
+        "setups": sanitize_field(report.get("priorities")),
+        "strategy": sanitize_field(report.get("wyckoff_analysis")),
+        "recommendation": sanitize_field(report.get("recommendations")),
+        "conclusion": sanitize_field(report.get("conclusion")),
+        "outlook": sanitize_field(report.get("outlook")),
     }
     return generate_pdf_report(structured)
 
 
-# Helper om routes aan te maken
-
+# ✅ Maak routes voor elk type rapport
 def create_report_routes(report_type: str, table: str, celery_task):
     @router.get(f"/{report_type}_report/latest")
     async def get_latest():
         report = fetch_report(table)
-        return report or {}
+        return {k: sanitize_field(v) for k, v in report.items()} if report else {}
 
     @router.get(f"/{report_type}_report/summary")
     async def get_summary():
@@ -71,18 +79,16 @@ def create_report_routes(report_type: str, table: str, celery_task):
         if not report:
             raise HTTPException(status_code=404, detail="Geen samenvatting beschikbaar")
 
-        def safe(val): return val or "Niet beschikbaar"
-
         return {
             "report_date": report["report_date"].isoformat() if report.get("report_date") else "onbekend",
-            "btc_summary": safe(report.get("btc_summary")),
-            "macro_summary": safe(report.get("macro_summary")),
-            "setup_checklist": safe(report.get("setup_checklist")),
-            "priorities": safe(report.get("priorities")),
-            "wyckoff_analysis": safe(report.get("wyckoff_analysis")),
-            "recommendations": safe(report.get("recommendations")),
-            "conclusion": safe(report.get("conclusion")),
-            "outlook": safe(report.get("outlook")),
+            "btc_summary": sanitize_field(report.get("btc_summary")),
+            "macro_summary": sanitize_field(report.get("macro_summary")),
+            "setup_checklist": sanitize_field(report.get("setup_checklist")),
+            "priorities": sanitize_field(report.get("priorities")),
+            "wyckoff_analysis": sanitize_field(report.get("wyckoff_analysis")),
+            "recommendations": sanitize_field(report.get("recommendations")),
+            "conclusion": sanitize_field(report.get("conclusion")),
+            "outlook": sanitize_field(report.get("outlook")),
         }
 
     @router.get(f"/{report_type}_report/history")
@@ -95,10 +101,12 @@ def create_report_routes(report_type: str, table: str, celery_task):
             datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(status_code=400, detail="Ongeldige datum. Gebruik formaat YYYY-MM-DD")
+
         report = fetch_report(table, date=date)
         if not report:
             raise HTTPException(status_code=404, detail="Geen rapport gevonden")
-        return report
+
+        return {k: sanitize_field(v) for k, v in report.items()}
 
     @router.get(f"/{report_type}_report/export/pdf")
     async def export_pdf(date: str = Query(default=None)):
@@ -107,9 +115,11 @@ def create_report_routes(report_type: str, table: str, celery_task):
                 datetime.strptime(date, "%Y-%m-%d")
             except ValueError:
                 raise HTTPException(status_code=400, detail="Ongeldige datum. Gebruik formaat YYYY-MM-DD")
+
         report = fetch_report(table, date=date)
         if not report:
             raise HTTPException(status_code=404, detail="Geen rapport beschikbaar")
+
         pdf_output = export_report_pdf(report)
         filename = f"{report_type}_report_{report['report_date']}.pdf"
         return StreamingResponse(pdf_output, media_type="application/pdf", headers={
@@ -122,11 +132,11 @@ def create_report_routes(report_type: str, table: str, celery_task):
             t = celery_task.delay()
             return {"message": f"{report_type.capitalize()}rapport wordt gegenereerd", "task_id": t.id}
         except Exception as e:
-            logger.error(f"\u274c RAP_GEN: Fout bij starten Celery-task ({report_type}): {e}")
+            logger.error(f"❌ RAP_GEN: Fout bij starten Celery-task ({report_type}): {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
 
-# 🔁 Voeg routes toe voor elk type
+# 🔁 Voeg routes toe voor elk type rapport
 create_report_routes("daily", "daily_reports", generate_daily_report)
 create_report_routes("weekly", "weekly_reports", generate_weekly_report)
 create_report_routes("monthly", "monthly_reports", generate_monthly_report)
