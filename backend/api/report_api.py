@@ -17,8 +17,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-# ⬇️ Helper voor rapport ophalen (laatste, op datum of datumlijst)
-def fetch_report(table: str, date: str = None, limit: int = 1):
+# ⬇️ Helper voor rapport ophalen
+def fetch_report(table: str, date: str = None, limit: int = 1, as_options=False):
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Geen databaseverbinding")
@@ -26,15 +26,17 @@ def fetch_report(table: str, date: str = None, limit: int = 1):
         cur = conn.cursor()
         if date:
             cur.execute(f"SELECT * FROM {table} WHERE report_date = %s", (date,))
-        elif limit == 1:
-            cur.execute(f"SELECT * FROM {table} ORDER BY report_date DESC LIMIT 1")
         else:
-            cur.execute(f"SELECT report_date FROM {table} ORDER BY report_date DESC LIMIT %s", (limit,))
+            cur.execute(f"SELECT * FROM {table} ORDER BY report_date DESC LIMIT %s", (limit,))
         rows = cur.fetchall()
+
+        if as_options:
+            return [{"label": r[0].isoformat(), "value": r[0].isoformat()} for r in rows]
+
         if limit == 1:
             return dict(zip([desc[0] for desc in cur.description], rows[0])) if rows else None
         else:
-            return [{"label": r[0].isoformat(), "value": r[0].isoformat()} for r in rows]
+            return [r[0].isoformat() for r in rows]
     except Exception as e:
         logger.error(f"❌ RAP_FETCH: Fout bij ophalen {table}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -42,7 +44,7 @@ def fetch_report(table: str, date: str = None, limit: int = 1):
         conn.close()
 
 
-# ⬇️ Helper voor PDF-export
+# ⬇️ Helper voor PDF
 def export_report_pdf(report: dict):
     structured = {
         "summary": report.get("btc_summary", ""),
@@ -57,7 +59,7 @@ def export_report_pdf(report: dict):
     return generate_pdf_report(structured)
 
 
-# ✅ Dynamisch per rapporttype (daily, weekly, monthly, quarterly)
+# ✅ Endpoints per rapporttype (daily, weekly, monthly, quarterly)
 for report_type, table, celery_task in [
     ("daily",     "daily_reports",     generate_daily_report),
     ("weekly",    "weekly_reports",    generate_weekly_report),
@@ -65,13 +67,15 @@ for report_type, table, celery_task in [
     ("quarterly", "quarterly_reports", generate_quarterly_report),
 ]:
 
-    # 🟢 Laatste rapport
+    # 🟢 LAATSTE
     @router.get(f"/{report_type}_report/latest")
     async def get_latest_report(rt=report_type, tbl=table):
         report = fetch_report(tbl)
-        return report or {}
+        if not report:
+            return {}
+        return report
 
-    # 🟢 Samenvatting ophalen
+    # 🟢 SAMENVATTING
     @router.get(f"/{report_type}_report/summary")
     async def get_summary(rt=report_type, tbl=table):
         report = fetch_report(tbl)
@@ -93,12 +97,12 @@ for report_type, table, celery_task in [
             "outlook": safe(report.get("outlook")),
         }
 
-    # 🟢 Historie ophalen (lijst met datums)
+    # 🟢 HISTORIE (Fix: return [{label, value}])
     @router.get(f"/{report_type}_report/history")
     async def get_history(limit: int = 7, tbl=table):
-        return fetch_report(tbl, limit=limit)
+        return fetch_report(tbl, limit=limit, as_options=True)
 
-    # 🟢 Rapport op datum ophalen
+    # 🟢 OP DATUM
     @router.get(f"/{report_type}_report/{{date}}")
     async def get_by_date(date: str, tbl=table):
         try:
@@ -110,9 +114,9 @@ for report_type, table, celery_task in [
             raise HTTPException(status_code=404, detail="Geen rapport gevonden")
         return report
 
-    # 🟢 Exporteren naar PDF
+    # 🟢 EXPORT PDF
     @router.get(f"/{report_type}_report/export/pdf")
-    async def export_pdf(date: str = Query(default=None), rt=report_type, tbl=table):
+    async def export_pdf(date: str = Query(default=None), tbl=table):
         if date:
             try:
                 datetime.strptime(date, "%Y-%m-%d")
@@ -127,7 +131,7 @@ for report_type, table, celery_task in [
             "Content-Disposition": f"attachment; filename={filename}"
         })
 
-    # 🟢 Rapport genereren (trigger Celery)
+    # 🟢 GENEREREN
     @router.post(f"/{report_type}_report/generate")
     async def generate_report(task=celery_task):
         try:
