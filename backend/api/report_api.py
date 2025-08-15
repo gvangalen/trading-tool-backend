@@ -32,14 +32,19 @@ def fetch_report(table: str, date: str = None, limit: int = 1, as_options=False)
         raise HTTPException(status_code=500, detail="Geen databaseverbinding")
     try:
         cur = conn.cursor()
+
+        # 🔁 Datumlijst ophalen (alleen report_date)
+        if as_options:
+            cur.execute(f"SELECT report_date FROM {table} ORDER BY report_date DESC LIMIT %s", (limit,))
+            rows = cur.fetchall()
+            return [{"label": r[0].isoformat(), "value": r[0].isoformat()} for r in rows]
+
+        # 🎯 Specifiek rapport ophalen
         if date:
             cur.execute(f"SELECT * FROM {table} WHERE report_date = %s", (date,))
         else:
             cur.execute(f"SELECT * FROM {table} ORDER BY report_date DESC LIMIT %s", (limit,))
         rows = cur.fetchall()
-
-        if as_options:
-            return [{"label": r[0].isoformat(), "value": r[0].isoformat()} for r in rows]
 
         if limit == 1:
             return dict(zip([desc[0] for desc in cur.description], rows[0])) if rows else None
