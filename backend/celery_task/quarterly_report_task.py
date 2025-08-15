@@ -11,6 +11,15 @@ from backend.utils.db import get_db_connection
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def sanitize_field(val):
+    if val is None:
+        return ""
+    if isinstance(val, (dict, list)):
+        return str(val)
+    return str(val)
+
+
 def fetch_monthly_reports_for_quarter():
     conn = get_db_connection()
     if not conn:
@@ -35,6 +44,7 @@ def fetch_monthly_reports_for_quarter():
         return []
     finally:
         conn.close()
+
 
 def save_quarterly_report_to_db(date, report_data):
     conn = get_db_connection()
@@ -76,6 +86,7 @@ def save_quarterly_report_to_db(date, report_data):
     finally:
         conn.close()
 
+
 @shared_task(name="celery_task.quarterly_report_task.generate_quarterly_report")
 def generate_quarterly_report():
     logger.info("📊 Start genereren kwartaalrapport...")
@@ -83,10 +94,10 @@ def generate_quarterly_report():
     monthly_reports = fetch_monthly_reports_for_quarter()
     if not monthly_reports:
         logger.warning("⚠️ Geen maandrapporten beschikbaar voor deze periode.")
-        return
+        return {"status": "no_data"}
 
     quarter_summary = "📆 Kwartaaloverzicht:\n\n" + "\n\n".join(
-        [f"{r[0]}:\n{r[1]}" for r in monthly_reports]
+        [f"{r[0]}:\n{sanitize_field(r[1])}" for r in monthly_reports]
     )
     top_performance = "Setup X leverde in april en mei samen +25% rendement op."
     major_mistake = "In juni werd volume overschat tijdens CPI-week – trade mislukte."
@@ -100,20 +111,29 @@ def generate_quarterly_report():
     today = datetime.now(timezone("UTC")).date()
 
     report_data = {
-        "quarter_summary": quarter_summary,
-        "top_performance": top_performance,
-        "major_mistake": major_mistake,
-        "ai_reflection": ai_reflection,
-        "future_outlook": future_outlook,
+        "quarter_summary": sanitize_field(quarter_summary),
+        "top_performance": sanitize_field(top_performance),
+        "major_mistake": sanitize_field(major_mistake),
+        "ai_reflection": sanitize_field(ai_reflection),
+        "future_outlook": sanitize_field(future_outlook),
     }
 
-    # Backup JSON
+    # 💾 JSON-backup in backend/backups
     try:
-        with open(f"quarterly_report_{today}.json", "w") as f:
+        backup_dir = "backend/backups"
+        os.makedirs(backup_dir, exist_ok=True)
+        backup_path = os.path.join(backup_dir, f"quarterly_report_{today}.json")
+        with open(backup_path, "w") as f:
             json.dump(report_data, f, indent=2)
-        logger.info(f"🧾 Backup opgeslagen als quarterly_report_{today}.json")
+        logger.info(f"🧾 Backup opgeslagen: {backup_path}")
     except Exception as e:
         logger.warning(f"⚠️ Backup json maken mislukt: {e}")
 
-    save_quarterly_report_to_db(today, report_data)
-    return report_data
+    success = save_quarterly_report_to_db(today, report_data)
+
+    return {
+        "status": "ok" if success else "db_failed",
+        "date": str(today),
+        "records": len(monthly_reports),
+        "report_data": report_data
+    }
