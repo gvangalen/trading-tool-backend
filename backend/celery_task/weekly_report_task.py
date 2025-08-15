@@ -7,9 +7,19 @@ from celery import shared_task
 
 from backend.utils.db import get_db_connection
 
-# Logging
+# Logging instellen
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def sanitize_field(val):
+    """Zorgt dat alle velden stringbaar zijn en geen fouten geven bij join of dump."""
+    if val is None:
+        return ""
+    if isinstance(val, (dict, list)):
+        return str(val)
+    return str(val)
+
 
 def fetch_daily_reports_for_week():
     conn = get_db_connection()
@@ -36,6 +46,7 @@ def fetch_daily_reports_for_week():
         return []
     finally:
         conn.close()
+
 
 def save_weekly_report_to_db(date, report_data):
     conn = get_db_connection()
@@ -77,6 +88,7 @@ def save_weekly_report_to_db(date, report_data):
     finally:
         conn.close()
 
+
 @shared_task(name="celery_task.weekly_report_task.generate_weekly_report")
 def generate_weekly_report():
     logger.info("📅 Start genereren van weekrapport...")
@@ -84,15 +96,17 @@ def generate_weekly_report():
     daily_reports = fetch_daily_reports_for_week()
     if not daily_reports:
         logger.warning("⚠️ Geen daily reports beschikbaar voor deze week.")
-        return
+        return {"status": "no_data"}
 
-    # Simpele verwerking
+    # 🔍 Simpele samenvatting op basis van btc_summary
     week_summary = "Overzicht van week:\n" + "\n\n".join(
-        [f"{r[0]}:\n{r[1]}" for r in daily_reports])  # btc_summary
+        [f"{r[0]}:\n{sanitize_field(r[1])}" for r in daily_reports]
+    )
+
     best_setup = "Setup A – breakout gaf +15% rendement op woensdag."
     missed_opportunity = "Setup C werd niet geactiveerd door lage volatiliteit, maar had potentieel."
 
-    # AI-reflectie (placeholder – later vervangen door echte AI-oproep)
+    # 🧠 AI-reflectie (later vervangen door echte AI)
     ai_reflection = (
         "Deze week was de RSI vaak oversold terwijl volume achterbleef. "
         "De breakout-strategieën werkten goed in combinatie met macro-bullish sentiment. "
@@ -101,25 +115,33 @@ def generate_weekly_report():
     )
 
     outlook = "Volgende week mogelijk voortzetting bullish trend zolang macro en volume dit ondersteunen."
-
     today = datetime.now(timezone("UTC")).date()
 
     report_data = {
-        "week_summary": week_summary,
-        "best_setup": best_setup,
-        "missed_opportunity": missed_opportunity,
-        "ai_reflection": ai_reflection,
-        "outlook": outlook,
+        "week_summary": sanitize_field(week_summary),
+        "best_setup": sanitize_field(best_setup),
+        "missed_opportunity": sanitize_field(missed_opportunity),
+        "ai_reflection": sanitize_field(ai_reflection),
+        "outlook": sanitize_field(outlook),
     }
 
-    # Backup JSON
+    # 💾 JSON-backup opslaan in eigen map
     try:
-        with open(f"weekly_report_{today}.json", "w") as f:
+        backup_dir = "backend/backups"
+        os.makedirs(backup_dir, exist_ok=True)
+        backup_path = os.path.join(backup_dir, f"weekly_report_{today}.json")
+        with open(backup_path, "w") as f:
             json.dump(report_data, f, indent=2)
-        logger.info(f"🧾 Backup opgeslagen als weekly_report_{today}.json")
+        logger.info(f"🧾 Backup opgeslagen: {backup_path}")
     except Exception as e:
         logger.warning(f"⚠️ Backup json maken mislukt: {e}")
 
-    # Opslaan in DB
-    save_weekly_report_to_db(today, report_data)
-    return report_data
+    # 📥 Opslaan in DB
+    success = save_weekly_report_to_db(today, report_data)
+
+    return {
+        "status": "ok" if success else "db_failed",
+        "date": str(today),
+        "records": len(daily_reports),
+        "report_data": report_data
+    }
