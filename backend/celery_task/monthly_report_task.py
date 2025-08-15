@@ -11,6 +11,15 @@ from backend.utils.db import get_db_connection
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+def sanitize_field(val):
+    if val is None:
+        return ""
+    if isinstance(val, (dict, list)):
+        return str(val)
+    return str(val)
+
+
 def fetch_weekly_reports_for_month():
     conn = get_db_connection()
     if not conn:
@@ -35,6 +44,7 @@ def fetch_weekly_reports_for_month():
         return []
     finally:
         conn.close()
+
 
 def save_monthly_report_to_db(date, report_data):
     conn = get_db_connection()
@@ -68,7 +78,7 @@ def save_monthly_report_to_db(date, report_data):
                 report_data.get("outlook"),
             ))
             conn.commit()
-        logger.info("✅ Maandrapport succesvol opgeslagen in de database.")
+        logger.info("✅ Maandrapport succesvol opgeslagen.")
         return True
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan maandrapport: {e}")
@@ -76,18 +86,18 @@ def save_monthly_report_to_db(date, report_data):
     finally:
         conn.close()
 
+
 @shared_task(name="celery_task.monthly_report_task.generate_monthly_report")
 def generate_monthly_report():
-    logger.info("📆 Start genereren van maandrapport...")
+    logger.info("📆 Start genereren maandrapport...")
 
     weekly_reports = fetch_weekly_reports_for_month()
     if not weekly_reports:
-        logger.warning("⚠️ Geen weekly reports beschikbaar voor deze maand.")
-        return
+        logger.warning("⚠️ Geen weekly reports beschikbaar.")
+        return {"status": "no_data"}
 
-    # Samenvatting genereren
     month_summary = "📅 Samenvatting van de maand:\n\n" + "\n\n".join(
-        [f"{r[0]}:\n{r[1]}" for r in weekly_reports]
+        [f"{r[0]}:\n{sanitize_field(r[1])}" for r in weekly_reports]
     )
     best_setup = "Setup B werkte meerdere keren goed op momentum reversal."
     biggest_mistake = "Verkeerde inschatting van macro-data tijdens FOMC week zorgde voor verlies."
@@ -101,20 +111,29 @@ def generate_monthly_report():
     today = datetime.now(timezone("UTC")).date()
 
     report_data = {
-        "month_summary": month_summary,
-        "best_setup": best_setup,
-        "biggest_mistake": biggest_mistake,
-        "ai_reflection": ai_reflection,
-        "outlook": outlook,
+        "month_summary": sanitize_field(month_summary),
+        "best_setup": sanitize_field(best_setup),
+        "biggest_mistake": sanitize_field(biggest_mistake),
+        "ai_reflection": sanitize_field(ai_reflection),
+        "outlook": sanitize_field(outlook),
     }
 
-    # Backup JSON
+    # 💾 JSON-backup in backend/backups
     try:
-        with open(f"monthly_report_{today}.json", "w") as f:
+        backup_dir = "backend/backups"
+        os.makedirs(backup_dir, exist_ok=True)
+        backup_path = os.path.join(backup_dir, f"monthly_report_{today}.json")
+        with open(backup_path, "w") as f:
             json.dump(report_data, f, indent=2)
-        logger.info(f"🧾 Backup opgeslagen als monthly_report_{today}.json")
+        logger.info(f"🧾 Backup opgeslagen: {backup_path}")
     except Exception as e:
         logger.warning(f"⚠️ Backup json maken mislukt: {e}")
 
-    save_monthly_report_to_db(today, report_data)
-    return report_data
+    success = save_monthly_report_to_db(today, report_data)
+
+    return {
+        "status": "ok" if success else "db_failed",
+        "date": str(today),
+        "records": len(weekly_reports),
+        "report_data": report_data
+    }
