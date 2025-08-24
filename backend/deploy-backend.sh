@@ -25,12 +25,10 @@ pip install --user -r backend/requirements.txt || {
   exit 1
 }
 
-echo "💀 Stop oude backend..."
-if pm2 list | grep -q backend; then
-  pm2 delete backend || echo "⚠️ Kon oude backend niet stoppen (misschien al gestopt)."
-else
-  echo "ℹ️ Geen bestaand backend-proces actief."
-fi
+echo "💀 Stop oude PM2-processen..."
+pm2 delete backend || echo "⚠️ Backend niet actief"
+pm2 delete celery || echo "⚠️ Celery worker niet actief"
+pm2 delete celery-beat || echo "⚠️ Celery beat niet actief"
 
 echo "🌱 Laad .env bestand..."
 if [ -f backend/.env ]; then
@@ -42,7 +40,7 @@ else
   exit 1
 fi
 
-echo "🚀 Start nieuwe backend met ingeladen variabelen..."
+echo "🚀 Start nieuwe backend..."
 pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
   --name backend \
@@ -64,6 +62,23 @@ pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
     exit 1
   }
 
+echo "🚀 Start Celery worker..."
+pm2 start backend/celery_task/celery_app.py \
+  --interpreter python3 \
+  --name celery \
+  --cwd ~/trading-tool-backend \
+  --env CELERY_BROKER_URL="$CELERY_BROKER_URL" \
+  --env CELERY_RESULT_BACKEND="$CELERY_RESULT_BACKEND" \
+  --env API_BASE_URL="$API_BASE_URL"
+
+echo "⏰ Start Celery Beat scheduler..."
+pm2 start backend/celery_task/celery_beat.py \
+  --interpreter python3 \
+  --name celery-beat \
+  --cwd ~/trading-tool-backend \
+  --env CELERY_BROKER_URL="$CELERY_BROKER_URL" \
+  --env CELERY_RESULT_BACKEND="$CELERY_RESULT_BACKEND"
+
 echo "💾 Sla PM2-config op voor herstart..."
 pm2 save
 
@@ -71,3 +86,5 @@ echo "🌍 Controleer geladen AI_MODE in PM2:"
 pm2 show backend | grep AI_MODE || echo "⚠️ AI_MODE niet gevonden in PM2 env."
 
 echo "✅ Backend draait op http://localhost:5002"
+echo "✅ Celery worker actief als 'celery'"
+echo "✅ Celery beat actief als 'celery-beat'"
