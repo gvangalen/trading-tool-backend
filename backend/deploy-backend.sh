@@ -66,13 +66,23 @@ echo "🚀 Start Celery worker via PM2..."
 pm2 start "celery -A backend.celery_task.celery_app worker --loglevel=info" \
   --interpreter bash \
   --name celery \
-  --cwd ~/trading-tool-backend
+  --cwd ~/trading-tool-backend \
+  --env CELERY_BROKER_URL="$CELERY_BROKER_URL" \
+  --env CELERY_RESULT_BACKEND="$CELERY_RESULT_BACKEND" || {
+    echo "❌ Start celery worker mislukt."
+    exit 1
+  }
 
 echo "⏰ Start Celery Beat via PM2..."
 pm2 start "celery -A backend.celery_task.celery_app beat --loglevel=info" \
   --interpreter bash \
   --name celery-beat \
-  --cwd ~/trading-tool-backend
+  --cwd ~/trading-tool-backend \
+  --env CELERY_BROKER_URL="$CELERY_BROKER_URL" \
+  --env CELERY_RESULT_BACKEND="$CELERY_RESULT_BACKEND" || {
+    echo "❌ Start celery beat mislukt."
+    exit 1
+  }
 
 echo "💾 Sla PM2-config op voor herstart..."
 pm2 save
