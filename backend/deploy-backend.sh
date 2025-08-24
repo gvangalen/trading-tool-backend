@@ -62,22 +62,17 @@ pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
     exit 1
   }
 
-echo "🚀 Start Celery worker..."
-pm2 start backend/celery_task/celery_app.py \
-  --interpreter python3 \
+echo "🚀 Start Celery worker via PM2..."
+pm2 start "celery -A backend.celery_task.celery_app worker --loglevel=info" \
+  --interpreter bash \
   --name celery \
-  --cwd ~/trading-tool-backend \
-  --env CELERY_BROKER_URL="$CELERY_BROKER_URL" \
-  --env CELERY_RESULT_BACKEND="$CELERY_RESULT_BACKEND" \
-  --env API_BASE_URL="$API_BASE_URL"
+  --cwd ~/trading-tool-backend
 
-echo "⏰ Start Celery Beat scheduler..."
-pm2 start backend/celery_task/celery_beat.py \
-  --interpreter python3 \
+echo "⏰ Start Celery Beat via PM2..."
+pm2 start "celery -A backend.celery_task.celery_app beat --loglevel=info" \
+  --interpreter bash \
   --name celery-beat \
-  --cwd ~/trading-tool-backend \
-  --env CELERY_BROKER_URL="$CELERY_BROKER_URL" \
-  --env CELERY_RESULT_BACKEND="$CELERY_RESULT_BACKEND"
+  --cwd ~/trading-tool-backend
 
 echo "💾 Sla PM2-config op voor herstart..."
 pm2 save
