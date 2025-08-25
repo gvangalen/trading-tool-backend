@@ -63,7 +63,7 @@ pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
   }
 
 echo "🚀 Start Celery worker via PM2 (script)..."
-pm2 start "./start_celery_worker.sh" \
+pm2 start "./backend/start_celery_worker.sh" \
   --interpreter bash \
   --name celery \
   --cwd ~/trading-tool-backend || {
@@ -72,7 +72,7 @@ pm2 start "./start_celery_worker.sh" \
   }
 
 echo "⏰ Start Celery Beat via PM2 (script)..."
-pm2 start "./start_celery_beat.sh" \
+pm2 start "./backend/start_celery_beat.sh" \
   --interpreter bash \
   --name celery-beat \
   --cwd ~/trading-tool-backend || {
