@@ -90,6 +90,6 @@ def test_cors():
     return {"success": True, "message": "CORS werkt correct vanaf frontend."}
 
 # ✅ Lokale run-optie
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=5002, reload=True)
+#if __name__ == "__main__":
+#    import uvicorn
+ #   uvicorn.run("main:app", host="0.0.0.0", port=5002, reload=True)
