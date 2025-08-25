@@ -6,12 +6,16 @@ from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
 
+# ✅ .env forceren laden
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
+
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ✅ API-config
-API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
+# ✅ API-config (wordt nu correct uit .env geladen)
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
@@ -39,7 +43,7 @@ def safe_request(url, method="POST", payload=None):
 def fetch_market_data():
     logger.info("📈 Taak gestart: marktdata ophalen en opslaan...")
     try:
-        url = urljoin(API_BASE_URL, "/save_market_data")
+        url = urljoin(API_BASE_URL, "/market_data/save")  # Let op juiste route
         response = safe_request(url)
         logger.info(f"✅ Marktdata opgeslagen: {response}")
     except RetryError:
