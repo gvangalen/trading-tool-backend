@@ -44,38 +44,26 @@ echo "🚀 Start nieuwe backend..."
 pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
   --name backend \
-  --cwd ~/trading-tool-backend/backend \
-  --env PYTHONPATH=./ \
-  --env ENV=production \
-  --env DB_HOST="$DB_HOST" \
-  --env DB_PORT="$DB_PORT" \
-  --env DB_NAME="$DB_NAME" \
-  --env DB_USER="$DB_USER" \
-  --env DB_PASS="$DB_PASS" \
-  --env CELERY_BROKER_URL="$CELERY_BROKER_URL" \
-  --env CELERY_RESULT_BACKEND="$CELERY_RESULT_BACKEND" \
-  --env OPENAI_API_KEY="$OPENAI_API_KEY" \
-  --env AI_MODE="$AI_MODE" \
-  --env API_BASE_URL="$API_BASE_URL" \
-  --env LOG_LEVEL="$LOG_LEVEL" || {
+  --cwd backend \
+  --env-file backend/.env || {
     echo "❌ Start backend mislukt."
     exit 1
   }
 
 echo "🚀 Start Celery worker via PM2 (script)..."
-pm2 start "./backend/start_celery_worker.sh" \
+pm2 start "start_celery_worker.sh" \
   --interpreter bash \
   --name celery \
-  --cwd ~/trading-tool-backend || {
+  --cwd backend || {
     echo "❌ Start celery worker mislukt."
     exit 1
   }
 
 echo "⏰ Start Celery Beat via PM2 (script)..."
-pm2 start "./backend/start_celery_beat.sh" \
+pm2 start "start_celery_beat.sh" \
   --interpreter bash \
   --name celery-beat \
-  --cwd ~/trading-tool-backend || {
+  --cwd backend || {
     echo "❌ Start celery beat mislukt."
     exit 1
   }
