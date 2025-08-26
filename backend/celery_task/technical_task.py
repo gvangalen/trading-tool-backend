@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ✅ Configuratie
-API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
