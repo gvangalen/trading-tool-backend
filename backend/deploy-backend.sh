@@ -21,14 +21,14 @@ git reset --hard origin/main || {
 
 echo "🐍 Installeer Python dependencies..."
 pip install --user -r backend/requirements.txt || {
-  echo "❌ Installeren dependencies mislukt."
+  echo "❌ Installeren van requirements.txt mislukt."
   exit 1
 }
 
 echo "💀 Stop oude PM2-processen..."
-pm2 delete backend || echo "⚠️ Backend niet actief"
-pm2 delete celery || echo "⚠️ Celery worker niet actief"
-pm2 delete celery-beat || echo "⚠️ Celery beat niet actief"
+pm2 delete backend || echo "⚠️ Process 'backend' niet actief"
+pm2 delete celery || echo "⚠️ Process 'celery' niet actief"
+pm2 delete celery-beat || echo "⚠️ Process 'celery-beat' niet actief"
 
 echo "🌱 Laad .env bestand..."
 if [ -f backend/.env ]; then
@@ -40,7 +40,7 @@ else
   exit 1
 fi
 
-echo "🚀 Start nieuwe backend..."
+echo "🚀 Start nieuwe backend (FastAPI via Uvicorn)..."
 pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
   --name backend \
@@ -50,12 +50,12 @@ pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
     exit 1
   }
 
-echo "🚀 Start Celery worker via PM2 (script)..."
+echo "🚀 Start Celery Worker via PM2 (script)..."
 pm2 start "start_celery_worker.sh" \
   --interpreter bash \
   --name celery \
   --cwd backend || {
-    echo "❌ Start celery worker mislukt."
+    echo "❌ Start Celery worker mislukt."
     exit 1
   }
 
@@ -64,16 +64,18 @@ pm2 start "start_celery_beat.sh" \
   --interpreter bash \
   --name celery-beat \
   --cwd backend || {
-    echo "❌ Start celery beat mislukt."
+    echo "❌ Start Celery Beat mislukt."
     exit 1
   }
 
-echo "💾 Sla PM2-config op voor herstart..."
+echo "💾 Sla PM2-processen op (voor reboot/herstart)..."
 pm2 save
 
-echo "🌍 Controleer geladen AI_MODE in PM2:"
+echo ""
+echo "✅ Alles draait! Statusoverzicht:"
+echo "🌐 Backend: http://localhost:5002"
+echo "⚙️  Celery worker: pm2 logs celery"
+echo "⏰ Celery beat:   pm2 logs celery-beat"
+echo ""
+echo "🧠 Controleer of AI_MODE is geladen:"
 pm2 show backend | grep AI_MODE || echo "⚠️ AI_MODE niet gevonden in PM2 env."
-
-echo "✅ Backend draait op http://localhost:5002"
-echo "✅ Celery worker actief als 'celery'"
-echo "✅ Celery beat actief als 'celery-beat'"
