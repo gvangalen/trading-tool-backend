@@ -40,12 +40,11 @@ else
   exit 1
 fi
 
-echo "🚀 Start nieuwe backend (FastAPI via Uvicorn)..."
+echo "🚀 Start nieuwe backend..."
 pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
   --name backend \
-  --cwd backend \
-  --env-file backend/.env || {
+  --cwd backend || {
     echo "❌ Start backend mislukt."
     exit 1
   }
