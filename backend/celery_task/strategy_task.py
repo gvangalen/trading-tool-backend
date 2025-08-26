@@ -12,7 +12,7 @@ from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 HEADERS = {"Content-Type": "application/json"}
 TIMEOUT = 10
 
