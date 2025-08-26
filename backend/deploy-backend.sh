@@ -49,37 +49,16 @@ else
 fi
 
 echo "🚀 Start backend (FastAPI/Uvicorn)..."
-pm2 start "uvicorn main:app --host 0.0.0.0 --port 5002" \
-  --interpreter python3 \
-  --name backend \
-  --cwd backend \
-  --output "$LOG_DIR/backend.log" \
-  --error "$LOG_DIR/backend.err.log" || {
-    echo "❌ Start backend mislukt."
-    exit 1
-  }
+pm2 start bash --name backend --cwd backend --output "$LOG_DIR/backend.log" --error "$LOG_DIR/backend.err.log" -- \
+  -c "uvicorn main:app --host 0.0.0.0 --port 5002"
 
 echo "🚀 Start Celery Worker..."
-pm2 start "celery -A backend.celery_task.celery_app worker --loglevel=info" \
-  --interpreter python3 \
-  --name celery \
-  --cwd backend \
-  --output "$LOG_DIR/celery.log" \
-  --error "$LOG_DIR/celery.err.log" || {
-    echo "❌ Start celery worker mislukt."
-    exit 1
-  }
+pm2 start bash --name celery --cwd backend --output "$LOG_DIR/celery.log" --error "$LOG_DIR/celery.err.log" -- \
+  -c "celery -A backend.celery_task.celery_app worker --loglevel=info"
 
 echo "⏰ Start Celery Beat..."
-pm2 start "celery -A backend.celery_task.celery_app beat --loglevel=info" \
-  --interpreter python3 \
-  --name celery-beat \
-  --cwd backend \
-  --output "$LOG_DIR/celery-beat.log" \
-  --error "$LOG_DIR/celery-beat.err.log" || {
-    echo "❌ Start celery beat mislukt."
-    exit 1
-  }
+pm2 start bash --name celery-beat --cwd backend --output "$LOG_DIR/celery-beat.log" --error "$LOG_DIR/celery-beat.err.log" -- \
+  -c "celery -A backend.celery_task.celery_app beat --loglevel=info"
 
 echo "💾 PM2 configuratie opslaan (voor reboot)..."
 pm2 save
