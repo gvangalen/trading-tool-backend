@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 
 # ✅ Basisinstellingen
-API_BASE_URL = os.getenv("API_BASE_URL", "http://market_dashboard-api:5002/api")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 HEADERS = {"Content-Type": "application/json"}
 TIMEOUT = 10  # seconden
 
