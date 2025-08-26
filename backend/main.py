@@ -7,13 +7,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# ✅ Laad .env voor AI_MODE, API keys etc.
+# ✅ .env inladen
 load_dotenv()
 
-# ✅ Voeg rootpad toe aan sys.path zodat backend modules werken
+# ✅ Rootpad toevoegen voor correcte backend imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# ✅ Logging instellen op DEBUG met duidelijke formatter
+# ✅ Logging configureren
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ✅ FastAPI app
+# ✅ FastAPI app aanmaken
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
 # ✅ CORS-configuratie
@@ -33,13 +33,13 @@ origins = [
 ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,  # ✅ fix: gebruik correcte lijst
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ✅ Router loader met logging en fallback
+# ✅ Veilige router-loader
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
@@ -73,23 +73,18 @@ safe_include("backend.api.ai.ai_status_api", "ai_status_api")
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
 
-
 # ✅ Health check
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API is running"}
 
-# ✅ Debug: print alle routes
-print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
-for route in app.routes:
-    print(f"{route.path} - methods: {route.methods}")
-print()
-
+# ✅ CORS test endpoint
 @app.get("/api/test-cors")
 def test_cors():
     return {"success": True, "message": "CORS werkt correct vanaf frontend."}
 
-# ✅ Lokale run-optie
-#if __name__ == "__main__":
-#    import uvicorn
- #   uvicorn.run("main:app", host="0.0.0.0", port=5002, reload=True)
+# ✅ Debug: alle routes loggen
+print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
+for route in app.routes:
+    print(f"{route.path} - methods: {route.methods}")
+print()
