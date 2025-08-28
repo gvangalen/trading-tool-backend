@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from backend.utils.db import get_db_connection  # ✅ juist
 from backend.config.settings import COINGECKO_URL, VOLUME_URL, ASSETS
 import httpx
+from datetime import datetime
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -130,3 +131,72 @@ async def delete_market_asset(id: int):
     except Exception as e:
         logger.error(f"❌ [delete] Fout bij verwijderen: {e}")
         raise HTTPException(status_code=500, detail="❌ Kon asset niet verwijderen.")
+
+
+@router.get("/market_data/7d")
+async def get_market_data_7d():
+    """
+    Haalt de 7-daagse historische marktdata op uit market_data_7d.
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, symbol, date, open, high, low, close, change, created_at
+            FROM market_data_7d
+            ORDER BY symbol, date DESC
+        """)
+        rows = cur.fetchall()
+        conn.close()
+
+        data = [{
+            "id": r[0],
+            "symbol": r[1],
+            "date": r[2].isoformat(),
+            "open": float(r[3]) if r[3] else None,
+            "high": float(r[4]) if r[4] else None,
+            "low": float(r[5]) if r[5] else None,
+            "close": float(r[6]) if r[6] else None,
+            "change": float(r[7]) if r[7] else None,
+            "created_at": r[8].isoformat() if r[8] else None
+        } for r in rows]
+
+        return data
+
+    except Exception as e:
+        logger.error(f"❌ [7d] Fout bij ophalen market_data_7d: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van 7-daagse data.")
+
+
+@router.get("/market_data/forward")
+async def get_market_forward_returns():
+    """
+    Haalt de forward returns op uit market_forward_returns.
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, symbol, period, start_date, end_date, change, avg_daily, created_at
+            FROM market_forward_returns
+            ORDER BY symbol, period, start_date DESC
+        """)
+        rows = cur.fetchall()
+        conn.close()
+
+        data = [{
+            "id": r[0],
+            "symbol": r[1],
+            "period": r[2],
+            "start": r[3].isoformat(),
+            "end": r[4].isoformat(),
+            "change": float(r[5]) if r[5] else None,
+            "avgDaily": float(r[6]) if r[6] else None,
+            "created_at": r[7].isoformat() if r[7] else None
+        } for r in rows]
+
+        return data
+
+    except Exception as e:
+        logger.error(f"❌ [forward] Fout bij ophalen market_forward_returns: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van forward returns.")
