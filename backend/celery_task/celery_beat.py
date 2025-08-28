@@ -28,9 +28,9 @@ celery = Celery(
         "backend.celery_task.setup_task",
         "backend.celery_task.strategy_task",
         "backend.celery_task.daily_report_task",
-        "backend.celery_task.weekly_report_task",     # ✅ Nieuw
-        "backend.celery_task.monthly_report_task",    # ✅ Nieuw
-        "backend.celery_task.quarterly_report_task",  # ✅ Nieuw
+        "backend.celery_task.weekly_report_task",
+        "backend.celery_task.monthly_report_task",
+        "backend.celery_task.quarterly_report_task",
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task",
     ]
@@ -82,6 +82,14 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
         "schedule": crontab(hour=8, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
+    "save_market_data_7d": {
+        "task": "backend.celery_task.market_task.save_market_data_7d",
+        "schedule": crontab(hour=1, minute=30),  # Dagelijks om 01:30 UTC
+    },
+    "save_forward_returns": {
+        "task": "backend.celery_task.market_task.save_forward_returns",
+        "schedule": crontab(hour=2, minute=0),  # Dagelijks om 02:00 UTC
+    },
 }
 
 # ✅ Taken expliciet importeren (voor debug/logging)
@@ -92,9 +100,9 @@ try:
     import backend.celery_task.setup_task
     import backend.celery_task.strategy_task
     import backend.celery_task.daily_report_task
-    import backend.celery_task.weekly_report_task      # ✅ Nieuw
-    import backend.celery_task.monthly_report_task     # ✅ Nieuw
-    import backend.celery_task.quarterly_report_task   # ✅ Nieuw
+    import backend.celery_task.weekly_report_task
+    import backend.celery_task.monthly_report_task
+    import backend.celery_task.quarterly_report_task
     import backend.ai_tasks.trading_advice_task
     import backend.ai_tasks.validation_task
     logger.info("✅ Alle Celery taken succesvol geïmporteerd.")
