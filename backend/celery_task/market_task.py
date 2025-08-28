@@ -52,3 +52,32 @@ def fetch_market_data():
     except Exception as e:
         logger.error(f"❌ Onverwachte fout tijdens fetch_market_data: {e}")
         logger.error(traceback.format_exc())
+
+@shared_task(name="celery_task.market_task.save_market_data_7d")
+def save_market_data_7d():
+    logger.info("📊 Taak gestart: 7-daagse candles ophalen en opslaan...")
+    try:
+        url = urljoin(API_BASE_URL, "/market_data/7d/save")
+        response = safe_request(url)
+        logger.info(f"✅ 7d marktdata opgeslagen: {response}")
+    except RetryError:
+        logger.error("❌ Alle retries mislukt voor save_market_data_7d.")
+        logger.error(traceback.format_exc())
+    except Exception as e:
+        logger.error(f"❌ Onverwachte fout tijdens save_market_data_7d: {e}")
+        logger.error(traceback.format_exc())
+
+
+@shared_task(name="celery_task.market_task.save_forward_returns")
+def save_forward_returns():
+    logger.info("📈 Taak gestart: forward returns berekenen en opslaan...")
+    try:
+        url = urljoin(API_BASE_URL, "/market_data/forward/save")
+        response = safe_request(url)
+        logger.info(f"✅ Forward returns opgeslagen: {response}")
+    except RetryError:
+        logger.error("❌ Alle retries mislukt voor save_forward_returns.")
+        logger.error(traceback.format_exc())
+    except Exception as e:
+        logger.error(f"❌ Onverwachte fout tijdens save_forward_returns: {e}")
+        logger.error(traceback.format_exc())
