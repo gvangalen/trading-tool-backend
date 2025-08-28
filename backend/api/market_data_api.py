@@ -200,3 +200,90 @@ async def get_market_forward_returns():
     except Exception as e:
         logger.error(f"❌ [forward] Fout bij ophalen market_forward_returns: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van forward returns.")
+
+
+@router.post("/market_data/7d/save")
+async def save_market_data_7d(data: list[dict]):
+    """
+    Verwacht een lijst met dicts:
+    [
+        {
+            "symbol": "BTC",
+            "date": "2025-08-27",
+            "open": 26500,
+            "high": 27000,
+            "low": 26000,
+            "close": 26800,
+            "change": 1.2
+        },
+        ...
+    ]
+    """
+    if not data:
+        raise HTTPException(status_code=400, detail="❌ Geen data ontvangen.")
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        for row in data:
+            cur.execute("""
+                INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            """, (
+                row["symbol"],
+                row["date"],
+                row["open"],
+                row["high"],
+                row["low"],
+                row["close"],
+                row["change"]
+            ))
+        conn.commit()
+        conn.close()
+        logger.info(f"✅ [7d/save] {len(data)} rijen opgeslagen in market_data_7d.")
+        return {"message": f"✅ {len(data)} rijen opgeslagen."}
+    except Exception as e:
+        logger.error(f"❌ [7d/save] Fout bij opslaan: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij opslaan van 7-daagse data.")
+
+@router.post("/market_data/forward/save")
+async def save_forward_returns(data: list[dict]):
+    """
+    Verwacht een lijst met dicts:
+    [
+        {
+            "symbol": "BTC",
+            "period": "Week",
+            "start_date": "2025-08-20",
+            "end_date": "2025-08-27",
+            "change": 3.4,
+            "avg_daily": 0.48
+        },
+        ...
+    ]
+    """
+    if not data:
+        raise HTTPException(status_code=400, detail="❌ Geen data ontvangen.")
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        for row in data:
+            cur.execute("""
+                INSERT INTO market_forward_returns (symbol, period, start_date, end_date, change, avg_daily, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+            """, (
+                row["symbol"],
+                row["period"],
+                row["start_date"],
+                row["end_date"],
+                row["change"],
+                row["avg_daily"]
+            ))
+        conn.commit()
+        conn.close()
+        logger.info(f"✅ [forward/save] {len(data)} rijen opgeslagen in market_forward_returns.")
+        return {"message": f"✅ {len(data)} rijen opgeslagen."}
+    except Exception as e:
+        logger.error(f"❌ [forward/save] Fout bij opslaan: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij opslaan van forward returns.")
