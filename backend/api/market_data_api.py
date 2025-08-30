@@ -287,3 +287,44 @@ async def save_forward_returns(data: list[dict]):
     except Exception as e:
         logger.error(f"❌ [forward/save] Fout bij opslaan: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij opslaan van forward returns.")
+
+@router.get("/market_data/returns/{periode}")
+async def get_market_return_by_period(periode: str):
+    """
+    Haal forward return data op voor een bepaalde periode: week, maand, kwartaal, jaar
+    Uit market_forward_returns
+    """
+    valid_periods = ["week", "maand", "kwartaal", "jaar"]
+    if periode.lower() not in valid_periods:
+        raise HTTPException(status_code=400, detail="❌ Ongeldige periode.")
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, symbol, period, start_date, end_date, change, avg_daily, created_at
+            FROM market_forward_returns
+            WHERE LOWER(period) = %s AND symbol = 'BTC'
+            ORDER BY start_date DESC
+            LIMIT 1
+        """, (periode.lower(),))
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="❌ Geen data gevonden.")
+
+        return {
+            "id": row[0],
+            "symbol": row[1],
+            "period": row[2],
+            "start": row[3].isoformat(),
+            "end": row[4].isoformat(),
+            "change": float(row[5]) if row[5] else None,
+            "avgDaily": float(row[6]) if row[6] else None,
+            "created_at": row[7].isoformat() if row[7] else None
+        }
+
+    except Exception as e:
+        logger.error(f"❌ [returns/{periode}] Fout bij ophalen returns: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van returns.")
