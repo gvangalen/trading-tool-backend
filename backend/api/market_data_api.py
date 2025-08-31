@@ -133,7 +133,7 @@ async def delete_market_asset(id: int):
         raise HTTPException(status_code=500, detail="❌ Kon asset niet verwijderen.")
 
 
-@router.get("/7d")
+@router.get("/market_data/7d")
 async def get_market_data_7d():
     """
     Haalt de 7-daagse historische marktdata op uit market_data_7d.
