@@ -7,6 +7,7 @@ from datetime import datetime
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+logger.info("🚀 market_data_api.py geladen – alle marktroutes zijn actief.")  # ✅ LOG TOEGEVOEGD
 
 
 @router.get("/market_data/list")
