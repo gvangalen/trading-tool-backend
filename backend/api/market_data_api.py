@@ -189,16 +189,20 @@ async def get_market_data_7d():
 @router.get("/market_data/forward")
 async def get_market_forward_returns():
     """
-    Haalt de forward returns op uit market_forward_returns.
+    Haalt de forward returns op uit market_forward_returns – alleen voor BTC.
     """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+
+        # ✅ Alleen BTC records ophalen
         cur.execute("""
             SELECT id, symbol, period, start_date, end_date, change, avg_daily, created_at
             FROM market_forward_returns
-            ORDER BY symbol, period, start_date DESC
+            WHERE symbol = 'BTC'
+            ORDER BY period, start_date DESC
         """)
+
         rows = cur.fetchall()
         conn.close()
 
@@ -208,8 +212,8 @@ async def get_market_forward_returns():
             "period": r[2],
             "start": r[3].isoformat(),
             "end": r[4].isoformat(),
-            "change": float(r[5]) if r[5] else None,
-            "avgDaily": float(r[6]) if r[6] else None,
+            "change": float(r[5]) if r[5] is not None else None,
+            "avgDaily": float(r[6]) if r[6] is not None else None,
             "created_at": r[7].isoformat() if r[7] else None
         } for r in rows]
 
@@ -218,7 +222,6 @@ async def get_market_forward_returns():
     except Exception as e:
         logger.error(f"❌ [forward] Fout bij ophalen market_forward_returns: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van forward returns.")
-
 
 @router.post("/market_data/7d/save")
 async def save_market_data_7d(data: list[dict]):
