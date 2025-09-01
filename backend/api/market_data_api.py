@@ -107,6 +107,23 @@ async def save_market_data():
     finally:
         conn.close()
 
+@router.get("/market_data/btc/latest")
+def get_latest_btc_price():
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, symbol, price, change_24h, volume, timestamp
+            FROM market_data
+            WHERE symbol = 'BTC'
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """)
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Geen BTC data gevonden")
+        keys = ['id', 'symbol', 'price', 'change_24h', 'volume', 'timestamp']
+        return dict(zip(keys, row))
+
 
 @router.get("/market_data/interpreted")
 async def fetch_interpreted_data():
