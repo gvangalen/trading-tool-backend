@@ -153,7 +153,8 @@ async def delete_market_asset(id: int):
 @router.get("/market_data/7d")
 async def get_market_data_7d():
     """
-    Haalt de 7-daagse historische marktdata op uit market_data_7d.
+    Haalt de 7-daagse historische BTC-marktdata op uit market_data_7d.
+    Alleen voor symbol 'BTC'.
     """
     try:
         conn = get_db_connection()
@@ -161,7 +162,8 @@ async def get_market_data_7d():
         cur.execute("""
             SELECT id, symbol, date, open, high, low, close, change, created_at
             FROM market_data_7d
-            ORDER BY symbol, date DESC
+            WHERE symbol = 'BTC'
+            ORDER BY date DESC
         """)
         rows = cur.fetchall()
         conn.close()
@@ -183,7 +185,6 @@ async def get_market_data_7d():
     except Exception as e:
         logger.error(f"❌ [7d] Fout bij ophalen market_data_7d: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van 7-daagse data.")
-
 
 @router.get("/market_data/forward")
 async def get_market_forward_returns():
