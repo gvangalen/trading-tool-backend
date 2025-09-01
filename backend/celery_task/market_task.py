@@ -19,6 +19,9 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
+# ✅ Log de geladen API_BASE_URL (debug)
+logger.info(f"🌍 API_BASE_URL geladen als: {API_BASE_URL}")
+
 # ✅ Robuuste API-call met retry & logging
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=5, max=20), reraise=True)
 def safe_request(url, method="POST", payload=None):
@@ -66,7 +69,6 @@ def save_market_data_7d():
     except Exception as e:
         logger.error(f"❌ Onverwachte fout tijdens save_market_data_7d: {e}")
         logger.error(traceback.format_exc())
-
 
 @shared_task(name="celery_task.market_task.save_forward_returns")
 def save_forward_returns():
