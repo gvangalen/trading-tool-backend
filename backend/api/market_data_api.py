@@ -108,6 +108,43 @@ async def save_market_data():
     finally:
         conn.close()
 
+@router.post("/market_data/btc/7d/fill")
+async def fill_btc_7day_data():
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "❌ Geen databaseverbinding"}
+
+    today = datetime.utcnow().date()
+
+    try:
+        with conn.cursor() as cur:
+            for i in range(7):
+                date = today - timedelta(days=i)
+
+                # Check of record al bestaat
+                cur.execute("SELECT 1 FROM market_data_7d WHERE symbol = 'BTC' AND date = %s", (date,))
+                if cur.fetchone():
+                    continue  # ⏭️ Skip als al bestaat
+
+                # 🔁 Dummy data – later vervangen door echte API
+                open_price = 27000 + i * 100
+                high_price = open_price + 500
+                low_price = open_price - 500
+                close_price = open_price + 200
+                change = round((close_price - open_price) / open_price * 100, 2)
+
+                cur.execute("""
+                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, ('BTC', date, open_price, high_price, low_price, close_price, change))
+
+            conn.commit()
+
+        return {"status": "✅ BTC 7-daagse data succesvol gevuld"}
+
+    except Exception as e:
+        return {"error": f"❌ Fout bij vullen data: {str(e)}"}
+
 @router.get("/market_data/btc/latest")
 def get_latest_btc_price():
     conn = get_db_connection()
