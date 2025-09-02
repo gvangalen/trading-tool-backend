@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from backend.utils.db import get_db_connection  # ✅ juist
 from backend.config.settings import COINGECKO_URL, VOLUME_URL, ASSETS
 import httpx
-from datetime import datetime
+from datetime import datetime, timedelta
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
