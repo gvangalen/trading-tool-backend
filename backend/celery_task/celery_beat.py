@@ -33,6 +33,7 @@ celery = Celery(
         "backend.celery_task.quarterly_report_task",
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task",
+        "backend.celery_task.btc_price_history_task",  # ✅ NIEUW: toegevoegd voor BTC-prijs
     ]
 )
 
@@ -84,11 +85,15 @@ celery.conf.beat_schedule = {
     },
     "save_market_data_7d": {
         "task": "backend.celery_task.market_task.save_market_data_7d",
-        "schedule": crontab(hour=1, minute=30),  # Dagelijks om 01:30 UTC
+        "schedule": crontab(hour=1, minute=30),
     },
     "save_forward_returns": {
         "task": "backend.celery_task.market_task.save_forward_returns",
-        "schedule": crontab(hour=2, minute=0),  # Dagelijks om 02:00 UTC
+        "schedule": crontab(hour=2, minute=0),
+    },
+    "fetch_btc_daily_price": {  # ✅ NIEUW: BTC-prijs ophalen
+        "task": "backend.celery_task.btc_price_history_task.fetch_btc_history_daily",
+        "schedule": crontab(hour=1, minute=10),
     },
 }
 
@@ -105,6 +110,7 @@ try:
     import backend.celery_task.quarterly_report_task
     import backend.ai_tasks.trading_advice_task
     import backend.ai_tasks.validation_task
+    import backend.celery_task.btc_price_history_task  # ✅ toevoegen voor expliciete import
     logger.info("✅ Alle Celery taken succesvol geïmporteerd.")
 except ImportError:
     logger.error("❌ Fout bij importeren van Celery taken:")
