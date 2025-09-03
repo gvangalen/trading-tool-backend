@@ -24,9 +24,13 @@ celery.autodiscover_tasks([
     "backend.celery_task.setup_task",
     "backend.celery_task.strategy_task",
     "backend.celery_task.daily_report_task",
+    "backend.celery_task.weekly_report_task",       # ⬅️ Nieuw toegevoegd
+    "backend.celery_task.monthly_report_task",      # ⬅️ Nieuw toegevoegd
+    "backend.celery_task.quarterly_report_task",    # ⬅️ Nieuw toegevoegd
+    "backend.celery_task.btc_price_history_task",   # ⬅️ Nieuw toegevoegd
     "backend.ai_tasks.trading_advice_task",
     "backend.ai_tasks.validation_task"
 ])
 
-# ✅ Belangrijk: exporteer de app zodat `celery -A backend.celery_app worker --loglevel=info` werkt
+# ✅ Belangrijk: exporteer de app zodat `celery -A backend.celery_task.celery_app worker --loglevel=info` werkt
 app = celery
