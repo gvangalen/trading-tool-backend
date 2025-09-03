@@ -3,25 +3,29 @@ import logging
 import traceback
 import requests
 from urllib.parse import urljoin
+from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
-
-# ✅ .env forceren laden
 from dotenv import load_dotenv
+
+# ✅ .env laden
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 
-# ✅ Logging instellen
+# ✅ Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ✅ API-config
+# ✅ Config
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
+COINGECKO_URL = os.getenv("COINGECKO_URL")
+VOLUME_URL = os.getenv("VOLUME_URL")
+ASSETS_JSON = os.getenv("ASSETS_JSON", '{"BTC": "bitcoin"}')
+ASSETS = eval(ASSETS_JSON)  # ✅ omzetten naar dict
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
-logger.info(f"🌍 API_BASE_URL geladen als: {API_BASE_URL}")
 
-# ✅ Robuuste request-functie
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=5, max=20), reraise=True)
+# ✅ Robuuste request
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=30), reraise=True)
 def safe_request(url, method="POST", payload=None):
     try:
         response = requests.request(method, url, json=payload, headers=HEADERS, timeout=TIMEOUT)
@@ -29,57 +33,102 @@ def safe_request(url, method="POST", payload=None):
         logger.info(f"✅ API-call succesvol: {url}")
         try:
             return response.json()
-        except Exception:
-            logger.warning("⚠️ API-call gaf geen geldige JSON terug.")
-            return {"message": "Non-JSON response"}
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ RequestException bij {url}: {e}")
-        raise
+        except:
+            logger.warning("⚠️ Non-JSON response")
+            return {}
     except Exception as e:
-        logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
+        logger.error(f"❌ API-call fout: {e}")
         raise
 
-# ✅ Task: Live BTC marktdata opslaan
+
+# ✅ 1. Live BTC marktdata ophalen (prijs, RSI, volume, etc.)
 @shared_task(name="celery_task.market_task.fetch_market_data")
 def fetch_market_data():
-    logger.info("📈 Taak gestart: live BTC-marktdata ophalen...")
+    logger.info("📈 Start live marktdata ophalen...")
     try:
         url = urljoin(API_BASE_URL, "/market_data/save")
         response = safe_request(url)
-        logger.info(f"✅ Live marktdata opgeslagen: {response}")
+        logger.info(f"✅ Marktdata opgeslagen: {response}")
     except RetryError:
         logger.error("❌ Alle retries mislukt voor fetch_market_data.")
         logger.error(traceback.format_exc())
-    except Exception as e:
-        logger.error(f"❌ Onverwachte fout tijdens fetch_market_data: {e}")
-        logger.error(traceback.format_exc())
 
-# ✅ ✅ ✅ Task: Nieuwe route voor 7-daagse BTC data gebruiken!
+
+# ✅ 2. 7-daagse BTC-data vullen
 @shared_task(name="celery_task.market_task.save_market_data_7d")
 def save_market_data_7d():
-    logger.info("📊 Taak gestart: BTC 7-daagse marktdata vullen...")
+    logger.info("📊 Start vullen 7-daagse BTC-data...")
     try:
-        url = urljoin(API_BASE_URL, "/market_data/btc/7d/fill")  # ✅ nieuwe route!
+        url = urljoin(API_BASE_URL, "/market_data/btc/7d/fill")
         response = safe_request(url)
-        logger.info(f"✅ 7-daagse BTC marktdata gevuld: {response}")
+        logger.info(f"✅ 7d-data gevuld: {response}")
     except RetryError:
-        logger.error("❌ Alle retries mislukt voor save_market_data_7d.")
-        logger.error(traceback.format_exc())
-    except Exception as e:
-        logger.error(f"❌ Onverwachte fout tijdens save_market_data_7d: {e}")
+        logger.error("❌ Retries mislukt voor save_market_data_7d.")
         logger.error(traceback.format_exc())
 
-# ✅ Task: Forward returns berekenen
+
+# ✅ 3. Forward returns opslaan
 @shared_task(name="celery_task.market_task.save_forward_returns")
 def save_forward_returns():
-    logger.info("📈 Taak gestart: forward returns berekenen...")
+    logger.info("📈 Start berekenen forward returns...")
     try:
         url = urljoin(API_BASE_URL, "/market_data/forward/save")
         response = safe_request(url)
         logger.info(f"✅ Forward returns opgeslagen: {response}")
     except RetryError:
-        logger.error("❌ Alle retries mislukt voor save_forward_returns.")
+        logger.error("❌ Retries mislukt voor save_forward_returns.")
         logger.error(traceback.format_exc())
+
+
+# ✅ 4. Historische BTC-prijs ophalen (CoinGecko market_chart API)
+@shared_task(name="celery_task.market_task.fetch_btc_price_history")
+def fetch_btc_price_history():
+    logger.info("⏳ Start ophalen BTC-prijsgeschiedenis...")
+    try:
+        coingecko_id = ASSETS.get("BTC", "bitcoin")
+        url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart"
+        params = {"vs_currency": "usd", "days": "max"}
+
+        response = requests.get(url, params=params)
+        data = response.json()
+        prices = data.get("prices", [])
+        if not prices:
+            logger.warning("⚠️ Geen data van CoinGecko.")
+            return
+
+        # ⏬ API-call naar eigen backend voor opslaan
+        save_url = urljoin(API_BASE_URL, "/market_data/history/save")
+        payload = [{"date": datetime.utcfromtimestamp(ts / 1000).date().isoformat(), "price": round(price, 2)} for ts, price in prices]
+        logger.info(f"📝 Versturen {len(payload)} entries naar history endpoint...")
+
+        response = safe_request(save_url, method="POST", payload=payload)
+        logger.info(f"✅ Geschiedenis opgeslagen: {response}")
     except Exception as e:
-        logger.error(f"❌ Onverwachte fout tijdens save_forward_returns: {e}")
+        logger.error("❌ Fout tijdens ophalen historische BTC-data.")
+        logger.error(traceback.format_exc())
+
+
+# ✅ 5. Trigger maandrapport (optioneel)
+@shared_task(name="celery_task.market_task.trigger_monthly_report")
+def trigger_monthly_report():
+    logger.info("📅 Start maandrapport-trigger...")
+    try:
+        url = urljoin(API_BASE_URL, "/report/generate/monthly")
+        response = safe_request(url)
+        logger.info(f"✅ Maandrapport gestart: {response}")
+    except Exception as e:
+        logger.error("❌ Fout maandrapport: ")
+        logger.error(traceback.format_exc())
+
+
+# ✅ 6. Trigger kwartaalrapport (optioneel)
+@shared_task(name="celery_task.market_task.trigger_quarterly_report")
+def trigger_quarterly_report():
+    logger.info("📅 Start kwartaalrapport-trigger...")
+    try:
+        url = urljoin(API_BASE_URL, "/report/generate/quarterly")
+        response = safe_request(url)
+        logger.info(f"✅ Kwartaalrapport gestart: {response}")
+    except Exception as e:
+        logger.error("❌ Fout kwartaalrapport: ")
         logger.error(traceback.format_exc())
