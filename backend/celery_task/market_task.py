@@ -108,27 +108,3 @@ def fetch_btc_price_history():
         logger.error(traceback.format_exc())
 
 
-# ✅ 5. Trigger maandrapport (optioneel)
-@shared_task(name="celery_task.market_task.trigger_monthly_report")
-def trigger_monthly_report():
-    logger.info("📅 Start maandrapport-trigger...")
-    try:
-        url = urljoin(API_BASE_URL, "/report/generate/monthly")
-        response = safe_request(url)
-        logger.info(f"✅ Maandrapport gestart: {response}")
-    except Exception as e:
-        logger.error("❌ Fout maandrapport: ")
-        logger.error(traceback.format_exc())
-
-
-# ✅ 6. Trigger kwartaalrapport (optioneel)
-@shared_task(name="celery_task.market_task.trigger_quarterly_report")
-def trigger_quarterly_report():
-    logger.info("📅 Start kwartaalrapport-trigger...")
-    try:
-        url = urljoin(API_BASE_URL, "/report/generate/quarterly")
-        response = safe_request(url)
-        logger.info(f"✅ Kwartaalrapport gestart: {response}")
-    except Exception as e:
-        logger.error("❌ Fout kwartaalrapport: ")
-        logger.error(traceback.format_exc())
