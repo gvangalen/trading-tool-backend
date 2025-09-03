@@ -11,15 +11,17 @@ logger.info("🚀 market_data_api.py geladen – alle marktroutes zijn actief.")
 
 
 @router.get("/market_data/list")
-async def list_market_data():
+async def list_market_data(since_minutes: int = Query(default=1440, description="Alleen data van de laatste X minuten")):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        time_threshold = datetime.utcnow() - timedelta(minutes=since_minutes)
         cur.execute("""
             SELECT id, symbol, price, open, high, low, change_24h, volume, timestamp
             FROM market_data
+            WHERE timestamp >= %s
             ORDER BY timestamp DESC
-        """)
+        """, (time_threshold,))
         rows = cur.fetchall()
         conn.close()
 
@@ -39,7 +41,6 @@ async def list_market_data():
     except Exception as e:
         logger.error(f"❌ [list] DB-fout: {e}")
         raise HTTPException(status_code=500, detail="❌ Kon marktdata niet ophalen.")
-
 
 @router.post("/market_data/save")
 async def save_market_data():
@@ -165,7 +166,60 @@ def get_latest_btc_price():
 
 @router.get("/market_data/interpreted")
 async def fetch_interpreted_data():
-    return {"message": "✅ Interpretatiedata ophalen werkt (nog geen scoreberekening geïmplementeerd)."}
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT symbol, price, change_24h, volume, timestamp
+            FROM market_data
+            WHERE symbol = 'BTC'
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """)
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Geen BTC data gevonden")
+
+        price = row[1]
+        change = row[2]
+        volume = row[3]
+
+        score = 0
+        advies = []
+
+        if change > 2:
+            score += 2
+            advies.append("Sterke prijsstijging – mogelijk momentum")
+        elif change < -2:
+            score -= 2
+            advies.append("Prijsdaling – verhoogde voorzichtigheid")
+
+        if volume and volume > 10_000_000_000:
+            score += 1
+            advies.append("Hoog volume – bevestigt beweging")
+
+        interpretatie = "Neutraal"
+        if score >= 2:
+            interpretatie = "Bullish"
+        elif score <= -2:
+            interpretatie = "Bearish"
+
+        return {
+            "symbol": row[0],
+            "timestamp": row[4].isoformat(),
+            "price": price,
+            "change_24h": change,
+            "volume": volume,
+            "score": score,
+            "advies": advies,
+            "interpretatie": interpretatie
+        }
+    except Exception as e:
+        logger.error(f"❌ [interpreted] Fout bij interpretatie: {e}")
+        raise HTTPException(status_code=500, detail="❌ Interpretatiefout.")
 
 
 @router.get("/market_data/test")
@@ -263,28 +317,22 @@ async def get_market_forward_returns():
 
 @router.post("/market_data/7d/save")
 async def save_market_data_7d(data: list[dict]):
-    """
-    Verwacht een lijst met dicts:
-    [
-        {
-            "symbol": "BTC",
-            "date": "2025-08-27",
-            "open": 26500,
-            "high": 27000,
-            "low": 26000,
-            "close": 26800,
-            "change": 1.2
-        },
-        ...
-    ]
-    """
     if not data:
         raise HTTPException(status_code=400, detail="❌ Geen data ontvangen.")
 
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        inserted = 0
+
         for row in data:
+            cur.execute("""
+                SELECT 1 FROM market_data_7d
+                WHERE symbol = %s AND date = %s
+            """, (row["symbol"], row["date"]))
+            if cur.fetchone():
+                continue
+
             cur.execute("""
                 INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
@@ -297,37 +345,34 @@ async def save_market_data_7d(data: list[dict]):
                 row["close"],
                 row["change"]
             ))
+            inserted += 1
+
         conn.commit()
         conn.close()
-        logger.info(f"✅ [7d/save] {len(data)} rijen opgeslagen in market_data_7d.")
-        return {"message": f"✅ {len(data)} rijen opgeslagen."}
+        logger.info(f"✅ [7d/save] {inserted} rijen opgeslagen.")
+        return {"message": f"✅ {inserted} rijen opgeslagen."}
     except Exception as e:
         logger.error(f"❌ [7d/save] Fout bij opslaan: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij opslaan van 7-daagse data.")
 
 @router.post("/market_data/forward/save")
 async def save_forward_returns(data: list[dict]):
-    """
-    Verwacht een lijst met dicts:
-    [
-        {
-            "symbol": "BTC",
-            "period": "Week",
-            "start_date": "2025-08-20",
-            "end_date": "2025-08-27",
-            "change": 3.4,
-            "avg_daily": 0.48
-        },
-        ...
-    ]
-    """
     if not data:
         raise HTTPException(status_code=400, detail="❌ Geen data ontvangen.")
 
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        inserted = 0
+
         for row in data:
+            cur.execute("""
+                SELECT 1 FROM market_forward_returns
+                WHERE symbol = %s AND period = %s AND start_date = %s AND end_date = %s
+            """, (row["symbol"], row["period"], row["start_date"], row["end_date"]))
+            if cur.fetchone():
+                continue
+
             cur.execute("""
                 INSERT INTO market_forward_returns (symbol, period, start_date, end_date, change, avg_daily, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, NOW())
@@ -339,13 +384,16 @@ async def save_forward_returns(data: list[dict]):
                 row["change"],
                 row["avg_daily"]
             ))
+            inserted += 1
+
         conn.commit()
         conn.close()
-        logger.info(f"✅ [forward/save] {len(data)} rijen opgeslagen in market_forward_returns.")
-        return {"message": f"✅ {len(data)} rijen opgeslagen."}
+        logger.info(f"✅ [forward/save] {inserted} rijen opgeslagen.")
+        return {"message": f"✅ {inserted} rijen opgeslagen."}
     except Exception as e:
         logger.error(f"❌ [forward/save] Fout bij opslaan: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij opslaan van forward returns.")
+
 
 @router.get("/market_data/returns/{periode}")
 async def get_market_return_by_period(periode: str):
