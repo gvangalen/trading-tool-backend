@@ -63,7 +63,7 @@ echo "🚀 Start Celery Worker..."
 pm2 start "celery -A backend.celery_task.celery_app worker --loglevel=info" \
   --interpreter python3 \
   --name celery \
-  --cwd "$BACKEND_DIR" \   # ✅ hier aangepast
+  --cwd "$BACKEND_DIR" \
   --output "$LOG_DIR/celery.log" \
   --error "$LOG_DIR/celery.err.log" || {
     echo "❌ Start celery worker mislukt."
@@ -74,7 +74,7 @@ echo "⏰ Start Celery Beat..."
 pm2 start "celery -A backend.celery_task.celery_app beat --loglevel=info" \
   --interpreter python3 \
   --name celery-beat \
-  --cwd "$BACKEND_DIR" \   # ✅ hier aangepast
+  --cwd "$BACKEND_DIR" \
   --output "$LOG_DIR/celery-beat.log" \
   --error "$LOG_DIR/celery-beat.err.log" || {
     echo "❌ Start celery beat mislukt."
