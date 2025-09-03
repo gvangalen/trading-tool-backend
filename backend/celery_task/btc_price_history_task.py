@@ -15,10 +15,14 @@ PARAMS = {"vs_currency": "usd", "days": "max"}
 @shared_task(name="backend.celery_task.btc_price_history_task.fetch_btc_history")
 def fetch_btc_history():
     logger.info("📊 Start ophalen historische BTC-prijzen...")
+    logger.info(f"📡 Request: {COINGECKO_URL} met {PARAMS}")
     try:
         response = requests.get(COINGECKO_URL, params=PARAMS)
-        data = response.json()
+        if response.status_code != 200:
+            logger.error(f"❌ Foutcode {response.status_code} van CoinGecko: {response.text}")
+            return
 
+        data = response.json()
         prices = data.get("prices", [])
         if not prices:
             logger.warning("⚠️ Geen prijsdata ontvangen van CoinGecko.")
@@ -39,7 +43,7 @@ def fetch_btc_history():
                     logger.warning(f"⚠️ Skipped {date}: {e}")
 
             conn.commit()
-            logger.info(f"✅ {inserted} BTC-prijsrecords toegevoegd.")
+            logger.info(f"✅ {inserted} BTC-prijsrecords toegevoegd aan btc_price_history.")
     except Exception as e:
         logger.error("❌ Fout bij ophalen en opslaan van BTC-prijzen:")
         logger.error(traceback.format_exc())
