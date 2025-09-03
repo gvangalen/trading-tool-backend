@@ -61,7 +61,6 @@ pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
 
 echo "🚀 Start Celery Worker..."
 pm2 start "celery -A backend.celery_task.celery_app worker --loglevel=info" \
-  --interpreter python3 \
   --name celery \
   --cwd "$BACKEND_DIR" \
   --output "$LOG_DIR/celery.log" \
@@ -72,7 +71,6 @@ pm2 start "celery -A backend.celery_task.celery_app worker --loglevel=info" \
 
 echo "⏰ Start Celery Beat..."
 pm2 start "celery -A backend.celery_task.celery_app beat --loglevel=info" \
-  --interpreter python3 \
   --name celery-beat \
   --cwd "$BACKEND_DIR" \
   --output "$LOG_DIR/celery-beat.log" \
