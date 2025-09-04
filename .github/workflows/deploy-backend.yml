@@ -18,8 +18,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📦 Checkout code
+      - name: 📦 Checkout volledige repo (inclusief deploy-backend.sh)
         uses: actions/checkout@v3
+        with:
+          path: backend  # Zorg dat pad klopt
 
       - name: 📤 Upload nieuwste deploy-backend.sh naar server
         uses: appleboy/scp-action@v0.1.4
@@ -27,7 +29,7 @@ jobs:
           host: ${{ secrets.HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          source: "deploy-backend.sh"
+          source: "backend/deploy-backend.sh"  # <-- Correct pad gebruiken
           target: "~/trading-tool-backend/"
 
       - name: 🚀 SSH en voer script uit
