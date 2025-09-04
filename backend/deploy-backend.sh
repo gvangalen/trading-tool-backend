@@ -11,6 +11,10 @@ export NVM_DIR="$HOME/.nvm"
 source "$NVM_DIR/nvm.sh"
 export PATH="$NVM_DIR/versions/node/$(nvm current)/bin:$PATH"
 
+# 🧼 Optioneel: verwijder oude __pycache__ mappen
+echo "🧹 Verwijder oude __pycache__ mappen..."
+find "$BACKEND_DIR" -type d -name '__pycache__' -exec rm -rf {} +
+
 # 🛠 Maak logmap aan als die nog niet bestaat
 mkdir -p "$LOG_DIR"
 
@@ -48,8 +52,8 @@ else
   exit 1
 fi
 
-echo "🚀 Start backend (FastAPI/Uvicorn)..."
-pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
+echo "🚀 Start backend (FastAPI via python -m uvicorn)..."
+pm2 start "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
   --interpreter python3 \
   --name backend \
   --cwd "$BACKEND_DIR" \
