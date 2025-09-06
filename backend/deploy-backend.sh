@@ -40,21 +40,22 @@ pm2 delete backend || true
 pm2 delete celery || true
 pm2 delete celery-beat || true
 
-# 🔁 Korte pauze om te zorgen dat processen echt gestopt zijn
 sleep 2
 
-# 🚀 Start backend
+# ✅ ✅ ✅ FIX HIER: correcte backend-start
+echo "🚀 Start backend met Uvicorn via PM2..."
 pm2 start uvicorn \
   --name backend \
-  --interpreter python3 \
   --cwd "$BACKEND_DIR" \
+  --interpreter python3 \
   --output "$LOG_DIR/backend.log" \
   --error "$LOG_DIR/backend.err.log" \
   -- \
   backend.main:app --host 0.0.0.0 --port 5002
 
-# 🚀 Start celery worker
-pm2 start "$HOME/.local/bin/celery" \
+# ✅ FIX: gebruik expliciet pad naar celery (en juiste interpreter = none)
+echo "🚀 Start Celery Worker..."
+pm2 start "$(which celery)" \
   --name celery \
   --interpreter none \
   --cwd "$BACKEND_DIR" \
@@ -63,8 +64,8 @@ pm2 start "$HOME/.local/bin/celery" \
   -- \
   -A backend.celery_task.celery_app worker --loglevel=info
 
-# ⏰ Start celery beat
-pm2 start "$HOME/.local/bin/celery" \
+echo "⏰ Start Celery Beat..."
+pm2 start "$(which celery)" \
   --name celery-beat \
   --interpreter none \
   --cwd "$BACKEND_DIR" \
