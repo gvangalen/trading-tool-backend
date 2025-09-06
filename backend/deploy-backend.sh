@@ -6,7 +6,7 @@ BACKEND_DIR="$HOME/trading-tool-backend"
 ENV_FILE="$BACKEND_DIR/backend/.env"
 LOG_DIR="/var/log/pm2"
 
-# ✅ Pad fix
+# ✅ PATH fix
 export PATH="$HOME/.local/bin:$PATH"
 export NVM_DIR="$HOME/.nvm"
 source "$NVM_DIR/nvm.sh"
@@ -23,15 +23,10 @@ cd "$BACKEND_DIR"
 git fetch origin main
 git reset --hard origin/main
 
-# 🧪 Python deps
+# 🧪 Dependencies
 pip install --user -r backend/requirements.txt
 
-# 🔁 PM2 restart
-pm2 delete backend || true
-pm2 delete celery || true
-pm2 delete celery-beat || true
-
-# 🌱 Laad .env (voor Python omgevingsvariabelen)
+# 🧠 Load .env
 if [ -f "$ENV_FILE" ]; then
   set -o allexport
   source "$ENV_FILE"
@@ -41,28 +36,33 @@ else
   exit 1
 fi
 
-# ✅ Start backend
-pm2 start "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 5002 --reload" \
+# 🧯 Stop oude processen
+pm2 delete backend || true
+pm2 delete celery || true
+pm2 delete celery-beat || true
+
+# 🚀 Start backend (zonder reload!)
+pm2 start "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
   --name backend \
   --cwd "$BACKEND_DIR" \
   --interpreter python3 \
   --output "$LOG_DIR/backend.log" \
   --error "$LOG_DIR/backend.err.log"
 
-# ✅ Start Celery Worker
+# 🚀 Start celery worker (FIXED)
 pm2 start "$HOME/.local/bin/celery" \
   --name celery \
-  --interpreter python3 \
+  --interpreter none \
   --cwd "$BACKEND_DIR" \
   --output "$LOG_DIR/celery.log" \
   --error "$LOG_DIR/celery.err.log" \
   -- \
   -A backend.celery_task.celery_app worker --loglevel=info
 
-# ✅ Start Celery Beat
+# ⏰ Start celery beat (FIXED)
 pm2 start "$HOME/.local/bin/celery" \
   --name celery-beat \
-  --interpreter python3 \
+  --interpreter none \
   --cwd "$BACKEND_DIR" \
   --output "$LOG_DIR/celery-beat.log" \
   --error "$LOG_DIR/celery-beat.err.log" \
@@ -73,7 +73,7 @@ pm2 start "$HOME/.local/bin/celery" \
 pm2 save
 pm2 startup | grep sudo && echo "⚠️ Voer bovenstaande 'sudo' commando éénmalig uit voor autostart bij reboot"
 
-# ✅ Status en samenvatting
+# ✅ Status
 echo ""
 echo "✅ Alles draait nu:"
 pm2 status
@@ -84,5 +84,3 @@ echo "📄 Logs backend:  $LOG_DIR/backend.log"
 echo "📄 Logs celery:   $LOG_DIR/celery.log"
 echo "📄 Logs beat:     $LOG_DIR/celery-beat.log"
 echo ""
-echo "🧠 AI_MODE check:"
-pm2 show backend | grep AI_MODE || echo "⚠️ AI_MODE niet gevonden in PM2 env."
