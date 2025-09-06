@@ -15,7 +15,6 @@ export PATH="$NVM_DIR/versions/node/$(nvm current)/bin:$PATH"
 # 🧹 Opschonen
 echo "🧹 Verwijder oude __pycache__ mappen..."
 find "$BACKEND_DIR" -type d -name '__pycache__' -exec rm -rf {} +
-
 mkdir -p "$LOG_DIR"
 
 # 📥 Pull laatste code
@@ -41,15 +40,20 @@ pm2 delete backend || true
 pm2 delete celery || true
 pm2 delete celery-beat || true
 
-# 🚀 Start backend (zonder reload!)
-pm2 start "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
-  --name backend \
-  --cwd "$BACKEND_DIR" \
-  --interpreter python3 \
-  --output "$LOG_DIR/backend.log" \
-  --error "$LOG_DIR/backend.err.log"
+# 🔁 Korte pauze om te zorgen dat processen echt gestopt zijn
+sleep 2
 
-# 🚀 Start celery worker (FIXED)
+# 🚀 Start backend
+pm2 start uvicorn \
+  --name backend \
+  --interpreter python3 \
+  --cwd "$BACKEND_DIR" \
+  --output "$LOG_DIR/backend.log" \
+  --error "$LOG_DIR/backend.err.log" \
+  -- \
+  backend.main:app --host 0.0.0.0 --port 5002
+
+# 🚀 Start celery worker
 pm2 start "$HOME/.local/bin/celery" \
   --name celery \
   --interpreter none \
@@ -59,7 +63,7 @@ pm2 start "$HOME/.local/bin/celery" \
   -- \
   -A backend.celery_task.celery_app worker --loglevel=info
 
-# ⏰ Start celery beat (FIXED)
+# ⏰ Start celery beat
 pm2 start "$HOME/.local/bin/celery" \
   --name celery-beat \
   --interpreter none \
