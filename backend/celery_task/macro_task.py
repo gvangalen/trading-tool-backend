@@ -53,3 +53,59 @@ def save_macro_data_task(indicator, value, trend=None, interpretation=None, acti
     except Exception as e:
         logger.error(f"❌ Onverwachte fout bij opslaan macrodata: {e}")
         logger.error(traceback.format_exc())
+
+# ✅ Celery taak: Ophalen van macrodata (live API's)
+@shared_task(name="celery_task.macro_task.fetch_macro_data")
+def fetch_macro_data():
+    logger.info("🌍 Start ophalen macrodata...")
+
+    # ✅ 1. Fear & Greed Index
+    try:
+        response = requests.get("https://api.alternative.me/fng/")
+        data = response.json()
+        value = int(data["data"][0]["value"])
+        save_macro_data_task.delay(
+            indicator="Fear & Greed Index",
+            value=value,
+            trend=None,
+            interpretation=None,
+            action=None,
+            score=None
+        )
+        logger.info(f"✅ Fear & Greed opgeslagen: {value}")
+    except Exception as e:
+        logger.warning(f"❌ Fout bij Fear & Greed ophalen: {e}")
+
+    # ✅ 2. S&P500 (Yahoo Finance)
+    try:
+        sp_response = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/^GSPC?interval=1d&range=1d")
+        sp_data = sp_response.json()
+        price = sp_data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+        save_macro_data_task.delay(
+            indicator="S&P500",
+            value=round(price, 2),
+            trend=None,
+            interpretation=None,
+            action=None,
+            score=None
+        )
+        logger.info(f"✅ S&P500 opgeslagen: {price}")
+    except Exception as e:
+        logger.warning(f"❌ Fout bij S&P500 ophalen: {e}")
+
+    # ✅ 3. DXY (Yahoo Finance)
+    try:
+        dxy_response = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=1d")
+        dxy_data = dxy_response.json()
+        price = dxy_data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+        save_macro_data_task.delay(
+            indicator="DXY",
+            value=round(price, 2),
+            trend=None,
+            interpretation=None,
+            action=None,
+            score=None
+        )
+        logger.info(f"✅ DXY opgeslagen: {price}")
+    except Exception as e:
+        logger.warning(f"❌ Fout bij DXY ophalen: {e}")
