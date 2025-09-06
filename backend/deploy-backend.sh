@@ -41,8 +41,8 @@ else
   exit 1
 fi
 
-# 🚀 Start backend (✅ zonder --reload!)
-pm2 start "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
+# ✅ ✅ ✅ BELANGRIJK: gebruik juiste interpreter bij backend
+pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
   --name backend \
   --cwd "$BACKEND_DIR" \
   --interpreter python3 \
@@ -59,7 +59,7 @@ pm2 start celery \
   -- \
   -A backend.celery_task.celery_app worker --loglevel=info
 
-# ⏰ Start celery beat
+# 🚀 Start celery beat
 pm2 start celery \
   --name celery-beat \
   --interpreter python3 \
