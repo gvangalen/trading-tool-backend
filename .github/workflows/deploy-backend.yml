@@ -9,7 +9,7 @@ on:
       - '**.yml'
       - '**.txt'
       - '**.js'
-      - 'deploy-backend.sh'
+      - 'backend/deploy-backend.sh'
       - '.github/workflows/deploy-backend.yml'
 
 jobs:
@@ -21,6 +21,15 @@ jobs:
       - name: 📦 Checkout code
         uses: actions/checkout@v3
 
+      - name: 📤 Upload deploy-backend.sh naar server
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "backend/deploy-backend.sh"
+          target: "~/trading-tool-backend/backend/"
+
       - name: 🚀 SSH en draai deploy-backend.sh op server
         uses: appleboy/ssh-action@v1.0.0
         with:
@@ -29,7 +38,8 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             echo "🎯 Start remote deployment..."
-            cd ~/trading-tool-backend
-            git pull origin main
-            bash deploy-backend.sh
+            cd ~/trading-tool-backend/backend
+            chmod +x deploy-backend.sh
+            dos2unix deploy-backend.sh
+            ./deploy-backend.sh
             echo "✅ Deploy afgerond"
