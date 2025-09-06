@@ -5,10 +5,12 @@ import traceback
 from celery import Celery
 from celery.schedules import crontab
 
-# ✅ Zorg dat backend.* import werkt (ook vanuit root)
-sys.path.insert(0, os.path.abspath("."))
+# ✅ Veilige pad-toevoeging voor backend.* imports
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
-# ✅ Logging instellen
+# ✅ Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
