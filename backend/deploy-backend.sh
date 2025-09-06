@@ -41,15 +41,15 @@ else
   exit 1
 fi
 
-# 🚀 Start backend (✅ juiste cmd)
-pm2 start "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 5002 --reload" \
+# 🚀 Start backend (✅ zonder --reload!)
+pm2 start "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
   --name backend \
   --cwd "$BACKEND_DIR" \
   --interpreter python3 \
   --output "$LOG_DIR/backend.log" \
   --error "$LOG_DIR/backend.err.log"
 
-# 🚀 Start celery worker (🔁 FIXED versie)
+# 🚀 Start celery worker
 pm2 start celery \
   --name celery \
   --interpreter python3 \
@@ -59,7 +59,7 @@ pm2 start celery \
   -- \
   -A backend.celery_task.celery_app worker --loglevel=info
 
-# ⏰ Start celery beat (🔁 FIXED versie)
+# ⏰ Start celery beat
 pm2 start celery \
   --name celery-beat \
   --interpreter python3 \
