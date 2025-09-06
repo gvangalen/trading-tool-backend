@@ -7,16 +7,16 @@ ENV_FILE="$BACKEND_DIR/backend/.env"
 LOG_DIR="/var/log/pm2"
 
 # ✅ Zet juiste paden voor Celery + Node
-export PATH="$HOME/.local/bin:$PATH"  # Voor celery als pip install --user is gebruikt
+export PATH="$HOME/.local/bin:$PATH"
 export NVM_DIR="$HOME/.nvm"
 source "$NVM_DIR/nvm.sh"
 export PATH="$NVM_DIR/versions/node/$(nvm current)/bin:$PATH"
 
-# 🧼 Optioneel: verwijder oude __pycache__ mappen
+# 🧼 Verwijder oude __pycache__ mappen
 echo "🧹 Verwijder oude __pycache__ mappen..."
 find "$BACKEND_DIR" -type d -name '__pycache__' -exec rm -rf {} +
 
-# 🛠 Maak logmap aan als die nog niet bestaat
+# 🛠 Maak logmap aan
 mkdir -p "$LOG_DIR"
 
 echo "📁 Ga naar projectmap..."
@@ -53,50 +53,46 @@ else
   exit 1
 fi
 
-echo "🚀 Start backend (FastAPI via python -m uvicorn)..."
-pm2 start "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
-  --interpreter python3 \
+echo "🚀 Start backend (FastAPI via uvicorn)..."
+pm2 start uvicorn \
   --name backend \
+  --interpreter python3 \
   --cwd "$BACKEND_DIR" \
   --output "$LOG_DIR/backend.log" \
-  --error "$LOG_DIR/backend.err.log" || {
-    echo "❌ Start backend mislukt."
-    exit 1
-  }
+  --error "$LOG_DIR/backend.err.log" \
+  -- backend.main:app --host 0.0.0.0 --port 5002 --reload
 
 echo "🚀 Start Celery Worker..."
-pm2 start "celery -A backend.celery_task.celery_app worker --loglevel=info" \
+pm2 start celery \
   --name celery \
+  --interpreter python3 \
   --cwd "$BACKEND_DIR" \
   --output "$LOG_DIR/celery.log" \
-  --error "$LOG_DIR/celery.err.log" || {
-    echo "❌ Start celery worker mislukt."
-    exit 1
-  }
+  --error "$LOG_DIR/celery.err.log" \
+  -- -A backend.celery_task.celery_app worker --loglevel=info
 
 echo "⏰ Start Celery Beat..."
-pm2 start "celery -A backend.celery_task.celery_app beat --loglevel=info" \
+pm2 start celery \
   --name celery-beat \
+  --interpreter python3 \
   --cwd "$BACKEND_DIR" \
   --output "$LOG_DIR/celery-beat.log" \
-  --error "$LOG_DIR/celery-beat.err.log" || {
-    echo "❌ Start celery beat mislukt."
-    exit 1
-  }
+  --error "$LOG_DIR/celery-beat.err.log" \
+  -- -A backend.celery_task.celery_app beat --loglevel=info
 
 echo "💾 PM2 configuratie opslaan (voor reboot)..."
 pm2 save
 pm2 startup | grep sudo && echo "⚠️ Voer bovenstaande 'sudo' commando éénmalig uit voor autostart bij reboot"
 
 echo ""
-echo "✅ Productieprocessen draaien:"
+echo "✅ Alles draait nu onder PM2:"
 pm2 status
 
 echo ""
-echo "🌐 Backend:       http://localhost:5002"
-echo "📄 Logs backend:  $LOG_DIR/backend.log"
-echo "📄 Logs celery:   $LOG_DIR/celery.log"
-echo "📄 Logs beat:     $LOG_DIR/celery-beat.log"
+echo "🌐 Backend URL:      http://localhost:5002"
+echo "📄 Logs backend:     $LOG_DIR/backend.log"
+echo "📄 Logs celery:      $LOG_DIR/celery.log"
+echo "📄 Logs celery-beat: $LOG_DIR/celery-beat.log"
 echo ""
 echo "🧠 AI_MODE check:"
 pm2 show backend | grep AI_MODE || echo "⚠️ AI_MODE niet gevonden in PM2 env."
