@@ -6,7 +6,8 @@ BACKEND_DIR="$HOME/trading-tool-backend"
 ENV_FILE="$BACKEND_DIR/backend/.env"
 LOG_DIR="/var/log/pm2"
 
-# ✅ Activeer NVM en zet Node/PM2 in PATH
+# ✅ Zet juiste paden voor Celery + Node
+export PATH="$HOME/.local/bin:$PATH"  # Voor celery als pip install --user is gebruikt
 export NVM_DIR="$HOME/.nvm"
 source "$NVM_DIR/nvm.sh"
 export PATH="$NVM_DIR/versions/node/$(nvm current)/bin:$PATH"
