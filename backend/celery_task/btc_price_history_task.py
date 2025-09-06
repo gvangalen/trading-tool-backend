@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 COINGECKO_URL = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
 PARAMS = {"vs_currency": "usd", "days": "max"}
 
+# 📈 Volledige historiek ophalen
 @shared_task(name="backend.celery_task.btc_price_history_task.fetch_btc_history")
 def fetch_btc_history():
     logger.info("📊 Start ophalen historische BTC-prijzen...")
@@ -53,6 +54,7 @@ def fetch_btc_history():
         logger.error("❌ Fout bij ophalen en opslaan van BTC-prijzen:")
         logger.error(traceback.format_exc())
 
+# 📆 Dagelijkse prijs ophalen (laatste datapunt)
 @shared_task(name="backend.celery_task.btc_price_history_task.fetch_btc_history_daily")
 def fetch_btc_history_daily():
     logger.info("📆 Start ophalen BTC-prijs van vandaag...")
