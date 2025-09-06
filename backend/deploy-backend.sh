@@ -23,7 +23,7 @@ cd "$BACKEND_DIR"
 git fetch origin main
 git reset --hard origin/main
 
-# 🧪 Check Python deps
+# 🧪 Python deps
 pip install --user -r backend/requirements.txt
 
 # 🔁 PM2 restart
@@ -31,7 +31,7 @@ pm2 delete backend || true
 pm2 delete celery || true
 pm2 delete celery-beat || true
 
-# 🌱 Laad .env handmatig (voor pm2 export)
+# 🌱 Laad .env (voor Python omgevingsvariabelen)
 if [ -f "$ENV_FILE" ]; then
   set -o allexport
   source "$ENV_FILE"
@@ -41,16 +41,16 @@ else
   exit 1
 fi
 
-# ✅ ✅ ✅ BELANGRIJK: gebruik juiste interpreter bij backend
-pm2 start "uvicorn backend.main:app --host 0.0.0.0 --port 5002" \
+# ✅ Start backend
+pm2 start "python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 5002 --reload" \
   --name backend \
   --cwd "$BACKEND_DIR" \
   --interpreter python3 \
   --output "$LOG_DIR/backend.log" \
   --error "$LOG_DIR/backend.err.log"
 
-# 🚀 Start celery worker
-pm2 start celery \
+# ✅ Start Celery Worker
+pm2 start "$HOME/.local/bin/celery" \
   --name celery \
   --interpreter python3 \
   --cwd "$BACKEND_DIR" \
@@ -59,8 +59,8 @@ pm2 start celery \
   -- \
   -A backend.celery_task.celery_app worker --loglevel=info
 
-# 🚀 Start celery beat
-pm2 start celery \
+# ✅ Start Celery Beat
+pm2 start "$HOME/.local/bin/celery" \
   --name celery-beat \
   --interpreter python3 \
   --cwd "$BACKEND_DIR" \
@@ -69,11 +69,11 @@ pm2 start celery \
   -- \
   -A backend.celery_task.celery_app beat --loglevel=info
 
-# 💾 Bewaar PM2 config
+# 💾 PM2 config opslaan
 pm2 save
 pm2 startup | grep sudo && echo "⚠️ Voer bovenstaande 'sudo' commando éénmalig uit voor autostart bij reboot"
 
-# ✅ Check status
+# ✅ Status en samenvatting
 echo ""
 echo "✅ Alles draait nu:"
 pm2 status
