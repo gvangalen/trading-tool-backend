@@ -87,7 +87,7 @@ def save_quarterly_report_to_db(date, report_data):
         conn.close()
 
 
-@shared_task(name="celery_task.quarterly_report_task.generate_quarterly_report")
+@shared_task(name="backend.celery_task.quarterly_report_task.generate_quarterly_report")
 def generate_quarterly_report():
     logger.info("📊 Start genereren kwartaalrapport...")
 
