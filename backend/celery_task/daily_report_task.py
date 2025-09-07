@@ -64,7 +64,7 @@ def save_report_to_db(date, report_data):
     finally:
         conn.close()
 
-@shared_task(name="celery_task.daily_report_task.generate_daily_report")
+@shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
     logger.info("📝 Genereren van dagelijks rapport gestart...")
 
