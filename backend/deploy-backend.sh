@@ -63,7 +63,7 @@ pm2 start "$(which celery)" \
   --output "$LOG_DIR/celery.log" \
   --error "$LOG_DIR/celery.err.log" \
   -- \
-  -A backend.celery_app worker --loglevel=info
+  -A backend.celery_task.celery_app worker --loglevel=info
 
 # ⏰ Start Celery Beat (nu: celery-app)
 echo "⏰ Start Celery Beat (celery-app)..."
@@ -74,8 +74,9 @@ pm2 start "$(which celery)" \
   --output "$LOG_DIR/celery-app.log" \
   --error "$LOG_DIR/celery-app.err.log" \
   -- \
-  -A backend.celery_app beat --loglevel=info
+  -A backend.celery_task.celery_app beat --loglevel=info
 
+  
 # 💾 PM2 config opslaan
 pm2 save
 pm2 startup | grep sudo && echo "⚠️ Voer bovenstaande 'sudo' commando éénmalig uit voor autostart bij reboot"
