@@ -1,6 +1,7 @@
 import os
 import sys
 from celery import Celery
+from celery.schedules import crontab
 
 # ✅ Voeg rootpad van het project toe voor correcte imports
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,6 +18,30 @@ celery = Celery(
 # ✅ Configuratie
 celery.conf.timezone = "UTC"
 celery.conf.enable_utc = True
+
+# ✅ Periodieke taken
+celery.conf.beat_schedule = {
+    "fetch-macro-data": {
+        "task": "backend.celery_task.macro_task.fetch_macro_data",
+        "schedule": crontab(minute=0, hour="*/6"),  # Elke 6 uur
+    },
+    "fetch-technical-data": {
+        "task": "backend.celery_task.technical_task.fetch_technical_data",
+        "schedule": crontab(minute=10, hour="*/6"),
+    },
+    "fetch-market-data": {
+        "task": "backend.celery_task.market_task.fetch_market_data",
+        "schedule": crontab(minute=20, hour="*/6"),
+    },
+    "validate-setups": {
+        "task": "backend.celery_task.setup_task.validate_setups_task",
+        "schedule": crontab(minute=30, hour="*/12"),
+    },
+    "generate-strategies": {
+        "task": "backend.celery_task.strategy_task.generate_all",
+        "schedule": crontab(minute=45, hour="*/12"),
+    },
+}
 
 # ✅ Automatisch alle taken uit submodules inladen
 celery.autodiscover_tasks([
