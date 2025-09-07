@@ -3,7 +3,6 @@ import json
 import logging
 import traceback
 import requests
-from urllib.parse import urljoin
 from datetime import datetime
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
@@ -57,7 +56,7 @@ def safe_request(url, method="POST", payload=None):
 def fetch_market_data():
     logger.info("📈 Start live marktdata ophalen...")
     try:
-        url = urljoin(API_BASE_URL, "/market_data/save")
+        url = f"{API_BASE_URL}/market_data/save"
         response = safe_request(url)
         logger.info(f"✅ Marktdata opgeslagen: {response}")
     except RetryError:
@@ -70,7 +69,7 @@ def fetch_market_data():
 def save_market_data_7d():
     logger.info("📊 Start vullen 7-daagse BTC-data...")
     try:
-        url = urljoin(API_BASE_URL, "/market_data/btc/7d/fill")
+        url = f"{API_BASE_URL}/market_data/btc/7d/fill"
         response = safe_request(url)
         logger.info(f"✅ 7d-data gevuld: {response}")
     except RetryError:
@@ -83,7 +82,7 @@ def save_market_data_7d():
 def save_forward_returns():
     logger.info("📈 Start berekenen forward returns...")
     try:
-        url = urljoin(API_BASE_URL, "/market_data/forward/save")
+        url = f"{API_BASE_URL}/market_data/forward/save"
         response = safe_request(url)
         logger.info(f"✅ Forward returns opgeslagen: {response}")
     except RetryError:
@@ -112,7 +111,7 @@ def fetch_btc_price_history():
             return
 
         # ⏬ API-call naar eigen backend voor opslaan
-        save_url = urljoin(API_BASE_URL, "/market_data/history/save")
+        save_url = f"{API_BASE_URL}/market_data/history/save"
         payload = [
             {
                 "date": datetime.utcfromtimestamp(ts / 1000).date().isoformat(),
