@@ -3,7 +3,6 @@ import logging
 import traceback
 import json
 import requests
-from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
@@ -30,18 +29,17 @@ def safe_request(url, method="POST", payload=None):
         raise
 
 # ✅ Taak 1: Genereer strategieën voor alle setups
-@shared_task(name="celery_task.strategie_task.generate_all")
+@shared_task(name="backend.celery_task.strategie_task.generate_all")
 def generate_strategieën_automatisch():
     try:
         logger.info("🚀 Start automatische strategie-generatie voor alle setups...")
-        setups = safe_request(urljoin(API_BASE_URL, "/setups"), method="GET")
+        setups = safe_request(f"{API_BASE_URL}/setups", method="GET")
 
         if not isinstance(setups, list):
             logger.error(f"❌ /setups response is geen lijst: {setups}")
             return
 
         for setup in setups:
-            # Check of er al een strategie is voor deze setup
             if setup.get("strategy_id"):
                 logger.info(f"⏭️ Strategie al aanwezig voor setup '{setup.get('name')}' → overslaan.")
                 continue
@@ -57,23 +55,20 @@ def generate_strategieën_automatisch():
 
             strategy_type = setup.get("strategy_type", "manual").lower()
 
-            # Basis payload
             payload = {
                 "setup_name": setup["name"],
                 "strategy_type": strategy_type,
-                "symbol": setup.get("symbol", "BTC"),  # hier aangepast
+                "symbol": setup.get("symbol", "BTC"),
                 "timeframe": setup.get("timeframe", "1D"),
                 "score": setup.get("score", 0),
                 "explanation": strategie.get("explanation"),
                 "risk_reward": strategie.get("risk_reward"),
             }
 
-            # Payload aanpassen per strategie-type
             if strategy_type == "dca":
                 payload.update({
                     "amount": strategie.get("amount", 0),
                     "frequency": strategie.get("frequency", "weekly"),
-                    # Entry, targets en stop_loss niet verplicht voor DCA
                 })
             else:
                 payload.update({
@@ -85,23 +80,22 @@ def generate_strategieën_automatisch():
             logger.info(f"📦 Strategie-payload:\n{json.dumps(payload, indent=2)}")
 
             try:
-                result = safe_request(urljoin(API_BASE_URL, "/strategies"), method="POST", payload=payload)
+                result = safe_request(f"{API_BASE_URL}/strategies", method="POST", payload=payload)
                 logger.info(f"✅ Strategie opgeslagen voor {setup['name']}: {result}")
             except Exception as e:
                 logger.error(f"❌ Fout bij opslaan strategie: {e}")
                 logger.error(traceback.format_exc())
-                # Optioneel: hier kan je errors verzamelen of opnieuw raise
 
     except Exception as e:
         logger.error(f"❌ Fout in generate_strategieën_automatisch: {e}")
         logger.error(traceback.format_exc())
 
 # ✅ Taak 2: Genereer strategie voor specifieke setup
-@shared_task(name="celery_task.strategie_task.generate_for_setup")
+@shared_task(name="backend.celery_task.strategie_task.generate_for_setup")
 def generate_strategie_voor_setup(setup_id, overwrite=True):
     try:
         logger.info(f"🔍 Setup ophalen via ID: {setup_id}")
-        res = requests.get(urljoin(API_BASE_URL, f"/setups/{setup_id}"), timeout=TIMEOUT)
+        res = requests.get(f"{API_BASE_URL}/setups/{setup_id}", timeout=TIMEOUT)
 
         if not res.ok:
             logger.error(f"❌ Setup ophalen mislukt: {res.status_code} - {res.text}")
@@ -122,7 +116,7 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         payload = {
             "setup_name": setup.get("name"),
             "strategy_type": strategy_type,
-            "symbol": setup.get("symbol"),  # hier aangepast
+            "symbol": setup.get("symbol"),
             "timeframe": setup.get("timeframe"),
             "score": setup.get("score"),
             "explanation": strategie.get("explanation"),
@@ -144,9 +138,9 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         logger.info(f"📦 Strategie-payload:\n{json.dumps(payload, indent=2)}")
 
         if overwrite:
-            res = requests.put(urljoin(API_BASE_URL, f"/strategies/van_setup/{setup_id}"), json=payload, timeout=TIMEOUT)
+            res = requests.put(f"{API_BASE_URL}/strategies/van_setup/{setup_id}", json=payload, timeout=TIMEOUT)
         else:
-            res = requests.post(urljoin(API_BASE_URL, "/strategies"), json=payload, timeout=TIMEOUT)
+            res = requests.post(f"{API_BASE_URL}/strategies", json=payload, timeout=TIMEOUT)
 
         if res.status_code not in [200, 201]:
             logger.error(f"❌ Strategie opslaan faalde: {res.status_code} - {res.text}")
