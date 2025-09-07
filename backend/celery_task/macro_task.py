@@ -33,7 +33,7 @@ def safe_request(url, method="POST", payload=None):
         raise
 
 # ✅ Celery taak: Macrodata opslaan via API
-@shared_task(name="celery_task.macro_task.save_macro_data_task")
+@shared_task(name="backend.celery_task.macro_task.save_macro_data_task")
 def save_macro_data_task(indicator, value, trend=None, interpretation=None, action=None, score=None):
     payload = {
         "indicator": indicator,
@@ -55,7 +55,7 @@ def save_macro_data_task(indicator, value, trend=None, interpretation=None, acti
         logger.error(traceback.format_exc())
 
 # ✅ Celery taak: Ophalen van macrodata (live API's)
-@shared_task(name="celery_task.macro_task.fetch_macro_data")
+@shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
     logger.info("🌍 Start ophalen macrodata...")
 
