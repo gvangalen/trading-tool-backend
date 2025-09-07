@@ -61,7 +61,7 @@ def calculate_rsi(closes, period=14):
     return round(100 - (100 / (1 + rs)), 2)
 
 # ✅ Celery taak: Technische data opslaan via je eigen backend API
-@shared_task(name="celery_task.technical_task.save_technical_data_task")
+@shared_task(name="backend.celery_task.technical_task.save_technical_data_task")
 def save_technical_data_task(symbol, rsi, volume, ma_200, timeframe="1D"):
     payload = {
         "symbol": symbol,
@@ -82,7 +82,7 @@ def save_technical_data_task(symbol, rsi, volume, ma_200, timeframe="1D"):
         logger.error(traceback.format_exc())
 
 # ✅ Celery taak: Live technische data ophalen en opslaan
-@shared_task(name="celery_task.technical_task.fetch_technical_data")
+@shared_task(name="backend.celery_task.technical_task.fetch_technical_data")
 def fetch_technical_data():
     try:
         symbol = "BTCUSDT"
