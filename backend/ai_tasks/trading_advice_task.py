@@ -3,7 +3,7 @@ import json
 import logging
 import traceback
 from celery import shared_task
-from db import get_db_connection
+from backend.utils.db import get_db_connection
 from ai_setup_validator import validate_setups
 from ai_trading_advice import generate_strategy_advice
 
