@@ -71,7 +71,7 @@ def save_technical_data_task(symbol, rsi, volume, ma_200, timeframe="1D"):
         "timeframe": timeframe,
     }
     try:
-        url = urljoin(API_BASE_URL, "/technical_data")
+        url = f"{API_BASE_URL}/technical_data"  # ✅ FIXED
         response = safe_request(url, method="POST", payload=payload, headers=HEADERS)
         logger.info(f"✅ Technische data succesvol opgeslagen: {response}")
     except RetryError:
