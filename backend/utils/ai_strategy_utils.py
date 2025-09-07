@@ -10,6 +10,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# === 🎯 Strategie genereren voor één setup ===
 def generate_strategy_from_setup(setup: dict) -> dict | None:
     """
     Genereert automatisch een strategie met GPT op basis van een setup.
@@ -70,3 +71,40 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
     except Exception as e:
         logger.error(f"❌ Fout bij strategie-generatie voor setup '{setup.get('name')}': {e}")
         return None
+
+# === 🧠 Strategieën genereren voor alle setups ===
+def generate_strategy_advice(setups, macro_score, technical_score, market_data):
+    """
+    Genereert een lijst van AI-strategieën op basis van setups + scores + marktdata.
+
+    Verwacht:
+    - setups: lijst van setup dicts met ten minste 'name', 'trend', 'timeframe', 'symbol'
+    - macro_score: gemiddelde macroscore (float)
+    - technical_score: gemiddelde technische score (float)
+    - market_data: dict met 'symbol', 'price', 'change_24h'
+
+    Returns:
+        lijst met strategieën per setup
+    """
+    strategies = []
+
+    for setup in setups:
+        # Voeg scores toe aan setup
+        setup["macro_score"] = macro_score
+        setup["technical_score"] = technical_score
+        setup["sentiment_score"] = setup.get("score_breakdown", {}).get("sentiment", {}).get("score", 0)
+
+        strategy = generate_strategy_from_setup(setup)
+        if strategy:
+            strategy_obj = {
+                "setup_name": setup.get("name"),
+                "symbol": setup.get("symbol"),
+                "timeframe": setup.get("timeframe"),
+                "trend": setup.get("trend"),
+                "strategy": strategy,
+            }
+            strategies.append(strategy_obj)
+        else:
+            logger.warning(f"⚠️ Geen strategie gegenereerd voor setup: {setup.get('name')}")
+
+    return strategies
