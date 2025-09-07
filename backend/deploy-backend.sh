@@ -72,7 +72,7 @@ pm2 start "$(which celery)" \
   --output "$LOG_DIR/celery-beat.log" \
   --error "$LOG_DIR/celery-beat.err.log" \
   -- \
-  -A backend.celery_task.celery_app beat --loglevel=info
+  -A backend.celery_task.celery_beat beat --loglevel=info
 
 # 💾 PM2 config opslaan
 pm2 save
