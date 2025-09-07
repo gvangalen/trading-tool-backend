@@ -5,7 +5,7 @@ import traceback
 from celery import shared_task
 from backend.utils.db import get_db_connection
 from backend.utils.setup_validator import validate_setups
-from backend.ai_tasks.ai_trading_advice import generate_strategy_advice
+from backend.utils.ai_strategy_utils import generate_strategy_advice
 
 # ✅ Logging instellen
 logger = logging.getLogger(__name__)
