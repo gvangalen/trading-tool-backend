@@ -87,7 +87,7 @@ def save_monthly_report_to_db(date, report_data):
         conn.close()
 
 
-@shared_task(name="celery_task.monthly_report_task.generate_monthly_report")
+@shared_task(name="backend.celery_task.monthly_report_task.generate_monthly_report")
 def generate_monthly_report():
     logger.info("📆 Start genereren maandrapport...")
 
