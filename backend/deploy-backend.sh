@@ -39,10 +39,11 @@ fi
 pm2 delete backend || true
 pm2 delete celery || true
 pm2 delete celery-beat || true
+pm2 delete celery-app || true  # 👈 nieuwe naam beat-proces
 
 sleep 2
 
-# ✅ ✅ ✅ FIX HIER: correcte backend-start
+# 🚀 Start backend met Uvicorn via PM2
 echo "🚀 Start backend met Uvicorn via PM2..."
 pm2 start uvicorn \
   --name backend \
@@ -53,7 +54,7 @@ pm2 start uvicorn \
   -- \
   backend.main:app --host 0.0.0.0 --port 5002
 
-# ✅ FIX: gebruik expliciet pad naar celery (en juiste interpreter = none)
+# 🚀 Start Celery Worker
 echo "🚀 Start Celery Worker..."
 pm2 start "$(which celery)" \
   --name celery \
@@ -62,23 +63,24 @@ pm2 start "$(which celery)" \
   --output "$LOG_DIR/celery.log" \
   --error "$LOG_DIR/celery.err.log" \
   -- \
-  -A backend.celery_task.celery_app worker --loglevel=info
+  -A backend.celery_app worker --loglevel=info
 
-echo "⏰ Start Celery Beat..."
+# ⏰ Start Celery Beat (nu: celery-app)
+echo "⏰ Start Celery Beat (celery-app)..."
 pm2 start "$(which celery)" \
-  --name celery-beat \
+  --name celery-app \
   --interpreter none \
   --cwd "$BACKEND_DIR" \
-  --output "$LOG_DIR/celery-beat.log" \
-  --error "$LOG_DIR/celery-beat.err.log" \
+  --output "$LOG_DIR/celery-app.log" \
+  --error "$LOG_DIR/celery-app.err.log" \
   -- \
-  -A backend.celery_task.celery_beat beat --loglevel=info
+  -A backend.celery_app beat --loglevel=info
 
 # 💾 PM2 config opslaan
 pm2 save
 pm2 startup | grep sudo && echo "⚠️ Voer bovenstaande 'sudo' commando éénmalig uit voor autostart bij reboot"
 
-# ✅ Status
+# ✅ Statusoverzicht
 echo ""
 echo "✅ Alles draait nu:"
 pm2 status
@@ -87,5 +89,5 @@ echo ""
 echo "🌐 Backend:       http://localhost:5002"
 echo "📄 Logs backend:  $LOG_DIR/backend.log"
 echo "📄 Logs celery:   $LOG_DIR/celery.log"
-echo "📄 Logs beat:     $LOG_DIR/celery-beat.log"
+echo "📄 Logs beat:     $LOG_DIR/celery-app.log"
 echo ""
