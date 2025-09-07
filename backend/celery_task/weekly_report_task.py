@@ -89,7 +89,7 @@ def save_weekly_report_to_db(date, report_data):
         conn.close()
 
 
-@shared_task(name="celery_task.weekly_report_task.generate_weekly_report")
+@shared_task(name="backend.celery_task.weekly_report_task.generate_weekly_report")
 def generate_weekly_report():
     logger.info("📅 Start genereren van weekrapport...")
 
