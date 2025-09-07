@@ -2,7 +2,6 @@ import os
 import logging
 import traceback
 import requests
-from urllib.parse import urljoin
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
 
@@ -44,7 +43,7 @@ def save_macro_data_task(indicator, value, trend=None, interpretation=None, acti
         "score": score
     }
     try:
-        url = urljoin(API_BASE_URL, "/macro_data")
+        url = f"{API_BASE_URL}/macro_data"
         response = safe_request(url, method="POST", payload=payload)
         logger.info(f"✅ Macrodata succesvol opgeslagen: {response}")
     except RetryError:
@@ -66,11 +65,7 @@ def fetch_macro_data():
         value = int(data["data"][0]["value"])
         save_macro_data_task.delay(
             indicator="Fear & Greed Index",
-            value=value,
-            trend=None,
-            interpretation=None,
-            action=None,
-            score=None
+            value=value
         )
         logger.info(f"✅ Fear & Greed opgeslagen: {value}")
     except Exception as e:
@@ -83,11 +78,7 @@ def fetch_macro_data():
         price = sp_data["chart"]["result"][0]["meta"]["regularMarketPrice"]
         save_macro_data_task.delay(
             indicator="S&P500",
-            value=round(price, 2),
-            trend=None,
-            interpretation=None,
-            action=None,
-            score=None
+            value=round(price, 2)
         )
         logger.info(f"✅ S&P500 opgeslagen: {price}")
     except Exception as e:
@@ -100,11 +91,7 @@ def fetch_macro_data():
         price = dxy_data["chart"]["result"][0]["meta"]["regularMarketPrice"]
         save_macro_data_task.delay(
             indicator="DXY",
-            value=round(price, 2),
-            trend=None,
-            interpretation=None,
-            action=None,
-            score=None
+            value=round(price, 2)
         )
         logger.info(f"✅ DXY opgeslagen: {price}")
     except Exception as e:
