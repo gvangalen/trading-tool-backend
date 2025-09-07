@@ -53,7 +53,7 @@ def safe_request(url, method="POST", payload=None):
 
 
 # ✅ 1. Live BTC marktdata ophalen
-@shared_task(name="celery_task.market_task.fetch_market_data")
+@shared_task(name="backend.celery_task.market_task.fetch_market_data")
 def fetch_market_data():
     logger.info("📈 Start live marktdata ophalen...")
     try:
@@ -66,7 +66,7 @@ def fetch_market_data():
 
 
 # ✅ 2. 7-daagse BTC-data vullen
-@shared_task(name="celery_task.market_task.save_market_data_7d")
+@shared_task(name="backend.celery_task.market_task.save_market_data_7d")
 def save_market_data_7d():
     logger.info("📊 Start vullen 7-daagse BTC-data...")
     try:
@@ -79,7 +79,7 @@ def save_market_data_7d():
 
 
 # ✅ 3. Forward returns opslaan
-@shared_task(name="celery_task.market_task.save_forward_returns")
+@shared_task(name="backend.celery_task.market_task.save_forward_returns")
 def save_forward_returns():
     logger.info("📈 Start berekenen forward returns...")
     try:
@@ -92,7 +92,7 @@ def save_forward_returns():
 
 
 # ✅ 4. Historische BTC-prijs ophalen via CoinGecko
-@shared_task(name="celery_task.market_task.fetch_btc_price_history")
+@shared_task(name="backend.celery_task.market_task.fetch_btc_price_history")
 def fetch_btc_price_history():
     logger.info("⏳ Start ophalen BTC-prijsgeschiedenis...")
     try:
