@@ -5,6 +5,9 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
 
+from backend.config.config_loader import load_macro_config  # ✅ Centrale config
+# Zorg dat je PYTHONPATH goed staat als je dit los draait
+
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -48,13 +51,23 @@ def enqueue_macro_indicator(indicator_name: str):
         logger.error(traceback.format_exc())
 
 
-# ✅ Verzameltaak: alle relevante macro-indicatoren aanroepen via config-gebaseerde API
+# ✅ Verzameltaak: alle relevante macro-indicatoren ophalen via config
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
-    logger.info("🌍 Start ophalen macrodata...")
+    logger.info("🌍 Start ophalen macrodata via config...")
 
-    # Deze lijst moet matchen met je macro_indicators_config.json
-    indicator_namen = ["Fear & Greed Index", "S&P500", "DXY"]
+    try:
+        config = load_macro_config()
+        indicator_namen = list(config.keys())
 
-    for name in indicator_namen:
-        enqueue_macro_indicator.delay(name)
+        if not indicator_namen:
+            logger.warning("⚠️ Geen macro-indicatoren gevonden in config.")
+            return
+
+        for name in indicator_namen:
+            enqueue_macro_indicator.delay(name)
+
+        logger.info(f"✅ {len(indicator_namen)} macro-indicatoren aangeroepen via Celery.")
+    except Exception as e:
+        logger.error(f"❌ Fout bij laden config of aanroepen: {e}")
+        logger.error(traceback.format_exc())
