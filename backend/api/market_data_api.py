@@ -9,6 +9,9 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logger.info("🚀 market_data_api.py geladen – alle marktroutes zijn actief.")
 
+# ✅ Config laden
+MARKET_CONFIG = load_market_config()
+
 # ⏬ Config variabelen gebruiken vanuit centrale MARKET_CONFIG
 COINGECKO_URL = MARKET_CONFIG["coingecko_url"]
 VOLUME_URL = MARKET_CONFIG["volume_url"]
