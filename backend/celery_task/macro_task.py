@@ -48,14 +48,30 @@ def fetch_macro_data():
         for name, indicator_config in indicators.items():
             logger.info(f"➡️ Verwerk: {name}...")
             try:
-                # Interpreter aanroepen
+                # Interpreter ophalen
                 result = asyncio.run(process_macro_indicator(name, indicator_config))
                 if not result or "value" not in result:
                     logger.warning(f"⚠️ Geen geldige data voor {name}")
                     continue
 
-                # Verstuur via backend API
-                safe_post(f"{API_BASE_URL}/macro_data", payload={"name": name})
+                try:
+                    float(result["value"])  # validatie
+                except:
+                    logger.warning(f"⚠️ Ongeldige waarde voor {name}: {result.get('value')}")
+                    continue
+
+                # ✅ Volledige payload naar macro_data API sturen
+                payload = {
+                    "name": result["name"],
+                    "value": result["value"],
+                    "score": result.get("score", 0),
+                    "interpretation": result.get("interpretation", ""),
+                    "action": result.get("action", ""),
+                }
+
+                logger.info(f"📤 POST {name} met value={result['value']}, score={payload['score']}")
+                safe_post(f"{API_BASE_URL}/macro_data", payload=payload)
+
             except RetryError:
                 logger.error(f"❌ Alle retries mislukt voor {name}")
             except Exception as e:
