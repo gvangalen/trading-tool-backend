@@ -13,7 +13,7 @@
       "explanation": "Hogere S&P500-standen duiden vaak op een gezonde aandelenmarkt.",
       "action": "Bij een sterke S&P500 is het marktsentiment positief. Positief voor crypto."
     },
-    "VIX": {
+    "vix": {
       "symbol": "^VIX",
       "source": "yahoo",
       "thresholds": [13, 18, 25],
@@ -23,7 +23,7 @@
       "explanation": "Een hogere VIX duidt op meer angst en volatiliteit op de markt.",
       "action": "Bij hoge VIX is voorzichtigheid geboden. Negatief voor risicovolle assets zoals crypto."
     },
-    "DXY": {
+    "dxy": {
       "symbol": "DX-Y.NYB",
       "source": "yahoo",
       "thresholds": [98, 102, 106],
