@@ -1,0 +1,18 @@
+{
+  "price": {
+    "thresholds": [25000, 35000, 45000],
+    "positive": true,
+    "category": "market",
+    "correlation": "positief",
+    "explanation": "Prijsniveau van BTC bepaalt veel marktsentiment.",
+    "action": "Hogere prijs wijst op sterkte. Lagere prijs kan koopkans zijn."
+  },
+  "change_24h": {
+    "thresholds": [-5, 0, 5],
+    "positive": true,
+    "category": "market",
+    "correlation": "positief",
+    "explanation": "De procentuele prijsverandering op 24h basis.",
+    "action": "Sterke stijging duidt op momentum. Negatief is vaak correctie of paniek."
+  }
+}
