@@ -1,15 +1,21 @@
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Query
+
 from backend.utils.db import get_db_connection
 from backend.utils.macro_interpreter import process_macro_indicator
 from backend.config.config_loader import load_macro_config
 
+# ✅ Init router en logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# ✅ Laad config bovenin bestand (conform market_data_api)
+MACRO_CONFIG = load_macro_config()
+logger.info("🚀 macro_data_api.py geladen – alle macro-routes zijn actief.")
 
+# ✅ Hulpfunctie voor DB-verbinding
 def get_db_cursor():
     conn = get_db_connection()
     if not conn:
