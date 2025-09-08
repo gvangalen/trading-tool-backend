@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
+
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import process_technical_indicator
 from backend.celery_task.technical_task import save_technical_data_task
@@ -15,6 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # ✅ Absoluut pad naar configmap
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "..", "config", "technical_indicators_config.json")
+
 
 def load_technical_config():
     try:
@@ -192,6 +194,8 @@ async def delete_technical_data(symbol: str):
     finally:
         conn.close()
 
+
+# ✅ POST: directe invoer van technische data + interpretatie
 @router.post("/technical_data")
 async def save_technical_data_post(request: Request):
     try:
@@ -205,13 +209,18 @@ async def save_technical_data_post(request: Request):
         if None in (symbol, rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
 
-        # ✅ Nieuw: zorg dat ma_200 altijd float is
+        # ✅ Validatie op numeriek
         try:
+            rsi = float(rsi)
+            volume = float(volume)
             ma_200 = float(ma_200)
         except ValueError:
-            raise HTTPException(status_code=400, detail="ma_200 moet een numerieke waarde zijn.")
+            raise HTTPException(status_code=400, detail="RSI, volume en ma_200 moeten numeriek zijn.")
 
+        # ✅ Interpretatie via functie
         score, advies = process_technical_indicator(symbol, rsi, volume, ma_200, timeframe)
+
+        # ✅ Opslaan in DB
         save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe)
 
         return {"message": "Technische data opgeslagen", "symbol": symbol}
