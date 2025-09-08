@@ -8,6 +8,9 @@ from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
 
+# ✅ Import voor technische logica
+from backend.utils.technical_logic import process_technical_indicator, load_technical_config
+
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,13 +66,15 @@ def calculate_rsi(closes, period=14):
 
 # ✅ Technische data POSTen naar backend
 @shared_task(name="backend.celery_task.technical_task.save_technical_data_task")
-def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D"):
+def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D", score=None, advice=None):
     payload = {
         "symbol": symbol,
         "timeframe": timeframe,
         "rsi": rsi,
         "ma_200": ma_200_ratio,
-        "volume": volume
+        "volume": volume,
+        "score": score,
+        "advice": advice
     }
     try:
         url = f"{API_BASE_URL}/technical_data"
@@ -114,13 +119,35 @@ def fetch_technical_data():
         volume = round(volumes[-1], 2)
         ma_200 = round(sum(closes[-200:]) / 200, 2)
         current_price = closes[-1]
-        ma_200_ratio = round(current_price / ma_200, 3)  # ✅ bijv. 1.08
+        ma_200_ratio = round(current_price / ma_200, 3)
 
         logger.info(f"📊 RSI: {rsi}, MA200-ratio: {ma_200_ratio}, Volume: {volume}")
 
-        # ✅ Naar backend sturen
-        save_technical_data_task.delay(our_symbol, rsi, volume, ma_200_ratio, "1D")
+        # ✅ Config laden
+        config = load_technical_config()
+
+        # ✅ Scores berekenen
+        rsi_result = process_technical_indicator("rsi", rsi, config["indicators"]["rsi"])
+        ma_result = process_technical_indicator("ma_200", ma_200_ratio, config["indicators"]["ma_200"])
+        volume_result = process_technical_indicator("volume", volume, config["indicators"]["volume"])
+
+        # ✅ Gemiddelde score
+        total_score = rsi_result["score"] + ma_result["score"] + volume_result["score"]
+        average_score = round(total_score / 3, 2)
+
+        # ✅ Advieslogica
+        if average_score >= 2.2:
+            advice = "Bullish"
+        elif average_score <= 0.8:
+            advice = "Bearish"
+        else:
+            advice = "Neutraal"
+
+        logger.info(f"🧠 Technische score: {average_score} → Advies: {advice}")
+
+        # ✅ POST naar backend
+        save_technical_data_task.delay(our_symbol, rsi, volume, ma_200_ratio, "1D", average_score, advice)
 
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen technische data: {e}")
+        logger.error(f"❌ Fout bij ophalen/verwerken technische data: {e}")
         logger.error(traceback.format_exc())
