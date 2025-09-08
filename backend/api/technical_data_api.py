@@ -189,7 +189,6 @@ async def delete_technical_data(symbol: str):
     finally:
         conn.close()
 
-# ✅ Technische data opslaan via POST (bijv. vanuit Celery)
 @router.post("/technical_data")
 async def save_technical_data_post(request: Request):
     try:
@@ -202,6 +201,12 @@ async def save_technical_data_post(request: Request):
 
         if None in (symbol, rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
+
+        # ✅ Nieuw: zorg dat ma_200 altijd float is
+        try:
+            ma_200 = float(ma_200)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="ma_200 moet een numerieke waarde zijn.")
 
         score, advies = process_technical_indicator(symbol, rsi, volume, ma_200, timeframe)
         save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe)
