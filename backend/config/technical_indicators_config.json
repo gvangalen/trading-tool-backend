@@ -1,26 +1,37 @@
 {
-  "RSI": {
-    "thresholds": [30, 50, 70],
-    "positive": false,
-    "category": "technical",
-    "correlation": "omgekeerd",
-    "explanation": "RSI geeft overbought of oversold situaties aan.",
-    "action": "Bij RSI < 30 is er vaak sprake van een koopmoment. RSI > 70 duidt op oververhitting."
+  "base_urls": {
+    "binance": "https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1d&limit=300"
   },
-  "Volume": {
-    "thresholds": [1000, 2500, 5000],
-    "positive": true,
-    "category": "technical",
-    "correlation": "positief",
-    "explanation": "Hoger volume bevestigt de richting van een trend.",
-    "action": "Stijgend volume = bevestiging van momentum. Laag volume = twijfel."
-  },
-  "200MA": {
-    "thresholds": [0.95, 1.0, 1.05],
-    "positive": true,
-    "category": "technical",
-    "correlation": "positief",
-    "explanation": "De MA-200 is een belangrijke langetermijnindicator.",
-    "action": "Asset boven MA-200 is bullish. Onder MA-200 is bearish."
+  "indicators": {
+    "RSI": {
+      "symbol": "BTCUSDT",
+      "source": "binance",
+      "thresholds": [30, 50, 70],
+      "positive": false,
+      "category": "technical",
+      "correlation": "omgekeerd",
+      "explanation": "RSI geeft overbought of oversold situaties aan.",
+      "action": "Bij RSI < 30 is er vaak sprake van een koopmoment. RSI > 70 duidt op oververhitting."
+    },
+    "Volume": {
+      "symbol": "BTCUSDT",
+      "source": "binance",
+      "thresholds": [1000, 2500, 5000],
+      "positive": true,
+      "category": "technical",
+      "correlation": "positief",
+      "explanation": "Hoger volume bevestigt de richting van een trend.",
+      "action": "Stijgend volume = bevestiging van momentum. Laag volume = twijfel."
+    },
+    "200MA": {
+      "symbol": "BTCUSDT",
+      "source": "binance",
+      "thresholds": [0.95, 1.0, 1.05],
+      "positive": true,
+      "category": "technical",
+      "correlation": "positief",
+      "explanation": "De MA-200 is een belangrijke langetermijnindicator.",
+      "action": "Asset boven MA-200 is bullish. Onder MA-200 is bearish."
+    }
   }
 }
