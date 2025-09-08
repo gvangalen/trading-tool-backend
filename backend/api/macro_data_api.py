@@ -45,9 +45,16 @@ async def add_macro_indicator(request: Request):
         result = await process_macro_indicator(name, config[name])
         if not result or "value" not in result or "interpretation" not in result or "action" not in result:
             raise ValueError("❌ Interpreterresultaat incompleet")
+        
+        # ✅ Extra check op waarde
+        try:
+            value = float(result.get("value"))
+        except (TypeError, ValueError):
+            raise ValueError(f"❌ Ongeldige waarde voor indicator '{name}': {result.get('value')}")
+        
     except Exception as e:
         logger.error(f"❌ [INT01] Interpreterfout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [INT01] Verwerking indicator mislukt.")
+        raise HTTPException(status_code=500, detail=f"❌ [INT01] Verwerking indicator mislukt: {e}")
 
     score = result.get("score", 0)
 
@@ -59,7 +66,7 @@ async def add_macro_indicator(request: Request):
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
             result["name"],
-            result["value"],
+            value,
             "",  # trend eventueel later berekenen
             result["interpretation"],
             result["action"],
@@ -67,7 +74,7 @@ async def add_macro_indicator(request: Request):
             datetime.utcnow()
         ))
         conn.commit()
-        logger.info(f"✅ [add] '{name}' opgeslagen met waarde {result['value']} en score {score}")
+        logger.info(f"✅ [add] '{name}' opgeslagen met waarde {value} en score {score}")
         return {"message": f"Indicator '{name}' succesvol opgeslagen."}
     except Exception as e:
         logger.error(f"❌ [DB02] Fout bij opslaan macro data: {e}")
