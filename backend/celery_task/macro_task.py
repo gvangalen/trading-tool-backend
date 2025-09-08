@@ -2,6 +2,7 @@ import os
 import logging
 import traceback
 import requests
+from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
 
