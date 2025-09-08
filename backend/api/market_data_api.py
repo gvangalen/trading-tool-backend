@@ -2,9 +2,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, Query
 from datetime import datetime, timedelta
 import httpx
-
 from backend.utils.db import get_db_connection
-from backend.config.settings import MARKET_CONFIG
+from backend.config.settings import load_market_config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
