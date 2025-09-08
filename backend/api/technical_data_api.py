@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, HTTPException, Request
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import process_technical_indicator
 from backend.celery_task.technical_task import save_technical_data_task
@@ -9,6 +9,14 @@ from backend.config.config_loader import load_technical_config
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# ✅ Config éénmalig laden bij opstart
+try:
+    TECHNICAL_CONFIG = load_technical_config()
+    logger.info("🚀 technical_data_api.py geladen – alle technische routes zijn actief.")
+except Exception as e:
+    TECHNICAL_CONFIG = {}
+    logger.error(f"❌ [INIT] Laden TECHNICAL_CONFIG mislukt: {e}")
 
 
 def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1D"):
@@ -89,7 +97,6 @@ async def save_technical_data_post(request: Request):
         if None in (symbol, rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
 
-        # ✅ Validatie op numeriek
         try:
             rsi = float(rsi)
             volume = float(volume)
@@ -97,10 +104,8 @@ async def save_technical_data_post(request: Request):
         except ValueError:
             raise HTTPException(status_code=400, detail="RSI, volume en ma_200 moeten numeriek zijn.")
 
-        # ✅ Interpretatie via functie
         score, advies = process_technical_indicator(symbol, rsi, volume, ma_200, timeframe)
 
-        # ✅ Opslaan in DB
         save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe)
 
         return {"message": "Technische data opgeslagen", "symbol": symbol}
@@ -109,7 +114,7 @@ async def save_technical_data_post(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ GET: Laatste technische data (voor dashboard)
+# ✅ GET: Laatste technische data
 @router.get("/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
@@ -126,9 +131,8 @@ async def get_technical_data():
             """)
             rows = cur.fetchall()
 
-        result = []
-        for row in rows:
-            result.append({
+        return [
+            {
                 "symbol": row[0],
                 "rsi": float(row[1]),
                 "volume": float(row[2]),
@@ -137,9 +141,8 @@ async def get_technical_data():
                 "advies": row[5],
                 "timeframe": row[6],
                 "timestamp": row[7].isoformat()
-            })
-
-        return result
+            } for row in rows
+        ]
     except Exception as e:
         logger.error(f"❌ TECH05: Ophalen mislukt: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -147,13 +150,13 @@ async def get_technical_data():
         conn.close()
 
 
-# ✅ GET: Alias voor frontend
+# ✅ GET alias
 @router.get("/technical_data/list")
 async def get_technical_data_list():
     return await get_technical_data()
 
 
-# ✅ GET: Data per asset
+# ✅ GET per asset
 @router.get("/technical_data/{symbol}")
 async def get_technical_for_symbol(symbol: str):
     conn = get_db_connection()
@@ -171,9 +174,8 @@ async def get_technical_for_symbol(symbol: str):
             """, (symbol,))
             rows = cur.fetchall()
 
-        result = []
-        for row in rows:
-            result.append({
+        return [
+            {
                 "symbol": row[0],
                 "rsi": float(row[1]),
                 "volume": float(row[2]),
@@ -182,9 +184,8 @@ async def get_technical_for_symbol(symbol: str):
                 "advies": row[5],
                 "timeframe": row[6],
                 "timestamp": row[7].isoformat()
-            })
-
-        return result
+            } for row in rows
+        ]
     except Exception as e:
         logger.error(f"❌ TECH07: Ophalen symbol error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -192,7 +193,7 @@ async def get_technical_for_symbol(symbol: str):
         conn.close()
 
 
-# ✅ DELETE: Verwijder technische data
+# ✅ DELETE
 @router.delete("/technical_data/{symbol}")
 async def delete_technical_data(symbol: str):
     conn = get_db_connection()
@@ -209,4 +210,3 @@ async def delete_technical_data(symbol: str):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
-
