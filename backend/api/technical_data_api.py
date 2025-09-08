@@ -1,36 +1,21 @@
 import logging
-import json
-import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import process_technical_indicator
 from backend.celery_task.technical_task import save_technical_data_task
+from backend.config.config_loader import load_technical_config  # ✅ Centrale loader gebruiken
 
-# ✅ Router en logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-# ✅ Absoluut pad naar configmap
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "..", "config", "technical_indicators_config.json")
-
-
-def load_technical_config():
-    try:
-        with open(CONFIG_PATH, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.warning(f"⚠️ TECH01: Config load failed: {e}")
-        return {}
 
 
 def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1D"):
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ TECH02: No DB connection.")
+        logger.error("❌ TECH02: Geen databaseverbinding.")
         return False
     try:
         with conn.cursor() as cur:
@@ -40,16 +25,16 @@ def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1
                 VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
             """, (symbol, float(rsi), float(volume), float(ma_200), score, advies, timeframe))
             conn.commit()
-        logger.info(f"✅ TECH03: Saved data for {symbol}")
+        logger.info(f"✅ TECH03: Data opgeslagen voor {symbol}")
         return True
     except Exception as e:
-        logger.error(f"❌ TECH04: Save error: {e}")
+        logger.error(f"❌ TECH04: Opslagfout: {e}")
         return False
     finally:
         conn.close()
 
 
-# ✅ Webhook endpoint vanuit TradingView
+# ✅ POST: TradingView webhook
 @router.post("/technical_data/webhook")
 async def tradingview_webhook(request: Request):
     try:
@@ -70,7 +55,7 @@ async def tradingview_webhook(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ Handmatige trigger via dashboard
+# ✅ POST: Handmatige trigger vanuit dashboard
 @router.post("/technical_data/trigger")
 async def trigger_technical_task(request: Request):
     try:
@@ -91,7 +76,41 @@ async def trigger_technical_task(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ Meest recente technische data ophalen
+# ✅ POST: Data + interpretatie opslaan (manueel)
+@router.post("/technical_data")
+async def save_technical_data_post(request: Request):
+    try:
+        data = await request.json()
+        symbol = data.get("symbol")
+        rsi = data.get("rsi")
+        volume = data.get("volume")
+        ma_200 = data.get("ma_200")
+        timeframe = data.get("timeframe", "1D")
+
+        if None in (symbol, rsi, volume, ma_200):
+            raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
+
+        # Validatie
+        try:
+            rsi = float(rsi)
+            volume = float(volume)
+            ma_200 = float(ma_200)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="RSI, volume en ma_200 moeten numeriek zijn.")
+
+        # Interpretatie ophalen
+        score, advies = process_technical_indicator(symbol, rsi, volume, ma_200, timeframe)
+
+        # Opslaan in DB
+        save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe)
+
+        return {"message": "Technische data opgeslagen", "symbol": symbol}
+    except Exception as e:
+        logger.error(f"❌ TECH08: Opslaan via POST mislukt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✅ GET: Laatste technische data (voor dashboard)
 @router.get("/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
@@ -122,21 +141,20 @@ async def get_technical_data():
             })
 
         return result
-
     except Exception as e:
-        logger.error(f"❌ TECH05: Fetch error: {e}")
+        logger.error(f"❌ TECH05: Ophalen mislukt: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
 
-# ✅ Alias route voor frontend
+# ✅ GET: Alias voor frontend
 @router.get("/technical_data/list")
 async def get_technical_data_list():
     return await get_technical_data()
 
 
-# ✅ Technische data per asset ophalen
+# ✅ GET: Data per asset
 @router.get("/technical_data/{symbol}")
 async def get_technical_for_symbol(symbol: str):
     conn = get_db_connection()
@@ -168,15 +186,14 @@ async def get_technical_for_symbol(symbol: str):
             })
 
         return result
-
     except Exception as e:
-        logger.error(f"❌ TECH07: Fetch symbol error: {e}")
+        logger.error(f"❌ TECH07: Ophalen symbol error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
 
-# ✅ Verwijder technische data (optioneel per symbool)
+# ✅ DELETE: Verwijder technische data
 @router.delete("/technical_data/{symbol}")
 async def delete_technical_data(symbol: str):
     conn = get_db_connection()
@@ -189,11 +206,10 @@ async def delete_technical_data(symbol: str):
             conn.commit()
             return {"message": f"Technische data voor {symbol} verwijderd."}
     except Exception as e:
-        logger.error(f"❌ TECH06: Delete error: {e}")
+        logger.error(f"❌ TECH06: Verwijderen mislukt: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
-
 
 # ✅ POST: directe invoer van technische data + interpretatie
 @router.post("/technical_data")
