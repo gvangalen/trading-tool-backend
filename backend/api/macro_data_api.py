@@ -6,7 +6,6 @@ from backend.utils.db import get_db_connection
 from backend.utils.macro_interpreter import process_macro_indicator
 from backend.config.config_loader import load_macro_config  # ✅ Centrale config loader
 
-# ✅ Logger instellen
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -19,6 +18,24 @@ def get_db_cursor():
     return conn, conn.cursor()
 
 
+def validate_macro_config(name: str, config: dict, full_config: dict):
+    """
+    ✅ Valideer macroconfig en geef API-URL terug
+    """
+    symbol = config.get("symbol")
+    source = config.get("source")
+    base_urls = full_config.get("base_urls", {})
+
+    if not symbol or not source:
+        raise ValueError(f"❌ [CFG03] 'symbol' of 'source' ontbreekt in config voor '{name}'")
+
+    if source not in base_urls:
+        raise ValueError(f"❌ [CFG04] Geen base_url gedefinieerd voor source '{source}'")
+
+    api_url = base_urls[source].format(symbol=symbol)
+    return api_url
+
+
 # ✅ POST: Macro-indicator toevoegen op basis van config
 @router.post("/macro_data")
 async def add_macro_indicator(request: Request):
@@ -29,19 +46,27 @@ async def add_macro_indicator(request: Request):
     if not name:
         raise HTTPException(status_code=400, detail="❌ [REQ01] Naam van indicator is verplicht.")
 
-    # Config laden via centrale loader
     try:
-        config = load_macro_config()
+        config_data = load_macro_config()
     except Exception as e:
         logger.error(f"❌ [CFG01] Config laden mislukt: {e}")
         raise HTTPException(status_code=500, detail=f"❌ [CFG01] Configbestand ongeldig of ontbreekt: {e}")
 
-    if name not in config:
+    if name not in config_data.get("indicators", {}):
         raise HTTPException(status_code=400, detail=f"❌ [CFG02] Indicator '{name}' niet gevonden in config.")
 
-    # Interpreter uitvoeren
+    indicator_config = config_data["indicators"][name]
+
+    # ✅ Valideer config + genereer API-URL
     try:
-        result = await process_macro_indicator(name, config[name])
+        _ = validate_macro_config(name, indicator_config, config_data)
+    except Exception as e:
+        logger.error(str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # ✅ Interpreter aanroepen
+    try:
+        result = await process_macro_indicator(name, indicator_config)
         if not result or "value" not in result or "interpretation" not in result or "action" not in result:
             raise ValueError("❌ Interpreterresultaat incompleet")
 
@@ -56,7 +81,7 @@ async def add_macro_indicator(request: Request):
 
     score = result.get("score", 0)
 
-    # Opslaan in database
+    # ✅ Opslaan in DB
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
@@ -114,13 +139,11 @@ async def get_macro_indicators():
         conn.close()
 
 
-# ✅ Alias: /macro_data/list → fallback route voor frontend
 @router.get("/macro_data/list")
 async def get_macro_data_list():
     return await get_macro_indicators()
 
 
-# ✅ DELETE: Macro-indicator verwijderen op basis van naam
 @router.delete("/macro_data/{name}")
 async def delete_macro_indicator(name: str):
     logger.info(f"🗑️ [delete] Probeer macro-indicator '{name}' te verwijderen...")
@@ -140,7 +163,6 @@ async def delete_macro_indicator(name: str):
         conn.close()
 
 
-# ✅ PATCH: Macro-indicator bijwerken (waarde)
 @router.patch("/macro_data/{name}")
 async def update_macro_value(name: str, request: Request):
     logger.info(f"✏️ [patch] Bijwerken van '{name}'...")
