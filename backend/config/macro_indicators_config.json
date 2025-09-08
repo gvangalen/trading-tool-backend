@@ -1,0 +1,26 @@
+{
+  "S&P500": {
+    "thresholds": [4000, 4300, 4600],
+    "positive": true,
+    "category": "macro",
+    "correlation": "positief",
+    "explanation": "Hogere S&P500-standen duiden vaak op een gezonde aandelenmarkt.",
+    "action": "Bij een sterke S&P500 is het marktsentiment positief. Positief voor crypto."
+  },
+  "VIX": {
+    "thresholds": [13, 18, 25],
+    "positive": false,
+    "category": "macro",
+    "correlation": "negatief",
+    "explanation": "Een hogere VIX duidt op meer angst en volatiliteit op de markt.",
+    "action": "Bij hoge VIX is voorzichtigheid geboden. Negatief voor risicovolle assets zoals crypto."
+  },
+  "DXY": {
+    "thresholds": [98, 102, 106],
+    "positive": false,
+    "category": "macro",
+    "correlation": "negatief",
+    "explanation": "Een sterke dollarindex (DXY) drukt vaak op de prijs van Bitcoin.",
+    "action": "Bij stijgende DXY is vaak een dalende BTC-prijs te zien. Bearish signaal."
+  }
+}
