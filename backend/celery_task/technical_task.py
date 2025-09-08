@@ -9,7 +9,11 @@ from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
 
 # ✅ Import voor technische logica
-from backend.utils.technical_logic import process_technical_indicator, load_technical_config
+from backend.utils.technical_interpreter import (
+    process_technical_indicator,
+    process_all_technical,
+    load_technical_config
+)
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
