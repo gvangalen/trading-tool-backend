@@ -2,6 +2,7 @@ import os
 import logging
 import traceback
 import requests
+from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
 
@@ -19,6 +20,8 @@ HEADERS = {"Content-Type": "application/json"}
 def safe_request(url, method="POST", payload=None):
     try:
         response = requests.request(method, url, json=payload, headers=HEADERS, timeout=TIMEOUT)
+        if response.status_code != 200:
+            logger.error(f"❌ Foutstatus {response.status_code} van {url}: {response.text}")
         response.raise_for_status()
         logger.info(f"✅ API-call succesvol: {url}")
         return response.json()
@@ -40,7 +43,8 @@ def save_macro_data_task(indicator, value, trend=None, interpretation=None, acti
         "trend": trend,
         "interpretation": interpretation,
         "action": action,
-        "score": score
+        "score": score,
+        "timestamp": datetime.utcnow().isoformat(),  # ✅ Toegevoegd
     }
     try:
         url = f"{API_BASE_URL}/macro_data"
@@ -60,39 +64,45 @@ def fetch_macro_data():
 
     # ✅ 1. Fear & Greed Index
     try:
-        response = requests.get("https://api.alternative.me/fng/")
-        data = response.json()
-        value = int(data["data"][0]["value"])
-        save_macro_data_task.delay(
-            indicator="Fear & Greed Index",
-            value=value
-        )
+        fng_response = requests.get("https://api.alternative.me/fng/", timeout=TIMEOUT)
+        if fng_response.status_code != 200:
+            raise Exception(f"FNG statuscode {fng_response.status_code}")
+        data = fng_response.json()
+        value = int(data.get("data", [{}])[0].get("value", 0))
+        save_macro_data_task.delay(indicator="Fear & Greed Index", value=value)
         logger.info(f"✅ Fear & Greed opgeslagen: {value}")
     except Exception as e:
-        logger.warning(f"❌ Fout bij Fear & Greed ophalen: {e}")
+        logger.warning(f"❌ Fout bij ophalen Fear & Greed: {e}")
+        logger.warning(traceback.format_exc())
 
     # ✅ 2. S&P500 (Yahoo Finance)
     try:
-        sp_response = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/^GSPC?interval=1d&range=1d")
+        sp_response = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/^GSPC?interval=1d&range=1d", timeout=TIMEOUT)
+        if sp_response.status_code != 200:
+            raise Exception(f"S&P500 statuscode {sp_response.status_code}")
         sp_data = sp_response.json()
-        price = sp_data["chart"]["result"][0]["meta"]["regularMarketPrice"]
-        save_macro_data_task.delay(
-            indicator="S&P500",
-            value=round(price, 2)
-        )
-        logger.info(f"✅ S&P500 opgeslagen: {price}")
+        price = sp_data.get("chart", {}).get("result", [{}])[0].get("meta", {}).get("regularMarketPrice")
+        if price is not None:
+            save_macro_data_task.delay(indicator="S&P500", value=round(price, 2))
+            logger.info(f"✅ S&P500 opgeslagen: {price}")
+        else:
+            raise ValueError("S&P500 prijs niet gevonden in response.")
     except Exception as e:
-        logger.warning(f"❌ Fout bij S&P500 ophalen: {e}")
+        logger.warning(f"❌ Fout bij ophalen S&P500: {e}")
+        logger.warning(traceback.format_exc())
 
     # ✅ 3. DXY (Yahoo Finance)
     try:
-        dxy_response = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=1d")
+        dxy_response = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB?interval=1d&range=1d", timeout=TIMEOUT)
+        if dxy_response.status_code != 200:
+            raise Exception(f"DXY statuscode {dxy_response.status_code}")
         dxy_data = dxy_response.json()
-        price = dxy_data["chart"]["result"][0]["meta"]["regularMarketPrice"]
-        save_macro_data_task.delay(
-            indicator="DXY",
-            value=round(price, 2)
-        )
-        logger.info(f"✅ DXY opgeslagen: {price}")
+        price = dxy_data.get("chart", {}).get("result", [{}])[0].get("meta", {}).get("regularMarketPrice")
+        if price is not None:
+            save_macro_data_task.delay(indicator="DXY", value=round(price, 2))
+            logger.info(f"✅ DXY opgeslagen: {price}")
+        else:
+            raise ValueError("DXY prijs niet gevonden in response.")
     except Exception as e:
-        logger.warning(f"❌ Fout bij DXY ophalen: {e}")
+        logger.warning(f"❌ Fout bij ophalen DXY: {e}")
+        logger.warning(traceback.format_exc())
