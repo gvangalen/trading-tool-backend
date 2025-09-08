@@ -188,3 +188,25 @@ async def delete_technical_data(symbol: str):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+# ✅ Technische data opslaan via POST (bijv. vanuit Celery)
+@router.post("/technical_data")
+async def save_technical_data_post(request: Request):
+    try:
+        data = await request.json()
+        symbol = data.get("symbol")
+        rsi = data.get("rsi")
+        volume = data.get("volume")
+        ma_200 = data.get("ma_200")
+        timeframe = data.get("timeframe", "1D")
+
+        if None in (symbol, rsi, volume, ma_200):
+            raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
+
+        score, advies = process_technical_indicator(symbol, rsi, volume, ma_200, timeframe)
+        save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe)
+
+        return {"message": "Technische data opgeslagen", "symbol": symbol}
+    except Exception as e:
+        logger.error(f"❌ TECH08: Save via POST failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
