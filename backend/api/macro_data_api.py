@@ -9,7 +9,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-CONFIG_PATH = "macro_indicators_config.json"
+CONFIG_PATH = "config/macro_indicators_config.json"
 
 
 def get_db_cursor():
