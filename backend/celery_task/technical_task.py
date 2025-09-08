@@ -4,6 +4,7 @@ import traceback
 from urllib.parse import urljoin
 from datetime import datetime
 from celery import shared_task
+from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
 
