@@ -76,7 +76,7 @@ async def trigger_technical_task(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ POST: Data + interpretatie opslaan (manueel)
+# ✅ POST: directe invoer van technische data + interpretatie
 @router.post("/technical_data")
 async def save_technical_data_post(request: Request):
     try:
@@ -90,7 +90,7 @@ async def save_technical_data_post(request: Request):
         if None in (symbol, rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
 
-        # Validatie
+        # ✅ Validatie op numeriek
         try:
             rsi = float(rsi)
             volume = float(volume)
@@ -98,15 +98,15 @@ async def save_technical_data_post(request: Request):
         except ValueError:
             raise HTTPException(status_code=400, detail="RSI, volume en ma_200 moeten numeriek zijn.")
 
-        # Interpretatie ophalen
+        # ✅ Interpretatie via functie
         score, advies = process_technical_indicator(symbol, rsi, volume, ma_200, timeframe)
 
-        # Opslaan in DB
+        # ✅ Opslaan in DB
         save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe)
 
         return {"message": "Technische data opgeslagen", "symbol": symbol}
     except Exception as e:
-        logger.error(f"❌ TECH08: Opslaan via POST mislukt: {e}")
+        logger.error(f"❌ TECH08: Save via POST failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -211,35 +211,3 @@ async def delete_technical_data(symbol: str):
     finally:
         conn.close()
 
-# ✅ POST: directe invoer van technische data + interpretatie
-@router.post("/technical_data")
-async def save_technical_data_post(request: Request):
-    try:
-        data = await request.json()
-        symbol = data.get("symbol")
-        rsi = data.get("rsi")
-        volume = data.get("volume")
-        ma_200 = data.get("ma_200")
-        timeframe = data.get("timeframe", "1D")
-
-        if None in (symbol, rsi, volume, ma_200):
-            raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
-
-        # ✅ Validatie op numeriek
-        try:
-            rsi = float(rsi)
-            volume = float(volume)
-            ma_200 = float(ma_200)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="RSI, volume en ma_200 moeten numeriek zijn.")
-
-        # ✅ Interpretatie via functie
-        score, advies = process_technical_indicator(symbol, rsi, volume, ma_200, timeframe)
-
-        # ✅ Opslaan in DB
-        save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe)
-
-        return {"message": "Technische data opgeslagen", "symbol": symbol}
-    except Exception as e:
-        logger.error(f"❌ TECH08: Save via POST failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
