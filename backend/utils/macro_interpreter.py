@@ -5,11 +5,12 @@ from backend.config.config_loader import load_macro_config
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+YAHOO_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d"
+
 
 async def process_all_macro_indicators():
     """
-    ➤ Laadt macro_config en verwerkt alle indicatoren.
-    ➤ Wordt gebruikt in o.a. macro_data_api of Celery-tasks.
+    ➤ Verwerkt alle macro-indicatoren uit config.
     """
     try:
         macro_config = load_macro_config()
@@ -18,7 +19,7 @@ async def process_all_macro_indicators():
         return []
 
     results = []
-    for name, config in macro_config.items():
+    for name, config in macro_config.get("indicators", {}).items():
         try:
             result = await process_macro_indicator(name, config)
             results.append(result)
@@ -31,110 +32,74 @@ async def process_all_macro_indicators():
 
 async def process_macro_indicator(name, config):
     """
-    ➤ Verwerkt een enkele macro-indicator via de config.
+    ➤ Verwerkt een enkele macro-indicator via Yahoo of andere bron.
     """
-    api_url = config.get("api_url")
-    extract_key = config.get("extract_key")
-    rules = config.get("interpretation_rules", [])
+    symbol = config.get("symbol")
+    source = config.get("source", "yahoo")
 
-    if not api_url or not extract_key:
-        raise ValueError(f"❌ Ongeldige configuratie voor '{name}': ontbrekende api_url of extract_key")
+    if source == "yahoo":
+        url = YAHOO_BASE_URL.format(symbol=symbol)
+    else:
+        raise ValueError(f"❌ [SRC01] Onbekende macrobron: {source}")
 
-    # ➤ API-request uitvoeren
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(api_url)
+            response = await client.get(url)
             response.raise_for_status()
-            json_data = response.json()
+            data = response.json()
     except Exception as e:
-        logger.error(f"❌ [API01] API-fout bij {api_url}: {e}")
+        logger.error(f"❌ [API01] API-fout bij ophalen van {name}: {e}")
         raise
 
-    # ➤ Speciale DXY-berekening
-    if extract_key == "custom_dxy_calculation":
-        try:
-            rates = json_data["rates"]
-            basket = ["EUR", "GBP", "JPY", "CAD", "SEK", "CHF"]
-            value = sum(rates.get(cur, 1) for cur in basket) / len(basket)
-        except Exception as e:
-            logger.error(f"❌ [DXY01] DXY-berekening mislukt: {e}")
-            raise
-    else:
-        value = extract_nested_value(json_data, extract_key)
+    try:
+        value = extract_yahoo_value(data)
+    except Exception as e:
+        logger.error(f"❌ [PARSE01] Fout bij uitlezen waarde voor {name}: {e}")
+        raise
 
-    if value is None:
-        raise ValueError(f"❌ Kon waarde niet extraheren voor '{name}' via key '{extract_key}'")
-
-    interpretation, action = interpret_value(value, rules)
-    score = calculate_score(value, rules)
+    score = calculate_score(value, config["thresholds"], config["positive"])
+    interpretation = config.get("explanation", "")
+    action = config.get("action", "")
 
     return {
         "name": name,
         "value": value,
-        "interpretation": interpretation,
-        "action": action,
         "score": score,
-        "symbol": config.get("symbol"),
-        "source": config.get("source"),
+        "symbol": symbol,
+        "source": source,
         "category": config.get("category"),
         "correlation": config.get("correlation"),
-        "explanation": config.get("explanation"),
-        "link": generate_chart_link(config.get("source"), config.get("symbol")),
+        "interpretation": interpretation,
+        "action": action,
+        "link": generate_chart_link(source, symbol),
     }
 
 
-def extract_nested_value(data, path):
+def extract_yahoo_value(data):
     """
-    ➤ Haalt een geneste waarde uit JSON op via dot-notatie (bv: "data[0].price").
+    ➤ Extract laatste slotkoers uit Yahoo response.
     """
-    try:
-        keys = path.split(".")
-        for key in keys:
-            if isinstance(data, list) and key.isdigit():
-                data = data[int(key)]
-            else:
-                data = data.get(key)
-
-        try:
-            return float(data)
-        except (TypeError, ValueError):
-            logger.error(f"❌ Ongeldige numerieke waarde bij extractie van '{path}': {data} (type: {type(data)})")
-            return None
-    except Exception as e:
-        logger.error(f"❌ Fout bij extractie van '{path}': {e}")
-        return None
+    result = data["chart"]["result"][0]
+    close_prices = result["indicators"]["quote"][0]["close"]
+    return float(close_prices[-1])
 
 
-def interpret_value(value, rules):
+def calculate_score(value, thresholds, positive=True):
     """
-    ➤ Retourneert interpretatie en actie op basis van thresholdregels.
+    ➤ Bereken score op basis van drempels (laag, neutraal, hoog).
     """
-    for rule in sorted(rules, key=lambda r: -r["threshold"]):
-        if value >= rule["threshold"]:
-            return rule["interpretation"], rule["action"]
-    return "Unknown", "No action"
-
-
-def calculate_score(value, rules):
-    """
-    ➤ Berekent score op basis van de positie t.o.v. thresholds.
-    """
-    for i, rule in enumerate(sorted(rules, key=lambda r: -r["threshold"])):
-        if value >= rule["threshold"]:
-            return len(rules) - i
-    return 0
+    score = 0
+    for threshold in thresholds:
+        if value >= threshold:
+            score += 1
+    return score if positive else 3 - score
 
 
 def generate_chart_link(source, symbol):
-    """
-    ➤ Genereert een URL naar een grafiek op basis van de bron en het symbool.
-    """
     if not source or not symbol:
         return None
-
     if source == "yahoo":
         return f"https://finance.yahoo.com/quote/{symbol}"
     elif source == "tradingview":
         return f"https://www.tradingview.com/symbols/{symbol.replace(':', '')}/"
-    else:
-        return None
+    return None
