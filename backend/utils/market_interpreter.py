@@ -1,18 +1,18 @@
 import logging
-import json
+from backend.config.config_loader import load_config_file
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
 def interpret_market_data(data, config_path="market_data_config.json"):
     """
-    Interpreteert marktdata (zoals prijs, 24h verandering) op basis van thresholds uit config.
-    Geeft een score per metric terug tussen 0–100 + interpretatie-label.
+    ➤ Interpreteert marktdata (zoals prijs, 24h verandering) op basis van thresholds uit config.
+    ➤ Geeft een score per metric terug tussen 0–100 + interpretatie-label.
     """
     try:
-        with open(config_path) as f:
-            config = json.load(f)
+        config = load_config_file(config_path)
     except Exception as e:
         logger.error(f"❌ Fout bij laden market config: {e}")
         return {}
@@ -49,9 +49,10 @@ def interpret_market_data(data, config_path="market_data_config.json"):
 
     return results
 
+
 def calculate_score(value, thresholds, positive=True):
     """
-    Bereken een score (0–100) op basis van thresholds.
+    ➤ Bereken een score (0–100) op basis van thresholds.
     """
     try:
         levels = sorted(thresholds)
@@ -64,9 +65,10 @@ def calculate_score(value, thresholds, positive=True):
         logger.error(f"❌ Fout bij scoreberekening: {e}")
         return 0
 
+
 def generate_label(value, thresholds, positive=True):
     """
-    Genereer interpretatielabel: 'Laag', 'Gemiddeld', 'Hoog', 'Zeer hoog', etc.
+    ➤ Genereer interpretatielabel: 'Laag', 'Gemiddeld', 'Hoog', 'Zeer hoog', etc.
     """
     if not thresholds or len(thresholds) < 2:
         return "Onbekend"
