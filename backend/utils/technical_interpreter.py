@@ -1,13 +1,15 @@
 import logging
+from backend.config.config_loader import load_config_file  # ✅ Centrale loader
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
 def extract_nested_value(data, key_path):
     """
-    Haalt een geneste waarde uit een dict op basis van een pad zoals 'rsi' of 'data.0.value'.
-    Geeft float terug of None bij fout.
+    ➤ Haalt een geneste waarde uit een dict op basis van een pad zoals 'rsi' of 'data.0.value'.
+    ➤ Geeft float terug of None bij fout.
     """
     try:
         keys = key_path.split(".")
@@ -23,9 +25,10 @@ def extract_nested_value(data, key_path):
         logger.warning(f"⚠️ Ongeldige waarde bij extractie '{key_path}': {e}")
         return None
 
+
 def interpret_value(value, thresholds, positive=True):
     """
-    Geeft interpretatie (Zwak, Neutraal, Sterk, Zeer sterk) op basis van drempels.
+    ➤ Geeft interpretatie ('Zwak', 'Neutraal', 'Sterk', 'Zeer sterk') op basis van thresholds.
     """
     if value is None:
         return "Ongeldig"
@@ -55,9 +58,10 @@ def interpret_value(value, thresholds, positive=True):
         else:
             return "Zwak"
 
+
 def calculate_score(value, thresholds, positive=True):
     """
-    Genereert een numerieke score op basis van thresholds (0-3).
+    ➤ Genereert een numerieke score op basis van thresholds (0–3).
     """
     if value is None:
         return 0
@@ -86,9 +90,10 @@ def calculate_score(value, thresholds, positive=True):
         else:
             return 0
 
+
 def process_technical_indicator(name, value, config):
     """
-    Verwerkt één technische indicator volgens de configuratie.
+    ➤ Verwerkt één technische indicator volgens de configuratie.
     Returns:
         dict met naam, waarde, interpretatie, score
     """
@@ -116,3 +121,23 @@ def process_technical_indicator(name, value, config):
     except Exception as e:
         logger.error(f"❌ Fout bij verwerken technische indicator '{name}': {e}")
         return None
+
+
+def process_all_technical(data, config_path="technical_indicators_config.json"):
+    """
+    ➤ Laadt alle technische configs en verwerkt ze met opgegeven data.
+    """
+    try:
+        config = load_config_file(config_path)
+    except Exception as e:
+        logger.error(f"❌ Config laden mislukt: {e}")
+        return {}
+
+    results = {}
+    for name, raw_value in data.items():
+        if name not in config:
+            logger.warning(f"⚠️ Geen interpretatieconfig voor: {name}")
+            continue
+        results[name] = process_technical_indicator(name, raw_value, config[name])
+
+    return results
