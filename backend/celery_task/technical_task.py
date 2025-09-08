@@ -63,14 +63,14 @@ def calculate_rsi(closes, period=14):
 # ✅ Technische data POSTen naar backend
 @shared_task(name="backend.celery_task.technical_task.save_technical_data_task")
 def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D"):
-   payload = {
-    "symbol": symbol,
-    "timeframe": timeframe,
-    "rsi": rsi,
-    "ma_200": ma_200_ratio,
-    "volume": volume
-}
-try:
+    payload = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "rsi": rsi,
+        "ma_200": ma_200_ratio,
+        "volume": volume
+    }
+    try:
         url = f"{API_BASE_URL}/technical_data"
         logger.info(f"📡 POST technische data: {payload}")
         response = safe_request(url, method="POST", payload=payload, headers=HEADERS)
