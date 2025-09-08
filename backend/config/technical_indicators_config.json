@@ -1,5 +1,5 @@
 {
-  "rsi": {
+  "RSI": {
     "thresholds": [30, 50, 70],
     "positive": false,
     "category": "technical",
@@ -7,7 +7,7 @@
     "explanation": "RSI geeft overbought of oversold situaties aan.",
     "action": "Bij RSI < 30 is er vaak sprake van een koopmoment. RSI > 70 duidt op oververhitting."
   },
-  "volume": {
+  "Volume": {
     "thresholds": [1000, 2500, 5000],
     "positive": true,
     "category": "technical",
@@ -15,8 +15,8 @@
     "explanation": "Hoger volume bevestigt de richting van een trend.",
     "action": "Stijgend volume = bevestiging van momentum. Laag volume = twijfel."
   },
-  "ma_200": {
-    "thresholds": [],
+  "200MA": {
+    "thresholds": [0.95, 1.0, 1.05],
     "positive": true,
     "category": "technical",
     "correlation": "positief",
