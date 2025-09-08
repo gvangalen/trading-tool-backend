@@ -57,20 +57,24 @@ async def process_macro_indicator(name, config):
         logger.error(f"❌ [PARSE01] Fout bij uitlezen waarde voor {name}: {e}")
         raise
 
-    score = calculate_score(value, config["thresholds"], config["positive"])
-    interpretation = config.get("explanation", "")
-    action = config.get("action", "")
+    # Nieuwe interpretatie + score logica
+    thresholds = config["thresholds"]
+    positive = config.get("positive", True)
+
+    score = calculate_score(value, thresholds, positive)
+    interpretation = interpret_value(value, thresholds, positive)
 
     return {
         "name": name,
         "value": value,
         "score": score,
+        "interpretation": interpretation,
         "symbol": symbol,
         "source": source,
         "category": config.get("category"),
         "correlation": config.get("correlation"),
-        "interpretation": interpretation,
-        "action": action,
+        "explanation": config.get("explanation"),
+        "action": config.get("action"),
         "link": generate_chart_link(source, symbol),
     }
 
@@ -86,13 +90,60 @@ def extract_yahoo_value(data):
 
 def calculate_score(value, thresholds, positive=True):
     """
-    ➤ Bereken score op basis van drempels (laag, neutraal, hoog).
+    ➤ Bereken score op basis van drempels (laag, midden, hoog).
     """
-    score = 0
-    for threshold in thresholds:
-        if value >= threshold:
-            score += 1
-    return score if positive else 3 - score
+    if value is None or not thresholds or len(thresholds) != 3:
+        return 0
+
+    v = float(value)
+
+    if positive:
+        if v >= thresholds[2]:
+            return 3
+        elif v >= thresholds[1]:
+            return 2
+        elif v >= thresholds[0]:
+            return 1
+        else:
+            return 0
+    else:
+        if v <= thresholds[0]:
+            return 3
+        elif v <= thresholds[1]:
+            return 2
+        elif v <= thresholds[2]:
+            return 1
+        else:
+            return 0
+
+
+def interpret_value(value, thresholds, positive=True):
+    """
+    ➤ Genereer tekstuele interpretatie van de waarde.
+    """
+    if value is None:
+        return "Ongeldig"
+
+    v = float(value)
+
+    if positive:
+        if v >= thresholds[2]:
+            return "Zeer sterk"
+        elif v >= thresholds[1]:
+            return "Sterk"
+        elif v >= thresholds[0]:
+            return "Neutraal"
+        else:
+            return "Zwak"
+    else:
+        if v <= thresholds[0]:
+            return "Zeer sterk"
+        elif v <= thresholds[1]:
+            return "Sterk"
+        elif v <= thresholds[2]:
+            return "Neutraal"
+        else:
+            return "Zwak"
 
 
 def generate_chart_link(source, symbol):
