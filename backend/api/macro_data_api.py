@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, HTTPException, Request
 from backend.utils.db import get_db_connection
 from backend.utils.macro_interpreter import process_macro_indicator
 from backend.config.config_loader import load_macro_config
@@ -27,9 +27,6 @@ def get_db_cursor():
 
 
 def validate_macro_config(name: str, config: dict, full_config: dict):
-    """
-    ✅ Valideer macroconfig en geef API-URL terug
-    """
     symbol = config.get("symbol")
     source = config.get("source")
     base_urls = full_config.get("base_urls", {})
@@ -69,32 +66,34 @@ async def add_macro_indicator(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
     # ✅ Interpreterresultaat opvragen – of ontvangen data gebruiken
-try:
-    if all(k in data for k in ("value", "score", "interpretation", "action")):
-        logger.info(f"📥 [add] Externe data ontvangen voor '{name}'")
-        result = {
-            "name": name,
-            "value": data["value"],
-            "score": data["score"],
-            "interpretation": data["interpretation"],
-            "action": data["action"],
-        }
-    else:
-        logger.info(f"⚙️ [add] Geen externe data, interpreter wordt aangeroepen voor '{name}'")
-        result = await process_macro_indicator(name, indicator_config)
-
-    # Validatie
-    if not result or "value" not in result or "interpretation" not in result or "action" not in result:
-        raise ValueError("❌ Interpreterresultaat incompleet")
-
     try:
-        value = float(result.get("value"))
-    except (TypeError, ValueError):
-        raise ValueError(f"❌ Ongeldige waarde voor indicator '{name}': {result.get('value')}")
+        if all(k in data for k in ("value", "score", "interpretation", "action")):
+            logger.info(f"📥 [add] Externe data ontvangen voor '{name}'")
+            result = {
+                "name": name,
+                "value": data["value"],
+                "score": data["score"],
+                "interpretation": data["interpretation"],
+                "action": data["action"],
+            }
+        else:
+            logger.info(f"⚙️ [add] Geen externe data, interpreter wordt aangeroepen voor '{name}'")
+            result = await process_macro_indicator(name, indicator_config)
 
-except Exception as e:
-    logger.error(f"❌ [INT01] Interpreterfout: {e}")
-    raise HTTPException(status_code=500, detail=f"❌ [INT01] Verwerking indicator mislukt: {e}")
+        # Validatie
+        if not result or "value" not in result or "score" not in result or "interpretation" not in result or "action" not in result:
+            raise ValueError("❌ Interpreterresultaat incompleet")
+
+        try:
+            value = float(result.get("value"))
+        except (TypeError, ValueError):
+            raise ValueError(f"❌ Ongeldige waarde voor indicator '{name}': {result.get('value')}")
+
+        score = result.get("score")
+
+    except Exception as e:
+        logger.error(f"❌ [INT01] Interpreterfout: {e}")
+        raise HTTPException(status_code=500, detail=f"❌ [INT01] Verwerking indicator mislukt: {e}")
 
     # ✅ Opslaan in DB
     conn, cur = get_db_cursor()
