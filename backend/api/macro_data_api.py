@@ -1,15 +1,20 @@
 import logging
 import json
+import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
-from backend.utils.db import get_db_connection  # ✅ FIXED
-from backend.utils.macro_interpreter import process_macro_indicator  # ✅ FIXED
+from backend.utils.db import get_db_connection
+from backend.utils.macro_interpreter import process_macro_indicator
 
+# ✅ Logger instellen
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-CONFIG_PATH = "config/macro_indicators_config.json"
+# ✅ Absoluut pad naar configmap (werkt altijd)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "..", "config", "macro_indicators_config.json")
+
 
 
 def get_db_cursor():
