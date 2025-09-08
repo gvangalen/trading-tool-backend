@@ -1,21 +1,24 @@
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Query
-
 from backend.utils.db import get_db_connection
 from backend.utils.macro_interpreter import process_macro_indicator
 from backend.config.config_loader import load_macro_config
 
-# ✅ Init router en logging
+# ✅ Router en logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ Laad config bovenin bestand (conform market_data_api)
-MACRO_CONFIG = load_macro_config()
-logger.info("🚀 macro_data_api.py geladen – alle macro-routes zijn actief.")
+# ✅ Macro-config éénmalig bovenaan laden
+try:
+    MACRO_CONFIG = load_macro_config()
+    logger.info("🚀 macro_data_api.py geladen – alle macro-routes zijn actief.")
+except Exception as e:
+    MACRO_CONFIG = {}
+    logger.error(f"❌ [INIT] Config niet geladen bij opstarten: {e}")
 
-# ✅ Hulpfunctie voor DB-verbinding
+
 def get_db_cursor():
     conn = get_db_connection()
     if not conn:
@@ -51,11 +54,7 @@ async def add_macro_indicator(request: Request):
     if not name:
         raise HTTPException(status_code=400, detail="❌ [REQ01] Naam van indicator is verplicht.")
 
-    try:
-        config_data = load_macro_config()
-    except Exception as e:
-        logger.error(f"❌ [CFG01] Config laden mislukt: {e}")
-        raise HTTPException(status_code=500, detail=f"❌ [CFG01] Configbestand ongeldig of ontbreekt: {e}")
+    config_data = MACRO_CONFIG
 
     if name not in config_data.get("indicators", {}):
         raise HTTPException(status_code=400, detail=f"❌ [CFG02] Indicator '{name}' niet gevonden in config.")
