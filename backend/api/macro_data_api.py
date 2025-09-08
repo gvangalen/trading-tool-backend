@@ -1,14 +1,15 @@
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
+
 from backend.utils.db import get_db_connection
 from backend.utils.macro_interpreter import process_macro_indicator
-from backend.config.config_loader import load_macro_config  # ✅ Gecentraliseerde loader
+from backend.config.config_loader import load_macro_config  # ✅ Centrale config loader
 
+# ✅ Logger instellen
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
 
 
 def get_db_cursor():
@@ -28,13 +29,12 @@ async def add_macro_indicator(request: Request):
     if not name:
         raise HTTPException(status_code=400, detail="❌ [REQ01] Naam van indicator is verplicht.")
 
-    # Config laden
+    # Config laden via centrale loader
     try:
-        with open(CONFIG_PATH) as f:
-            config = json.load(f)
+        config = load_macro_config()
     except Exception as e:
         logger.error(f"❌ [CFG01] Config laden mislukt: {e}")
-        raise HTTPException(status_code=500, detail="❌ [CFG01] Configbestand ongeldig of ontbreekt.")
+        raise HTTPException(status_code=500, detail=f"❌ [CFG01] Configbestand ongeldig of ontbreekt: {e}")
 
     if name not in config:
         raise HTTPException(status_code=400, detail=f"❌ [CFG02] Indicator '{name}' niet gevonden in config.")
@@ -44,13 +44,12 @@ async def add_macro_indicator(request: Request):
         result = await process_macro_indicator(name, config[name])
         if not result or "value" not in result or "interpretation" not in result or "action" not in result:
             raise ValueError("❌ Interpreterresultaat incompleet")
-        
-        # ✅ Extra check op waarde
+
         try:
             value = float(result.get("value"))
         except (TypeError, ValueError):
             raise ValueError(f"❌ Ongeldige waarde voor indicator '{name}': {result.get('value')}")
-        
+
     except Exception as e:
         logger.error(f"❌ [INT01] Interpreterfout: {e}")
         raise HTTPException(status_code=500, detail=f"❌ [INT01] Verwerking indicator mislukt: {e}")
