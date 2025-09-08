@@ -1,6 +1,6 @@
 print("✅ strategy_api.py geladen!")  # komt in logs bij opstarten
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from backend.utils.db import get_db_connection
 from backend.celery_task.strategy_task import generate_strategie_voor_setup as generate_strategy_task
