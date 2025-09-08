@@ -56,7 +56,7 @@ def safe_request(url, method="POST", payload=None):
 def fetch_market_data():
     logger.info("📈 Start live marktdata ophalen...")
     try:
-        url = f"{API_BASE_URL}/market_data/save"
+        url = f"{API_BASE_URL}/market_data"  # ✅ Correcte route
         response = safe_request(url)
         logger.info(f"✅ Marktdata opgeslagen: {response}")
     except RetryError:
