@@ -74,6 +74,12 @@ async def process_macro_indicator(name, config):
         "interpretation": interpretation,
         "action": action,
         "score": score,
+        "symbol": config.get("symbol"),
+        "source": config.get("source"),
+        "category": config.get("category"),
+        "correlation": config.get("correlation"),
+        "explanation": config.get("explanation"),
+        "link": generate_chart_link(config.get("source"), config.get("symbol")),
     }
 
 
@@ -117,3 +123,18 @@ def calculate_score(value, rules):
         if value >= rule["threshold"]:
             return len(rules) - i
     return 0
+
+
+def generate_chart_link(source, symbol):
+    """
+    ➤ Genereert een URL naar een grafiek op basis van de bron en het symbool.
+    """
+    if not source or not symbol:
+        return None
+
+    if source == "yahoo":
+        return f"https://finance.yahoo.com/quote/{symbol}"
+    elif source == "tradingview":
+        return f"https://www.tradingview.com/symbols/{symbol.replace(':', '')}/"
+    else:
+        return None
