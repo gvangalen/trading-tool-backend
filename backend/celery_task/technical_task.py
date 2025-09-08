@@ -17,6 +17,7 @@ BINANCE_BASE_URL = "https://api.binance.com"
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
+
 # ✅ Robuuste API-call met retries
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="GET", payload=None, headers=None):
@@ -35,6 +36,7 @@ def safe_request(url, method="GET", payload=None, headers=None):
     except Exception as e:
         logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
         raise
+
 
 # ✅ RSI berekenen
 def calculate_rsi(closes, period=14):
@@ -57,26 +59,16 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-# ✅ Huidige prijs ophalen voor vergelijking met MA200
-def get_current_price(symbol="BTCUSDT"):
-    try:
-        url = f"{BINANCE_BASE_URL}/api/v3/ticker/price"
-        params = {"symbol": symbol}
-        data = safe_request(url, payload=params)
-        return float(data["price"])
-    except Exception as e:
-        logger.warning(f"⚠️ Fout bij ophalen laatste prijs {symbol}: {e}")
-        return 0
 
 # ✅ Technische data POSTen naar backend
 @shared_task(name="backend.celery_task.technical_task.save_technical_data_task")
-def save_technical_data_task(symbol, rsi, volume, ma_200_position, timeframe="1D"):
+def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D"):
     payload = {
         "symbol": symbol,
-        "rsi": rsi,
-        "volume": volume,
-        "ma_200": ma_200_position,
         "timeframe": timeframe,
+        "RSI": rsi,
+        "200MA": ma_200_ratio,
+        "Volume": volume
     }
 
     try:
@@ -90,6 +82,7 @@ def save_technical_data_task(symbol, rsi, volume, ma_200_position, timeframe="1D
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
+
 
 # ✅ Technische data ophalen van Binance en verwerken
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data")
@@ -121,12 +114,12 @@ def fetch_technical_data():
         volume = round(volumes[-1], 2)
         ma_200 = round(sum(closes[-200:]) / 200, 2)
         current_price = closes[-1]
-        ma_200_position = "above" if current_price > ma_200 else "below"
+        ma_200_ratio = round(current_price / ma_200, 3)  # ✅ bijv. 1.08
 
-        logger.info(f"📊 RSI: {rsi}, MA200: {ma_200}, Positie: {ma_200_position}, Volume: {volume}")
+        logger.info(f"📊 RSI: {rsi}, MA200-ratio: {ma_200_ratio}, Volume: {volume}")
 
         # ✅ Naar backend sturen
-        save_technical_data_task.delay(our_symbol, rsi, volume, ma_200_position, "1D")
+        save_technical_data_task.delay(our_symbol, rsi, volume, ma_200_ratio, "1D")
 
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen technische data: {e}")
