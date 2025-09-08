@@ -1,4 +1,4 @@
-iimport logging
+import logging
 import traceback
 from celery import shared_task
 from backend.utils.db import get_db_connection
