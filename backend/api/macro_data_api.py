@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Query
 from backend.utils.db import get_db_connection
 from backend.utils.macro_interpreter import process_macro_indicator
-from backend.config.config_loader import load_macro_config  # ✅ Centrale config loader
+from backend.config.config_loader import load_macro_config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
