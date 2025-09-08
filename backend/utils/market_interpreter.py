@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 def interpret_market_data(data, config_path="market_data_config.json"):
     """
     Interpreteert marktdata (zoals prijs, 24h verandering) op basis van thresholds uit config.
-    Geeft een score per metric terug tussen 0–100 + interpretatie en adviesrichting.
+    Geeft een score per metric terug tussen 0–100 + interpretatie-label.
     """
     try:
         with open(config_path) as f:
@@ -19,55 +19,67 @@ def interpret_market_data(data, config_path="market_data_config.json"):
 
     results = {}
 
-    for key, value in data.items():
+    for key, raw_value in data.items():
         if key not in config:
             logger.warning(f"⚠️ Geen interpretatieconfig gevonden voor: {key}")
             continue
 
         try:
-            value = float(value)
-            thresholds = config[key].get("thresholds", [])
-            is_positive = config[key].get("positive", True)
-
-            score = calculate_score(value, thresholds, is_positive)
-            label = generate_label(value, thresholds)
-
+            value = float(raw_value)
+        except (ValueError, TypeError):
+            logger.warning(f"⚠️ Ongeldige numerieke waarde voor '{key}': {raw_value}")
             results[key] = {
-                "value": value,
-                "score": score,
-                "label": label,
+                "value": raw_value,
+                "score": 0,
+                "label": "Ongeldig"
             }
-        except Exception as e:
-            logger.error(f"❌ Fout bij interpreteren van {key}: {e}")
+            continue
+
+        thresholds = config[key].get("thresholds", [])
+        is_positive = config[key].get("positive", True)
+
+        score = calculate_score(value, thresholds, is_positive)
+        label = generate_label(value, thresholds, is_positive)
+
+        results[key] = {
+            "value": value,
+            "score": score,
+            "label": label,
+        }
 
     return results
 
 def calculate_score(value, thresholds, positive=True):
     """
-    Bereken een score op basis van thresholds.
-    Voorbeeld:
-      thresholds = [60000, 70000, 80000] → score = 25, 50, 75, 100 afhankelijk van waarde
+    Bereken een score (0–100) op basis van thresholds.
     """
     try:
         levels = sorted(thresholds)
         for i, t in enumerate(levels):
             if value < t:
-                return (i / len(levels)) * 100 if positive else (1 - i / len(levels)) * 100
+                fraction = i / len(levels)
+                return round(fraction * 100 if positive else (1 - fraction) * 100)
         return 100 if positive else 0
     except Exception as e:
         logger.error(f"❌ Fout bij scoreberekening: {e}")
         return 0
 
-def generate_label(value, thresholds):
+def generate_label(value, thresholds, positive=True):
     """
-    Genereer een simpele label zoals 'laag', 'gemiddeld', 'hoog'.
+    Genereer interpretatielabel: 'Laag', 'Gemiddeld', 'Hoog', 'Zeer hoog', etc.
     """
     if not thresholds or len(thresholds) < 2:
         return "Onbekend"
 
-    if value < thresholds[0]:
-        return "Laag"
-    elif value < thresholds[1]:
-        return "Gemiddeld"
-    else:
-        return "Hoog"
+    try:
+        if value < thresholds[0]:
+            return "Zeer laag" if positive else "Zeer hoog"
+        elif value < thresholds[1]:
+            return "Laag" if positive else "Hoog"
+        elif len(thresholds) == 3 and value < thresholds[2]:
+            return "Gemiddeld"
+        else:
+            return "Hoog" if positive else "Laag"
+    except Exception as e:
+        logger.warning(f"⚠️ Labelgeneratie mislukt voor waarde {value}: {e}")
+        return "Onbekend"
