@@ -1,17 +1,20 @@
 import logging
 import json
+import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import process_technical_indicator
 from backend.celery_task.technical_task import save_technical_data_task
 
+# ✅ Router en logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-CONFIG_PATH = "technical_indicators_config.json"
-
+# ✅ Absoluut pad naar configmap
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "..", "config", "technical_indicators_config.json")
 
 def load_technical_config():
     try:
