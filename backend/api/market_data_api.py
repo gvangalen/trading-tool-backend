@@ -1,16 +1,20 @@
 import logging
 from fastapi import APIRouter, HTTPException, Query
-from backend.utils.db import get_db_connection  # ✅ juist
-from backend.config.settings import COINGECKO_URL, VOLUME_URL, ASSETS
-from backend.config.settings import MARKET_CONFIG
-import os
-import json
-import httpx
 from datetime import datetime, timedelta
+import httpx
+
+from backend.utils.db import get_db_connection
+from backend.config.settings import MARKET_CONFIG
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-logger.info("🚀 market_data_api.py geladen – alle marktroutes zijn actief.")  # ✅ LOG TOEGEVOEGD
+logger.info("🚀 market_data_api.py geladen – alle marktroutes zijn actief.")
+
+# ⏬ Config variabelen gebruiken vanuit centrale MARKET_CONFIG
+COINGECKO_URL = MARKET_CONFIG["coingecko_url"]
+VOLUME_URL = MARKET_CONFIG["volume_url"]
+ASSETS = MARKET_CONFIG["assets"]
+
 
 @router.get("/market_data/list")
 async def list_market_data(since_minutes: int = Query(default=1440, description="Alleen data van de laatste X minuten")):
@@ -43,6 +47,7 @@ async def list_market_data(since_minutes: int = Query(default=1440, description=
     except Exception as e:
         logger.error(f"❌ [list] DB-fout: {e}")
         raise HTTPException(status_code=500, detail="❌ Kon marktdata niet ophalen.")
+
 
 @router.post("/market_data/save")
 async def save_market_data():
