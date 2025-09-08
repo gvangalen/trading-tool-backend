@@ -70,8 +70,7 @@ def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D"):
     "ma_200": ma_200_ratio,
     "volume": volume
 }
-
-    try:
+try:
         url = f"{API_BASE_URL}/technical_data"
         logger.info(f"📡 POST technische data: {payload}")
         response = safe_request(url, method="POST", payload=payload, headers=HEADERS)
