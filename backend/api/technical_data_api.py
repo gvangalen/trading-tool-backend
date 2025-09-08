@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Request, Query
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import process_technical_indicator
 from backend.celery_task.technical_task import save_technical_data_task
-from backend.config.config_loader import load_technical_config  # ✅ Centrale loader gebruiken
+from backend.config.config_loader import load_technical_config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
