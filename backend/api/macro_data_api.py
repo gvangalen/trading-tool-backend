@@ -68,22 +68,33 @@ async def add_macro_indicator(request: Request):
         logger.error(str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-    # ✅ Interpreter aanroepen
-    try:
+    # ✅ Interpreterresultaat opvragen – of ontvangen data gebruiken
+try:
+    if all(k in data for k in ("value", "score", "interpretation", "action")):
+        logger.info(f"📥 [add] Externe data ontvangen voor '{name}'")
+        result = {
+            "name": name,
+            "value": data["value"],
+            "score": data["score"],
+            "interpretation": data["interpretation"],
+            "action": data["action"],
+        }
+    else:
+        logger.info(f"⚙️ [add] Geen externe data, interpreter wordt aangeroepen voor '{name}'")
         result = await process_macro_indicator(name, indicator_config)
-        if not result or "value" not in result or "interpretation" not in result or "action" not in result:
-            raise ValueError("❌ Interpreterresultaat incompleet")
 
-        try:
-            value = float(result.get("value"))
-        except (TypeError, ValueError):
-            raise ValueError(f"❌ Ongeldige waarde voor indicator '{name}': {result.get('value')}")
+    # Validatie
+    if not result or "value" not in result or "interpretation" not in result or "action" not in result:
+        raise ValueError("❌ Interpreterresultaat incompleet")
 
-    except Exception as e:
-        logger.error(f"❌ [INT01] Interpreterfout: {e}")
-        raise HTTPException(status_code=500, detail=f"❌ [INT01] Verwerking indicator mislukt: {e}")
+    try:
+        value = float(result.get("value"))
+    except (TypeError, ValueError):
+        raise ValueError(f"❌ Ongeldige waarde voor indicator '{name}': {result.get('value')}")
 
-    score = result.get("score", 0)
+except Exception as e:
+    logger.error(f"❌ [INT01] Interpreterfout: {e}")
+    raise HTTPException(status_code=500, detail=f"❌ [INT01] Verwerking indicator mislukt: {e}")
 
     # ✅ Opslaan in DB
     conn, cur = get_db_cursor()
