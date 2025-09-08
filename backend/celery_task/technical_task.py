@@ -23,7 +23,11 @@ BINANCE_BASE_URL = "https://api.binance.com"
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="GET", payload=None, headers=None):
     try:
-        response = requests.request(method, url, params=payload, headers=headers or HEADERS, timeout=TIMEOUT)
+        if method.upper() == "POST":
+            response = requests.request(method, url, json=payload, headers=headers or HEADERS, timeout=TIMEOUT)
+        else:
+            response = requests.request(method, url, params=payload, headers=headers or HEADERS, timeout=TIMEOUT)
+
         response.raise_for_status()
         logger.info(f"✅ API-call succesvol: {url}")
         return response.json()
@@ -71,7 +75,7 @@ def save_technical_data_task(symbol, rsi, volume, ma_200, timeframe="1D"):
         "timeframe": timeframe,
     }
     try:
-        url = f"{API_BASE_URL}/technical_data"  # ✅ FIXED
+        url = f"{API_BASE_URL}/technical_data"
         response = safe_request(url, method="POST", payload=payload, headers=HEADERS)
         logger.info(f"✅ Technische data succesvol opgeslagen: {response}")
     except RetryError:
@@ -107,12 +111,11 @@ def fetch_technical_data():
             return
 
         rsi = calculate_rsi(closes)
-        volume = round(volumes[-1], 2)  # Laatste volume
+        volume = round(volumes[-1], 2)
         ma_200 = round(sum(closes[-200:]) / 200, 2)
 
         logger.info(f"📊 RSI: {rsi}, MA200: {ma_200}, Volume: {volume}")
 
-        # ✅ Opslaan in eigen systeem
         save_technical_data_task.delay(our_symbol, rsi, volume, ma_200, "1D")
 
     except Exception as e:
