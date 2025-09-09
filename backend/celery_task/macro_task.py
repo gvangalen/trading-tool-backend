@@ -33,7 +33,6 @@ def safe_post(url, payload=None):
         logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
         raise
 
-# ✅ Celery-taak: alles ophalen, verwerken, en posten
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
     logger.info("🚀 Start ophalen + verwerken van macro-indicatoren...")
@@ -48,7 +47,6 @@ def fetch_macro_data():
         for name, indicator_config in indicators.items():
             logger.info(f"➡️ Verwerk: {name}...")
             try:
-                # Interpreter ophalen
                 result = asyncio.run(process_macro_indicator(name, indicator_config))
                 if not result or "value" not in result:
                     logger.warning(f"⚠️ Geen geldige data voor {name}")
@@ -60,16 +58,19 @@ def fetch_macro_data():
                     logger.warning(f"⚠️ Ongeldige waarde voor {name}: {result.get('value')}")
                     continue
 
-                # ✅ Volledige payload naar macro_data API sturen
+                # ✅ Uitgebreid payload
                 payload = {
                     "name": result["name"],
                     "value": result["value"],
                     "score": result.get("score", 0),
+                    "trend": result.get("trend", ""),  # ✅ NIEUW
                     "interpretation": result.get("interpretation", ""),
                     "action": result.get("action", ""),
                 }
 
-                logger.info(f"📤 POST {name} met value={result['value']}, score={payload['score']}")
+                logger.info(
+                    f"📤 POST {name} | value={result['value']} | score={payload['score']} | trend={payload['trend']}"
+                )
                 safe_post(f"{API_BASE_URL}/macro_data", payload=payload)
 
             except RetryError:
