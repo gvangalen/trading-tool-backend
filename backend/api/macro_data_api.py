@@ -199,3 +199,132 @@ async def update_macro_value(name: str, request: Request):
         raise HTTPException(status_code=500, detail="❌ [DB05] Bijwerken mislukt.")
     finally:
         conn.close()
+
+# ✅ GET: Macro-data per timeframe (alleen BTC)
+
+@router.get("/macro_data/day")
+async def get_macro_day_data():
+    logger.info("📤 [get/day] Ophalen macro-data (1D)...")
+    conn, cur = get_db_cursor()
+    try:
+        cur.execute("""
+            SELECT name, value, trend, interpretation, action, score, timestamp
+            FROM macro_data
+            WHERE timeframe = '1D'
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        rows = cur.fetchall()
+        return [
+            {
+                "name": row[0],
+                "value": row[1],
+                "trend": row[2],
+                "interpretation": row[3],
+                "action": row[4],
+                "score": row[5],
+                "timestamp": row[6].isoformat() if row[6] else None
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ [get/day] Databasefout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB06] Ophalen dagdata mislukt.")
+    finally:
+        conn.close()
+
+
+@router.get("/macro_data/week")
+async def get_macro_week_data():
+    logger.info("📤 [get/week] Ophalen macro-data (1W)...")
+    conn, cur = get_db_cursor()
+    try:
+        cur.execute("""
+            SELECT name, value, trend, interpretation, action, score, timestamp
+            FROM macro_data
+            WHERE timeframe = '1W'
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        rows = cur.fetchall()
+        return [
+            {
+                "name": row[0],
+                "value": row[1],
+                "trend": row[2],
+                "interpretation": row[3],
+                "action": row[4],
+                "score": row[5],
+                "timestamp": row[6].isoformat() if row[6] else None
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ [get/week] Databasefout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB07] Ophalen weekdata mislukt.")
+    finally:
+        conn.close()
+
+
+@router.get("/macro_data/month")
+async def get_macro_month_data():
+    logger.info("📤 [get/month] Ophalen macro-data (1M)...")
+    conn, cur = get_db_cursor()
+    try:
+        cur.execute("""
+            SELECT name, value, trend, interpretation, action, score, timestamp
+            FROM macro_data
+            WHERE timeframe = '1M'
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        rows = cur.fetchall()
+        return [
+            {
+                "name": row[0],
+                "value": row[1],
+                "trend": row[2],
+                "interpretation": row[3],
+                "action": row[4],
+                "score": row[5],
+                "timestamp": row[6].isoformat() if row[6] else None
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ [get/month] Databasefout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB08] Ophalen maanddata mislukt.")
+    finally:
+        conn.close()
+
+
+@router.get("/macro_data/quarter")
+async def get_macro_quarter_data():
+    logger.info("📤 [get/quarter] Ophalen macro-data (3M)...")
+    conn, cur = get_db_cursor()
+    try:
+        cur.execute("""
+            SELECT name, value, trend, interpretation, action, score, timestamp
+            FROM macro_data
+            WHERE timeframe = '3M'
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        rows = cur.fetchall()
+        return [
+            {
+                "name": row[0],
+                "value": row[1],
+                "trend": row[2],
+                "interpretation": row[3],
+                "action": row[4],
+                "score": row[5],
+                "timestamp": row[6].isoformat() if row[6] else None
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ [get/quarter] Databasefout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB09] Ophalen kwartaaldata mislukt.")
+    finally:
+        conn.close()
