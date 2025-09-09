@@ -44,10 +44,12 @@ async def process_macro_indicator(name, config):
         symbol = "FearGreedIndex"
     else:
         # 🔁 Stap 1: Yahoo API proberen
-        try:
+                try:
             url = YAHOO_BASE_URL.format(symbol=symbol)
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.get(url)
+                if response.status_code == 429:
+                    raise httpx.HTTPStatusError("Too Many Requests", request=response.request, response=response)
                 response.raise_for_status()
                 data = response.json()
                 value = extract_yahoo_value(data)
