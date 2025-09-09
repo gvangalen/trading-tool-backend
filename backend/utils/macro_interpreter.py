@@ -52,8 +52,10 @@ async def process_macro_indicator(name, config):
                 data = response.json()
                 value = extract_yahoo_value(data)
                 logger.info(f"✅ [YAHOO] {name} waarde opgehaald: {value}")
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"⚠️ [FALLBACK] Yahoo HTTP fout ({e.response.status_code}) voor {name}: {e}")
         except Exception as e:
-            logger.warning(f"⚠️ [FALLBACK] Yahoo mislukt voor {name}: {e}")
+            logger.warning(f"⚠️ [FALLBACK] Yahoo fout voor {name}: {e}")
 
         # 🔁 Stap 2: fallback naar Alpha Vantage
         if value is None:
