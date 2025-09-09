@@ -49,18 +49,26 @@ def fetch_macro_data():
         for name, indicator_config in indicators.items():
             logger.info(f"➡️ Verwerk: {name}...")
             try:
-                result = asyncio.run(process_macro_indicator(name, indicator_config))
+                # 🔒 Beveiligde async-call
+                result = None
+                try:
+                    result = asyncio.run(process_macro_indicator(name, indicator_config))
+                except Exception as async_error:
+                    logger.error(f"❌ [ASYNC] Fout in asyncio.run() voor {name}: {async_error}")
+                    logger.error(traceback.format_exc())
+                    continue
+
                 if not result or "value" not in result:
-                    logger.warning(f"⚠️ Geen geldige data voor {name}")
+                    logger.warning(f"⚠️ Geen geldige data voor {name} → result={result}")
                     continue
 
                 try:
                     float(result["value"])  # validatie
-                except:
+                except Exception:
                     logger.warning(f"⚠️ Ongeldige waarde voor {name}: {result.get('value')}")
                     continue
 
-                # ✅ Uitgebreid payload met extra metadata
+                # ✅ Payload inclusief extra metadata
                 payload = {
                     "name": result["name"],
                     "value": result["value"],
