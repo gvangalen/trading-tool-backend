@@ -1,3 +1,4 @@
+import os
 import httpx
 import logging
 from backend.config.config_loader import load_macro_config
@@ -6,12 +7,11 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 YAHOO_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d"
+ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={api_key}"
+FEAR_GREED_URL = "https://api.alternative.me/fng/?limit=1"
 
-
+# ✅ Haalt alle macro-indicatoren op met fallback-logica
 async def process_all_macro_indicators():
-    """
-    ➤ Verwerkt alle macro-indicatoren uit config.
-    """
     try:
         macro_config = load_macro_config()
     except Exception as e:
@@ -24,40 +24,40 @@ async def process_all_macro_indicators():
             result = await process_macro_indicator(name, config)
             results.append(result)
         except Exception as e:
-            logger.error(f"❌ [PROC01] Indicator '{name}' verwerken mislukt: {e}")
+            logger.error(f"❌ [PROC01] {name} verwerken mislukt: {e}")
             results.append({"name": name, "error": str(e)})
-
     return results
 
 
+# ✅ Verwerkt één macro-indicator met fallbacklogica
 async def process_macro_indicator(name, config):
-    """
-    ➤ Verwerkt een enkele macro-indicator via Yahoo of andere bron.
-    """
     symbol = config.get("symbol")
     source = config.get("source", "yahoo")
+    value = None
 
-    if source == "yahoo":
-        url = YAHOO_BASE_URL.format(symbol=symbol)
-    else:
-        raise ValueError(f"❌ [SRC01] Onbekende macrobron: {source}")
-
+    # 🔁 Stap 1: Yahoo proberen
     try:
+        url = YAHOO_BASE_URL.format(symbol=symbol)
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(url)
             response.raise_for_status()
             data = response.json()
+            value = extract_yahoo_value(data)
+            logger.info(f"✅ [YAHOO] {name} waarde opgehaald: {value}")
     except Exception as e:
-        logger.error(f"❌ [API01] API-fout bij ophalen van {name}: {e}")
-        raise
+        logger.warning(f"⚠️ [FALLBACK] Yahoo mislukt voor {name}: {e}")
 
-    try:
-        value = extract_yahoo_value(data)
-    except Exception as e:
-        logger.error(f"❌ [PARSE01] Fout bij uitlezen waarde voor {name}: {e}")
-        raise
+    # 🔁 Stap 2: Als Yahoo faalt → Alpha Vantage of andere fallback
+    if value is None:
+        if name.lower() == "fear_greed":
+            value = await fetch_fear_greed_value()
+        else:
+            value = await fetch_alpha_vantage_value(symbol)
 
-    thresholds = config["thresholds"]
+    if value is None:
+        raise RuntimeError(f"❌ [FAIL] Geen waarde gevonden voor {name}")
+
+    thresholds = config.get("thresholds", [])
     positive = config.get("positive", True)
 
     score = calculate_score(value, thresholds, positive)
@@ -80,24 +80,61 @@ async def process_macro_indicator(name, config):
     }
 
 
+# ✅ Yahoo: extract sluitingswaarde
 def extract_yahoo_value(data):
-    """
-    ➤ Extract laatste slotkoers uit Yahoo response.
-    """
-    result = data["chart"]["result"][0]
-    close_prices = result["indicators"]["quote"][0]["close"]
-    return float(close_prices[-1])
+    try:
+        result = data["chart"]["result"][0]
+        close_prices = result["indicators"]["quote"][0]["close"]
+        return float(close_prices[-1])
+    except Exception as e:
+        raise ValueError(f"Fout bij uitlezen Yahoo-data: {e}")
 
+
+# ✅ Alpha Vantage fallback
+async def fetch_alpha_vantage_value(symbol):
+    api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
+    if not api_key:
+        logger.warning("⚠️ [AV01] Geen Alpha Vantage API key ingesteld")
+        return None
+
+    url = ALPHA_VANTAGE_URL.format(symbol=symbol, api_key=api_key)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+            ts = data.get("Time Series (Daily)")
+            if not ts:
+                logger.warning(f"⚠️ [AV02] Geen time series in Alpha Vantage response voor {symbol}")
+                return None
+            latest_day = sorted(ts.keys())[-1]
+            return float(ts[latest_day]["4. close"])
+    except Exception as e:
+        logger.warning(f"⚠️ [AV03] Alpha Vantage API-fout voor {symbol}: {e}")
+        return None
+
+
+# ✅ Alternative.me Fear & Greed index
+async def fetch_fear_greed_value():
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(FEAR_GREED_URL)
+            response.raise_for_status()
+            data = response.json()
+            value = data["data"][0]["value"]
+            return float(value)
+    except Exception as e:
+        logger.warning(f"⚠️ [FG01] Fear & Greed ophalen mislukt: {e}")
+        return None
+
+
+# — bestaande interpretatie functies hieronder blijven onveranderd —
 
 def calculate_score(value, thresholds, positive=True):
-    """
-    ➤ Bereken score op schaal van 0–100 op basis van drempels.
-    """
     if value is None or not thresholds or len(thresholds) != 3:
         return 0
 
     v = float(value)
-
     if positive:
         if v >= thresholds[2]:
             return 90
@@ -119,14 +156,10 @@ def calculate_score(value, thresholds, positive=True):
 
 
 def determine_trend(value, thresholds, positive=True):
-    """
-    ➤ Bepaal trendtekst op basis van waarde en richting.
-    """
     if value is None:
         return "Onbekend"
 
     v = float(value)
-
     if positive:
         if v >= thresholds[2]:
             return "Zeer sterk"
@@ -148,14 +181,10 @@ def determine_trend(value, thresholds, positive=True):
 
 
 def interpret_value(value, thresholds, positive=True):
-    """
-    ➤ Genereer tekstuele interpretatie van de waarde.
-    """
     if value is None:
         return "Ongeldig"
 
     v = float(value)
-
     if positive:
         if v >= thresholds[2]:
             return "Sterke stijging"
@@ -177,9 +206,6 @@ def interpret_value(value, thresholds, positive=True):
 
 
 def generate_chart_link(source, symbol):
-    """
-    ➤ Genereer een link naar Yahoo of TradingView.
-    """
     if not source or not symbol:
         return None
     if source == "yahoo":
