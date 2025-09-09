@@ -47,12 +47,13 @@ async def process_macro_indicator(name, config):
     except Exception as e:
         logger.warning(f"⚠️ [FALLBACK] Yahoo mislukt voor {name}: {e}")
 
-    # 🔁 Stap 2: Als Yahoo faalt → Alpha Vantage of andere fallback
-    if value is None:
-        if name.lower() == "fear_greed":
-            value = await fetch_fear_greed_value()
-        else:
-            value = await fetch_alpha_vantage_value(symbol)
+   # 🔁 Stap 2: Als Yahoo faalt → Alpha Vantage of andere fallback
+if value is None:
+    if name.lower() == "fear_greed":
+        value = await fetch_fear_greed_value()
+    else:
+        fallback_symbol = config.get("fallback_symbol", symbol)
+        value = await fetch_alpha_vantage_value(fallback_symbol)
 
     if value is None:
         raise RuntimeError(f"❌ [FAIL] Geen waarde gevonden voor {name}")
