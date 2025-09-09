@@ -68,7 +68,10 @@ def fetch_macro_data():
                     logger.warning(f"⚠️ Ongeldige waarde voor {name}: {result.get('value')}")
                     continue
 
-                # ✅ Payload inclusief extra metadata
+                # ✅ Timeframe ophalen uit config, fallback = '1D'
+                timeframe = indicator_config.get("timeframe", "1D")
+
+                # ✅ Payload inclusief extra metadata + timeframe
                 payload = {
                     "name": result["name"],
                     "value": result["value"],
@@ -81,10 +84,11 @@ def fetch_macro_data():
                     "category": result.get("category", ""),
                     "correlation": result.get("correlation", ""),
                     "link": result.get("link", ""),
+                    "timeframe": timeframe,  # ✅ toegevoegd
                 }
 
                 logger.info(
-                    f"📤 POST {name} | value={result['value']} | score={payload['score']} | trend={payload['trend']}"
+                    f"📤 POST {name} | timeframe={timeframe} | value={result['value']} | score={payload['score']} | trend={payload['trend']}"
                 )
                 safe_post(f"{API_BASE_URL}/macro_data", payload=payload)
 
