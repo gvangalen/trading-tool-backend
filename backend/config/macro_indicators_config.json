@@ -1,9 +1,9 @@
 {
   "base_urls": {
-  "yahoo": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d",
-  "alpha_vantage": "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=demo",
-  "alternative": "https://api.alternative.me/fng/?limit=1"
-},
+    "yahoo": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d",
+    "alpha_vantage": "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=demo",
+    "alternative": "https://api.alternative.me/fng/?limit=1"
+  },
   "indicators": {
     "S&P500": {
       "symbol": "^GSPC",
@@ -13,7 +13,8 @@
       "category": "macro",
       "correlation": "positief",
       "explanation": "Hogere S&P500-standen duiden vaak op een gezonde aandelenmarkt.",
-      "action": "Bij een sterke S&P500 is het marktsentiment positief. Positief voor crypto."
+      "action": "Bij een sterke S&P500 is het marktsentiment positief. Positief voor crypto.",
+      "timeframe": "1D"
     },
     "vix": {
       "symbol": "^VIX",
@@ -23,7 +24,8 @@
       "category": "macro",
       "correlation": "negatief",
       "explanation": "Een hogere VIX duidt op meer angst en volatiliteit op de markt.",
-      "action": "Bij hoge VIX is voorzichtigheid geboden. Negatief voor risicovolle assets zoals crypto."
+      "action": "Bij hoge VIX is voorzichtigheid geboden. Negatief voor risicovolle assets zoals crypto.",
+      "timeframe": "1D"
     },
     "dxy": {
       "symbol": "DX-Y.NYB",
@@ -34,7 +36,8 @@
       "category": "macro",
       "correlation": "negatief",
       "explanation": "Een sterke dollarindex (DXY) drukt vaak op de prijs van Bitcoin.",
-      "action": "Bij stijgende DXY is vaak een dalende BTC-prijs te zien. Bearish signaal."
+      "action": "Bij stijgende DXY is vaak een dalende BTC-prijs te zien. Bearish signaal.",
+      "timeframe": "1D"
     },
     "fear_greed": {
       "symbol": "fear_greed",
@@ -44,7 +47,8 @@
       "category": "sentiment",
       "correlation": "negatief",
       "explanation": "De Fear & Greed Index meet het marktsentiment in crypto.",
-      "action": "Bij extreme fear (<25) kan er sprake zijn van een koopkans. Bij extreme greed (>75) oppassen voor correctie."
+      "action": "Bij extreme fear (<25) kan er sprake zijn van een koopkans. Bij extreme greed (>75) oppassen voor correctie.",
+      "timeframe": "1D"
     }
   }
 }
