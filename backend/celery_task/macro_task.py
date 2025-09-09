@@ -33,6 +33,8 @@ def safe_post(url, payload=None):
         logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
         raise
 
+
+# ✅ Hoofd Celery-task
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
     logger.info("🚀 Start ophalen + verwerken van macro-indicatoren...")
@@ -58,14 +60,19 @@ def fetch_macro_data():
                     logger.warning(f"⚠️ Ongeldige waarde voor {name}: {result.get('value')}")
                     continue
 
-                # ✅ Uitgebreid payload
+                # ✅ Uitgebreid payload met extra metadata
                 payload = {
                     "name": result["name"],
                     "value": result["value"],
                     "score": result.get("score", 0),
-                    "trend": result.get("trend", ""),  # ✅ NIEUW
+                    "trend": result.get("trend", ""),
                     "interpretation": result.get("interpretation", ""),
                     "action": result.get("action", ""),
+                    "symbol": result.get("symbol", ""),
+                    "source": result.get("source", ""),
+                    "category": result.get("category", ""),
+                    "correlation": result.get("correlation", ""),
+                    "link": result.get("link", ""),
                 }
 
                 logger.info(
