@@ -1,7 +1,9 @@
 {
   "base_urls": {
-    "yahoo": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d"
-  },
+  "yahoo": "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d",
+  "alpha_vantage": "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=demo",
+  "alternative": "https://api.alternative.me/fng/?limit=1"
+},
   "indicators": {
     "S&P500": {
       "symbol": "^GSPC",
