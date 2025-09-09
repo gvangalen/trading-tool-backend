@@ -25,6 +25,7 @@
     },
     "dxy": {
       "symbol": "DX-Y.NYB",
+      "fallback_symbol": "EURUSD",
       "source": "yahoo",
       "thresholds": [98, 102, 106],
       "positive": false,
