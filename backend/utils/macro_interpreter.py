@@ -60,6 +60,7 @@ async def process_macro_indicator(name, config):
             fallback_symbol = config.get("fallback_symbol", symbol)
             value = await fetch_alpha_vantage_value(fallback_symbol)
             if value:
+                source = "alpha_vantage"
                 logger.info(f"✅ [AV03] Alpha Vantage waarde voor {fallback_symbol}: {value}")
             else:
                 logger.error(f"❌ [AV04] Geen waarde van Yahoo of Alpha voor {name}")
@@ -223,4 +224,6 @@ def generate_chart_link(source, symbol):
         return f"https://www.tradingview.com/symbols/{symbol.replace(':', '')}/"
     elif source == "alternative.me":
         return "https://alternative.me/crypto/fear-and-greed-index/"
+    elif source == "alpha_vantage":
+        return f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}"
     return None
