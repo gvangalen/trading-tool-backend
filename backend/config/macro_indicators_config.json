@@ -32,6 +32,16 @@
       "correlation": "negatief",
       "explanation": "Een sterke dollarindex (DXY) drukt vaak op de prijs van Bitcoin.",
       "action": "Bij stijgende DXY is vaak een dalende BTC-prijs te zien. Bearish signaal."
+    },
+    "fear_greed": {
+      "symbol": "fear_greed",
+      "source": "alternative",
+      "thresholds": [25, 50, 75],
+      "positive": false,
+      "category": "sentiment",
+      "correlation": "negatief",
+      "explanation": "De Fear & Greed Index meet het marktsentiment in crypto.",
+      "action": "Bij extreme fear (<25) kan er sprake zijn van een koopkans. Bij extreme greed (>75) oppassen voor correctie."
     }
   }
 }
