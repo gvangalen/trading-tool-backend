@@ -6,12 +6,15 @@ from backend.config.config_loader import load_macro_config
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# ✅ API URL's
 YAHOO_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d"
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey={api_key}"
 FEAR_GREED_URL = "https://api.alternative.me/fng/?limit=1"
 
+ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY")
 
-# ✅ Haalt alle macro-indicatoren op met fallback-logica
+
+# ✅ Verwerkt alle macro-indicatoren
 async def process_all_macro_indicators():
     try:
         macro_config = load_macro_config()
@@ -32,19 +35,19 @@ async def process_all_macro_indicators():
 
 # ✅ Verwerkt één macro-indicator met fallbacklogica
 async def process_macro_indicator(name, config):
-    name = name.lower()
     symbol = config.get("symbol")
     source = config.get("source", "yahoo")
+    fallback_symbol = config.get("fallback_symbol", symbol)
     value = None
 
-    # 👇 Fear & Greed: oversla Yahoo en Alpha direct
-    if name == "fear_greed":
+    # ✅ Alternative source (zoals Fear & Greed Index)
+    if source == "alternative":
         value = await fetch_fear_greed_value()
         source = "alternative.me"
         symbol = "FearGreedIndex"
     else:
-        # 🔁 Stap 1: Yahoo API proberen
-                try:
+        # 🔁 Stap 1: Yahoo API
+        try:
             url = YAHOO_BASE_URL.format(symbol=symbol)
             async with httpx.AsyncClient(timeout=10) as client:
                 response = await client.get(url)
@@ -54,14 +57,11 @@ async def process_macro_indicator(name, config):
                 data = response.json()
                 value = extract_yahoo_value(data)
                 logger.info(f"✅ [YAHOO] {name} waarde opgehaald: {value}")
-        except httpx.HTTPStatusError as e:
-            logger.warning(f"⚠️ [FALLBACK] Yahoo HTTP fout ({e.response.status_code}) voor {name}: {e}")
         except Exception as e:
-            logger.warning(f"⚠️ [FALLBACK] Yahoo fout voor {name}: {e}")
+            logger.warning(f"⚠️ [FALLBACK] Yahoo mislukt voor {name} ({symbol}): {e}")
 
-        # 🔁 Stap 2: fallback naar Alpha Vantage
+        # 🔁 Stap 2: Fallback naar Alpha Vantage
         if value is None:
-            fallback_symbol = config.get("fallback_symbol", symbol)
             value = await fetch_alpha_vantage_value(fallback_symbol)
             if value:
                 source = "alpha_vantage"
@@ -95,7 +95,7 @@ async def process_macro_indicator(name, config):
     }
 
 
-# ✅ Yahoo: extract sluitingswaarde
+# ✅ Yahoo: extract slotkoers
 def extract_yahoo_value(data):
     try:
         result = data["chart"]["result"][0]
@@ -107,12 +107,11 @@ def extract_yahoo_value(data):
 
 # ✅ Alpha Vantage fallback
 async def fetch_alpha_vantage_value(symbol):
-    api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
-    if not api_key:
+    if not ALPHA_VANTAGE_API_KEY:
         logger.warning("⚠️ [AV01] Geen Alpha Vantage API key ingesteld")
         return None
 
-    url = ALPHA_VANTAGE_URL.format(symbol=symbol, api_key=api_key)
+    url = ALPHA_VANTAGE_URL.format(symbol=symbol, api_key=ALPHA_VANTAGE_API_KEY)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(url)
@@ -136,14 +135,13 @@ async def fetch_fear_greed_value():
             response = await client.get(FEAR_GREED_URL)
             response.raise_for_status()
             data = response.json()
-            value = data["data"][0]["value"]
-            return float(value)
+            return float(data["data"][0]["value"])
     except Exception as e:
         logger.warning(f"⚠️ [FG01] Fear & Greed ophalen mislukt: {e}")
         return None
 
 
-# ✅ Interpretatie-functies
+# ✅ Interpretatiefuncties
 def calculate_score(value, thresholds, positive=True):
     if value is None or not thresholds or len(thresholds) != 3:
         return 0
