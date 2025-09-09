@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Request
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import process_technical_indicator
@@ -18,6 +18,8 @@ except Exception as e:
     TECHNICAL_CONFIG = {}
     logger.error(f"❌ [INIT] Laden TECHNICAL_CONFIG mislukt: {e}")
 
+
+# ✅ Data opslaan
 
 def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1D"):
     conn = get_db_connection()
@@ -41,7 +43,7 @@ def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1
         conn.close()
 
 
-# ✅ POST: TradingView webhook
+# ✅ Webhook van TradingView
 @router.post("/technical_data/webhook")
 async def tradingview_webhook(request: Request):
     try:
@@ -62,7 +64,7 @@ async def tradingview_webhook(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ POST: Handmatige trigger vanuit dashboard
+# ✅ Handmatige trigger
 @router.post("/technical_data/trigger")
 async def trigger_technical_task(request: Request):
     try:
@@ -150,13 +152,11 @@ async def get_technical_data():
         conn.close()
 
 
-# ✅ GET alias
 @router.get("/technical_data/list")
 async def get_technical_data_list():
     return await get_technical_data()
 
 
-# ✅ GET per asset
 @router.get("/technical_data/{symbol}")
 async def get_technical_for_symbol(symbol: str):
     conn = get_db_connection()
@@ -193,7 +193,6 @@ async def get_technical_for_symbol(symbol: str):
         conn.close()
 
 
-# ✅ DELETE
 @router.delete("/technical_data/{symbol}")
 async def delete_technical_data(symbol: str):
     conn = get_db_connection()
@@ -210,3 +209,87 @@ async def delete_technical_data(symbol: str):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+
+# 🔁 AGGREGATIE / SAMENVATTING – extra API voor dashboard
+
+INDICATORS = ['rsi', 'volume', 'ma_200']
+
+def fetch_aggregated_data(timeframe_days: int):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cutoff_date = datetime.utcnow() - timedelta(days=timeframe_days)
+
+        query = """
+            SELECT indicator, AVG(value)::numeric(10,2) as avg_value
+            FROM technical_indicators
+            WHERE symbol = 'BTC'
+              AND timeframe = '1D'
+              AND date >= %s
+              AND indicator = ANY(%s)
+            GROUP BY indicator
+        """
+        cur.execute(query, (cutoff_date, INDICATORS))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        data = {indicator: None for indicator in INDICATORS}
+        for row in rows:
+            data[row[0]] = float(row[1])
+        return data
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def fetch_latest_day_data():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        data = {}
+
+        for indicator in INDICATORS:
+            cur.execute("""
+                SELECT value
+                FROM technical_indicators
+                WHERE symbol = 'BTC'
+                  AND indicator = %s
+                  AND timeframe = '1D'
+                ORDER BY date DESC
+                LIMIT 1
+            """, (indicator,))
+            result = cur.fetchone()
+            data[indicator] = float(result[0]) if result else None
+
+        cur.close()
+        conn.close()
+        return data
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/technical/day")
+def get_day_data():
+    data = fetch_latest_day_data()
+    return {"symbol": "BTC", "timeframe": "1D", **data}
+
+
+@router.get("/api/technical/week")
+def get_week_data():
+    data = fetch_aggregated_data(7)
+    return {"symbol": "BTC", "timeframe": "1W", **data}
+
+
+@router.get("/api/technical/month")
+def get_month_data():
+    data = fetch_aggregated_data(30)
+    return {"symbol": "BTC", "timeframe": "1M", **data}
+
+
+@router.get("/api/technical/quarter")
+def get_quarter_data():
+    data = fetch_aggregated_data(90)
+    return {"symbol": "BTC", "timeframe": "1Q", **data}
