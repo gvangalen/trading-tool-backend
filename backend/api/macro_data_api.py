@@ -96,6 +96,7 @@ async def add_macro_indicator(request: Request):
         raise HTTPException(status_code=500, detail=f"❌ [INT01] Verwerking indicator mislukt: {e}")
 
     # ✅ Opslaan in DB
+        # ✅ Opslaan in DB
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
@@ -104,14 +105,14 @@ async def add_macro_indicator(request: Request):
         """, (
             result["name"],
             value,
-            "",  # trend eventueel later berekenen
+            result.get("trend", ""),  # ✅ trend gebruiken als aanwezig
             result["interpretation"],
             result["action"],
             score,
             datetime.utcnow()
         ))
         conn.commit()
-        logger.info(f"✅ [add] '{name}' opgeslagen met waarde {value} en score {score}")
+        logger.info(f"✅ [add] '{name}' opgeslagen met waarde {value}, score {score}, trend {result.get('trend', '')}")
         return {"message": f"Indicator '{name}' succesvol opgeslagen."}
     except Exception as e:
         logger.error(f"❌ [DB02] Fout bij opslaan macro data: {e}")
