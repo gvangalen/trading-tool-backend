@@ -57,17 +57,18 @@ async def process_macro_indicator(name, config):
         logger.error(f"❌ [PARSE01] Fout bij uitlezen waarde voor {name}: {e}")
         raise
 
-    # Nieuwe interpretatie + score logica
     thresholds = config["thresholds"]
     positive = config.get("positive", True)
 
     score = calculate_score(value, thresholds, positive)
+    trend = determine_trend(value, thresholds, positive)
     interpretation = interpret_value(value, thresholds, positive)
 
     return {
         "name": name,
         "value": value,
         "score": score,
+        "trend": trend,
         "interpretation": interpretation,
         "symbol": symbol,
         "source": source,
@@ -90,7 +91,7 @@ def extract_yahoo_value(data):
 
 def calculate_score(value, thresholds, positive=True):
     """
-    ➤ Bereken score op basis van drempels (laag, midden, hoog).
+    ➤ Bereken score op schaal van 0–100 op basis van drempels.
     """
     if value is None or not thresholds or len(thresholds) != 3:
         return 0
@@ -99,22 +100,51 @@ def calculate_score(value, thresholds, positive=True):
 
     if positive:
         if v >= thresholds[2]:
-            return 3
+            return 90
         elif v >= thresholds[1]:
-            return 2
+            return 70
         elif v >= thresholds[0]:
-            return 1
+            return 50
         else:
-            return 0
+            return 30
     else:
         if v <= thresholds[0]:
-            return 3
+            return 90
         elif v <= thresholds[1]:
-            return 2
+            return 70
         elif v <= thresholds[2]:
-            return 1
+            return 50
         else:
-            return 0
+            return 30
+
+
+def determine_trend(value, thresholds, positive=True):
+    """
+    ➤ Bepaal trendtekst op basis van waarde en richting.
+    """
+    if value is None:
+        return "Onbekend"
+
+    v = float(value)
+
+    if positive:
+        if v >= thresholds[2]:
+            return "Zeer sterk"
+        elif v >= thresholds[1]:
+            return "Sterk"
+        elif v >= thresholds[0]:
+            return "Neutraal"
+        else:
+            return "Zwak"
+    else:
+        if v <= thresholds[0]:
+            return "Zeer sterk"
+        elif v <= thresholds[1]:
+            return "Sterk"
+        elif v <= thresholds[2]:
+            return "Neutraal"
+        else:
+            return "Zwak"
 
 
 def interpret_value(value, thresholds, positive=True):
@@ -128,25 +158,28 @@ def interpret_value(value, thresholds, positive=True):
 
     if positive:
         if v >= thresholds[2]:
-            return "Zeer sterk"
+            return "Sterke stijging"
         elif v >= thresholds[1]:
-            return "Sterk"
+            return "Stijgend"
         elif v >= thresholds[0]:
             return "Neutraal"
         else:
-            return "Zwak"
+            return "Dalend"
     else:
         if v <= thresholds[0]:
-            return "Zeer sterk"
+            return "Sterke daling"
         elif v <= thresholds[1]:
-            return "Sterk"
+            return "Dalend"
         elif v <= thresholds[2]:
             return "Neutraal"
         else:
-            return "Zwak"
+            return "Stijgend"
 
 
 def generate_chart_link(source, symbol):
+    """
+    ➤ Genereer een link naar Yahoo of TradingView.
+    """
     if not source or not symbol:
         return None
     if source == "yahoo":
