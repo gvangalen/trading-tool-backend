@@ -63,10 +63,9 @@ def calculate_rsi(closes, period=14):
 
 # ✅ POST taak voor opslag in backend
 @shared_task(name="backend.celery_task.technical_task.save_technical_data_task")
-def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D"):
+def save_technical_data_task(symbol, rsi, volume, ma_200_ratio):
     payload = {
         "symbol": symbol,
-        "timeframe": timeframe,
         "rsi": rsi,
         "ma_200": ma_200_ratio,
         "volume": volume
@@ -89,15 +88,15 @@ def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D"):
 def fetch_technical_data():
     try:
         symbol = "BTCUSDT"
-        timeframe = "1d"
         our_symbol = "BTC"
         limit = 300
+        interval = "1d"
 
         # ✅ Binance candles ophalen
         url = f"{BINANCE_BASE_URL}/api/v3/klines"
         params = {
             "symbol": symbol,
-            "interval": timeframe,
+            "interval": interval,
             "limit": limit,
         }
 
@@ -119,7 +118,7 @@ def fetch_technical_data():
         logger.info(f"📊 RSI: {rsi}, MA200-ratio: {ma_200_ratio}, Volume: {volume}")
 
         # ✅ Verstuur ruwe data → interpretatie gebeurt in backend
-        save_technical_data_task.delay(our_symbol, rsi, volume, ma_200_ratio, "1D")
+        save_technical_data_task.delay(our_symbol, rsi, volume, ma_200_ratio)
 
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen/verwerken technische data: {e}")
