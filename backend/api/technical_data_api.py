@@ -10,7 +10,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ Config éénmalig laden bij opstart
+# ✅ Config laden bij opstart
 try:
     TECHNICAL_CONFIG = load_technical_config()
     logger.info("🚀 technical_data_api.py geladen – alle technische routes zijn actief.")
@@ -19,9 +19,8 @@ except Exception as e:
     logger.error(f"❌ [INIT] Laden TECHNICAL_CONFIG mislukt: {e}")
 
 
-# ✅ Data opslaan
-
-def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1D"):
+# ✅ Opslaan van technische data
+def save_technical_data(symbol, rsi, volume, ma_200, score, advies):
     conn = get_db_connection()
     if not conn:
         logger.error("❌ TECH02: Geen databaseverbinding.")
@@ -30,9 +29,9 @@ def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_data 
-                (symbol, rsi, volume, ma_200, score, advies, timeframe, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            """, (symbol, float(rsi), float(volume), float(ma_200), score, advies, timeframe))
+                (symbol, rsi, volume, ma_200, score, advies, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+            """, (symbol, float(rsi), float(volume), float(ma_200), score, advies))
             conn.commit()
         logger.info(f"✅ TECH03: Data opgeslagen voor {symbol}")
         return True
@@ -43,7 +42,7 @@ def save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe="1
         conn.close()
 
 
-# ✅ Webhook van TradingView
+# ✅ POST vanaf TradingView webhook
 @router.post("/technical_data/webhook")
 async def tradingview_webhook(request: Request):
     try:
@@ -52,12 +51,11 @@ async def tradingview_webhook(request: Request):
         rsi = data.get("rsi")
         volume = data.get("volume")
         ma_200 = data.get("ma_200")
-        timeframe = data.get("timeframe", "1D")
 
         if None in (rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="Incomplete webhook data.")
 
-        save_technical_data_task.delay(symbol, rsi, volume, ma_200, timeframe)
+        save_technical_data_task.delay(symbol, rsi, volume, ma_200)
         return {"message": "Webhook ontvangen en taak gestart."}
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
@@ -73,19 +71,18 @@ async def trigger_technical_task(request: Request):
         rsi = data.get("rsi")
         volume = data.get("volume")
         ma_200 = data.get("ma_200")
-        timeframe = data.get("timeframe", "1D")
 
         if None in (rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="Incomplete trigger data.")
 
-        save_technical_data_task.delay(symbol, rsi, volume, ma_200, timeframe)
+        save_technical_data_task.delay(symbol, rsi, volume, ma_200)
         return {"message": f"📡 Celery-task gestart voor {symbol}"}
     except Exception as e:
         logger.error(f"❌ Trigger error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ POST: directe invoer van technische data + interpretatie
+# ✅ POST: directe opslag met interpretatie
 @router.post("/technical_data")
 async def save_technical_data_post(request: Request):
     try:
@@ -94,7 +91,6 @@ async def save_technical_data_post(request: Request):
         rsi = data.get("rsi")
         volume = data.get("volume")
         ma_200 = data.get("ma_200")
-        timeframe = data.get("timeframe", "1D")
 
         if None in (symbol, rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
@@ -104,11 +100,10 @@ async def save_technical_data_post(request: Request):
             volume = float(volume)
             ma_200 = float(ma_200)
         except ValueError:
-            raise HTTPException(status_code=400, detail="RSI, volume en ma_200 moeten numeriek zijn.")
+            raise HTTPException(status_code=400, detail="RSI, volume en MA-200 moeten numeriek zijn.")
 
-        score, advies = process_technical_indicator(symbol, rsi, volume, ma_200, timeframe)
-
-        save_technical_data(symbol, rsi, volume, ma_200, score, advies, timeframe)
+        score, advies = process_technical_indicator(symbol, rsi, volume, ma_200)
+        save_technical_data(symbol, rsi, volume, ma_200, score, advies)
 
         return {"message": "Technische data opgeslagen", "symbol": symbol}
     except Exception as e:
@@ -116,17 +111,16 @@ async def save_technical_data_post(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ GET: Laatste technische data
+# ✅ GET: laatste technische data
 @router.get("/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timeframe, timestamp
+                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
                 FROM technical_data
                 ORDER BY timestamp DESC
                 LIMIT 50;
@@ -141,8 +135,7 @@ async def get_technical_data():
                 "ma_200": float(row[3]),
                 "score": float(row[4]) if row[4] is not None else None,
                 "advies": row[5],
-                "timeframe": row[6],
-                "timestamp": row[7].isoformat()
+                "timestamp": row[6].isoformat()
             } for row in rows
         ]
     except Exception as e:
@@ -152,21 +145,15 @@ async def get_technical_data():
         conn.close()
 
 
-@router.get("/technical_data/list")
-async def get_technical_data_list():
-    return await get_technical_data()
-
-
 @router.get("/technical_data/{symbol}")
 async def get_technical_for_symbol(symbol: str):
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timeframe, timestamp
+                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
                 FROM technical_data
                 WHERE symbol = %s
                 ORDER BY timestamp DESC
@@ -182,8 +169,7 @@ async def get_technical_for_symbol(symbol: str):
                 "ma_200": float(row[3]),
                 "score": float(row[4]) if row[4] is not None else None,
                 "advies": row[5],
-                "timeframe": row[6],
-                "timestamp": row[7].isoformat()
+                "timestamp": row[6].isoformat()
             } for row in rows
         ]
     except Exception as e:
@@ -198,7 +184,6 @@ async def delete_technical_data(symbol: str):
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM technical_data WHERE symbol = %s", (symbol,))
@@ -211,85 +196,50 @@ async def delete_technical_data(symbol: str):
         conn.close()
 
 
-# 🔁 AGGREGATIE / SAMENVATTING – extra API voor dashboard
+# ✅ AGGREGATIE – week, maand, kwartaal (via timestamp)
+def aggregate_data(days: int):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
 
-INDICATORS = ['rsi', 'volume', 'ma_200']
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    indicators = ['rsi', 'volume', 'ma_200']
+    data = {}
 
-def fetch_aggregated_data(timeframe_days: int):
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cutoff_date = datetime.utcnow() - timedelta(days=timeframe_days)
-
-        query = """
-            SELECT indicator, AVG(value)::numeric(10,2) as avg_value
-            FROM technical_indicators
-            WHERE symbol = 'BTC'
-              AND timeframe = '1D'
-              AND date >= %s
-              AND indicator = ANY(%s)
-            GROUP BY indicator
-        """
-        cur.execute(query, (cutoff_date, INDICATORS))
-        rows = cur.fetchall()
-        cur.close()
+        with conn.cursor() as cur:
+            for indicator in indicators:
+                cur.execute(f"""
+                    SELECT AVG({indicator}) 
+                    FROM technical_data
+                    WHERE symbol = 'BTC'
+                    AND timestamp >= %s
+                """, (cutoff,))
+                result = cur.fetchone()
+                data[indicator] = float(result[0]) if result[0] else None
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Aggregatie mislukt: {e}")
+    finally:
         conn.close()
 
-        data = {indicator: None for indicator in INDICATORS}
-        for row in rows:
-            data[row[0]] = float(row[1])
-        return data
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-def fetch_latest_day_data():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        data = {}
-
-        for indicator in INDICATORS:
-            cur.execute("""
-                SELECT value
-                FROM technical_indicators
-                WHERE symbol = 'BTC'
-                  AND indicator = %s
-                  AND timeframe = '1D'
-                ORDER BY date DESC
-                LIMIT 1
-            """, (indicator,))
-            result = cur.fetchone()
-            data[indicator] = float(result[0]) if result else None
-
-        cur.close()
-        conn.close()
-        return data
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"symbol": "BTC", **data}
 
 
 @router.get("/api/technical/day")
 def get_day_data():
-    data = fetch_latest_day_data()
-    return {"symbol": "BTC", "timeframe": "1D", **data}
+    return aggregate_data(1)
 
 
 @router.get("/api/technical/week")
 def get_week_data():
-    data = fetch_aggregated_data(7)
-    return {"symbol": "BTC", "timeframe": "1W", **data}
+    return aggregate_data(7)
 
 
 @router.get("/api/technical/month")
 def get_month_data():
-    data = fetch_aggregated_data(30)
-    return {"symbol": "BTC", "timeframe": "1M", **data}
+    return aggregate_data(30)
 
 
 @router.get("/api/technical/quarter")
 def get_quarter_data():
-    data = fetch_aggregated_data(90)
-    return {"symbol": "BTC", "timeframe": "1Q", **data}
+    return aggregate_data(90)
