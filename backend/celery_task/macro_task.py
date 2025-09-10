@@ -50,7 +50,6 @@ def fetch_macro_data():
             logger.info(f"➡️ Verwerk: {name}...")
             try:
                 # 🔒 Beveiligde async-call
-                result = None
                 try:
                     result = asyncio.run(process_macro_indicator(name, indicator_config))
                 except Exception as async_error:
@@ -68,10 +67,7 @@ def fetch_macro_data():
                     logger.warning(f"⚠️ Ongeldige waarde voor {name}: {result.get('value')}")
                     continue
 
-                # ✅ Timeframe ophalen uit config, fallback = '1D'
-                timeframe = indicator_config.get("timeframe", "1D")
-
-                # ✅ Payload inclusief extra metadata + timeframe
+                # ✅ Payload (zonder timeframe)
                 payload = {
                     "name": result["name"],
                     "value": result["value"],
@@ -84,11 +80,10 @@ def fetch_macro_data():
                     "category": result.get("category", ""),
                     "correlation": result.get("correlation", ""),
                     "link": result.get("link", ""),
-                    "timeframe": timeframe,  # ✅ toegevoegd
                 }
 
                 logger.info(
-                    f"📤 POST {name} | timeframe={timeframe} | value={result['value']} | score={payload['score']} | trend={payload['trend']}"
+                    f"📤 POST {name} | value={result['value']} | score={payload['score']} | trend={payload['trend']}"
                 )
                 safe_post(f"{API_BASE_URL}/macro_data", payload=payload)
 
