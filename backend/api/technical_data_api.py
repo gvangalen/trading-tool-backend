@@ -195,51 +195,133 @@ async def delete_technical_data(symbol: str):
     finally:
         conn.close()
 
-
-# ✅ AGGREGATIE – week, maand, kwartaal (via timestamp)
-def aggregate_data(days: int):
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-
-    cutoff = datetime.utcnow() - timedelta(days=days)
-    indicators = ['rsi', 'volume', 'ma_200']
-    data = {}
-
+# ✅ DAY
+@router.get("/technical_data/day")
+async def get_technical_day_data():
+    logger.info("📤 [get/day] Ophalen technical-data (laatste 24 uur)...")
+    conn, cur = get_db_cursor()
     try:
-        with conn.cursor() as cur:
-            for indicator in indicators:
-                cur.execute(f"""
-                    SELECT AVG({indicator}) 
-                    FROM technical_data
-                    WHERE symbol = 'BTC'
-                    AND timestamp >= %s
-                """, (cutoff,))
-                result = cur.fetchone()
-                data[indicator] = float(result[0]) if result[0] else None
+        cur.execute("""
+            SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+            FROM technical_data
+            WHERE timestamp >= NOW() - INTERVAL '1 day'
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        rows = cur.fetchall()
+        return [
+            {
+                "symbol": row[0],
+                "rsi": float(row[1]) if row[1] is not None else None,
+                "volume": float(row[2]) if row[2] is not None else None,
+                "ma_200": float(row[3]) if row[3] is not None else None,
+                "score": float(row[4]) if row[4] is not None else None,
+                "advies": row[5],
+                "timestamp": row[6].isoformat() if row[6] else None
+            }
+            for row in rows
+        ]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Aggregatie mislukt: {e}")
+        logger.error(f"❌ [get/day] Databasefout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB01] Ophalen dagdata mislukt.")
     finally:
         conn.close()
 
-    return {"symbol": "BTC", **data}
+
+# ✅ WEEK
+@router.get("/technical_data/week")
+async def get_technical_week_data():
+    logger.info("📤 [get/week] Ophalen technical-data (laatste 7 dagen)...")
+    conn, cur = get_db_cursor()
+    try:
+        cur.execute("""
+            SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+            FROM technical_data
+            WHERE timestamp >= NOW() - INTERVAL '7 days'
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        rows = cur.fetchall()
+        return [
+            {
+                "symbol": row[0],
+                "rsi": float(row[1]) if row[1] is not None else None,
+                "volume": float(row[2]) if row[2] is not None else None,
+                "ma_200": float(row[3]) if row[3] is not None else None,
+                "score": float(row[4]) if row[4] is not None else None,
+                "advies": row[5],
+                "timestamp": row[6].isoformat() if row[6] else None
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ [get/week] Databasefout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB02] Ophalen weekdata mislukt.")
+    finally:
+        conn.close()
 
 
-@router.get("/api/technical/day")
-def get_day_data():
-    return aggregate_data(1)
+# ✅ MONTH
+@router.get("/technical_data/month")
+async def get_technical_month_data():
+    logger.info("📤 [get/month] Ophalen technical-data (laatste 30 dagen)...")
+    conn, cur = get_db_cursor()
+    try:
+        cur.execute("""
+            SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+            FROM technical_data
+            WHERE timestamp >= NOW() - INTERVAL '30 days'
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        rows = cur.fetchall()
+        return [
+            {
+                "symbol": row[0],
+                "rsi": float(row[1]) if row[1] is not None else None,
+                "volume": float(row[2]) if row[2] is not None else None,
+                "ma_200": float(row[3]) if row[3] is not None else None,
+                "score": float(row[4]) if row[4] is not None else None,
+                "advies": row[5],
+                "timestamp": row[6].isoformat() if row[6] else None
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ [get/month] Databasefout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB03] Ophalen maanddata mislukt.")
+    finally:
+        conn.close()
 
 
-@router.get("/api/technical/week")
-def get_week_data():
-    return aggregate_data(7)
-
-
-@router.get("/api/technical/month")
-def get_month_data():
-    return aggregate_data(30)
-
-
-@router.get("/api/technical/quarter")
-def get_quarter_data():
-    return aggregate_data(90)
+# ✅ QUARTER
+@router.get("/technical_data/quarter")
+async def get_technical_quarter_data():
+    logger.info("📤 [get/quarter] Ophalen technical-data (laatste 90 dagen)...")
+    conn, cur = get_db_cursor()
+    try:
+        cur.execute("""
+            SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+            FROM technical_data
+            WHERE timestamp >= NOW() - INTERVAL '90 days'
+            ORDER BY timestamp DESC
+            LIMIT 50;
+        """)
+        rows = cur.fetchall()
+        return [
+            {
+                "symbol": row[0],
+                "rsi": float(row[1]) if row[1] is not None else None,
+                "volume": float(row[2]) if row[2] is not None else None,
+                "ma_200": float(row[3]) if row[3] is not None else None,
+                "score": float(row[4]) if row[4] is not None else None,
+                "advies": row[5],
+                "timestamp": row[6].isoformat() if row[6] else None
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ [get/quarter] Databasefout: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB04] Ophalen kwartaaldata mislukt.")
+    finally:
+        conn.close()
