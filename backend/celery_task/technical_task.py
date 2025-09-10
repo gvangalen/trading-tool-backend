@@ -68,17 +68,14 @@ def calculate_rsi(closes, period=14):
     return round(100 - (100 / (1 + rs)), 2)
 
 
-# ✅ Technische data POSTen naar backend
 @shared_task(name="backend.celery_task.technical_task.save_technical_data_task")
-def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D", score=None, advice=None):
+def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D"):
     payload = {
         "symbol": symbol,
         "timeframe": timeframe,
         "rsi": rsi,
         "ma_200": ma_200_ratio,
-        "volume": volume,
-        "score": score,
-        "advice": advice
+        "volume": volume
     }
     try:
         url = f"{API_BASE_URL}/technical_data"
@@ -91,7 +88,6 @@ def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D", 
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
-
 
 # ✅ Technische data ophalen van Binance en verwerken
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data")
