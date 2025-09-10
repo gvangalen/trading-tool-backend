@@ -8,13 +8,6 @@ from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
 
-# ✅ Import voor technische logica
-from backend.utils.technical_interpreter import (
-    process_technical_indicator,
-    process_all_technical,
-    load_technical_config
-)
-
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -68,6 +61,7 @@ def calculate_rsi(closes, period=14):
     return round(100 - (100 / (1 + rs)), 2)
 
 
+# ✅ POST taak voor opslag in backend
 @shared_task(name="backend.celery_task.technical_task.save_technical_data_task")
 def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D"):
     payload = {
@@ -89,7 +83,8 @@ def save_technical_data_task(symbol, rsi, volume, ma_200_ratio, timeframe="1D"):
         logger.error(f"❌ Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
 
-# ✅ Technische data ophalen van Binance en verwerken
+
+# ✅ Ophalen van candles en technische data → alleen ruwe data doorsturen
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data")
 def fetch_technical_data():
     try:
@@ -123,30 +118,8 @@ def fetch_technical_data():
 
         logger.info(f"📊 RSI: {rsi}, MA200-ratio: {ma_200_ratio}, Volume: {volume}")
 
-        # ✅ Config laden
-        config = load_technical_config()
-
-        # ✅ Scores berekenen
-        rsi_result = process_technical_indicator("rsi", rsi, config["indicators"]["rsi"])
-        ma_result = process_technical_indicator("ma_200", ma_200_ratio, config["indicators"]["ma_200"])
-        volume_result = process_technical_indicator("volume", volume, config["indicators"]["volume"])
-
-        # ✅ Gemiddelde score
-        total_score = rsi_result["score"] + ma_result["score"] + volume_result["score"]
-        average_score = round(total_score / 3, 2)
-
-        # ✅ Advieslogica
-        if average_score >= 2.2:
-            advice = "Bullish"
-        elif average_score <= 0.8:
-            advice = "Bearish"
-        else:
-            advice = "Neutraal"
-
-        logger.info(f"🧠 Technische score: {average_score} → Advies: {advice}")
-
-        # ✅ POST naar backend
-        save_technical_data_task.delay(our_symbol, rsi, volume, ma_200_ratio, "1D", average_score, advice)
+        # ✅ Verstuur ruwe data → interpretatie gebeurt in backend
+        save_technical_data_task.delay(our_symbol, rsi, volume, ma_200_ratio, "1D")
 
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen/verwerken technische data: {e}")
