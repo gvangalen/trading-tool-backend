@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, HTTPException, Request
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import process_technical_indicator
 from backend.celery_task.technical_task import save_technical_data_task
@@ -195,11 +195,15 @@ async def delete_technical_data(symbol: str):
     finally:
         conn.close()
 
+
 # ✅ DAY
 @router.get("/technical_data/day")
 async def get_technical_day_data():
     logger.info("📤 [get/day] Ophalen technical-data (laatste 24 uur)...")
-    conn, cur = get_db_cursor()
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+    cur = conn.cursor()
     try:
         cur.execute("""
             SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
@@ -232,7 +236,10 @@ async def get_technical_day_data():
 @router.get("/technical_data/week")
 async def get_technical_week_data():
     logger.info("📤 [get/week] Ophalen technical-data (laatste 7 dagen)...")
-    conn, cur = get_db_cursor()
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+    cur = conn.cursor()
     try:
         cur.execute("""
             SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
@@ -265,7 +272,10 @@ async def get_technical_week_data():
 @router.get("/technical_data/month")
 async def get_technical_month_data():
     logger.info("📤 [get/month] Ophalen technical-data (laatste 30 dagen)...")
-    conn, cur = get_db_cursor()
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+    cur = conn.cursor()
     try:
         cur.execute("""
             SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
@@ -298,7 +308,10 @@ async def get_technical_month_data():
 @router.get("/technical_data/quarter")
 async def get_technical_quarter_data():
     logger.info("📤 [get/quarter] Ophalen technical-data (laatste 90 dagen)...")
-    conn, cur = get_db_cursor()
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+    cur = conn.cursor()
     try:
         cur.execute("""
             SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
