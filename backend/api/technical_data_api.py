@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import process_technical_indicator
 from backend.celery_task.technical_task import save_technical_data_task
