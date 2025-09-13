@@ -1,4 +1,5 @@
 import logging
+import traceback
 from fastapi import APIRouter, HTTPException, Request, Query
 from datetime import datetime, timedelta
 import httpx
@@ -9,17 +10,13 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logger.info("🚀 market_data_api.py geladen – alle marktroutes zijn actief.")
 
-# ✅ Config laden
 MARKET_CONFIG = load_market_config()
-
-# ⏬ Config variabelen gebruiken vanuit centrale MARKET_CONFIG
 COINGECKO_URL = MARKET_CONFIG["coingecko_url"]
 VOLUME_URL = MARKET_CONFIG["volume_url"]
 ASSETS = MARKET_CONFIG["assets"]
 
-
 @router.get("/market_data/list")
-async def list_market_data(since_minutes: int = Query(default=1440, description="Alleen data van de laatste X minuten")):
+async def list_market_data(since_minutes: int = Query(default=1440)):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -32,24 +29,14 @@ async def list_market_data(since_minutes: int = Query(default=1440, description=
         """, (time_threshold,))
         rows = cur.fetchall()
         conn.close()
-
-        return [
-            {
-                "id": r[0],
-                "symbol": r[1],
-                "price": r[2],
-                "open": r[3],
-                "high": r[4],
-                "low": r[5],
-                "change_24h": r[6],
-                "volume": r[7],
-                "timestamp": r[8],
-            } for r in rows
-        ]
+        return [{
+            "id": r[0], "symbol": r[1], "price": r[2], "open": r[3], "high": r[4], "low": r[5],
+            "change_24h": r[6], "volume": r[7], "timestamp": r[8]
+        } for r in rows]
     except Exception as e:
         logger.error(f"❌ [list] DB-fout: {e}")
+        logger.debug(traceback.format_exc())
         raise HTTPException(status_code=500, detail="❌ Kon marktdata niet ophalen.")
-
 
 @router.post("/market_data")
 async def save_market_data(request: Request):
@@ -58,27 +45,21 @@ async def save_market_data(request: Request):
         symbol = data.get("symbol", "BTC")
         coingecko_id = MARKET_CONFIG["assets"].get(symbol, "bitcoin")
 
-        COINGECKO_URL = MARKET_CONFIG["coingecko_url"]
-        VOLUME_URL = MARKET_CONFIG["volume_url"]
-
         async with httpx.AsyncClient(timeout=10) as client:
-            # ✅ Prijs ophalen via ohlc endpoint
             url = COINGECKO_URL.format(id=coingecko_id)
             response = await client.get(url)
             response.raise_for_status()
             prices = response.json()
             if not prices:
                 raise ValueError("⚠️ Geen prijsdata ontvangen")
-            price = float(prices[-1][4])  # laatste sluitprijs
+            price = float(prices[-1][4])
 
-            # ✅ 24h % verandering + volume ophalen via coin endpoint
-            vol_response = await client.get(VOLUME_URL.format(id=coingecko_id))  # ✅ FIXED HERE
+            vol_response = await client.get(VOLUME_URL.format(id=coingecko_id))
             vol_response.raise_for_status()
             vol_data = vol_response.json()
             change_24h = vol_data.get("market_data", {}).get("price_change_percentage_24h", 0.0)
             volume = vol_data.get("market_data", {}).get("total_volume", {}).get("usd", 0.0)
 
-        # ✅ Opslaan in DB
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute("""
