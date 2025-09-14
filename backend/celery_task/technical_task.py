@@ -100,18 +100,18 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
 
 
 # ✅ Taken per periode
-@shared_task(name="backend.tasks.technical.fetch_technical_data_day")
+@shared_task(name="backend.celery_task.technical.fetch_technical_data_day")
 def fetch_technical_data_day():
     fetch_and_post(interval="1d", periode="day")
 
-@shared_task(name="backend.tasks.technical.fetch_technical_data_week")
+@shared_task(name="backend.celery_task.technical.fetch_technical_data_week")
 def fetch_technical_data_week():
     fetch_and_post(interval="1w", periode="week")
 
-@shared_task(name="backend.tasks.technical.fetch_technical_data_month")
+@shared_task(name="backend.celery_task.technical.fetch_technical_data_month")
 def fetch_technical_data_month():
     fetch_and_post(interval="1M", periode="month")
 
-@shared_task(name="backend.tasks.technical.fetch_technical_data_quarter")
+@shared_task(name="backend.celery_task.technical.fetch_technical_data_quarter")
 def fetch_technical_data_quarter():
     fetch_and_post(interval="1d", limit=90, periode="quarter")
