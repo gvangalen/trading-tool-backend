@@ -198,38 +198,48 @@ async def delete_technical_data(symbol: str):
 
 # ✅ DAY
 @router.get("/technical_data/day")
-async def get_technical_day_data():
-    logger.info("📤 [get/day] Ophalen technical-data (laatste 24 uur)...")
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    cur = conn.cursor()
+def get_technical_data_day():
     try:
-        cur.execute("""
-            SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-            FROM technical_data
-            WHERE timestamp >= NOW() - INTERVAL '1 day'
-            ORDER BY timestamp DESC
-            LIMIT 50;
-        """)
-        rows = cur.fetchall()
-        return [
-            {
-                "symbol": row[0],
-                "rsi": float(row[1]) if row[1] is not None else None,
-                "volume": float(row[2]) if row[2] is not None else None,
-                "ma_200": float(row[3]) if row[3] is not None else None,
-                "score": float(row[4]) if row[4] is not None else None,
-                "advies": row[5],
-                "timestamp": row[6].isoformat() if row[6] else None
-            }
-            for row in rows
-        ]
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+                FROM technical_data
+                WHERE timestamp >= NOW() - INTERVAL '1 day'
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail="Geen technische data gevonden voor afgelopen dag")
+
+            # ✅ Structureer per indicator met score en uitleg
+            result = [
+                {
+                    "indicator": "RSI",
+                    "value": float(row[1]) if row[1] is not None else None,
+                    "score": calculate_rsi_score(row[1]),
+                    "uitleg": uitleg_rsi(row[1]),
+                },
+                {
+                    "indicator": "Volume",
+                    "value": float(row[2]) if row[2] is not None else None,
+                    "score": calculate_volume_score(row[2]),
+                    "uitleg": uitleg_volume(row[2]),
+                },
+                {
+                    "indicator": "200MA",
+                    "value": float(row[3]) if row[3] is not None else None,
+                    "score": calculate_ma_score(row[3]),
+                    "uitleg": uitleg_ma(row[3]),
+                },
+            ]
+            return result
+
     except Exception as e:
-        logger.error(f"❌ [get/day] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB01] Ophalen dagdata mislukt.")
-    finally:
-        conn.close()
+        print(f"❌ Fout bij ophalen technische dagdata: {e}")
+        raise HTTPException(status_code=500, detail="Interne serverfout")
 
 
 # ✅ WEEK
