@@ -203,7 +203,7 @@ def get_technical_data_day():
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+                SELECT symbol, rsi, volume, ma_200
                 FROM technical_data
                 WHERE timestamp >= NOW() - INTERVAL '1 day'
                 ORDER BY timestamp DESC
@@ -212,33 +212,35 @@ def get_technical_data_day():
             row = cur.fetchone()
 
             if not row:
-                raise HTTPException(status_code=404, detail="Geen technische data gevonden voor afgelopen dag")
+                raise HTTPException(status_code=404, detail="Geen technische data gevonden")
 
-            # ✅ Structureer per indicator met score en uitleg
+            # Bouw dict met ruwe waarden
+            raw_data = {
+                "RSI": float(row[1]) if row[1] is not None else None,
+                "Volume": float(row[2]) if row[2] is not None else None,
+                "200MA": float(row[3]) if row[3] is not None else None,
+            }
+
+            # Verwerk via centrale logica
+            processed = process_all_technical(raw_data)
+
+            # Zet output om in lijst i.p.v. dict (voor frontend-table)
             result = [
                 {
-                    "indicator": "RSI",
-                    "value": float(row[1]) if row[1] is not None else None,
-                    "score": calculate_rsi_score(row[1]),
-                    "uitleg": uitleg_rsi(row[1]),
-                },
-                {
-                    "indicator": "Volume",
-                    "value": float(row[2]) if row[2] is not None else None,
-                    "score": calculate_volume_score(row[2]),
-                    "uitleg": uitleg_volume(row[2]),
-                },
-                {
-                    "indicator": "200MA",
-                    "value": float(row[3]) if row[3] is not None else None,
-                    "score": calculate_ma_score(row[3]),
-                    "uitleg": uitleg_ma(row[3]),
-                },
+                    "indicator": key,
+                    "value": val["value"],
+                    "score": val["score"],
+                    "interpretatie": val["interpretation"],
+                    "uitleg": val["explanation"],
+                    "actie": val["action"],
+                    "categorie": val["category"],
+                }
+                for key, val in processed.items()
             ]
             return result
 
     except Exception as e:
-        print(f"❌ Fout bij ophalen technische dagdata: {e}")
+        logger.error(f"❌ Fout bij ophalen technische dagdata: {e}")
         raise HTTPException(status_code=500, detail="Interne serverfout")
 
 
