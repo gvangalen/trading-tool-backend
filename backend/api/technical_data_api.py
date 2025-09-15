@@ -200,17 +200,20 @@ def get_technical_data_day():
     logger.info("🧪 [get/day] TESTMODUS: alleen BTC data wordt teruggegeven.")
 
     return [
-        {
-            "id": 1,
-            "symbol": "BTC",
-            "rsi": 45.0,
-            "volume": 900000000,
-            "ma_200": 40000.0,
-            "score": 2,
-            "advies": "🟢 Bullish",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    ]
+    {
+        "id": 1,
+        "symbol": "BTC",
+        "rsi": 45.0,
+        "volume": 900000000,
+        "ma_200": 40000.0,
+        "rsi_score": 0,
+        "volume_score": 1,
+        "ma_200_score": 1,
+        "score": 2,
+        "advies": "🟢 Bullish",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+]
     
 # ✅ WEEK
 @router.get("/technical_data/week")
