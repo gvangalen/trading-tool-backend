@@ -200,34 +200,32 @@ def get_technical_data_day():
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
+            since = datetime.utcnow() - timedelta(days=1)
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200
+                SELECT id, symbol, rsi, volume, ma_200, score, advies, timestamp
                 FROM technical_data
-                WHERE timestamp >= NOW() - INTERVAL '1 day'
+                WHERE timestamp >= %s
                 ORDER BY timestamp DESC
-                LIMIT 1
-            """)
-            row = cur.fetchone()
+            """, (since,))
+            rows = cur.fetchall()
 
-            if not row:
-                raise HTTPException(status_code=404, detail="Geen technische data gevonden")
-
-            symbol, rsi, volume, ma_200 = row
-
-            score, advies = process_technical_indicator(symbol, float(rsi), float(volume), float(ma_200))
-
-            return {
-                "symbol": symbol,
-                "rsi": float(rsi),
-                "volume": float(volume),
-                "ma_200": float(ma_200),
-                "score": score,
-                "advies": advies
+        # ✅ data serialiseren naar JSON
+        return [
+            {
+                "id": row[0],
+                "symbol": row[1],
+                "rsi": float(row[2]) if row[2] is not None else None,
+                "volume": float(row[3]) if row[3] is not None else None,
+                "ma_200": float(row[4]) if row[4] is not None else None,
+                "score": float(row[5]) if row[5] is not None else None,
+                "advies": row[6],
+                "timestamp": row[7].isoformat()
             }
-
+            for row in rows
+        ]
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen technische dagdata: {e}")
-        raise HTTPException(status_code=500, detail="Interne serverfout")
+        print("❌ Fout bij ophalen technische dagdata:", e)
+        return {"error": "Fout bij ophalen dagdata"}
 
 
 # ✅ WEEK
