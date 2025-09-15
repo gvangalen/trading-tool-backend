@@ -197,55 +197,30 @@ async def delete_technical_data(symbol: str):
 
 @router.get("/technical_data/day")
 def get_technical_data_day():
-    logger.info("📤 [get/day] Ophalen technical-data (laatste 24 uur)...")
-    try:
-        conn = get_db_connection()
-        if not conn:
-            logger.error("❌ TECH-DAY: Geen databaseverbinding.")
-            raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+    logger.info("🧪 [get/day] TESTMODUS: hardcoded data wordt teruggegeven.")
 
-        since = datetime.utcnow() - timedelta(days=1)
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
-                WHERE timestamp >= %s
-                ORDER BY timestamp DESC
-            """, (since,))
-            rows = cur.fetchall()
-
-            if not rows:
-                logger.warning("⚠️ Geen data gevonden voor afgelopen 24 uur. Fallback: laatste 10 rijen ophalen.")
-                cur.execute("""
-                    SELECT id, symbol, rsi, volume, ma_200, score, advies, timestamp
-                    FROM technical_data
-                    ORDER BY timestamp DESC
-                    LIMIT 10;
-                """)
-                rows = cur.fetchall()
-
-        logger.info(f"✅ [get/day] {len(rows)} records opgehaald (since: {since.isoformat()})")
-        return [
-            {
-                "id": row[0],
-                "symbol": row[1],
-                "rsi": float(row[2]) if row[2] is not None else None,
-                "volume": float(row[3]) if row[3] is not None else None,
-                "ma_200": float(row[4]) if row[4] is not None else None,
-                "score": float(row[5]) if row[5] is not None else None,
-                "advies": row[6],
-                "timestamp": row[7].isoformat()
-            }
-            for row in rows
-        ]
-
-    except Exception as e:
-        logger.error(f"❌ [get/day] Fout bij ophalen technische dagdata: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen dagdata.")
-    finally:
-        if conn:
-            conn.close()
-
+    return [
+        {
+            "id": 1,
+            "symbol": "BTC",
+            "rsi": 45.0,
+            "volume": 900000000,
+            "ma_200": 40000.0,
+            "score": 2,
+            "advies": "🟢 Bullish",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+        {
+            "id": 2,
+            "symbol": "ETH",
+            "rsi": 65.0,
+            "volume": 700000000,
+            "ma_200": 2500.0,
+            "score": 1,
+            "advies": "⚖️ Neutraal",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    ]
 
 # ✅ WEEK
 @router.get("/technical_data/week")
