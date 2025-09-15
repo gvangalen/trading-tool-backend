@@ -197,7 +197,7 @@ async def delete_technical_data(symbol: str):
 
 @router.get("/technical_data/day")
 def get_technical_data_day():
-    logger.info("🧪 [get/day] TESTMODUS: hardcoded data wordt teruggegeven.")
+    logger.info("🧪 [get/day] TESTMODUS: alleen BTC data wordt teruggegeven.")
 
     return [
         {
@@ -209,19 +209,9 @@ def get_technical_data_day():
             "score": 2,
             "advies": "🟢 Bullish",
             "timestamp": datetime.utcnow().isoformat()
-        },
-        {
-            "id": 2,
-            "symbol": "ETH",
-            "rsi": 65.0,
-            "volume": 700000000,
-            "ma_200": 2500.0,
-            "score": 1,
-            "advies": "⚖️ Neutraal",
-            "timestamp": datetime.utcnow().isoformat()
         }
     ]
-
+    
 # ✅ WEEK
 @router.get("/technical_data/week")
 async def get_technical_week_data():
