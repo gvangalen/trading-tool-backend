@@ -195,7 +195,6 @@ async def delete_technical_data(symbol: str):
         conn.close()
 
 
-# ✅ DAY
 @router.get("/technical_data/day")
 def get_technical_data_day():
     try:
@@ -213,30 +212,18 @@ def get_technical_data_day():
             if not row:
                 raise HTTPException(status_code=404, detail="Geen technische data gevonden")
 
-            # Bouw dict met ruwe waarden
-            raw_data = {
-                "RSI": float(row[1]) if row[1] is not None else None,
-                "Volume": float(row[2]) if row[2] is not None else None,
-                "200MA": float(row[3]) if row[3] is not None else None,
+            symbol, rsi, volume, ma_200 = row
+
+            score, advies = process_technical_indicator(symbol, float(rsi), float(volume), float(ma_200))
+
+            return {
+                "symbol": symbol,
+                "rsi": float(rsi),
+                "volume": float(volume),
+                "ma_200": float(ma_200),
+                "score": score,
+                "advies": advies
             }
-
-            # Verwerk via centrale logica
-            processed = process_all_technical(raw_data)
-
-            # Zet output om in lijst i.p.v. dict (voor frontend-table)
-            result = [
-                {
-                    "indicator": key,
-                    "value": val["value"],
-                    "score": val["score"],
-                    "interpretatie": val["interpretation"],
-                    "uitleg": val["explanation"],
-                    "actie": val["action"],
-                    "categorie": val["category"],
-                }
-                for key, val in processed.items()
-            ]
-            return result
 
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen technische dagdata: {e}")
