@@ -197,10 +197,15 @@ async def delete_technical_data(symbol: str):
 
 @router.get("/technical_data/day")
 def get_technical_data_day():
+    logger.info("📤 [get/day] Ophalen technical-data (laatste 24 uur)...")
     try:
         conn = get_db_connection()
+        if not conn:
+            logger.error("❌ TECH-DAY: Geen databaseverbinding.")
+            raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+
+        since = datetime.utcnow() - timedelta(days=1)
         with conn.cursor() as cur:
-            since = datetime.utcnow() - timedelta(days=1)
             cur.execute("""
                 SELECT id, symbol, rsi, volume, ma_200, score, advies, timestamp
                 FROM technical_data
@@ -209,7 +214,17 @@ def get_technical_data_day():
             """, (since,))
             rows = cur.fetchall()
 
-        # ✅ data serialiseren naar JSON
+            if not rows:
+                logger.warning("⚠️ Geen data gevonden voor afgelopen 24 uur. Fallback: laatste 10 rijen ophalen.")
+                cur.execute("""
+                    SELECT id, symbol, rsi, volume, ma_200, score, advies, timestamp
+                    FROM technical_data
+                    ORDER BY timestamp DESC
+                    LIMIT 10;
+                """)
+                rows = cur.fetchall()
+
+        logger.info(f"✅ [get/day] {len(rows)} records opgehaald (since: {since.isoformat()})")
         return [
             {
                 "id": row[0],
@@ -223,9 +238,13 @@ def get_technical_data_day():
             }
             for row in rows
         ]
+
     except Exception as e:
-        print("❌ Fout bij ophalen technische dagdata:", e)
-        return {"error": "Fout bij ophalen dagdata"}
+        logger.error(f"❌ [get/day] Fout bij ophalen technische dagdata: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen dagdata.")
+    finally:
+        if conn:
+            conn.close()
 
 
 # ✅ WEEK
