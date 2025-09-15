@@ -197,23 +197,35 @@ async def delete_technical_data(symbol: str):
 
 @router.get("/technical_data/day")
 def get_technical_data_day():
-    logger.info("🧪 [get/day] TESTMODUS: alleen BTC data wordt teruggegeven.")
-
     return [
-    {
-        "id": 1,
-        "symbol": "BTC",
-        "rsi": 45.0,
-        "volume": 900000000,
-        "ma_200": 40000.0,
-        "rsi_score": 0,
-        "volume_score": 1,
-        "ma_200_score": 1,
-        "score": 2,
-        "advies": "🟢 Bullish",
-        "timestamp": datetime.utcnow().isoformat()
-    }
-]
+        {
+            "symbol": "BTC",
+            "indicator": "RSI",
+            "waarde": 45.0,
+            "score": 1,
+            "advies": "🟢 Bullish",
+            "uitleg": "RSI is onder 50 en stijgend.",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+        {
+            "symbol": "BTC",
+            "indicator": "Volume",
+            "waarde": 900000000,
+            "score": 0,
+            "advies": "⚖️ Neutraal",
+            "uitleg": "Volume ligt rond het gemiddelde.",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+        {
+            "symbol": "BTC",
+            "indicator": "200MA",
+            "waarde": 40000.0,
+            "score": 1,
+            "advies": "🟢 Bullish",
+            "uitleg": "Prijs ligt boven 200MA.",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    ]
     
 # ✅ WEEK
 @router.get("/technical_data/week")
