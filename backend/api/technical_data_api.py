@@ -195,6 +195,7 @@ async def delete_technical_data(symbol: str):
         conn.close()
 
 
+✅ DAY (dummy)
 @router.get("/technical_data/day")
 def get_technical_data_day():
     return [
@@ -226,182 +227,105 @@ def get_technical_data_day():
             "timestamp": datetime.utcnow().isoformat()
         }
     ]
-    
-# ✅ WEEK
+
+
+# ✅ WEEK (dummy)
 @router.get("/technical_data/week")
-async def get_technical_week_data():
-    logger.info("📤 [get/week] Ophalen technical-data (laatste 7 dagen)...")
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
-                WHERE timestamp >= NOW() - INTERVAL '7 days'
-                ORDER BY timestamp DESC
-                LIMIT 10;
-            """)
-            rows = cur.fetchall()
-
-        result = []
-        for row in rows:
-            symbol, rsi, volume, ma_200, score, advies, ts = row
-            timestamp = ts.isoformat() if ts else None
-
-            result.extend([
-                {
-                    "symbol": symbol,
-                    "indicator": "RSI",
-                    "waarde": float(rsi),
-                    "score": score,
-                    "advies": advies,
-                    "uitleg": "RSI-analyse over de afgelopen week",
-                    "timestamp": timestamp
-                },
-                {
-                    "symbol": symbol,
-                    "indicator": "Volume",
-                    "waarde": float(volume),
-                    "score": score,
-                    "advies": advies,
-                    "uitleg": "Volume-analyse over de afgelopen week",
-                    "timestamp": timestamp
-                },
-                {
-                    "symbol": symbol,
-                    "indicator": "200MA",
-                    "waarde": float(ma_200),
-                    "score": score,
-                    "advies": advies,
-                    "uitleg": "Vergelijking met 200MA over de afgelopen week",
-                    "timestamp": timestamp
-                }
-            ])
-        return result
-    except Exception as e:
-        logger.error(f"❌ [get/week] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB02] Ophalen weekdata mislukt.")
-    finally:
-        conn.close()
+def get_technical_data_week():
+    return [
+        {
+            "symbol": "BTC",
+            "indicator": "RSI",
+            "waarde": 51.2,
+            "score": 0,
+            "advies": "⚖️ Neutraal",
+            "uitleg": "RSI schommelt rond 50.",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+        {
+            "symbol": "BTC",
+            "indicator": "Volume",
+            "waarde": 870000000,
+            "score": -1,
+            "advies": "🔻 Afname",
+            "uitleg": "Volume lager dan vorige week.",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+        {
+            "symbol": "BTC",
+            "indicator": "200MA",
+            "waarde": 39200.0,
+            "score": 1,
+            "advies": "🟢 Bullish",
+            "uitleg": "BTC blijft boven de 200MA.",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    ]
 
 
-# ✅ MONTH
+# ✅ MONTH (dummy)
 @router.get("/technical_data/month")
-async def get_technical_month_data():
-    logger.info("📤 [get/month] Ophalen technical-data (laatste 30 dagen)...")
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
-                WHERE timestamp >= NOW() - INTERVAL '30 days'
-                ORDER BY timestamp DESC
-                LIMIT 10;
-            """)
-            rows = cur.fetchall()
-
-        result = []
-        for row in rows:
-            symbol, rsi, volume, ma_200, score, advies, ts = row
-            timestamp = ts.isoformat() if ts else None
-
-            result.extend([
-                {
-                    "symbol": symbol,
-                    "indicator": "RSI",
-                    "waarde": float(rsi),
-                    "score": score,
-                    "advies": advies,
-                    "uitleg": "RSI-analyse afgelopen maand",
-                    "timestamp": timestamp
-                },
-                {
-                    "symbol": symbol,
-                    "indicator": "Volume",
-                    "waarde": float(volume),
-                    "score": score,
-                    "advies": advies,
-                    "uitleg": "Volume-analyse afgelopen maand",
-                    "timestamp": timestamp
-                },
-                {
-                    "symbol": symbol,
-                    "indicator": "200MA",
-                    "waarde": float(ma_200),
-                    "score": score,
-                    "advies": advies,
-                    "uitleg": "200MA-analyse afgelopen maand",
-                    "timestamp": timestamp
-                }
-            ])
-        return result
-    except Exception as e:
-        logger.error(f"❌ [get/month] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB03] Ophalen maanddata mislukt.")
-    finally:
-        conn.close()
+def get_technical_data_month():
+    return [
+        {
+            "symbol": "BTC",
+            "indicator": "RSI",
+            "waarde": 62.8,
+            "score": 2,
+            "advies": "🟢 Sterk",
+            "uitleg": "RSI trendt omhoog sinds begin van de maand.",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+        {
+            "symbol": "BTC",
+            "indicator": "Volume",
+            "waarde": 1200000000,
+            "score": 1,
+            "advies": "🟢 Positief",
+            "uitleg": "Volume stijgt licht.",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+        {
+            "symbol": "BTC",
+            "indicator": "200MA",
+            "waarde": 38500.0,
+            "score": 2,
+            "advies": "🟢 Sterk bullish",
+            "uitleg": "BTC ruim boven 200MA.",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    ]
 
 
-# ✅ QUARTER
+# ✅ QUARTER (dummy)
 @router.get("/technical_data/quarter")
-async def get_technical_quarter_data():
-    logger.info("📤 [get/quarter] Ophalen technical-data (laatste 90 dagen)...")
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
-                WHERE timestamp >= NOW() - INTERVAL '90 days'
-                ORDER BY timestamp DESC
-                LIMIT 10;
-            """)
-            rows = cur.fetchall()
-
-        result = []
-        for row in rows:
-            symbol, rsi, volume, ma_200, score, advies, ts = row
-            timestamp = ts.isoformat() if ts else None
-
-            result.extend([
-                {
-                    "symbol": symbol,
-                    "indicator": "RSI",
-                    "waarde": float(rsi),
-                    "score": score,
-                    "advies": advies,
-                    "uitleg": "RSI-analyse afgelopen kwartaal",
-                    "timestamp": timestamp
-                },
-                {
-                    "symbol": symbol,
-                    "indicator": "Volume",
-                    "waarde": float(volume),
-                    "score": score,
-                    "advies": advies,
-                    "uitleg": "Volume-analyse afgelopen kwartaal",
-                    "timestamp": timestamp
-                },
-                {
-                    "symbol": symbol,
-                    "indicator": "200MA",
-                    "waarde": float(ma_200),
-                    "score": score,
-                    "advies": advies,
-                    "uitleg": "200MA-analyse afgelopen kwartaal",
-                    "timestamp": timestamp
-                }
-            ])
-        return result
-    except Exception as e:
-        logger.error(f"❌ [get/quarter] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB04] Ophalen kwartaaldata mislukt.")
-    finally:
-        conn.close()
+def get_technical_data_quarter():
+    return [
+        {
+            "symbol": "BTC",
+            "indicator": "RSI",
+            "waarde": 68.1,
+            "score": 2,
+            "advies": "🟢 Overbought",
+            "uitleg": "RSI boven 65 voor meerdere weken.",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+        {
+            "symbol": "BTC",
+            "indicator": "Volume",
+            "waarde": 1350000000,
+            "score": 2,
+            "advies": "🟢 Bullish trend",
+            "uitleg": "Volume is toegenomen sinds kwartaalstart.",
+            "timestamp": datetime.utcnow().isoformat()
+        },
+        {
+            "symbol": "BTC",
+            "indicator": "200MA",
+            "waarde": 37000.0,
+            "score": 2,
+            "advies": "🟢 Boven MA",
+            "uitleg": "BTC zit in opwaartse trend boven 200MA.",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    ]
