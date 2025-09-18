@@ -234,28 +234,52 @@ async def get_technical_week_data():
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    cur = conn.cursor()
     try:
-        cur.execute("""
-            SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-            FROM technical_data
-            WHERE timestamp >= NOW() - INTERVAL '7 days'
-            ORDER BY timestamp DESC
-            LIMIT 50;
-        """)
-        rows = cur.fetchall()
-        return [
-            {
-                "symbol": row[0],
-                "rsi": float(row[1]) if row[1] is not None else None,
-                "volume": float(row[2]) if row[2] is not None else None,
-                "ma_200": float(row[3]) if row[3] is not None else None,
-                "score": float(row[4]) if row[4] is not None else None,
-                "advies": row[5],
-                "timestamp": row[6].isoformat() if row[6] else None
-            }
-            for row in rows
-        ]
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+                FROM technical_data
+                WHERE timestamp >= NOW() - INTERVAL '7 days'
+                ORDER BY timestamp DESC
+                LIMIT 10;
+            """)
+            rows = cur.fetchall()
+
+        result = []
+        for row in rows:
+            symbol, rsi, volume, ma_200, score, advies, ts = row
+            timestamp = ts.isoformat() if ts else None
+
+            result.extend([
+                {
+                    "symbol": symbol,
+                    "indicator": "RSI",
+                    "waarde": float(rsi),
+                    "score": score,
+                    "advies": advies,
+                    "uitleg": "RSI-analyse over de afgelopen week",
+                    "timestamp": timestamp
+                },
+                {
+                    "symbol": symbol,
+                    "indicator": "Volume",
+                    "waarde": float(volume),
+                    "score": score,
+                    "advies": advies,
+                    "uitleg": "Volume-analyse over de afgelopen week",
+                    "timestamp": timestamp
+                },
+                {
+                    "symbol": symbol,
+                    "indicator": "200MA",
+                    "waarde": float(ma_200),
+                    "score": score,
+                    "advies": advies,
+                    "uitleg": "Vergelijking met 200MA over de afgelopen week",
+                    "timestamp": timestamp
+                }
+            ])
+        return result
     except Exception as e:
         logger.error(f"❌ [get/week] Databasefout: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB02] Ophalen weekdata mislukt.")
@@ -270,28 +294,52 @@ async def get_technical_month_data():
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    cur = conn.cursor()
     try:
-        cur.execute("""
-            SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-            FROM technical_data
-            WHERE timestamp >= NOW() - INTERVAL '30 days'
-            ORDER BY timestamp DESC
-            LIMIT 50;
-        """)
-        rows = cur.fetchall()
-        return [
-            {
-                "symbol": row[0],
-                "rsi": float(row[1]) if row[1] is not None else None,
-                "volume": float(row[2]) if row[2] is not None else None,
-                "ma_200": float(row[3]) if row[3] is not None else None,
-                "score": float(row[4]) if row[4] is not None else None,
-                "advies": row[5],
-                "timestamp": row[6].isoformat() if row[6] else None
-            }
-            for row in rows
-        ]
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+                FROM technical_data
+                WHERE timestamp >= NOW() - INTERVAL '30 days'
+                ORDER BY timestamp DESC
+                LIMIT 10;
+            """)
+            rows = cur.fetchall()
+
+        result = []
+        for row in rows:
+            symbol, rsi, volume, ma_200, score, advies, ts = row
+            timestamp = ts.isoformat() if ts else None
+
+            result.extend([
+                {
+                    "symbol": symbol,
+                    "indicator": "RSI",
+                    "waarde": float(rsi),
+                    "score": score,
+                    "advies": advies,
+                    "uitleg": "RSI-analyse afgelopen maand",
+                    "timestamp": timestamp
+                },
+                {
+                    "symbol": symbol,
+                    "indicator": "Volume",
+                    "waarde": float(volume),
+                    "score": score,
+                    "advies": advies,
+                    "uitleg": "Volume-analyse afgelopen maand",
+                    "timestamp": timestamp
+                },
+                {
+                    "symbol": symbol,
+                    "indicator": "200MA",
+                    "waarde": float(ma_200),
+                    "score": score,
+                    "advies": advies,
+                    "uitleg": "200MA-analyse afgelopen maand",
+                    "timestamp": timestamp
+                }
+            ])
+        return result
     except Exception as e:
         logger.error(f"❌ [get/month] Databasefout: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB03] Ophalen maanddata mislukt.")
@@ -306,28 +354,52 @@ async def get_technical_quarter_data():
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    cur = conn.cursor()
     try:
-        cur.execute("""
-            SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-            FROM technical_data
-            WHERE timestamp >= NOW() - INTERVAL '90 days'
-            ORDER BY timestamp DESC
-            LIMIT 50;
-        """)
-        rows = cur.fetchall()
-        return [
-            {
-                "symbol": row[0],
-                "rsi": float(row[1]) if row[1] is not None else None,
-                "volume": float(row[2]) if row[2] is not None else None,
-                "ma_200": float(row[3]) if row[3] is not None else None,
-                "score": float(row[4]) if row[4] is not None else None,
-                "advies": row[5],
-                "timestamp": row[6].isoformat() if row[6] else None
-            }
-            for row in rows
-        ]
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+                FROM technical_data
+                WHERE timestamp >= NOW() - INTERVAL '90 days'
+                ORDER BY timestamp DESC
+                LIMIT 10;
+            """)
+            rows = cur.fetchall()
+
+        result = []
+        for row in rows:
+            symbol, rsi, volume, ma_200, score, advies, ts = row
+            timestamp = ts.isoformat() if ts else None
+
+            result.extend([
+                {
+                    "symbol": symbol,
+                    "indicator": "RSI",
+                    "waarde": float(rsi),
+                    "score": score,
+                    "advies": advies,
+                    "uitleg": "RSI-analyse afgelopen kwartaal",
+                    "timestamp": timestamp
+                },
+                {
+                    "symbol": symbol,
+                    "indicator": "Volume",
+                    "waarde": float(volume),
+                    "score": score,
+                    "advies": advies,
+                    "uitleg": "Volume-analyse afgelopen kwartaal",
+                    "timestamp": timestamp
+                },
+                {
+                    "symbol": symbol,
+                    "indicator": "200MA",
+                    "waarde": float(ma_200),
+                    "score": score,
+                    "advies": advies,
+                    "uitleg": "200MA-analyse afgelopen kwartaal",
+                    "timestamp": timestamp
+                }
+            ])
+        return result
     except Exception as e:
         logger.error(f"❌ [get/quarter] Databasefout: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB04] Ophalen kwartaaldata mislukt.")
