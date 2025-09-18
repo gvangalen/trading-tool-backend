@@ -195,18 +195,18 @@ async def delete_technical_data(symbol: str):
         conn.close()
 
 
-@router.get("/technical_data/day")
+@@router.get("/technical_data/day")
 def get_technical_data_day():
     return [
-        {            
-            "indicator": "RSI",
-            "waarde": 45.0,
+        {
+            "symbol": "BTC",
+            "rsi": 45.0,
+            "volume": 100000000,
+            "ma_200": 49500,
             "score": 1,
             "advies": "🟢 Bullish",
-            "uitleg": "RSI is onder 50 en stijgend.",
             "timestamp": datetime.utcnow().isoformat()
         }
-        
     ]
     
 # ✅ WEEK
