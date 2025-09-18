@@ -198,31 +198,31 @@ async def delete_technical_data(symbol: str):
 @router.get("/technical_data/day")
 def get_technical_data_day():
     return [
-  {
-    indicator: 'RSI (Week)',
-    waarde: 65.2,
-    score: 2,
-    advies: 'Bullish',
-    uitleg: 'RSI boven 60 wijst op kracht.',
-    symbol: 'BTC',
-  },
-  {
-    indicator: 'Volume (Week)',
-    waarde: '12.4M',
-    score: 1,
-    advies: 'Neutraal',
-    uitleg: 'Volume gemiddeld op weekbasis.',
-    symbol: 'BTC',
-  },
-  {
-    indicator: '200MA (Week)',
-    waarde: 'Boven MA',
-    score: 2,
-    advies: 'Bullish',
-    uitleg: 'Prijs boven 200-week MA.',
-    symbol: 'BTC',
-  },
-];
+        {
+            "indicator": "RSI (Dag)",
+            "waarde": 65.2,
+            "score": 2,
+            "advies": "Bullish",
+            "uitleg": "RSI boven 60 wijst op kracht.",
+            "symbol": "BTC",
+        },
+        {
+            "indicator": "Volume (Dag)",
+            "waarde": "12.4M",
+            "score": 1,
+            "advies": "Neutraal",
+            "uitleg": "Volume gemiddeld op dagbasis.",
+            "symbol": "BTC",
+        },
+        {
+            "indicator": "200MA (Dag)",
+            "waarde": "Boven MA",
+            "score": 2,
+            "advies": "Bullish",
+            "uitleg": "Prijs boven 200-dagen MA.",
+            "symbol": "BTC",
+        },
+    ]
     
 # ✅ WEEK
 @router.get("/technical_data/week")
