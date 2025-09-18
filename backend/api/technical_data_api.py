@@ -195,7 +195,7 @@ async def delete_technical_data(symbol: str):
         conn.close()
 
 
-@@router.get("/technical_data/day")
+@router.get("/technical_data/day")
 def get_technical_data_day():
     return [
         {
