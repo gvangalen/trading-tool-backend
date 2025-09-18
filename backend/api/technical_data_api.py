@@ -219,7 +219,7 @@ def get_technical_data_day():
         {
             "symbol": "BTC",
             "indicator": "200MA",
-            "waarde": 40000.0,
+            "waarde": "Boven MA",
             "score": 1,
             "advies": "🟢 Bullish",
             "uitleg": "Prijs ligt boven 200MA.",
