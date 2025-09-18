@@ -198,33 +198,15 @@ async def delete_technical_data(symbol: str):
 @router.get("/technical_data/day")
 def get_technical_data_day():
     return [
-        {
-            "symbol": "BTC",
+        {            
             "indicator": "RSI",
             "waarde": 45.0,
             "score": 1,
             "advies": "🟢 Bullish",
             "uitleg": "RSI is onder 50 en stijgend.",
             "timestamp": datetime.utcnow().isoformat()
-        },
-        {
-            "symbol": "BTC",
-            "indicator": "Volume",
-            "waarde": 900000000,
-            "score": 0,
-            "advies": "⚖️ Neutraal",
-            "uitleg": "Volume ligt rond het gemiddelde.",
-            "timestamp": datetime.utcnow().isoformat()
-        },
-        {
-            "symbol": "BTC",
-            "indicator": "200MA",
-            "waarde": "Boven MA",
-            "score": 1,
-            "advies": "🟢 Bullish",
-            "uitleg": "Prijs ligt boven 200MA.",
-            "timestamp": datetime.utcnow().isoformat()
         }
+        
     ]
     
 # ✅ WEEK
