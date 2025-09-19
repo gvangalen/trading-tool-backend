@@ -42,23 +42,22 @@ def save_technical_data(symbol, rsi, volume, ma_200, score, advies):
 
 
 # ✅ POST vanaf TradingView webhook
-@router.post("/technical_data/webhook")
-async def tradingview_webhook(request: Request):
-    try:
-        data = await request.json()
-        symbol = data.get("symbol", "BTC")
-        rsi = data.get("rsi")
-        volume = data.get("volume")
-        ma_200 = data.get("ma_200")
+#@router.post("/technical_data/webhook")
+#async def tradingview_webhook(request: Request):
+ #   try:
+  #     symbol = data.get("symbol", "BTC")
+ #         rsi = data.get("rsi")
+ #         volume = data.get("volume")
+ #         ma_200 = data.get("ma_200")
 
-        if None in (rsi, volume, ma_200):
-            raise HTTPException(status_code=400, detail="Incomplete webhook data.")
+ #         if None in (rsi, volume, ma_200):
+ #             raise HTTPException(status_code=400, detail="Incomplete webhook data.")
 
-        save_technical_data_task.delay(symbol, rsi, volume, ma_200)
-        return {"message": "Webhook ontvangen en taak gestart."}
-    except Exception as e:
-        logger.error(f"❌ Webhook error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+#          save_technical_data_task.delay(symbol, rsi, volume, ma_200)
+ #         return {"message": "Webhook ontvangen en taak gestart."}
+ #     except Exception as e:
+ #         logger.error(f"❌ Webhook error: {e}")
+  #        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ✅ Handmatige trigger
@@ -144,38 +143,38 @@ async def get_technical_data():
         conn.close()
 
 
-@router.get("/technical_data/{symbol}")
-async def get_technical_for_symbol(symbol: str):
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
-                WHERE symbol = %s
-                ORDER BY timestamp DESC
-                LIMIT 25;
-            """, (symbol,))
-            rows = cur.fetchall()
+#  @router.get("/technical_data/{symbol}")
+#  async def get_technical_for_symbol(symbol: str):
+#      conn = get_db_connection()
+#      if not conn:
+#          raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+#      try:
+ #         with conn.cursor() as cur:
+#              cur.execute("""
+   #               SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+  #                FROM technical_data
+   #               WHERE symbol = %s
+    #              ORDER BY timestamp DESC
+   #               LIMIT 25;
+   #           """, (symbol,))
+   #           rows = cur.fetchall()
 
-        return [
-            {
-                "symbol": row[0],
-                "rsi": float(row[1]),
-                "volume": float(row[2]),
-                "ma_200": float(row[3]),
-                "score": float(row[4]) if row[4] is not None else None,
-                "advies": row[5],
-                "timestamp": row[6].isoformat()
-            } for row in rows
-        ]
-    except Exception as e:
-        logger.error(f"❌ TECH07: Ophalen symbol error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
+    #      return [
+   #           {
+   #               "symbol": row[0],
+   #              "rsi": float(row[1]),
+   #               "volume": float(row[2]),
+   #               "ma_200": float(row[3]),
+  #                "score": float(row[4]) if row[4] is not None else None,
+   #               "advies": row[5],
+  #                "timestamp": row[6].isoformat()
+  #            } for row in rows
+   #       ]
+  #    except Exception as e:
+  #        logger.error(f"❌ TECH07: Ophalen symbol error: {e}")
+  #        raise HTTPException(status_code=500, detail=str(e))
+  #    finally:
+  #        conn.close()
 
 
 @router.delete("/technical_data/{symbol}")
