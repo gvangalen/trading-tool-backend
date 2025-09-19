@@ -143,57 +143,6 @@ async def get_technical_data():
         conn.close()
 
 
-#  @router.get("/technical_data/{symbol}")
-#  async def get_technical_for_symbol(symbol: str):
-#      conn = get_db_connection()
-#      if not conn:
-#          raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-#      try:
- #         with conn.cursor() as cur:
-#              cur.execute("""
-   #               SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-  #                FROM technical_data
-   #               WHERE symbol = %s
-    #              ORDER BY timestamp DESC
-   #               LIMIT 25;
-   #           """, (symbol,))
-   #           rows = cur.fetchall()
-
-    #      return [
-   #           {
-   #               "symbol": row[0],
-   #              "rsi": float(row[1]),
-   #               "volume": float(row[2]),
-   #               "ma_200": float(row[3]),
-  #                "score": float(row[4]) if row[4] is not None else None,
-   #               "advies": row[5],
-  #                "timestamp": row[6].isoformat()
-  #            } for row in rows
-   #       ]
-  #    except Exception as e:
-  #        logger.error(f"❌ TECH07: Ophalen symbol error: {e}")
-  #        raise HTTPException(status_code=500, detail=str(e))
-  #    finally:
-  #        conn.close()
-
-
-@router.delete("/technical_data/{symbol}")
-async def delete_technical_data(symbol: str):
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
-    try:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM technical_data WHERE symbol = %s", (symbol,))
-            conn.commit()
-            return {"message": f"Technische data voor {symbol} verwijderd."}
-    except Exception as e:
-        logger.error(f"❌ TECH06: Verwijderen mislukt: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
-
 @router.get("/technical_data/day")
 def get_technical_data_day():
     return [
@@ -329,3 +278,55 @@ async def get_technical_quarter_data():
         raise HTTPException(status_code=500, detail="❌ [DB04] Ophalen kwartaaldata mislukt.")
     finally:
         conn.close()
+
+
+@router.delete("/technical_data/{symbol}")
+async def delete_technical_data(symbol: str):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM technical_data WHERE symbol = %s", (symbol,))
+            conn.commit()
+            return {"message": f"Technische data voor {symbol} verwijderd."}
+    except Exception as e:
+        logger.error(f"❌ TECH06: Verwijderen mislukt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
+@router.get("/technical_data/{symbol}")
+async def get_technical_for_symbol(symbol: str):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+                FROM technical_data
+                WHERE symbol = %s
+                ORDER BY timestamp DESC
+                LIMIT 25;
+            """, (symbol,))
+            rows = cur.fetchall()
+
+        return [
+            {
+                "symbol": row[0],
+                "rsi": float(row[1]),
+                "volume": float(row[2]),
+                "ma_200": float(row[3]),
+                "score": float(row[4]) if row[4] is not None else None,
+                "advies": row[5],
+                "timestamp": row[6].isoformat()
+            } for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ TECH07: Ophalen symbol error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
