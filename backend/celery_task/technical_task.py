@@ -7,6 +7,9 @@ from celery import shared_task
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
 
+# ✅ Eigen utils
+from backend.utils.technical_score import process_all_technical
+
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -52,14 +55,8 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-# ✅ Verstuur POST naar juiste route
-def post_technical_data(symbol, rsi, volume, ma_200_ratio, periode):
-    payload = {
-        "symbol": symbol,
-        "rsi": rsi,
-        "ma_200": ma_200_ratio,
-        "volume": volume
-    }
+# ✅ POST wrapper
+def post_technical_data(payload: dict, periode: str):
     try:
         url = f"{API_BASE_URL}/technical_data/{periode}"
         logger.info(f"📡 POST {periode.upper()} technische data: {payload}")
@@ -72,7 +69,7 @@ def post_technical_data(symbol, rsi, volume, ma_200_ratio, periode):
         logger.error(f"❌ Fout bij opslaan technische data ({periode}): {e}")
         logger.error(traceback.format_exc())
 
-# ✅ Algemene functie per periode
+# ✅ Algemene logica
 def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300, periode="day"):
     try:
         url = f"{BINANCE_BASE_URL}/api/v3/klines"
@@ -91,13 +88,30 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
         current_price = closes[-1]
         ma_200_ratio = round(current_price / ma_200, 3)
 
-        logger.info(f"📊 {periode.upper()} RSI: {rsi}, MA200-ratio: {ma_200_ratio}, Volume: {volume}")
-        post_technical_data(our_symbol, rsi, volume, ma_200_ratio, periode)
+        # ✅ Score-engine gebruiken
+        score_result = process_all_technical({
+            "rsi": rsi,
+            "volume": volume,
+            "ma_200": ma_200_ratio
+        })
+
+        # ✅ Payload bouwen
+        payload = {
+            "symbol": our_symbol,
+            "rsi": rsi,
+            "volume": volume,
+            "ma_200": ma_200_ratio,
+            "rsi_score": score_result.get("rsi", {}).get("score"),
+            "volume_score": score_result.get("volume", {}).get("score"),
+            "ma_200_score": score_result.get("ma_200", {}).get("score")
+        }
+
+        logger.info(f"📊 {periode.upper()} Scores: {payload}")
+        post_technical_data(payload, periode)
 
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen/verwerken technische data ({periode}): {e}")
         logger.error(traceback.format_exc())
-
 
 # ✅ Taken per periode
 @shared_task(name="backend.celery_task.technical.fetch_technical_data_day")
