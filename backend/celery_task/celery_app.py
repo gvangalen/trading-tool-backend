@@ -33,7 +33,7 @@ celery = Celery(
         "backend.celery_task.weekly_report_task",
         "backend.celery_task.monthly_report_task",
         "backend.celery_task.quarterly_report_task",
-        "backend.celery_task.btc_price_history_task",  # ✅ BTC-prijs
+        "backend.celery_task.btc_price_history_task",
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task",
     ]
@@ -43,28 +43,45 @@ celery = Celery(
 celery.conf.enable_utc = True
 celery.conf.timezone = "UTC"
 
-# ✅ Beat scheduler: taken inplannen
+# ✅ Beat scheduler: geplande taken
 celery.conf.beat_schedule = {
     # 📈 Live BTC/crypto prijsdata
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
         "schedule": crontab(minute="*/5"),
     },
-    # 📊 Macro & Technische indicators
+
+    # 📊 Macro-indicatoren
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
         "schedule": crontab(minute="*/10"),
     },
-    "fetch_technical_data": {
-        "task": "backend.celery_task.technical_task.fetch_technical_data",
-        "schedule": crontab(minute="*/10"),
+
+    # 📊 Technische indicatoren (per periode)
+    "fetch_technical_data_day": {
+        "task": "backend.celery_task.technical_task.fetch_technical_data_day",
+        "schedule": crontab(hour=6, minute=0),
     },
-    # ✅ BTC prijs (dagelijks historisch)
+    "fetch_technical_data_week": {
+        "task": "backend.celery_task.technical_task.fetch_technical_data_week",
+        "schedule": crontab(hour=6, minute=5),
+    },
+    "fetch_technical_data_month": {
+        "task": "backend.celery_task.technical_task.fetch_technical_data_month",
+        "schedule": crontab(hour=6, minute=10),
+    },
+    "fetch_technical_data_quarter": {
+        "task": "backend.celery_task.technical_task.fetch_technical_data_quarter",
+        "schedule": crontab(hour=6, minute=15),
+    },
+
+    # ✅ BTC prijs historiek (dagelijks)
     "fetch_btc_daily_price": {
         "task": "backend.celery_task.btc_price_history_task.fetch_btc_history_daily",
         "schedule": crontab(hour=1, minute=10),
     },
-    # 📚 Historiek en returns
+
+    # 📚 Historiek en forward returns
     "save_market_data_7d": {
         "task": "backend.celery_task.market_task.save_market_data_7d",
         "schedule": crontab(hour=1, minute=30),
@@ -73,6 +90,7 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.market_task.save_forward_returns",
         "schedule": crontab(hour=2, minute=0),
     },
+
     # 🤖 AI-validatie en advies
     "validate_setups_task": {
         "task": "backend.ai_tasks.validation_task.validate_setups_task",
@@ -82,6 +100,7 @@ celery.conf.beat_schedule = {
         "task": "backend.ai_tasks.trading_advice_task.generate_trading_advice",
         "schedule": crontab(minute=5, hour="*/6"),
     },
+
     # 🧠 Strategieën & rapporten
     "generate_ai_strategieën": {
         "task": "backend.celery_task.strategy_task.generate_strategieën_automatisch",
@@ -105,7 +124,7 @@ celery.conf.beat_schedule = {
     },
 }
 
-# ✅ Expliciete imports voor log/debug
+# ✅ Expliciete imports (voor logging en debugging)
 try:
     import backend.celery_task.market_task
     import backend.celery_task.macro_task
@@ -127,5 +146,5 @@ except ImportError:
 # ✅ Laatste melding
 logger.info(f"🚀 Celery en Beat draaien met broker: {CELERY_BROKER}")
 
-# ✅ Nodig voor PM2 of CLI
+# ✅ Voor PM2 of CLI gebruik
 app = celery
