@@ -6,6 +6,7 @@ from datetime import datetime
 from celery import shared_task
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
+import pytz  # ✅ Nieuw toegevoegd
 
 # ✅ Eigen utils
 from backend.utils.technical_interpreter import process_all_technical
@@ -55,7 +56,7 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-# ✅ POST wrapper (zonder timeframe!)
+# ✅ POST wrapper
 def post_technical_data(payload: dict):
     try:
         url = f"{API_BASE_URL}/technical_data"
@@ -101,6 +102,10 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
 
         logger.info("📈 Interpretatie resultaten ontvangen van score-engine")
 
+        # ✅ Gebruik lokale tijd voor timestamp (Europe/Amsterdam)
+        local_tz = pytz.timezone("Europe/Amsterdam")
+        timestamp = datetime.now(local_tz).replace(microsecond=0).isoformat()
+
         for indicator, data in result.items():
             payload = {
                 "symbol": our_symbol,
@@ -109,7 +114,7 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
                 "score": data.get("score"),
                 "advies": data.get("action"),
                 "uitleg": data.get("explanation"),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": timestamp
             }
             logger.info(f"📦 Payload voor {indicator}: {payload}")
             post_technical_data(payload)
