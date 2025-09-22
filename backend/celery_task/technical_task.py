@@ -95,23 +95,27 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
             "ma_200": ma_200_ratio
         })
 
-        # ✅ Payload bouwen
-        payload = {
-            "symbol": our_symbol,
-            "rsi": rsi,
-            "volume": volume,
-            "ma_200": ma_200_ratio,
-            "score": result.get("score"),
-            "advies": result.get("advies"),
-            "timestamp": datetime.utcnow().isoformat()
-        }
-
-        logger.info(f"📊 Technische data payload: {payload}")
-        post_technical_data(payload)
+        # ✅ Per indicator opslaan in database
+        for indicator, data in result.items():
+            payload = {
+                "symbol": our_symbol,
+                "indicator": indicator,
+                "value": data.get("value"),
+                "score": data.get("score"),
+                "interpretation": data.get("interpretation"),
+                "advies": data.get("action"),
+                "uitleg": data.get("explanation"),
+                "category": data.get("category", "technical"),
+                "correlatie": data.get("correlation"),
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            logger.info(f"📦 Payload voor {indicator}: {payload}")
+            post_technical_data(payload)
 
     except Exception as e:
         logger.error("❌ Fout bij ophalen/verwerken technische data")
         logger.error(traceback.format_exc())
+        
 
 # ✅ Dagelijkse task
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data")
