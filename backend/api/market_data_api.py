@@ -60,16 +60,18 @@ async def save_market_data(request: Request):
             change_24h = vol_data.get("market_data", {}).get("price_change_percentage_24h", 0.0)
             volume = vol_data.get("market_data", {}).get("total_volume", {}).get("usd", 0.0)
 
+        timestamp = datetime.utcnow()
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO market_data (symbol, price, change_24h, volume)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (symbol) DO UPDATE SET
+                INSERT INTO market_data (symbol, price, change_24h, volume, timestamp)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (symbol, date) DO UPDATE SET
                     price = EXCLUDED.price,
                     change_24h = EXCLUDED.change_24h,
-                    volume = EXCLUDED.volume;
-            """, (symbol, price, change_24h, volume))
+                    volume = EXCLUDED.volume,
+                    timestamp = EXCLUDED.timestamp;
+            """, (symbol, price, change_24h, volume, timestamp))
             conn.commit()
 
         logger.info(f"✅ Marktdata opgeslagen voor {symbol}: prijs={price}, 24h={change_24h}, volume={volume}")
