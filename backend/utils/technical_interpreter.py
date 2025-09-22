@@ -94,7 +94,7 @@ def process_technical_indicator(name, value, config):
     """
     ➤ Verwerkt één technische indicator volgens de config.
     Returns:
-        dict met name, value, interpretation, score
+        dict met name, value, interpretation, score, etc.
     """
     try:
         thresholds = config.get("thresholds", [])
@@ -128,8 +128,10 @@ def process_technical_indicator(name, value, config):
 
 def process_all_technical(data: dict):
     """
-    ➤ Laadt technische config en verwerkt alle aanwezige technische indicatoren.
-    `data` is een dict met naam: waarde (bv: {"RSI": 41.2, "200MA": 1})
+    ➤ Verwerkt alle technische indicatoren met bijbehorende config.
+    Verwacht dict zoals: {"rsi": 44.1, "volume": 380000000, "ma_200": 0.94}
+    Returns:
+        {"rsi": {score, uitleg, ...}, "volume": {..}, ...}
     """
     try:
         config = load_technical_config()
@@ -142,6 +144,7 @@ def process_all_technical(data: dict):
         if name not in config.get("indicators", {}):
             logger.warning(f"⚠️ Geen interpretatieconfig voor: {name}")
             continue
+
         result = process_technical_indicator(name, raw_value, config["indicators"][name])
         if result:
             results[name] = result
