@@ -8,8 +8,6 @@
       "source": "binance",
       "thresholds": [30, 50, 70],
       "positive": false,
-      "category": "technical",
-      "correlation": "omgekeerd",
       "explanation": "RSI geeft overbought of oversold situaties aan.",
       "action": "Bij RSI < 30 is er vaak sprake van een koopmoment. RSI > 70 duidt op oververhitting."
     },
@@ -18,8 +16,6 @@
       "source": "binance",
       "thresholds": [1000, 2500, 5000],
       "positive": true,
-      "category": "technical",
-      "correlation": "positief",
       "explanation": "Hoger volume bevestigt de richting van een trend.",
       "action": "Stijgend volume = bevestiging van momentum. Laag volume = twijfel."
     },
@@ -28,8 +24,6 @@
       "source": "binance",
       "thresholds": [0.95, 1.0, 1.05],
       "positive": true,
-      "category": "technical",
-      "correlation": "positief",
       "explanation": "De MA-200 is een belangrijke langetermijnindicator.",
       "action": "Asset boven MA-200 is bullish. Onder MA-200 is bearish."
     }
