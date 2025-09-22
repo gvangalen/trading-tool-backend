@@ -59,9 +59,11 @@ async def save_technical_data(item: TechnicalIndicator):
 
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
+                INSERT INTO technical_indicators (
+                    symbol, indicator, value, score, advies, uitleg, timestamp
+                )
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (symbol, indicator, DATE(timestamp)) DO UPDATE
+                ON CONFLICT (symbol, indicator, date) DO UPDATE
                 SET value = EXCLUDED.value,
                     score = EXCLUDED.score,
                     advies = EXCLUDED.advies,
