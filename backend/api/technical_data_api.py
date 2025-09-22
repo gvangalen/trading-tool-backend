@@ -45,28 +45,6 @@ async def get_technical_data():
 async def save_technical_data(item: TechnicalIndicator):
     try:
         conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (
-                item.symbol,
-                item.indicator,
-                item.value,
-                item.score,
-                item.advies,
-                item.uitleg,
-                item.timestamp,
-            ))
-            conn.commit()
-        return {"status": "success"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan: {e}")
-
-@router.post("/technical_data")
-async def save_technical_data(item: TechnicalIndicator):
-    try:
-        conn = get_db_connection()
         if not conn:
             raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
 
