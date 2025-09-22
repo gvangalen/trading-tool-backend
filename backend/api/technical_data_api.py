@@ -80,8 +80,7 @@ async def trigger_technical_task(request: Request):
         logger.error(f"❌ Trigger error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# ✅ POST: directe opslag met interpretatie
+# ✅ POST met interpretatie
 @router.post("/technical_data")
 async def save_technical_data_post(request: Request):
     try:
@@ -94,12 +93,9 @@ async def save_technical_data_post(request: Request):
         if None in (symbol, rsi, volume, ma_200):
             raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
 
-        try:
-            rsi = float(rsi)
-            volume = float(volume)
-            ma_200 = float(ma_200)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="RSI, volume en MA-200 moeten numeriek zijn.")
+        rsi = float(rsi)
+        volume = float(volume)
+        ma_200 = float(ma_200)
 
         score, advies = process_technical_indicator(symbol, rsi, volume, ma_200)
         save_technical_data(symbol, rsi, volume, ma_200, score, advies)
@@ -110,7 +106,7 @@ async def save_technical_data_post(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ✅ GET: laatste technische data
+# ✅ Algemene GET
 @router.get("/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
@@ -119,7 +115,8 @@ async def get_technical_data():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
+                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp,
+                       rsi_score, volume_score, ma_200_score
                 FROM technical_data
                 ORDER BY timestamp DESC
                 LIMIT 50;
@@ -132,9 +129,12 @@ async def get_technical_data():
                 "rsi": float(row[1]),
                 "volume": float(row[2]),
                 "ma_200": float(row[3]),
-                "score": float(row[4]) if row[4] is not None else None,
+                "score": float(row[4]) if row[4] is not None else 0,
                 "advies": row[5],
-                "timestamp": row[6].isoformat()
+                "timestamp": row[6].isoformat(),
+                "rsi_score": row[7] if row[7] is not None else 0,
+                "volume_score": row[8] if row[8] is not None else 0,
+                "ma_200_score": row[9] if row[9] is not None else 0,
             } for row in rows
         ]
     except Exception as e:
