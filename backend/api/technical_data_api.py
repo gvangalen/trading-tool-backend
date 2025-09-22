@@ -52,6 +52,7 @@ async def get_technical_data():
 
 @router.post("/technical_data")
 async def save_technical_data(item: TechnicalIndicator):
+    conn = None
     try:
         conn = get_db_connection()
         if not conn:
@@ -84,6 +85,7 @@ async def save_technical_data(item: TechnicalIndicator):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan: {e}")
+    
     finally:
         if conn:
             conn.close()
