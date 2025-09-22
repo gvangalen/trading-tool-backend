@@ -102,11 +102,8 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
                 "indicator": indicator,
                 "value": data.get("value"),
                 "score": data.get("score"),
-                "interpretation": data.get("interpretation"),
                 "advies": data.get("action"),
                 "uitleg": data.get("explanation"),
-                "category": data.get("category", "technical"),
-                "correlatie": data.get("correlation"),
                 "timestamp": datetime.utcnow().isoformat()
             }
             logger.info(f"📦 Payload voor {indicator}: {payload}")
@@ -115,7 +112,6 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
     except Exception as e:
         logger.error("❌ Fout bij ophalen/verwerken technische data")
         logger.error(traceback.format_exc())
-        
 
 # ✅ Dagelijkse task
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data")
