@@ -3,13 +3,13 @@ import json
 import logging
 import traceback
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
 from dotenv import load_dotenv
 
-# ✅ .env laden (dynamisch pad)
+# ✅ .env laden
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
@@ -24,13 +24,27 @@ VOLUME_URL = os.getenv("VOLUME_URL")
 ASSETS_JSON = os.getenv("ASSETS_JSON", '{"BTC": "bitcoin"}')
 
 try:
-    ASSETS = json.loads(ASSETS_JSON)  # ✅ Veilig omzetten naar dict
+    ASSETS = json.loads(ASSETS_JSON)
 except json.JSONDecodeError:
     logger.error("❌ Ongeldige JSON in ASSETS_JSON.")
     ASSETS = {"BTC": "bitcoin"}
 
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
+
+# ✅ Caching voor CoinGecko-limieten
+CACHE_FILE = "/tmp/last_market_data_fetch.txt"
+MIN_INTERVAL_MINUTES = 15
+
+def recently_fetched():
+    try:
+        mtime = datetime.fromtimestamp(Path(CACHE_FILE).stat().st_mtime)
+        if datetime.now() - mtime < timedelta(minutes=MIN_INTERVAL_MINUTES):
+            logger.info(f"♻️ Marktdata is < {MIN_INTERVAL_MINUTES} minuten oud. Skip.")
+            return True
+    except FileNotFoundError:
+        return False
+    return False
 
 # ✅ Robuuste request
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=30), reraise=True)
@@ -50,11 +64,14 @@ def safe_request(url, method="POST", payload=None):
         logger.error(f"❌ API-call fout: {e}")
         raise
 
-
 # ✅ 1. Live BTC marktdata ophalen
 @shared_task(name="backend.celery_task.market_task.fetch_market_data")
 def fetch_market_data():
     logger.info("📈 Start live marktdata ophalen...")
+
+    if recently_fetched():
+        return
+
     try:
         coingecko_id = ASSETS.get("BTC", "bitcoin")
         url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}"
@@ -91,11 +108,13 @@ def fetch_market_data():
         save_url = f"{API_BASE_URL}/market_data"
         safe_request(save_url, method="POST", payload=payload)
 
-        logger.info(f"✅ Marktdata succesvol opgeslagen.")
+        # ✅ Cache-tijdstip bijwerken
+        Path(CACHE_FILE).touch()
+        logger.info("✅ Marktdata succesvol opgeslagen en cache-tijd bijgewerkt.")
+
     except RetryError:
         logger.error("❌ Retries mislukt voor fetch_market_data.")
         logger.error(traceback.format_exc())
-
 
 # ✅ 2. 7-daagse BTC-data vullen
 @shared_task(name="backend.celery_task.market_task.save_market_data_7d")
@@ -105,26 +124,22 @@ def save_market_data_7d():
     try:
         coingecko_id = ASSETS.get("BTC", "bitcoin")
 
-        # ✅ 1. OHLC ophalen
         ohlc_url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc"
         ohlc_params = {"vs_currency": "usd", "days": 7}
         ohlc_response = requests.get(ohlc_url, params=ohlc_params, timeout=TIMEOUT)
         ohlc_data = ohlc_response.json()
 
-        # ✅ 2. Volume ophalen
         volume_url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart"
         volume_params = {"vs_currency": "usd", "days": 7}
         volume_response = requests.get(volume_url, params=volume_params, timeout=TIMEOUT)
         volume_data = volume_response.json()
 
-        # ✅ Zet volume per dag in dict met date als key
         volume_map = {}
         for ts, vol in volume_data.get("total_volumes", []):
             date = datetime.utcfromtimestamp(ts / 1000).date().isoformat()
             if date not in volume_map:
                 volume_map[date] = vol
 
-        # ✅ Combineer OHLC + volume per dag
         combined = []
         for row in ohlc_data:
             ts, open_, high, low, close = row
@@ -143,8 +158,6 @@ def save_market_data_7d():
             })
 
         logger.info(f"🔄 Versturen {len(combined)} dagen OHLC+volume naar backend")
-
-        # ✅ Opslaan in backend
         save_url = f"{API_BASE_URL}/market_data/btc/7d/fill"
         safe_request(save_url, method="POST", payload=combined)
         logger.info("✅ Marktdata 7 dagen opgeslagen.")
@@ -168,7 +181,6 @@ def save_forward_returns():
         logger.error("❌ Retries mislukt voor save_forward_returns.")
         logger.error(traceback.format_exc())
 
-
 # ✅ 4. Historische BTC-prijs ophalen via CoinGecko
 @shared_task(name="backend.celery_task.market_task.fetch_btc_price_history")
 def fetch_btc_price_history():
@@ -189,7 +201,6 @@ def fetch_btc_price_history():
             logger.warning("⚠️ Geen data van CoinGecko.")
             return
 
-        # ⏬ API-call naar eigen backend voor opslaan
         save_url = f"{API_BASE_URL}/market_data/history/save"
         payload = [
             {
@@ -199,7 +210,6 @@ def fetch_btc_price_history():
             for ts, price in prices
         ]
         logger.info(f"📝 Versturen {len(payload)} entries naar history endpoint...")
-
         response = safe_request(save_url, method="POST", payload=payload)
         logger.info(f"✅ Geschiedenis opgeslagen: {response}")
     except Exception as e:
