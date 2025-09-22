@@ -3,6 +3,15 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Query
 from backend.utils.db import get_db_connection
 from backend.models.technical_model import TechnicalIndicator
+from fastapi import APIRouter
+from backend.celery_task.technical_task import fetch_technical_data
+
+router = APIRouter()
+
+@router.post("/technical_data/trigger")
+async def trigger_technical_data():
+    fetch_technical_data.delay()
+    return {"message": "⏳ Celery-task gestart: technische data wordt opgehaald."}
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
