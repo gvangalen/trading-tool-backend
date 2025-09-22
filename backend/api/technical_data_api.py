@@ -2,63 +2,10 @@ import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from backend.utils.db import get_db_connection
-from backend.utils.technical_interpreter import process_technical_indicator
-from backend.config.config_loader import load_technical_config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-# ✅ Config laden
-try:
-    TECHNICAL_CONFIG = load_technical_config()
-    logger.info("🚀 technical_data_api.py geladen – alle technische routes zijn actief.")
-except Exception as e:
-    TECHNICAL_CONFIG = {}
-    logger.error(f"❌ [INIT] Laden TECHNICAL_CONFIG mislukt: {e}")
-
-# ✅ Opslaan
-def save_technical_data(symbol, rsi, volume, ma_200, score, advies):
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ TECH02: Geen databaseverbinding.")
-        return False
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO technical_data 
-                (symbol, rsi, volume, ma_200, score, advies, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
-            """, (symbol, float(rsi), float(volume), float(ma_200), score, advies))
-            conn.commit()
-        logger.info(f"✅ TECH03: Data opgeslagen voor {symbol}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ TECH04: Opslagfout: {e}")
-        return False
-    finally:
-        conn.close()
-
-# ✅ POST met interpretatie
-@router.post("/technical_data")
-async def save_technical_data_post(request: Request):
-    try:
-        data = await request.json()
-        symbol = data.get("symbol")
-        rsi = data.get("rsi")
-        volume = data.get("volume")
-        ma_200 = data.get("ma_200")
-
-        if None in (symbol, rsi, volume, ma_200):
-            raise HTTPException(status_code=400, detail="Verplichte velden ontbreken.")
-
-        score, advies = process_technical_indicator(symbol, float(rsi), float(volume), float(ma_200))
-        save_technical_data(symbol, rsi, volume, ma_200, score, advies)
-
-        return {"message": "Technische data opgeslagen", "symbol": symbol}
-    except Exception as e:
-        logger.error(f"❌ TECH08: Save via POST failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 # ✅ GET all
 @router.get("/technical_data")
@@ -69,8 +16,8 @@ async def get_technical_data():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
+                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                FROM technical_indicators
                 ORDER BY timestamp DESC
                 LIMIT 50;
             """)
@@ -79,11 +26,11 @@ async def get_technical_data():
         return [
             {
                 "symbol": row[0],
-                "rsi": float(row[1]),
-                "volume": float(row[2]),
-                "ma_200": float(row[3]),
-                "score": float(row[4]) if row[4] is not None else 0,
-                "advies": row[5],
+                "indicator": row[1],
+                "waarde": float(row[2]),
+                "score": int(row[3]),
+                "advies": row[4],
+                "uitleg": row[5],
                 "timestamp": row[6].isoformat(),
             } for row in rows
         ]
@@ -93,7 +40,7 @@ async def get_technical_data():
     finally:
         conn.close()
 
-# ✅ Dagdata
+# ✅ Dagdata per indicator
 @router.get("/technical_data/day")
 async def get_latest_day_data():
     conn = get_db_connection()
@@ -102,42 +49,23 @@ async def get_latest_day_data():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
-                WHERE symbol = 'BTC'
-                ORDER BY timestamp DESC
-                LIMIT 1;
+                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                FROM technical_indicators
+                WHERE symbol = 'BTC' AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY timestamp DESC;
             """)
-            row = cur.fetchone()
-
-        if not row:
-            return []
+            rows = cur.fetchall()
 
         return [
             {
-                "indicator": "RSI (Dag)",
-                "waarde": float(row[1]),
-                "score": float(row[4]),
-                "advies": row[5],
-                "uitleg": "RSI-waarde geïnterpreteerd op dagbasis.",
                 "symbol": row[0],
-            },
-            {
-                "indicator": "Volume (Dag)",
-                "waarde": f"{float(row[2]) / 1e6:.1f}M",
-                "score": float(row[4]),
-                "advies": row[5],
-                "uitleg": "Volume op dagbasis.",
-                "symbol": row[0],
-            },
-            {
-                "indicator": "200MA (Dag)",
-                "waarde": "Boven MA" if float(row[1]) > float(row[3]) else "Onder MA",
-                "score": float(row[4]),
-                "advies": row[5],
-                "uitleg": "Vergelijking prijs met 200MA.",
-                "symbol": row[0],
-            }
+                "indicator": row[1],
+                "waarde": float(row[2]),
+                "score": int(row[3]),
+                "advies": row[4],
+                "uitleg": row[5],
+                "timestamp": row[6].isoformat(),
+            } for row in rows
         ]
     except Exception as e:
         logger.error(f"❌ [day] Fout bij ophalen: {e}")
@@ -148,28 +76,28 @@ async def get_latest_day_data():
 # ✅ WEEK
 @router.get("/technical_data/week")
 async def get_technical_week_data():
-    logger.info("📤 [get/week] Ophalen technical-data (laatste 7 dagen)...")
+    logger.info("📤 [get/week] Ophalen technical-indicators (7 dagen)...")
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
+                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                FROM technical_indicators
                 WHERE timestamp >= NOW() - INTERVAL '7 days'
                 ORDER BY timestamp DESC
-                LIMIT 50;
+                LIMIT 100;
             """)
             rows = cur.fetchall()
             return [
                 {
                     "symbol": row[0],
-                    "rsi": float(row[1]),
-                    "volume": float(row[2]),
-                    "ma_200": float(row[3]),
-                    "score": float(row[4]),
-                    "advies": row[5],
+                    "indicator": row[1],
+                    "waarde": float(row[2]),
+                    "score": int(row[3]),
+                    "advies": row[4],
+                    "uitleg": row[5],
                     "timestamp": row[6].isoformat(),
                 } for row in rows
             ]
@@ -182,28 +110,28 @@ async def get_technical_week_data():
 # ✅ MONTH
 @router.get("/technical_data/month")
 async def get_technical_month_data():
-    logger.info("📤 [get/month] Ophalen technical-data (laatste 30 dagen)...")
+    logger.info("📤 [get/month] Ophalen technical-indicators (30 dagen)...")
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
+                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                FROM technical_indicators
                 WHERE timestamp >= NOW() - INTERVAL '30 days'
                 ORDER BY timestamp DESC
-                LIMIT 50;
+                LIMIT 100;
             """)
             rows = cur.fetchall()
             return [
                 {
                     "symbol": row[0],
-                    "rsi": float(row[1]),
-                    "volume": float(row[2]),
-                    "ma_200": float(row[3]),
-                    "score": float(row[4]),
-                    "advies": row[5],
+                    "indicator": row[1],
+                    "waarde": float(row[2]),
+                    "score": int(row[3]),
+                    "advies": row[4],
+                    "uitleg": row[5],
                     "timestamp": row[6].isoformat(),
                 } for row in rows
             ]
@@ -216,28 +144,28 @@ async def get_technical_month_data():
 # ✅ QUARTER
 @router.get("/technical_data/quarter")
 async def get_technical_quarter_data():
-    logger.info("📤 [get/quarter] Ophalen technical-data (laatste 90 dagen)...")
+    logger.info("📤 [get/quarter] Ophalen technical-indicators (90 dagen)...")
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
+                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                FROM technical_indicators
                 WHERE timestamp >= NOW() - INTERVAL '90 days'
                 ORDER BY timestamp DESC
-                LIMIT 50;
+                LIMIT 100;
             """)
             rows = cur.fetchall()
             return [
                 {
                     "symbol": row[0],
-                    "rsi": float(row[1]),
-                    "volume": float(row[2]),
-                    "ma_200": float(row[3]),
-                    "score": float(row[4]),
-                    "advies": row[5],
+                    "indicator": row[1],
+                    "waarde": float(row[2]),
+                    "score": int(row[3]),
+                    "advies": row[4],
+                    "uitleg": row[5],
                     "timestamp": row[6].isoformat(),
                 } for row in rows
             ]
@@ -256,21 +184,21 @@ async def get_technical_for_symbol(symbol: str):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, rsi, volume, ma_200, score, advies, timestamp
-                FROM technical_data
+                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                FROM technical_indicators
                 WHERE symbol = %s
                 ORDER BY timestamp DESC
-                LIMIT 25;
+                LIMIT 50;
             """, (symbol,))
             rows = cur.fetchall()
             return [
                 {
                     "symbol": row[0],
-                    "rsi": float(row[1]),
-                    "volume": float(row[2]),
-                    "ma_200": float(row[3]),
-                    "score": float(row[4]),
-                    "advies": row[5],
+                    "indicator": row[1],
+                    "waarde": float(row[2]),
+                    "score": int(row[3]),
+                    "advies": row[4],
+                    "uitleg": row[5],
                     "timestamp": row[6].isoformat(),
                 } for row in rows
             ]
@@ -288,7 +216,7 @@ async def delete_technical_data(symbol: str):
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM technical_data WHERE symbol = %s", (symbol,))
+            cur.execute("DELETE FROM technical_indicators WHERE symbol = %s", (symbol,))
             conn.commit()
         return {"message": f"Technische data voor {symbol} verwijderd."}
     except Exception as e:
