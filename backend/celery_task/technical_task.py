@@ -72,9 +72,12 @@ def post_technical_data(payload: dict):
 # ✅ Technische data ophalen en posten
 def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300):
     try:
+        logger.info("🚀 Start ophalen technische data...")
         url = f"{BINANCE_BASE_URL}/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": limit}
         data = safe_request(url, payload=params)
+        logger.info("✅ Binance candles ontvangen")
+
         closes = [float(item[4]) for item in data]
         volumes = [float(item[5]) for item in data]
 
@@ -88,14 +91,16 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
         current_price = closes[-1]
         ma_200_ratio = round(current_price / ma_200, 3)
 
-        # ✅ Score-engine gebruiken
+        logger.info(f"📊 Berekende waarden - RSI: {rsi}, Volume: {volume}, MA-ratio: {ma_200_ratio}")
+
         result = process_all_technical({
             "rsi": rsi,
             "volume": volume,
             "ma_200": ma_200_ratio
         })
 
-        # ✅ Per indicator opslaan in database
+        logger.info("📈 Interpretatie resultaten ontvangen van score-engine")
+
         for indicator, data in result.items():
             payload = {
                 "symbol": our_symbol,
