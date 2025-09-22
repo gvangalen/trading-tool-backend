@@ -8,7 +8,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
 
 # ✅ Eigen utils
-from backend.utils.technical_score import process_all_technical
+from backend.utils.technical_interpreter import process_all_technical
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
