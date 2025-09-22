@@ -19,8 +19,6 @@ logger = logging.getLogger(__name__)
 
 # ✅ Config
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
-COINGECKO_URL = os.getenv("COINGECKO_URL")
-VOLUME_URL = os.getenv("VOLUME_URL")
 ASSETS_JSON = os.getenv("ASSETS_JSON", '{"BTC": "bitcoin"}')
 
 try:
@@ -31,8 +29,6 @@ except json.JSONDecodeError:
 
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
-
-# ✅ Caching voor CoinGecko-limieten
 CACHE_FILE = "/tmp/last_market_data_fetch.txt"
 MIN_INTERVAL_MINUTES = 15
 
@@ -46,25 +42,21 @@ def recently_fetched():
         return False
     return False
 
-# ✅ Robuuste request
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=30), reraise=True)
 def safe_request(url, method="POST", payload=None):
     try:
         response = requests.request(method, url, json=payload, headers=HEADERS, timeout=TIMEOUT)
+        if response.status_code == 429:
+            logger.error(f"🚫 CoinGecko rate limit bereikt (429).")
+            raise Exception("Rate limit")
         if response.status_code != 200:
-            logger.error(f"❌ Foutstatus {response.status_code} van {url}: {response.text}")
+            logger.error(f"❌ API-foutstatus {response.status_code}: {response.text}")
         response.raise_for_status()
-        logger.info(f"✅ API-call succesvol: {url}")
-        try:
-            return response.json()
-        except Exception:
-            logger.warning("⚠️ Non-JSON response")
-            return {}
+        return response.json()
     except Exception as e:
         logger.error(f"❌ API-call fout: {e}")
         raise
 
-# ✅ 1. Live BTC marktdata ophalen
 @shared_task(name="backend.celery_task.market_task.fetch_market_data")
 def fetch_market_data():
     logger.info("📈 Start live marktdata ophalen...")
@@ -77,6 +69,9 @@ def fetch_market_data():
         url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}"
         response = requests.get(url, params={"localization": "false"}, timeout=TIMEOUT)
 
+        if response.status_code == 429:
+            logger.warning("🚫 CoinGecko API rate limit (429). Sla opvraag over.")
+            return
         if response.status_code != 200:
             logger.error(f"❌ CoinGecko foutstatus {response.status_code}: {response.text}")
             return
@@ -97,9 +92,6 @@ def fetch_market_data():
             "price": price,
             "volume": volume,
             "change": change,
-            "rsi": None,
-            "ma_200": None,
-            "timeframe": "1d",
             "timestamp": datetime.utcnow().isoformat(),
             "source": "coingecko"
         }
@@ -108,7 +100,6 @@ def fetch_market_data():
         save_url = f"{API_BASE_URL}/market_data"
         safe_request(save_url, method="POST", payload=payload)
 
-        # ✅ Cache-tijdstip bijwerken
         Path(CACHE_FILE).touch()
         logger.info("✅ Marktdata succesvol opgeslagen en cache-tijd bijgewerkt.")
 
