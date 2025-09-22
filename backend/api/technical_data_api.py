@@ -224,3 +224,14 @@ async def delete_technical_data(symbol: str):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+# ✅ Handmatig triggeren van Celery-task (test)
+@router.post("/technical_data/trigger")
+async def trigger_technical_task():
+    try:
+        fetch_technical_data.delay()
+        logger.info("🚀 Celery-task 'fetch_technical_data' handmatig gestart.")
+        return {"message": "⏳ Celery-task gestart: technische data wordt opgehaald."}
+    except Exception as e:
+        logger.error(f"❌ Trigger-fout: {e}")
+        raise HTTPException(status_code=500, detail="Triggeren van Celery mislukt.")
