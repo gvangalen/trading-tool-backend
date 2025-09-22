@@ -55,22 +55,22 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-# ✅ POST wrapper
-def post_technical_data(payload: dict, periode: str):
+# ✅ POST wrapper (zonder timeframe!)
+def post_technical_data(payload: dict):
     try:
-        url = f"{API_BASE_URL}/technical_data/{periode}"
-        logger.info(f"📡 POST {periode.upper()} technische data: {payload}")
+        url = f"{API_BASE_URL}/technical_data"
+        logger.info(f"📡 POST technische data: {payload}")
         response = safe_request(url, method="POST", payload=payload, headers=HEADERS)
-        logger.info(f"✅ Technische data ({periode}) opgeslagen: {response}")
+        logger.info(f"✅ Technische data opgeslagen: {response}")
     except RetryError:
-        logger.error(f"❌ Alle retries mislukt voor {periode}")
+        logger.error("❌ Alle retries mislukt voor technische data")
         logger.error(traceback.format_exc())
     except Exception as e:
-        logger.error(f"❌ Fout bij opslaan technische data ({periode}): {e}")
+        logger.error(f"❌ Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
 
-# ✅ Algemene logica
-def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300, periode="day"):
+# ✅ Technische data ophalen en posten
+def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300):
     try:
         url = f"{BINANCE_BASE_URL}/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": limit}
@@ -79,7 +79,7 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
         volumes = [float(item[5]) for item in data]
 
         if len(closes) < 200:
-            logger.warning(f"⚠️ Niet genoeg candles voor 200MA ({periode})")
+            logger.warning("⚠️ Niet genoeg candles voor 200MA")
             return
 
         rsi = calculate_rsi(closes)
@@ -103,29 +103,18 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
             "ma_200": ma_200_ratio,
             "rsi_score": score_result.get("rsi", {}).get("score"),
             "volume_score": score_result.get("volume", {}).get("score"),
-            "ma_200_score": score_result.get("ma_200", {}).get("score")
+            "ma_200_score": score_result.get("ma_200", {}).get("score"),
+            "timestamp": datetime.utcnow().isoformat()  # ✅ timestamp toevoegen
         }
 
-        logger.info(f"📊 {periode.upper()} Scores: {payload}")
-        post_technical_data(payload, periode)
+        logger.info(f"📊 Technische Scores: {payload}")
+        post_technical_data(payload)
 
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen/verwerken technische data ({periode}): {e}")
+        logger.error("❌ Fout bij ophalen/verwerken technische data")
         logger.error(traceback.format_exc())
 
-# ✅ Taken per periode
-@shared_task(name="backend.celery_task.technical.fetch_technical_data_day")
-def fetch_technical_data_day():
-    fetch_and_post(interval="1d", periode="day")
-
-@shared_task(name="backend.celery_task.technical.fetch_technical_data_week")
-def fetch_technical_data_week():
-    fetch_and_post(interval="1w", periode="week")
-
-@shared_task(name="backend.celery_task.technical.fetch_technical_data_month")
-def fetch_technical_data_month():
-    fetch_and_post(interval="1M", periode="month")
-
-@shared_task(name="backend.celery_task.technical.fetch_technical_data_quarter")
-def fetch_technical_data_quarter():
-    fetch_and_post(interval="1d", limit=90, periode="quarter")
+# ✅ Dagelijkse task
+@shared_task(name="backend.celery_task.technical_task.fetch_technical_data")
+def fetch_technical_data():
+    fetch_and_post()
