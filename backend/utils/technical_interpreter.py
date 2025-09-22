@@ -1,5 +1,5 @@
 import logging
-from backend.config.config_loader import load_technical_config  # ✅ Vaste loader voor technische config
+from backend.config.config_loader import load_technical_config  # ✅ Config loader
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -112,10 +112,8 @@ def process_technical_indicator(name, value, config):
             "value": value,
             "interpretation": interpretation,
             "score": score,
-            "correlation": config.get("correlation"),
             "explanation": config.get("explanation"),
-            "action": config.get("action"),
-            "category": config.get("category", "technical")
+            "action": config.get("action")
         }
 
         logger.info(f"✅ {name}: {value} → {interpretation} (score: {score})")
