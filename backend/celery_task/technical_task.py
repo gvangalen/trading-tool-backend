@@ -89,7 +89,7 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
         ma_200_ratio = round(current_price / ma_200, 3)
 
         # ✅ Score-engine gebruiken
-        score_result = process_all_technical({
+        result = process_all_technical({
             "rsi": rsi,
             "volume": volume,
             "ma_200": ma_200_ratio
@@ -101,13 +101,12 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
             "rsi": rsi,
             "volume": volume,
             "ma_200": ma_200_ratio,
-            "rsi_score": score_result.get("rsi", {}).get("score"),
-            "volume_score": score_result.get("volume", {}).get("score"),
-            "ma_200_score": score_result.get("ma_200", {}).get("score"),
-            "timestamp": datetime.utcnow().isoformat()  # ✅ timestamp toevoegen
+            "score": result.get("score"),
+            "advies": result.get("advies"),
+            "timestamp": datetime.utcnow().isoformat()
         }
 
-        logger.info(f"📊 Technische Scores: {payload}")
+        logger.info(f"📊 Technische data payload: {payload}")
         post_technical_data(payload)
 
     except Exception as e:
