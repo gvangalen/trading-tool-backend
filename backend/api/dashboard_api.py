@@ -22,7 +22,7 @@ async def get_dashboard_data():
                 cur.execute("""
                     SELECT DISTINCT ON (symbol) symbol, price, volume, change_24h, timestamp
                     FROM market_data
-                    WHERE symbol IN ('BTC', 'SOL')
+                    WHERE symbol = 'BTC'
                     ORDER BY symbol, timestamp DESC
                 """)
                 market_data = [dict(row) for row in cur.fetchall()]
@@ -32,18 +32,18 @@ async def get_dashboard_data():
                 market_data = []
 
             # ✅ Technical data (alleen BTC, uit nieuwe tabel: technical_indicators)
-try:
-    cur.execute("""
-        SELECT DISTINCT ON (symbol) symbol, rsi, volume, ma_200, timestamp
-        FROM technical_indicators
-        WHERE symbol = 'BTC'
-        ORDER BY symbol, timestamp DESC
-    """)
-    technical_data = [dict(row) for row in cur.fetchall()]
-    logger.info(f"🧪 DASH02: Technical data geladen ({len(technical_data)} rijen)")
-except Exception as e:
-    logger.warning(f"⚠️ DASH02: Technical data fout: {e}")
-    technical_data = []
+            try:
+                cur.execute("""
+                    SELECT DISTINCT ON (symbol) symbol, rsi, volume, ma_200, timestamp
+                    FROM technical_indicators
+                    WHERE symbol = 'BTC'
+                    ORDER BY symbol, timestamp DESC
+                """)
+                technical_data = [dict(row) for row in cur.fetchall()]
+                logger.info(f"🧪 DASH02: Technical data geladen ({len(technical_data)} rijen)")
+            except Exception as e:
+                logger.warning(f"⚠️ DASH02: Technical data fout: {e}")
+                technical_data = []
 
             # ✅ Macro data
             try:
