@@ -56,20 +56,23 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-# ✅ POST wrapper
+# ✅ POST wrapper (werkt met automatische "date" kolom)
 def post_technical_data(payload: dict):
     try:
         url = f"{API_BASE_URL}/technical_data"
         logger.info(f"📡 POST technische data: {payload}")
+        
+        # Onnodig om zelf 'date' toe te voegen – deze wordt automatisch afgeleid in de database
         response = safe_request(url, method="POST", payload=payload, headers=HEADERS)
-        logger.info(f"✅ Technische data opgeslagen: {response}")
+
+        logger.info(f"✅ Technische data opgeslagen of bijgewerkt: {response}")
     except RetryError:
         logger.error("❌ Alle retries mislukt voor technische data")
         logger.error(traceback.format_exc())
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
-
+        
 # ✅ Technische data ophalen en posten
 def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300):
     try:
