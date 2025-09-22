@@ -62,6 +62,42 @@ async def save_technical_data(item: TechnicalIndicator):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan: {e}")
 
+@router.post("/technical_data")
+async def save_technical_data(item: TechnicalIndicator):
+    try:
+        conn = get_db_connection()
+        if not conn:
+            raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (symbol, indicator, DATE(timestamp)) DO UPDATE
+                SET value = EXCLUDED.value,
+                    score = EXCLUDED.score,
+                    advies = EXCLUDED.advies,
+                    uitleg = EXCLUDED.uitleg,
+                    timestamp = EXCLUDED.timestamp;
+            """, (
+                item.symbol,
+                item.indicator,
+                item.value,
+                item.score,
+                item.advies,
+                item.uitleg,
+                item.timestamp,
+            ))
+            conn.commit()
+
+        return {"status": "success"}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan: {e}")
+    finally:
+        if conn:
+            conn.close()
+
 # ✅ Dagdata per indicator
 @router.get("/technical_data/day")
 async def get_latest_day_data():
