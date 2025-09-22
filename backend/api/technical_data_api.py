@@ -2,6 +2,7 @@ import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Query
 from backend.utils.db import get_db_connection
+from backend.models.technical_model import TechnicalIndicator
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
