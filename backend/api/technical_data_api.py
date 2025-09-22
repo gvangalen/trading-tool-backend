@@ -145,33 +145,55 @@ async def get_technical_data():
 
 
 @router.get("/technical_data/day")
-def get_technical_data_day():
-    return [
-        {
-            "indicator": "RSI (Dag)",
-            "waarde": 65.2,
-            "score": 2,
-            "advies": "Bullish",
-            "uitleg": "RSI boven 60 wijst op kracht.",
-            "symbol": "BTC",
-        },
-        {
-            "indicator": "Volume (Dag)",
-            "waarde": "12.4M",
-            "score": 1,
-            "advies": "Neutraal",
-            "uitleg": "Volume gemiddeld op dagbasis.",
-            "symbol": "BTC",
-        },
-        {
-            "indicator": "200MA (Dag)",
-            "waarde": "Boven MA",
-            "score": 2,
-            "advies": "Bullish",
-            "uitleg": "Prijs boven 200-dagen MA.",
-            "symbol": "BTC",
-        },
-    ]
+async def get_latest_day_data():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT symbol, rsi, volume, ma_200, rsi_score, volume_score, ma_200_score, timestamp
+                FROM technical_data
+                WHERE symbol = 'BTC'
+                ORDER BY timestamp DESC
+                LIMIT 1;
+            """)
+            row = cur.fetchone()
+
+        if not row:
+            return []
+
+        return [
+            {
+                "indicator": "RSI (Dag)",
+                "waarde": float(row[1]),
+                "score": row[4],
+                "advies": "Bullish" if row[4] >= 2 else "Bearish" if row[4] <= -2 else "Neutraal",
+                "uitleg": "RSI-waarde geïnterpreteerd op dagbasis.",
+                "symbol": row[0],
+            },
+            {
+                "indicator": "Volume (Dag)",
+                "waarde": f"{float(row[2]) / 1e6:.1f}M",
+                "score": row[5],
+                "advies": "Bullish" if row[5] >= 2 else "Bearish" if row[5] <= -2 else "Neutraal",
+                "uitleg": "Volumeverhouding op dagbasis.",
+                "symbol": row[0],
+            },
+            {
+                "indicator": "200MA (Dag)",
+                "waarde": "Boven MA" if row[1] > row[3] else "Onder MA",
+                "score": row[6],
+                "advies": "Bullish" if row[6] >= 2 else "Bearish" if row[6] <= -2 else "Neutraal",
+                "uitleg": "Vergelijking prijs met 200MA.",
+                "symbol": row[0],
+            }
+        ]
+    except Exception as e:
+        logger.error(f"❌ [day] Fout bij ophalen: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
     
 # ✅ WEEK
 @router.get("/technical_data/week")
