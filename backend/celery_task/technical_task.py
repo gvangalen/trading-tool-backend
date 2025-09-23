@@ -86,8 +86,8 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
             closes = closes[-aggregation_days:]
             volumes = volumes[-aggregation_days:]
 
-        if len(closes) < 200:
-            logger.warning("⚠️ Niet genoeg candles voor 200MA")
+        if not aggregation_days and len(closes) < 200:
+            logger.warning("⚠️ Niet genoeg candles voor 200MA (dagdata)")
             return
 
         rsi = calculate_rsi(closes)
