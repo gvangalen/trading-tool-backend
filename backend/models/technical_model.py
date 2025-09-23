@@ -1,6 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
-from datetime import datetime
+from datetime import datetime, date
 
 class TechnicalIndicator(BaseModel):
     symbol: str
@@ -10,3 +9,4 @@ class TechnicalIndicator(BaseModel):
     advies: str
     uitleg: str
     timestamp: datetime
+    date: date  
