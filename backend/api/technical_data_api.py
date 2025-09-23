@@ -3,11 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Query
 from backend.utils.db import get_db_connection
 from backend.models.technical_model import TechnicalIndicator
-from backend.celery_task.technical_task import (
-    fetch_technical_data_day,
-    fetch_technical_data_week,
-    fetch_technical_data_month,
-)
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
