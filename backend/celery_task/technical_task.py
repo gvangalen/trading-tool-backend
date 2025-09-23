@@ -6,7 +6,7 @@ from datetime import datetime
 from celery import shared_task
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
-import pytz  # ✅ Nieuw toegevoegd
+import pytz
 
 # ✅ Eigen utils
 from backend.utils.technical_interpreter import process_all_technical
@@ -56,15 +56,12 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-# ✅ POST wrapper (werkt met automatische "date" kolom)
+# ✅ POST wrapper
 def post_technical_data(payload: dict):
     try:
         url = f"{API_BASE_URL}/technical_data"
         logger.info(f"📡 POST technische data: {payload}")
-        
-        # Onnodig om zelf 'date' toe te voegen – deze wordt automatisch afgeleid in de database
         response = safe_request(url, method="POST", payload=payload, headers=HEADERS)
-
         logger.info(f"✅ Technische data opgeslagen of bijgewerkt: {response}")
     except RetryError:
         logger.error("❌ Alle retries mislukt voor technische data")
@@ -72,11 +69,11 @@ def post_technical_data(payload: dict):
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
-        
-# ✅ Technische data ophalen en posten
-def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300):
+
+# ✅ Algemene functie om technische data te verwerken
+def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300, aggregation_days=None):
     try:
-        logger.info("🚀 Start ophalen technische data...")
+        logger.info(f"🚀 Start ophalen technische data ({aggregation_days or '1d realtime'})...")
         url = f"{BINANCE_BASE_URL}/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": limit}
         data = safe_request(url, payload=params)
@@ -85,12 +82,16 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
         closes = [float(item[4]) for item in data]
         volumes = [float(item[5]) for item in data]
 
+        if aggregation_days:
+            closes = closes[-aggregation_days:]
+            volumes = volumes[-aggregation_days:]
+
         if len(closes) < 200:
             logger.warning("⚠️ Niet genoeg candles voor 200MA")
             return
 
         rsi = calculate_rsi(closes)
-        volume = round(volumes[-1], 2)
+        volume = round(sum(volumes), 2)  # 📊 Totale volume over periode
         ma_200 = round(sum(closes[-200:]) / 200, 2)
         current_price = closes[-1]
         ma_200_ratio = round(current_price / ma_200, 3)
@@ -103,9 +104,6 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
             "ma_200": ma_200_ratio
         })
 
-        logger.info("📈 Interpretatie resultaten ontvangen van score-engine")
-
-        # ✅ Gebruik lokale tijd voor timestamp (Europe/Amsterdam)
         local_tz = pytz.timezone("Europe/Amsterdam")
         timestamp = datetime.now(local_tz).replace(microsecond=0).isoformat()
 
@@ -119,14 +117,25 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
                 "uitleg": data.get("explanation"),
                 "timestamp": timestamp
             }
-            logger.info(f"📦 Payload voor {indicator}: {payload}")
             post_technical_data(payload)
 
     except Exception as e:
         logger.error("❌ Fout bij ophalen/verwerken technische data")
         logger.error(traceback.format_exc())
 
-# ✅ Dagelijkse task
+# ✅ Taken per periode
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
 def fetch_technical_data_day():
     fetch_and_post()
+
+@shared_task(name="backend.celery_task.technical_task.fetch_technical_data_week")
+def fetch_technical_data_week():
+    fetch_and_post(aggregation_days=7)
+
+@shared_task(name="backend.celery_task.technical_task.fetch_technical_data_month")
+def fetch_technical_data_month():
+    fetch_and_post(aggregation_days=30)
+
+@shared_task(name="backend.celery_task.technical_task.fetch_technical_data_quarter")
+def fetch_technical_data_quarter():
+    fetch_and_post(aggregation_days=90)
