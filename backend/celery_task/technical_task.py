@@ -127,6 +127,6 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300)
         logger.error(traceback.format_exc())
 
 # ✅ Dagelijkse task
-@shared_task(name="backend.celery_task.technical_task.fetch_technical_data")
-def fetch_technical_data():
+@shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
+def fetch_technical_data_day():
     fetch_and_post()
