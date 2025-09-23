@@ -55,16 +55,15 @@ async def save_technical_data(item: TechnicalIndicator):
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_indicators (
-                    symbol, indicator, value, score, advies, uitleg, timestamp, date
+                    symbol, indicator, value, score, advies, uitleg, timestamp
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT ON CONSTRAINT unique_technical_entry DO UPDATE
                 SET value = EXCLUDED.value,
                     score = EXCLUDED.score,
                     advies = EXCLUDED.advies,
                     uitleg = EXCLUDED.uitleg,
-                    timestamp = EXCLUDED.timestamp,
-                    date = EXCLUDED.date;
+                    timestamp = EXCLUDED.timestamp;
             """, (
                 item.symbol,
                 item.indicator,
@@ -73,7 +72,6 @@ async def save_technical_data(item: TechnicalIndicator):
                 item.advies,
                 item.uitleg,
                 item.timestamp,
-                item.date,  # ✅ nieuw veld
             ))
             conn.commit()
 
