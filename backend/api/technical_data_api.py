@@ -57,7 +57,7 @@ async def save_technical_data(item: TechnicalIndicator):
                     symbol, indicator, value, score, advies, uitleg, timestamp
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (symbol, indicator, date) DO UPDATE
+                ON CONFLICT ON CONSTRAINT unique_technical_entry DO UPDATE
                 SET value = EXCLUDED.value,
                     score = EXCLUDED.score,
                     advies = EXCLUDED.advies,
@@ -82,7 +82,7 @@ async def save_technical_data(item: TechnicalIndicator):
     finally:
         if conn:
             conn.close()
-
+            
 # ✅ Dagdata per indicator
 @router.get("/technical_data/day")
 async def get_latest_day_data():
