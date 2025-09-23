@@ -1,3 +1,5 @@
+# backend/celery_task/technical_task.py
+
 import os
 import logging
 import traceback
@@ -6,7 +8,6 @@ from datetime import datetime
 from celery import shared_task
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
-import pytz
 
 # ✅ Eigen utils
 from backend.utils.technical_interpreter import process_all_technical
@@ -91,7 +92,7 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
             return
 
         rsi = calculate_rsi(closes)
-        volume = round(sum(volumes), 2)  # 📊 Totale volume over periode
+        volume = round(sum(volumes), 2)
         ma_200 = round(sum(closes[-200:]) / 200, 2)
         current_price = closes[-1]
         ma_200_ratio = round(current_price / ma_200, 3)
@@ -104,9 +105,8 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
             "ma_200": ma_200_ratio
         })
 
-        # ✅ Fix voor timestamp + date
-        utc_now = datetime.utcnow().replace(microsecond=0)  # naive timestamp voor postgres
-        date = utc_now.date()
+        # ✅ Fix: alleen timestamp meesturen — geen "date" meer!
+        utc_now = datetime.utcnow().replace(microsecond=0)
 
         for indicator, data in result.items():
             payload = {
@@ -116,8 +116,7 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
                 "score": data.get("score"),
                 "advies": data.get("action"),
                 "uitleg": data.get("explanation"),
-                "timestamp": utc_now.isoformat(),  # ✅ geen tzinfo
-                "date": str(date)                  # ✅ voor unique constraint
+                "timestamp": utc_now.isoformat(),  # ⏰ Alleen deze meesturen
             }
             post_technical_data(payload)
 
