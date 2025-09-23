@@ -47,7 +47,10 @@ async def save_technical_data(item: TechnicalIndicator):
     try:
         conn = get_db_connection()
         if not conn:
+            logger.error("❌ TECH_POST: Geen databaseverbinding.")
             raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
+
+        logger.info(f"📥 TECH_POST: Ontvangen data: {item.dict()}")
 
         with conn.cursor() as cur:
             cur.execute("""
@@ -72,9 +75,13 @@ async def save_technical_data(item: TechnicalIndicator):
             ))
             conn.commit()
 
+        logger.info(f"✅ TECH_POST: Succesvol opgeslagen: {item.symbol} - {item.indicator}")
         return {"status": "success"}
 
     except Exception as e:
+        import traceback
+        logger.error(f"❌ TECH_POST: Fout bij opslaan technische data: {e}")
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan: {e}")
     
     finally:
