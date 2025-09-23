@@ -1,6 +1,6 @@
 import logging
 from fastapi import APIRouter, HTTPException
-from backend.utils.db import get_db_connection  # ✅ Fix import
+from backend.utils.db import get_db_connection
 import psycopg2.extras
 
 router = APIRouter()
@@ -31,19 +31,28 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH01: Market data fout: {e}")
                 market_data = []
 
-            # ✅ Technical data (alleen BTC, uit nieuwe tabel: technical_indicators)
+            # ✅ Technical data (RSI, Volume, 200MA uit nieuwe tabel)
             try:
                 cur.execute("""
-                    SELECT DISTINCT ON (symbol) symbol, rsi, volume, ma_200, timestamp
+                    SELECT symbol, indicator_name, value, score, timestamp
                     FROM technical_indicators
                     WHERE symbol = 'BTC'
-                    ORDER BY symbol, timestamp DESC
+                    AND indicator_name IN ('RSI', 'Volume', '200MA')
+                    ORDER BY indicator_name, timestamp DESC
                 """)
-                technical_data = [dict(row) for row in cur.fetchall()]
-                logger.info(f"🧪 DASH02: Technical data geladen ({len(technical_data)} rijen)")
+                rows = cur.fetchall()
+                technical_data = {
+                    row["indicator_name"]: {
+                        "value": row["value"],
+                        "score": row["score"],
+                        "timestamp": row["timestamp"]
+                    }
+                    for row in rows
+                }
+                logger.info(f"🧪 DASH02: Technical data geladen ({len(technical_data)} indicatoren)")
             except Exception as e:
                 logger.warning(f"⚠️ DASH02: Technical data fout: {e}")
-                technical_data = []
+                technical_data = {}
 
             # ✅ Macro data
             try:
@@ -77,9 +86,20 @@ async def get_dashboard_data():
         setup_score = len(setups) * 10 if setups else 0
 
         # ✅ Dummy uitleg per score
-        macro_explanation = "📊 Gebaseerd op " + ", ".join(d['name'] for d in macro_data) if macro_data else "❌ Geen macrodata"
-        technical_explanation = "📈 Laatste RSI: " + str(technical_data[0]['rsi']) if technical_data else "❌ Geen technische data"
-        setup_explanation = f"🧠 {len(setups)} setups geladen" if setups else "❌ Geen setups actief"
+        macro_explanation = (
+            "📊 Gebaseerd op " + ", ".join(d['name'] for d in macro_data)
+            if macro_data else "❌ Geen macrodata"
+        )
+
+        technical_explanation = (
+            "📈 Laatste RSI: " + str(technical_data.get("RSI", {}).get("value", "n.v.t."))
+            if technical_data else "❌ Geen technische data"
+        )
+
+        setup_explanation = (
+            f"🧠 {len(setups)} setups geladen"
+            if setups else "❌ Geen setups actief"
+        )
 
         return {
             "market_data": market_data,
@@ -104,7 +124,6 @@ async def get_dashboard_data():
     finally:
         conn.close()
 
-
 # ✅ 2. Healthcheck
 @router.get("/dashboard/health")
 async def health_check():
@@ -117,7 +136,6 @@ async def health_check():
     except Exception as e:
         logger.error(f"❌ HEALTH02: {e}")
         raise HTTPException(status_code=500, detail="HEALTH02: Interne fout")
-
 
 # ✅ 3. Tradingadvies per asset
 @router.get("/dashboard/trading_advice")
@@ -142,7 +160,6 @@ async def get_trading_advice(symbol: str = "BTC"):
     finally:
         conn.close()
 
-
 # ✅ 4. Top setups (voor component)
 @router.get("/dashboard/top_setups")
 async def get_top_setups():
@@ -163,7 +180,6 @@ async def get_top_setups():
         raise HTTPException(status_code=500, detail="SETUPS01: Ophalen top setups mislukt.")
     finally:
         conn.close()
-
 
 # ✅ 5. Setup summary (per unieke naam)
 @router.get("/dashboard/setup_summary")
