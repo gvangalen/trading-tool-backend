@@ -32,27 +32,27 @@ async def get_dashboard_data():
                 market_data = []
 
             # ✅ Technical data (RSI, Volume, 200MA uit nieuwe tabel)
-try:
-    cur.execute("""
-        SELECT symbol, indicator, value, score, timestamp
-        FROM technical_indicators
-        WHERE symbol = 'BTC'
-        AND indicator IN ('RSI', 'Volume', '200MA')
-        ORDER BY indicator, timestamp DESC
-    """)
-    rows = cur.fetchall()
-    technical_data = {
-        row["indicator"]: {
-            "value": row["value"],
-            "score": row["score"],
-            "timestamp": row["timestamp"]
-        }
-        for row in rows
-    }
-    logger.info(f"🧪 DASH02: Technical data geladen ({len(technical_data)} indicatoren)")
-except Exception as e:
-    logger.warning(f"⚠️ DASH02: Technical data fout: {e}")
-    technical_data = {}
+            try:
+                cur.execute("""
+                    SELECT symbol, indicator, value, score, timestamp
+                    FROM technical_indicators
+                    WHERE symbol = 'BTC'
+                    AND indicator IN ('RSI', 'Volume', '200MA')
+                    ORDER BY indicator, timestamp DESC
+                """)
+                rows = cur.fetchall()
+                technical_data = {
+                    row["indicator"]: {
+                        "value": row["value"],
+                        "score": row["score"],
+                        "timestamp": row["timestamp"]
+                    }
+                    for row in rows
+                }
+                logger.info(f"🧪 DASH02: Technical data geladen ({len(technical_data)} indicatoren)")
+            except Exception as e:
+                logger.warning(f"⚠️ DASH02: Technical data fout: {e}")
+                technical_data = {}
 
             # ✅ Macro data
             try:
