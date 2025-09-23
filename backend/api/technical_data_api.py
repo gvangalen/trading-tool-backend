@@ -3,7 +3,6 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Query
 from backend.utils.db import get_db_connection
 from backend.models.technical_model import TechnicalIndicator
-from fastapi import APIRouter
 from backend.celery_task.technical_task import fetch_technical_data
 
 
