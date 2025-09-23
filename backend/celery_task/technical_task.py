@@ -105,7 +105,8 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
         })
 
         local_tz = pytz.timezone("Europe/Amsterdam")
-        timestamp = datetime.now(local_tz).replace(microsecond=0).isoformat()
+        timestamp = datetime.now(local_tz).replace(microsecond=0)
+        date = timestamp.date()
 
         for indicator, data in result.items():
             payload = {
@@ -115,7 +116,8 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
                 "score": data.get("score"),
                 "advies": data.get("action"),
                 "uitleg": data.get("explanation"),
-                "timestamp": timestamp
+                "timestamp": timestamp.isoformat(),
+                "date": str(date)  # ✅ Belangrijk voor unieke index
             }
             post_technical_data(payload)
 
