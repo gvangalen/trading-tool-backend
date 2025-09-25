@@ -9,4 +9,4 @@ class TechnicalIndicator(BaseModel):
     advies: str
     uitleg: str
     timestamp: datetime
-    date: date  
+ 
