@@ -57,13 +57,7 @@ async def save_technical_data(item: TechnicalIndicator):
                 INSERT INTO technical_indicators (
                     symbol, indicator, value, score, advies, uitleg, timestamp
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT ON CONSTRAINT unique_technical_entry DO UPDATE
-                SET value = EXCLUDED.value,
-                    score = EXCLUDED.score,
-                    advies = EXCLUDED.advies,
-                    uitleg = EXCLUDED.uitleg,
-                    timestamp = EXCLUDED.timestamp;
+                VALUES (%s, %s, %s, %s, %s, %s, %s);
             """, (
                 item.symbol,
                 item.indicator,
@@ -83,7 +77,7 @@ async def save_technical_data(item: TechnicalIndicator):
         logger.error(f"❌ TECH_POST: Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan: {e}")
-    
+
     finally:
         if conn:
             conn.close()
