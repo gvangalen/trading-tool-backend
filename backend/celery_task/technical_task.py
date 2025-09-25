@@ -1,9 +1,6 @@
-# backend/celery_task/technical_task.py
-
 import os
 import logging
 import traceback
-from urllib.parse import urljoin
 from datetime import datetime
 from celery import shared_task
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
@@ -71,10 +68,10 @@ def post_technical_data(payload: dict):
         logger.error(f"❌ Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
 
-# ✅ Algemene functie om technische data te verwerken
-def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300, aggregation_days=None):
+# ✅ Technische data ophalen en posten (alleen dagdata!)
+def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300):
     try:
-        logger.info(f"🚀 Start ophalen technische data ({aggregation_days or '1d realtime'})...")
+        logger.info(f"🚀 Start ophalen technische dagdata ({symbol})...")
         url = f"{BINANCE_BASE_URL}/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": limit}
         data = safe_request(url, payload=params)
@@ -83,11 +80,7 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
         closes = [float(item[4]) for item in data]
         volumes = [float(item[5]) for item in data]
 
-        if aggregation_days:
-            closes = closes[-aggregation_days:]
-            volumes = volumes[-aggregation_days:]
-
-        if not aggregation_days and len(closes) < 200:
+        if len(closes) < 200:
             logger.warning("⚠️ Niet genoeg candles voor 200MA (dagdata)")
             return
 
@@ -105,7 +98,6 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
             "ma_200": ma_200_ratio
         })
 
-        # ✅ Fix: alleen timestamp meesturen — geen "date" meer!
         utc_now = datetime.utcnow().replace(microsecond=0)
 
         for indicator, data in result.items():
@@ -124,19 +116,7 @@ def fetch_and_post(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300,
         logger.error("❌ Fout bij ophalen/verwerken technische data")
         logger.error(traceback.format_exc())
 
-# ✅ Taken per periode
+# ✅ Dagelijkse Celery taak
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
 def fetch_technical_data_day():
-    fetch_and_post()
-
-@shared_task(name="backend.celery_task.technical_task.fetch_technical_data_week")
-def fetch_technical_data_week():
-    fetch_and_post(aggregation_days=7)
-
-@shared_task(name="backend.celery_task.technical_task.fetch_technical_data_month")
-def fetch_technical_data_month():
-    fetch_and_post(aggregation_days=30)
-
-@shared_task(name="backend.celery_task.technical_task.fetch_technical_data_quarter")
-def fetch_technical_data_quarter():
-    fetch_and_post(aggregation_days=90)
+    fetch_and_post_daily()
