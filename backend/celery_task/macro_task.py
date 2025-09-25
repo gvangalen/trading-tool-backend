@@ -46,7 +46,14 @@ def fetch_macro_data():
             logger.warning("⚠️ Geen indicatoren gevonden in config.")
             return
 
+        # ✅ Tijdelijk alleen deze indicatoren ophalen
+        whitelist = ["fear_greed", "dxy"]
+
         for name, indicator_config in indicators.items():
+            if name not in whitelist:
+                logger.info(f"⏩ Skip {name} (niet in whitelist)")
+                continue
+
             logger.info(f"➡️ Verwerk: {name}...")
             try:
                 # 🔒 Beveiligde async-call
@@ -67,7 +74,7 @@ def fetch_macro_data():
                     logger.warning(f"⚠️ Ongeldige waarde voor {name}: {result.get('value')}")
                     continue
 
-                # ✅ Payload (zonder timeframe)
+                # ✅ Payload (BTC hardcoded als symbool)
                 payload = {
                     "name": result["name"],
                     "value": result["value"],
@@ -75,7 +82,7 @@ def fetch_macro_data():
                     "trend": result.get("trend", ""),
                     "interpretation": result.get("interpretation", ""),
                     "action": result.get("action", ""),
-                    "symbol": result.get("symbol", ""),
+                    "symbol": "BTC",  # ✅ altijd BTC
                     "source": result.get("source", ""),
                     "category": result.get("category", ""),
                     "correlation": result.get("correlation", ""),
