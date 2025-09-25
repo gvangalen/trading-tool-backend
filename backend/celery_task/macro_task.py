@@ -3,11 +3,13 @@ import logging
 import traceback
 import requests
 import asyncio
+from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 from celery import shared_task
 
 from backend.config.config_loader import load_macro_config
 from backend.utils.macro_interpreter import process_macro_indicator
+from backend.utils.db import get_db_connection  # ✅ Toegevoegd voor check
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +35,19 @@ def safe_post(url, payload=None):
         logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
         raise
 
+# ✅ Check of indicator vandaag al is opgeslagen
+def already_fetched_today(indicator_name: str) -> bool:
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id FROM macro_data
+                WHERE name = %s AND DATE(timestamp) = CURRENT_DATE
+            """, (indicator_name,))
+            return cur.fetchone() is not None
+    except Exception as e:
+        logger.error(f"⚠️ Fout bij controleren op bestaande macro-data: {e}")
+        return False  # fallback: doorgaan met ophalen
 
 # ✅ Hoofd Celery-task
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
@@ -52,6 +67,10 @@ def fetch_macro_data():
         for name, indicator_config in indicators.items():
             if name not in whitelist:
                 logger.info(f"⏩ Skip {name} (niet in whitelist)")
+                continue
+
+            if already_fetched_today(name):
+                logger.info(f"⏩ {name} is vandaag al opgehaald. Skip.")
                 continue
 
             logger.info(f"➡️ Verwerk: {name}...")
@@ -82,7 +101,7 @@ def fetch_macro_data():
                     "trend": result.get("trend", ""),
                     "interpretation": result.get("interpretation", ""),
                     "action": result.get("action", ""),
-                    "symbol": "BTC",  # ✅ altijd BTC
+                    "symbol": "BTC",  # of laat dit leeg of als "macro" in toekomst
                     "source": result.get("source", ""),
                     "category": result.get("category", ""),
                     "correlation": result.get("correlation", ""),
