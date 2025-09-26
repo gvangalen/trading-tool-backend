@@ -90,6 +90,7 @@ async def get_latest_day_data():
         raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
     try:
         with conn.cursor() as cur:
+            # ✅ Eerst: probeer data van vandaag
             cur.execute("""
                 SELECT symbol, indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
@@ -97,6 +98,25 @@ async def get_latest_day_data():
                 ORDER BY timestamp DESC;
             """)
             rows = cur.fetchall()
+
+            # ⚠️ Fallback: als geen data van vandaag, pak laatste beschikbare dag
+            if not rows:
+                cur.execute("""
+                    SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                    FROM technical_indicators
+                    WHERE symbol = 'BTC'
+                    ORDER BY timestamp DESC
+                    LIMIT 3;
+                """)
+                fallback_ts = cur.fetchone()[6]  # Pak timestamp van nieuwste
+                # Zoek dan alles van diezelfde dag
+                cur.execute("""
+                    SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                    FROM technical_indicators
+                    WHERE symbol = 'BTC' AND DATE(timestamp) = %s
+                    ORDER BY timestamp DESC;
+                """, (fallback_ts.date(),))
+                rows = cur.fetchall()
 
         return [
             {
