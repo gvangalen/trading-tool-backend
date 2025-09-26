@@ -180,18 +180,46 @@ async def update_macro_value(name: str, request: Request):
 # ✅ GET: Macro-data per periode (gebaseerd op timestamp, niet meer op timeframe)
 
 @router.get("/macro_data/day")
-async def get_macro_day_data():
-    logger.info("📤 [get/day] Ophalen macro-data (laatste 24 uur)...")
-    conn, cur = get_db_cursor()
+async def get_latest_macro_day_data():
+    logger.info("📤 [get/day] Ophalen macro-dagdata (met fallback)...")
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
+
     try:
-        cur.execute("""
-            SELECT name, value, trend, interpretation, action, score, timestamp
-            FROM macro_data
-            WHERE timestamp >= NOW() - INTERVAL '1 day'
-            ORDER BY timestamp DESC
-            LIMIT 50;
-        """)
-        rows = cur.fetchall()
+        with conn.cursor() as cur:
+            # ✅ Eerst proberen: data van vandaag
+            cur.execute("""
+                SELECT name, value, trend, interpretation, action, score, timestamp
+                FROM macro_data
+                WHERE DATE(timestamp) = CURRENT_DATE
+                ORDER BY timestamp DESC;
+            """)
+            rows = cur.fetchall()
+
+            # 🔁 Fallback: pak laatste beschikbare dag
+            if not rows:
+                cur.execute("""
+                    SELECT timestamp
+                    FROM macro_data
+                    ORDER BY timestamp DESC
+                    LIMIT 1;
+                """)
+                fallback_ts = cur.fetchone()
+                if not fallback_ts:
+                    logger.warning("⚠️ Geen fallback-timestamp gevonden.")
+                    return []
+
+                fallback_date = fallback_ts[0].date()
+
+                cur.execute("""
+                    SELECT name, value, trend, interpretation, action, score, timestamp
+                    FROM macro_data
+                    WHERE DATE(timestamp) = %s
+                    ORDER BY timestamp DESC;
+                """, (fallback_date,))
+                rows = cur.fetchall()
+
         return [
             {
                 "name": row[0],
@@ -204,12 +232,12 @@ async def get_macro_day_data():
             }
             for row in rows
         ]
+
     except Exception as e:
-        logger.error(f"❌ [get/day] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB06] Ophalen dagdata mislukt.")
+        logger.error(f"❌ [get/day] Fout bij ophalen macro dagdata: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB06] Ophalen macro dagdata mislukt.")
     finally:
         conn.close()
-
 
 @router.get("/macro_data/week")
 async def get_macro_week_data():
