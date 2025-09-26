@@ -54,7 +54,7 @@ celery.conf.beat_schedule = {
     # 📊 Macro-indicatoren
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
-        "schedule": crontab(minute="*/10"),
+        "schedule": crontab(hour=0, minute=12),
     },
 
     # 📊 Technische indicatoren (per periode)
