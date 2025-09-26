@@ -60,19 +60,19 @@ celery.conf.beat_schedule = {
     # 📊 Technische indicatoren (per periode)
     "fetch_technical_data_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
-        "schedule": crontab(hour=6, minute=0),
+        "schedule": crontab(hour=0, minute=10),
     },
     "fetch_technical_data_week": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_week",
-        "schedule": crontab(hour=6, minute=5),
+        "schedule": crontab(hour=0, minute=15),
     },
     "fetch_technical_data_month": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_month",
-        "schedule": crontab(hour=6, minute=10),
+        "schedule": crontab(hour=0, minute=20),
     },
     "fetch_technical_data_quarter": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_quarter",
-        "schedule": crontab(hour=6, minute=15),
+        "schedule": crontab(hour=0, minute=25),
     },
 
     # ✅ BTC prijs historiek (dagelijks)
