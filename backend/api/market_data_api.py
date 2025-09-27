@@ -84,40 +84,51 @@ async def save_market_data(request: Request):
 
 @router.post("/market_data/btc/7d/fill")
 async def fill_btc_7day_data():
+    """
+    Haalt de laatste 7 dagen echte BTC marktdata op via CoinGecko en slaat die op.
+    Te gebruiken als handmatige fallback of initieel vullen van de database.
+    """
+    logger.info("📥 Handmatig ophalen BTC 7d market data gestart")
+
     conn = get_db_connection()
     if not conn:
         return {"error": "❌ Geen databaseverbinding"}
 
-    today = datetime.utcnow().date()
-
     try:
-        with conn.cursor() as cur:
-            for i in range(7):
-                date = today - timedelta(days=i)
+        coingecko_id = "bitcoin"
+        url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc?vs_currency=usd&days=7"
 
-                # Check of record al bestaat
-                cur.execute("SELECT 1 FROM market_data_7d WHERE symbol = 'BTC' AND date = %s", (date,))
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(url)
+            resp.raise_for_status()
+            ohlc_data = resp.json()
+
+        inserted = 0
+        with conn.cursor() as cur:
+            for entry in ohlc_data:
+                ts, open_price, high_price, low_price, close_price = entry
+                date = datetime.utcfromtimestamp(ts / 1000).date()
+                change = round((close_price - open_price) / open_price * 100, 2)
+
+                cur.execute("SELECT 1 FROM market_data_7d WHERE symbol = %s AND date = %s", ('BTC', date))
                 if cur.fetchone():
                     continue  # ⏭️ Skip als al bestaat
 
-                # 🔁 Dummy data – later vervangen door echte API
-                open_price = 27000 + i * 100
-                high_price = open_price + 500
-                low_price = open_price - 500
-                close_price = open_price + 200
-                change = round((close_price - open_price) / open_price * 100, 2)
-
                 cur.execute("""
-                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                 """, ('BTC', date, open_price, high_price, low_price, close_price, change))
+                inserted += 1
 
-            conn.commit()
-
-        return {"status": "✅ BTC 7-daagse data succesvol gevuld"}
+        conn.commit()
+        return {"status": f"✅ Gegevens opgeslagen voor {inserted} dagen."}
 
     except Exception as e:
-        return {"error": f"❌ Fout bij vullen data: {str(e)}"}
+        logger.error(f"❌ Fout bij ophalen en opslaan BTC market data: {e}")
+        return {"error": f"❌ Fout: {str(e)}"}
+    finally:
+        conn.close()
+
 
 @router.get("/market_data/btc/latest")
 def get_latest_btc_price():
