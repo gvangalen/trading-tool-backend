@@ -218,22 +218,51 @@ async def delete_market_asset(id: int):
 @router.get("/market_data/7d")
 async def get_market_data_7d():
     """
-    Haalt de 7-daagse historische BTC-marktdata op uit market_data_7d.
+    Haalt de laatste 7 dagen BTC-marktdata op uit market_data_7d.
+    Fallback naar meest recente beschikbare datum als vandaag geen data bevat.
     Alleen voor symbol 'BTC'.
     """
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT id, symbol, date, open, high, low, close, change, created_at
-            FROM market_data_7d
-            WHERE symbol = 'BTC'
-            ORDER BY date DESC
-        """)
-        rows = cur.fetchall()
-        conn.close()
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
 
-        data = [{
+    try:
+        with conn.cursor() as cur:
+            # ✅ Stap 1: check of er data van vandaag is
+            cur.execute("""
+                SELECT 1 FROM market_data_7d
+                WHERE symbol = 'BTC' AND DATE(date) = CURRENT_DATE
+                LIMIT 1;
+            """)
+            today_exists = cur.fetchone() is not None
+
+            # 🔁 Stap 2: fallback naar laatste datum met data
+            if not today_exists:
+                cur.execute("""
+                    SELECT MAX(date) FROM market_data_7d
+                    WHERE symbol = 'BTC';
+                """)
+                fallback_date = cur.fetchone()[0]
+                if not fallback_date:
+                    logger.warning("⚠️ Geen data beschikbaar in market_data_7d.")
+                    return []
+
+                logger.info(f"🔁 Geen data van vandaag — fallback naar {fallback_date}")
+
+            # 📦 Stap 3: laatste 7 dagen ophalen vanaf fallback/latest
+            cur.execute("""
+                SELECT id, symbol, date, open, high, low, close, change, created_at
+                FROM market_data_7d
+                WHERE symbol = 'BTC'
+                ORDER BY date DESC
+                LIMIT 7;
+            """)
+            rows = cur.fetchall()
+
+        # ✅ Omkeren zodat oudste eerst komt (chronologisch)
+        rows.reverse()
+
+        return [{
             "id": r[0],
             "symbol": r[1],
             "date": r[2].isoformat(),
@@ -245,11 +274,12 @@ async def get_market_data_7d():
             "created_at": r[8].isoformat() if r[8] else None
         } for r in rows]
 
-        return data
-
     except Exception as e:
         logger.error(f"❌ [7d] Fout bij ophalen market_data_7d: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van 7-daagse data.")
+
+    finally:
+        conn.close()
 
 @router.get("/market_data/forward")
 async def get_market_forward_returns():
