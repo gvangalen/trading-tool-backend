@@ -85,23 +85,33 @@ async def save_market_data(request: Request):
 @router.post("/market_data/btc/7d/fill")
 async def fill_btc_7day_data():
     """
-    Haalt de laatste 7 dagen echte BTC marktdata op via CoinGecko en slaat die op.
-    Te gebruiken als handmatige fallback of initieel vullen van de database.
+    Haalt de laatste 7 dagen BTC marktdata + volume op via CoinGecko.
+    Slaat alles op in market_data_7d (indien nog niet aanwezig).
     """
     logger.info("📥 Handmatig ophalen BTC 7d market data gestart")
-
     conn = get_db_connection()
     if not conn:
         return {"error": "❌ Geen databaseverbinding"}
 
     try:
         coingecko_id = "bitcoin"
-        url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc?vs_currency=usd&days=7"
+        url_ohlc = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc?vs_currency=usd&days=7"
+        url_volume = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart?vs_currency=usd&days=7"
 
         with httpx.Client(timeout=10.0) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            ohlc_data = resp.json()
+            ohlc_resp = client.get(url_ohlc)
+            ohlc_resp.raise_for_status()
+            ohlc_data = ohlc_resp.json()
+
+            volume_resp = client.get(url_volume)
+            volume_resp.raise_for_status()
+            volume_data = volume_resp.json().get("total_volumes", [])
+
+        # 🔁 Zet volume-data om naar {date: volume}
+        volume_by_date = {}
+        for ts, volume in volume_data:
+            date = datetime.utcfromtimestamp(ts / 1000).date()
+            volume_by_date[date] = volume
 
         inserted = 0
         with conn.cursor() as cur:
@@ -109,15 +119,16 @@ async def fill_btc_7day_data():
                 ts, open_price, high_price, low_price, close_price = entry
                 date = datetime.utcfromtimestamp(ts / 1000).date()
                 change = round((close_price - open_price) / open_price * 100, 2)
+                volume = volume_by_date.get(date, None)
 
                 cur.execute("SELECT 1 FROM market_data_7d WHERE symbol = %s AND date = %s", ('BTC', date))
                 if cur.fetchone():
                     continue  # ⏭️ Skip als al bestaat
 
                 cur.execute("""
-                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                """, ('BTC', date, open_price, high_price, low_price, close_price, change))
+                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                """, ('BTC', date, open_price, high_price, low_price, close_price, change, volume))
                 inserted += 1
 
         conn.commit()
@@ -262,7 +273,7 @@ async def get_market_data_7d():
 
             # 📦 Stap 3: laatste 7 dagen ophalen vanaf fallback/latest
             cur.execute("""
-                SELECT id, symbol, date, open, high, low, close, change, created_at
+                SELECT id, symbol, date, open, high, low, close, change, volume, created_at
                 FROM market_data_7d
                 WHERE symbol = 'BTC'
                 ORDER BY date DESC
@@ -282,7 +293,8 @@ async def get_market_data_7d():
             "low": float(r[5]) if r[5] else None,
             "close": float(r[6]) if r[6] else None,
             "change": float(r[7]) if r[7] else None,
-            "created_at": r[8].isoformat() if r[8] else None
+            "volume": float(r[8]) if r[8] is not None else None,  # ✅ volume
+            "created_at": r[9].isoformat() if r[9] else None
         } for r in rows]
 
     except Exception as e:
