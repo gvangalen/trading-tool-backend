@@ -304,6 +304,74 @@ async def get_market_data_7d():
     finally:
         conn.close()
 
+# 📈 Automatisch forward returns genereren op basis van historische data
+@router.post("/market_data/forward/generate")
+def generate_forward_returns():
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    try:
+        logger.info("📈 Start genereren van forward returns...")
+
+        periods = {
+            "week": 7,
+            "month": 30,
+            "quarter": 90,
+        }
+
+        # Haal alle historische prijzen op
+        cur.execute("SELECT date, price FROM btc_price_history ORDER BY date ASC")
+        rows = cur.fetchall()
+        prices = {row[0]: float(row[1]) for row in rows}
+        dates = list(prices.keys())
+
+        inserted_count = 0
+
+        for i, start_date in enumerate(dates):
+            start_price = prices[start_date]
+            for period, delta_days in periods.items():
+                end_date = start_date + timedelta(days=delta_days)
+
+                # Zoek dichtstbijzijnde end_date
+                end_price = None
+                for j in range(i + 1, len(dates)):
+                    if dates[j] >= end_date:
+                        end_price = prices[dates[j]]
+                        actual_end_date = dates[j]
+                        break
+
+                if not end_price:
+                    continue  # Niet genoeg data vooruit
+
+                change = round((end_price - start_price) / start_price * 100, 2)
+                avg_daily = round(change / delta_days, 2)
+
+                # Check of deze al bestaat
+                cur.execute("""
+                    SELECT 1 FROM market_forward_returns
+                    WHERE symbol = %s AND period = %s AND start_date = %s
+                """, ("BTC", period, start_date))
+                if cur.fetchone():
+                    continue  # Skip dubbele invoer
+
+                # Insert nieuwe return
+                cur.execute("""
+                    INSERT INTO market_forward_returns (symbol, period, start_date, end_date, change, avg_daily)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, ("BTC", period, start_date, actual_end_date, change, avg_daily))
+                inserted_count += 1
+
+        conn.commit()
+        logger.info(f"✅ {inserted_count} forward returns toegevoegd.")
+        return {"inserted": inserted_count}
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij forward return generatie: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij forward return generatie")
+    finally:
+        cur.close()
+        conn.close()
+
 @router.get("/market_data/forward")
 async def get_market_forward_returns():
     """
