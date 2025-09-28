@@ -211,3 +211,52 @@ def fetch_btc_price_history():
     except Exception as e:
         logger.error("❌ Fout tijdens ophalen historische BTC-data.")
         logger.error(traceback.format_exc())
+
+@shared_task(name="backend.celery_task.market_task.calculate_and_save_forward_returns")
+def calculate_and_save_forward_returns():
+    logger.info("📈 Start berekening van forward returns vanuit btc_price_history...")
+
+    try:
+        from backend.utils.db import get_db_connection  # import hier binnen de task
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 📅 Data ophalen en sorteren op datum
+        cur.execute("SELECT date, price FROM btc_price_history ORDER BY date ASC")
+        rows = cur.fetchall()
+        data = [{"date": row[0], "price": float(row[1])} for row in rows]
+
+        payload = []
+        periods = [7, 30, 90]  # 1w, 1m, 1q
+
+        for i, row in enumerate(data):
+            for days in periods:
+                if i + days >= len(data):
+                    continue
+                start = row
+                end = data[i + days]
+
+                change = ((end["price"] - start["price"]) / start["price"]) * 100
+                avg_daily = change / days
+
+                payload.append({
+                    "symbol": "BTC",
+                    "period": f"{days}d",
+                    "start_date": start["date"],
+                    "end_date": end["date"],
+                    "change": round(change, 2),
+                    "avg_daily": round(avg_daily, 3)
+                })
+
+        if not payload:
+            logger.warning("⚠️ Geen forward return data om op te slaan.")
+            return
+
+        save_url = f"{API_BASE_URL}/market_data/forward/save"
+        logger.info(f"🧮 Versturen {len(payload)} forward returns...")
+        safe_request(save_url, method="POST", payload=payload)
+        logger.info(f"✅ Forward returns berekend en opgeslagen ({len(payload)} rijen).")
+
+    except Exception as e:
+        logger.error("❌ Fout tijdens berekening van forward returns.")
+        logger.error(traceback.format_exc())
