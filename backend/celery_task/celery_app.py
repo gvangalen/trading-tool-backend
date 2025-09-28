@@ -91,6 +91,16 @@ celery.conf.beat_schedule = {
         "schedule": crontab(hour=2, minute=0),
     },
 
+    # ✅ Wekelijkse en maandelijkse/kwartaal marketdata
+    "save_market_data_30d": {
+    "task": "backend.celery_task.market_task.save_market_data_30d",
+    "schedule": crontab(hour=1, minute=45),
+    },
+    "save_market_data_90d": {
+    "task": "backend.celery_task.market_task.save_market_data_90d",
+    "schedule": crontab(hour=1, minute=50),
+    },
+
     # 🤖 AI-validatie en advies
     "validate_setups_task": {
         "task": "backend.ai_tasks.validation_task.validate_setups_task",
