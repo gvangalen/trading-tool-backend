@@ -554,3 +554,73 @@ async def save_price_history(data: list[dict]):
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan geschiedenis: {e}")
         raise HTTPException(status_code=500, detail="❌ Opslaan mislukt.")
+
+# ✅ Nieuw endpoint voor structured forward returns
+@router.get("/market_data/forward/structured")
+def get_forward_returns_structured():
+    """
+    Retourneert forward returns (BTC) per maand, kwartaal, week en jaar in frontend-friendly format.
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT period, start_date, change
+            FROM market_forward_returns
+            WHERE symbol = 'BTC'
+            ORDER BY start_date ASC
+        """)
+
+        rows = cur.fetchall()
+        conn.close()
+
+        # Init containers
+        result = {
+            "maand": [],
+            "kwartaal": [],
+            "week": [],
+            "jaar": []
+        }
+
+        # Voor elk type period apart groeperen op jaar
+        buckets = {
+            "month": defaultdict(lambda: [None] * 12),
+            "quarter": defaultdict(lambda: [None] * 4),
+            "week": defaultdict(lambda: [None] * 53),
+            "year": defaultdict(lambda: [None])  # Alleen 1 waarde per jaar
+        }
+
+        for period, start_date, change in rows:
+            year = start_date.year
+            if period == "month":
+                month = start_date.month
+                buckets["month"][year][month - 1] = float(change)
+            elif period == "quarter":
+                quarter = (start_date.month - 1) // 3
+                buckets["quarter"][year][quarter] = float(change)
+            elif period == "week":
+                week = int(start_date.strftime("%U"))  # Week 0 t/m 52
+                buckets["week"][year][week] = float(change)
+            elif period == "year":
+                buckets["year"][year][0] = float(change)
+
+        # Zet om naar frontend-format
+        for key, year_dict in buckets.items():
+            for year, values in sorted(year_dict.items()):
+                result_key = {
+                    "month": "maand",
+                    "quarter": "kwartaal",
+                    "week": "week",
+                    "year": "jaar"
+                }[key]
+                result[result_key].append({
+                    "year": year,
+                    "values": values
+                })
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij transformeren structured forward returns: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij structureren van forward returns.")
