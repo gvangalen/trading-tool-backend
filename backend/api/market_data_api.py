@@ -529,3 +529,28 @@ async def get_market_return_by_period(periode: str):
     except Exception as e:
         logger.error(f"❌ [returns/{periode}] Fout bij ophalen returns: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van returns.")
+
+@router.post("/market_data/history/save")
+async def save_price_history(data: list[dict]):
+    if not data:
+        raise HTTPException(status_code=400, detail="❌ Geen data ontvangen.")
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        inserted = 0
+
+        for row in data:
+            cur.execute("""
+                INSERT INTO btc_price_history (date, price)
+                VALUES (%s, %s)
+                ON CONFLICT (date) DO NOTHING
+            """, (row["date"], row["price"]))
+            inserted += 1
+
+        conn.commit()
+        logger.info(f"✅ {inserted} entries opgeslagen in btc_price_history.")
+        return {"inserted": inserted}
+    except Exception as e:
+        logger.error(f"❌ Fout bij opslaan geschiedenis: {e}")
+        raise HTTPException(status_code=500, detail="❌ Opslaan mislukt.")
