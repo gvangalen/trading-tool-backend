@@ -177,14 +177,14 @@ def save_forward_returns():
         logger.error("❌ Retries mislukt voor save_forward_returns.")
         logger.error(traceback.format_exc())
 
-# ✅ 5. Historische BTC-prijs ophalen via CoinGecko
+# ✅ 5. Historische BTC-prijs ophalen via CoinGecko (max 365 dagen i.v.m. gratis API)
 @shared_task(name="backend.celery_task.market_task.fetch_btc_price_history")
 def fetch_btc_price_history():
-    logger.info("⏳ Start ophalen BTC-prijsgeschiedenis...")
+    logger.info("⏳ Start ophalen BTC-prijsgeschiedenis (365 dagen)...")
     try:
         coingecko_id = ASSETS.get("BTC", "bitcoin")
         url = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart"
-        params = {"vs_currency": "usd", "days": "max"}
+        params = {"vs_currency": "usd", "days": "365", "interval": "daily"}  # <= aangepast
 
         response = requests.get(url, params=params, timeout=TIMEOUT)
         if response.status_code != 200:
