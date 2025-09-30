@@ -33,7 +33,8 @@ def fetch_weekly_reports_for_month():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT report_date, week_summary, best_setup,
-                       missed_opportunity, ai_reflection, outlook
+                       missed_opportunity, ai_reflection, outlook,
+                       macro_score, technical_score, setup_score, sentiment_score
                 FROM weekly_reports
                 WHERE report_date >= %s
                 ORDER BY report_date ASC
@@ -61,14 +62,22 @@ def save_monthly_report_to_db(date, report_data):
                     best_setup,
                     biggest_mistake,
                     ai_reflection,
-                    outlook
-                ) VALUES (%s,%s,%s,%s,%s,%s)
+                    outlook,
+                    macro_score,
+                    technical_score,
+                    setup_score,
+                    sentiment_score
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (report_date) DO UPDATE SET
                     month_summary = EXCLUDED.month_summary,
                     best_setup = EXCLUDED.best_setup,
                     biggest_mistake = EXCLUDED.biggest_mistake,
                     ai_reflection = EXCLUDED.ai_reflection,
-                    outlook = EXCLUDED.outlook
+                    outlook = EXCLUDED.outlook,
+                    macro_score = EXCLUDED.macro_score,
+                    technical_score = EXCLUDED.technical_score,
+                    setup_score = EXCLUDED.setup_score,
+                    sentiment_score = EXCLUDED.sentiment_score
             """, (
                 date,
                 report_data.get("month_summary"),
@@ -76,6 +85,10 @@ def save_monthly_report_to_db(date, report_data):
                 report_data.get("biggest_mistake"),
                 report_data.get("ai_reflection"),
                 report_data.get("outlook"),
+                report_data.get("macro_score"),
+                report_data.get("technical_score"),
+                report_data.get("setup_score"),
+                report_data.get("sentiment_score"),
             ))
             conn.commit()
         logger.info("✅ Maandrapport succesvol opgeslagen.")
@@ -99,16 +112,23 @@ def generate_monthly_report():
     month_summary = "📅 Samenvatting van de maand:\n\n" + "\n\n".join(
         [f"{r[0]}:\n{sanitize_field(r[1])}" for r in weekly_reports]
     )
+
     best_setup = "Setup B werkte meerdere keren goed op momentum reversal."
     biggest_mistake = "Verkeerde inschatting van macro-data tijdens FOMC week zorgde voor verlies."
+
     ai_reflection = (
         "De maand toonde hoge volatiliteit met sterke bullish ondertoon. "
         "Het combineren van technische breakouts met macro-data leverde de beste resultaten op. "
         "Toekomstige optimalisatie ligt in nauwkeurigere exit-strategieën en setupfiltering bij low volume."
     )
-    outlook = "Volgende maand mogelijk consolidatie na sterke stijging – waakzaam voor omslag macro."
 
+    outlook = "Volgende maand mogelijk consolidatie na sterke stijging – waakzaam voor omslag macro."
     today = datetime.now(timezone("UTC")).date()
+
+    # 🎯 Gemiddelde scores berekenen
+    def avg(index):
+        values = [r[index] for r in weekly_reports if r[index] is not None]
+        return round(sum(values) / len(values)) if values else None
 
     report_data = {
         "month_summary": sanitize_field(month_summary),
@@ -116,9 +136,13 @@ def generate_monthly_report():
         "biggest_mistake": sanitize_field(biggest_mistake),
         "ai_reflection": sanitize_field(ai_reflection),
         "outlook": sanitize_field(outlook),
+        "macro_score": avg(6),
+        "technical_score": avg(7),
+        "setup_score": avg(8),
+        "sentiment_score": avg(9),
     }
 
-    # 💾 JSON-backup in backend/backups
+    # 💾 JSON-backup
     try:
         backup_dir = "backend/backups"
         os.makedirs(backup_dir, exist_ok=True)
