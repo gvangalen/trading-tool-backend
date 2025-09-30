@@ -15,6 +15,7 @@ from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 def save_report_to_db(date, report_data):
     conn = get_db_connection()
     if not conn:
@@ -33,8 +34,12 @@ def save_report_to_db(date, report_data):
                     wyckoff_analysis,
                     recommendations,
                     conclusion,
-                    outlook
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    outlook,
+                    macro_score,
+                    technical_score,
+                    setup_score,
+                    sentiment_score
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (report_date) DO UPDATE SET
                     btc_summary = EXCLUDED.btc_summary,
                     macro_summary = EXCLUDED.macro_summary,
@@ -43,7 +48,11 @@ def save_report_to_db(date, report_data):
                     wyckoff_analysis = EXCLUDED.wyckoff_analysis,
                     recommendations = EXCLUDED.recommendations,
                     conclusion = EXCLUDED.conclusion,
-                    outlook = EXCLUDED.outlook
+                    outlook = EXCLUDED.outlook,
+                    macro_score = EXCLUDED.macro_score,
+                    technical_score = EXCLUDED.technical_score,
+                    setup_score = EXCLUDED.setup_score,
+                    sentiment_score = EXCLUDED.sentiment_score
             """, (
                 date,
                 report_data.get("btc_summary"),
@@ -53,7 +62,11 @@ def save_report_to_db(date, report_data):
                 report_data.get("wyckoff_analysis"),
                 report_data.get("recommendations"),
                 report_data.get("conclusion"),
-                report_data.get("outlook")
+                report_data.get("outlook"),
+                report_data.get("macro_score"),
+                report_data.get("technical_score"),
+                report_data.get("setup_score"),
+                report_data.get("sentiment_score"),
             ))
             conn.commit()
         logger.info("✅ Dagrapport succesvol opgeslagen in de database.")
@@ -64,6 +77,7 @@ def save_report_to_db(date, report_data):
     finally:
         conn.close()
 
+
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
     logger.info("📝 Genereren van dagelijks rapport gestart...")
@@ -72,7 +86,7 @@ def generate_daily_report():
         logger.error("❌ Dagrapport geannuleerd: databaseverbinding faalt.")
         return
 
-    scores = generate_scores(asset="BTC")
+    scores = generate_scores(asset="BTC") or {}
     setups = validate_setups(asset="BTC")
     strategy = generate_strategy_from_setup(setups[0]) if setups else None
 
@@ -91,7 +105,6 @@ def generate_daily_report():
         f"💬 Opmerking: {strategy.get('reden', '—')}"
     ) if strategy else "⚠️ Geen geldige strategie gegenereerd."
 
-    # ⬇️ Tijdelijke invulling voor ontbrekende rapportvelden
     report_data = {
         "btc_summary": "Samenvatting volgt...",
         "macro_summary": "Macrodata niet beschikbaar.",
@@ -100,7 +113,11 @@ def generate_daily_report():
         "wyckoff_analysis": "Wyckoff-analyse ontbreekt.",
         "recommendations": advies_blok,
         "conclusion": "Conclusie volgt...",
-        "outlook": "Vooruitblik nog niet beschikbaar."
+        "outlook": "Vooruitblik nog niet beschikbaar.",
+        "macro_score": scores.get("macro_score"),
+        "technical_score": scores.get("technical_score"),
+        "setup_score": scores.get("setup_score"),
+        "sentiment_score": scores.get("sentiment_score"),
     }
 
     try:
