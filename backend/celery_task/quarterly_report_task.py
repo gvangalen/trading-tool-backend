@@ -33,7 +33,8 @@ def fetch_monthly_reports_for_quarter():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT report_date, month_summary, best_setup,
-                       biggest_mistake, ai_reflection, outlook
+                       biggest_mistake, ai_reflection, outlook,
+                       macro_score, technical_score, setup_score, sentiment_score
                 FROM monthly_reports
                 WHERE report_date >= %s
                 ORDER BY report_date ASC
@@ -61,14 +62,22 @@ def save_quarterly_report_to_db(date, report_data):
                     top_performance,
                     major_mistake,
                     ai_reflection,
-                    future_outlook
-                ) VALUES (%s,%s,%s,%s,%s,%s)
+                    future_outlook,
+                    macro_score,
+                    technical_score,
+                    setup_score,
+                    sentiment_score
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (report_date) DO UPDATE SET
                     quarter_summary = EXCLUDED.quarter_summary,
                     top_performance = EXCLUDED.top_performance,
                     major_mistake = EXCLUDED.major_mistake,
                     ai_reflection = EXCLUDED.ai_reflection,
-                    future_outlook = EXCLUDED.future_outlook
+                    future_outlook = EXCLUDED.future_outlook,
+                    macro_score = EXCLUDED.macro_score,
+                    technical_score = EXCLUDED.technical_score,
+                    setup_score = EXCLUDED.setup_score,
+                    sentiment_score = EXCLUDED.sentiment_score
             """, (
                 date,
                 report_data.get("quarter_summary"),
@@ -76,6 +85,10 @@ def save_quarterly_report_to_db(date, report_data):
                 report_data.get("major_mistake"),
                 report_data.get("ai_reflection"),
                 report_data.get("future_outlook"),
+                report_data.get("macro_score"),
+                report_data.get("technical_score"),
+                report_data.get("setup_score"),
+                report_data.get("sentiment_score"),
             ))
             conn.commit()
         logger.info("✅ Kwartaalrapport succesvol opgeslagen.")
@@ -99,16 +112,23 @@ def generate_quarterly_report():
     quarter_summary = "📆 Kwartaaloverzicht:\n\n" + "\n\n".join(
         [f"{r[0]}:\n{sanitize_field(r[1])}" for r in monthly_reports]
     )
+
     top_performance = "Setup X leverde in april en mei samen +25% rendement op."
     major_mistake = "In juni werd volume overschat tijdens CPI-week – trade mislukte."
+
     ai_reflection = (
         "Het kwartaal toonde een duidelijke bullish shift met toenemend volume. "
         "Setups op breakouts werkten vooral goed in combinatie met macrotrends. "
         "Een verbeterpunt is het tijdig afbouwen bij overextensie."
     )
-    future_outlook = "Komend kwartaal lijkt correctie aannemelijk. Mogelijk range-periode met opleving richting eind september."
 
+    future_outlook = "Komend kwartaal lijkt correctie aannemelijk. Mogelijk range-periode met opleving richting eind september."
     today = datetime.now(timezone("UTC")).date()
+
+    # 🎯 Gemiddelde scores berekenen
+    def avg(index):
+        values = [r[index] for r in monthly_reports if r[index] is not None]
+        return round(sum(values) / len(values)) if values else None
 
     report_data = {
         "quarter_summary": sanitize_field(quarter_summary),
@@ -116,6 +136,10 @@ def generate_quarterly_report():
         "major_mistake": sanitize_field(major_mistake),
         "ai_reflection": sanitize_field(ai_reflection),
         "future_outlook": sanitize_field(future_outlook),
+        "macro_score": avg(6),
+        "technical_score": avg(7),
+        "setup_score": avg(8),
+        "sentiment_score": avg(9),
     }
 
     # 💾 JSON-backup in backend/backups
