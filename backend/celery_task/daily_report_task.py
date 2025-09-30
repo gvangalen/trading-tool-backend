@@ -1,3 +1,5 @@
+# ✅ backend/celery_task/daily_report_task.py
+
 import os
 import json
 import logging
@@ -5,11 +7,8 @@ from datetime import datetime
 from pytz import timezone
 from celery import shared_task
 
-# ✅ Juiste imports
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import generate_scores
-from backend.utils.setup_validator import validate_setups
-from backend.utils.ai_strategy_utils import generate_strategy_from_setup
+from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- toegevoegd
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
@@ -86,40 +85,15 @@ def generate_daily_report():
         logger.error("❌ Dagrapport geannuleerd: databaseverbinding faalt.")
         return
 
-    scores = generate_scores(asset="BTC") or {}
-    setups = validate_setups(asset="BTC")
-    strategy = generate_strategy_from_setup(setups[0]) if setups else None
-
-    if not scores or not setups or not strategy:
-        logger.warning("⚠️ Incomplete data voor rapport. Mogelijk ontbrekende scores of setups.")
-
     today = datetime.now(timezone("UTC")).date()
 
-    advies_blok = (
-        f"📋 Setup: {strategy.get('setup', 'n.v.t.')}\n"
-        f"📈 Trend: {strategy.get('trend', 'n.v.t.')}\n"
-        f"🎯 Entry: ${strategy.get('entry', 'n.v.t.')}\n"
-        f"🎯 Targets: {', '.join(map(str, strategy.get('targets', [])))}\n"
-        f"🛑 Stop-loss: ${strategy.get('stop_loss', 'n.v.t.')}\n"
-        f"⚠️ Risico: {strategy.get('risico', 'n.v.t.')}\n"
-        f"💬 Opmerking: {strategy.get('reden', '—')}"
-    ) if strategy else "⚠️ Geen geldige strategie gegenereerd."
+    try:
+        report_data = generate_daily_report_sections(symbol="BTC")
+    except Exception as e:
+        logger.error(f"❌ Fout bij genereren rapportsecties: {e}")
+        return
 
-    report_data = {
-        "btc_summary": "Samenvatting volgt...",
-        "macro_summary": "Macrodata niet beschikbaar.",
-        "setup_checklist": "Check setups handmatig in dashboard.",
-        "priorities": "Nog geen prioriteiten ingesteld.",
-        "wyckoff_analysis": "Wyckoff-analyse ontbreekt.",
-        "recommendations": advies_blok,
-        "conclusion": "Conclusie volgt...",
-        "outlook": "Vooruitblik nog niet beschikbaar.",
-        "macro_score": scores.get("macro_score"),
-        "technical_score": scores.get("technical_score"),
-        "setup_score": scores.get("setup_score"),
-        "sentiment_score": scores.get("sentiment_score"),
-    }
-
+    # ⏺ Backup opslaan (optioneel)
     try:
         with open(f"daily_report_{today}.json", "w") as f:
             json.dump(report_data, f, indent=2)
