@@ -218,6 +218,8 @@ def calculate_and_save_forward_returns():
 
     try:
         from backend.utils.db import get_db_connection  # import hier binnen de task
+        from datetime import date
+
         conn = get_db_connection()
         cur = conn.cursor()
 
@@ -227,6 +229,7 @@ def calculate_and_save_forward_returns():
         data = [{"date": row[0], "price": float(row[1])} for row in rows]
 
         payload = []
+        # Je kunt hier je periodes naar wens aanpassen
         periods = [7, 30, 90]  # 1w, 1m, 1q
 
         for i, row in enumerate(data):
@@ -242,8 +245,8 @@ def calculate_and_save_forward_returns():
                 payload.append({
                     "symbol": "BTC",
                     "period": f"{days}d",
-                    "start_date": start["date"],
-                    "end_date": end["date"],
+                    "start_date": start["date"],  # wordt zo meteen geconverteerd
+                    "end_date": end["date"],      # idem
                     "change": round(change, 2),
                     "avg_daily": round(avg_daily, 3)
                 })
@@ -251,6 +254,13 @@ def calculate_and_save_forward_returns():
         if not payload:
             logger.warning("⚠️ Geen forward return data om op te slaan.")
             return
+
+        # 🔧 Fix: converteer alle date-velden naar ISO strings voor JSON
+        for item in payload:
+            if isinstance(item.get("start_date"), date):
+                item["start_date"] = item["start_date"].isoformat()
+            if isinstance(item.get("end_date"), date):
+                item["end_date"] = item["end_date"].isoformat()
 
         save_url = f"{API_BASE_URL}/market_data/forward/save"
         logger.info(f"🧮 Versturen {len(payload)} forward returns...")
