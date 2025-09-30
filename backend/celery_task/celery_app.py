@@ -36,6 +36,7 @@ celery = Celery(
         "backend.celery_task.btc_price_history_task",
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task",
+        "backend.ai_tasks.daily_report_task",  # ✅ Toegevoegd
     ]
 )
 
@@ -93,12 +94,12 @@ celery.conf.beat_schedule = {
 
     # ✅ Wekelijkse en maandelijkse/kwartaal marketdata
     "save_market_data_30d": {
-    "task": "backend.celery_task.market_task.save_market_data_30d",
-    "schedule": crontab(hour=1, minute=45),
+        "task": "backend.celery_task.market_task.save_market_data_30d",
+        "schedule": crontab(hour=1, minute=45),
     },
     "save_market_data_90d": {
-    "task": "backend.celery_task.market_task.save_market_data_90d",
-    "schedule": crontab(hour=1, minute=50),
+        "task": "backend.celery_task.market_task.save_market_data_90d",
+        "schedule": crontab(hour=1, minute=50),
     },
 
     # 🤖 AI-validatie en advies
@@ -132,6 +133,12 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
         "schedule": crontab(hour=8, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
+
+    # ✅ NIEUW: AI-generatie dagrapport
+    "generate_daily_report_ai": {
+        "task": "backend.ai_tasks.daily_report_task.generate_daily_report_task",
+        "schedule": crontab(hour=7, minute=30),
+    },
 }
 
 # ✅ Expliciete imports (voor logging en debugging)
@@ -148,6 +155,7 @@ try:
     import backend.celery_task.btc_price_history_task
     import backend.ai_tasks.trading_advice_task
     import backend.ai_tasks.validation_task
+    import backend.ai_tasks.daily_report_task  # ✅ Toegevoegd
     logger.info("✅ Alle Celery taken succesvol geïmporteerd.")
 except ImportError:
     logger.error("❌ Fout bij importeren van Celery taken:")
