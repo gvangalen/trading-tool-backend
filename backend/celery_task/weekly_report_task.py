@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 def sanitize_field(val):
-    """Zorgt dat alle velden stringbaar zijn en geen fouten geven bij join of dump."""
     if val is None:
         return ""
     if isinstance(val, (dict, list)):
@@ -35,7 +34,8 @@ def fetch_daily_reports_for_week():
             cur.execute("""
                 SELECT report_date, btc_summary, macro_summary, setup_checklist,
                        priorities, wyckoff_analysis, recommendations,
-                       conclusion, outlook
+                       conclusion, outlook,
+                       macro_score, technical_score, setup_score, sentiment_score
                 FROM daily_reports
                 WHERE report_date >= %s
                 ORDER BY report_date ASC
@@ -63,14 +63,22 @@ def save_weekly_report_to_db(date, report_data):
                     best_setup,
                     missed_opportunity,
                     ai_reflection,
-                    outlook
-                ) VALUES (%s,%s,%s,%s,%s,%s)
+                    outlook,
+                    macro_score,
+                    technical_score,
+                    setup_score,
+                    sentiment_score
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (report_date) DO UPDATE SET
                     week_summary = EXCLUDED.week_summary,
                     best_setup = EXCLUDED.best_setup,
                     missed_opportunity = EXCLUDED.missed_opportunity,
                     ai_reflection = EXCLUDED.ai_reflection,
-                    outlook = EXCLUDED.outlook
+                    outlook = EXCLUDED.outlook,
+                    macro_score = EXCLUDED.macro_score,
+                    technical_score = EXCLUDED.technical_score,
+                    setup_score = EXCLUDED.setup_score,
+                    sentiment_score = EXCLUDED.sentiment_score
             """, (
                 date,
                 report_data.get("week_summary"),
@@ -78,6 +86,10 @@ def save_weekly_report_to_db(date, report_data):
                 report_data.get("missed_opportunity"),
                 report_data.get("ai_reflection"),
                 report_data.get("outlook"),
+                report_data.get("macro_score"),
+                report_data.get("technical_score"),
+                report_data.get("setup_score"),
+                report_data.get("sentiment_score"),
             ))
             conn.commit()
         logger.info("✅ Weekrapport succesvol opgeslagen in de database.")
@@ -98,7 +110,6 @@ def generate_weekly_report():
         logger.warning("⚠️ Geen daily reports beschikbaar voor deze week.")
         return {"status": "no_data"}
 
-    # 🔍 Simpele samenvatting op basis van btc_summary
     week_summary = "Overzicht van week:\n" + "\n\n".join(
         [f"{r[0]}:\n{sanitize_field(r[1])}" for r in daily_reports]
     )
@@ -106,7 +117,6 @@ def generate_weekly_report():
     best_setup = "Setup A – breakout gaf +15% rendement op woensdag."
     missed_opportunity = "Setup C werd niet geactiveerd door lage volatiliteit, maar had potentieel."
 
-    # 🧠 AI-reflectie (later vervangen door echte AI)
     ai_reflection = (
         "Deze week was de RSI vaak oversold terwijl volume achterbleef. "
         "De breakout-strategieën werkten goed in combinatie met macro-bullish sentiment. "
@@ -117,15 +127,23 @@ def generate_weekly_report():
     outlook = "Volgende week mogelijk voortzetting bullish trend zolang macro en volume dit ondersteunen."
     today = datetime.now(timezone("UTC")).date()
 
+    # 🎯 Scores aggregeren
+    def avg(index):
+        values = [r[index] for r in daily_reports if r[index] is not None]
+        return round(sum(values) / len(values)) if values else None
+
     report_data = {
         "week_summary": sanitize_field(week_summary),
         "best_setup": sanitize_field(best_setup),
         "missed_opportunity": sanitize_field(missed_opportunity),
         "ai_reflection": sanitize_field(ai_reflection),
         "outlook": sanitize_field(outlook),
+        "macro_score": avg(9),
+        "technical_score": avg(10),
+        "setup_score": avg(11),
+        "sentiment_score": avg(12),
     }
 
-    # 💾 JSON-backup opslaan in eigen map
     try:
         backup_dir = "backend/backups"
         os.makedirs(backup_dir, exist_ok=True)
@@ -136,7 +154,6 @@ def generate_weekly_report():
     except Exception as e:
         logger.warning(f"⚠️ Backup json maken mislukt: {e}")
 
-    # 📥 Opslaan in DB
     success = save_weekly_report_to_db(today, report_data)
 
     return {
