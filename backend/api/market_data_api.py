@@ -521,10 +521,11 @@ def get_week_returns():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        # 👇 hier '7d' gebruiken i.p.v. 'week'
         cur.execute("""
             SELECT start_date, change
             FROM market_forward_returns
-            WHERE symbol = 'BTC' AND period = 'week'
+            WHERE symbol = 'BTC' AND period = '7d'
             ORDER BY start_date ASC
         """)
         rows = cur.fetchall()
@@ -540,6 +541,7 @@ def get_week_returns():
                 data[year][week] = float(change)
 
         return [{"year": year, "values": values} for year, values in sorted(data.items())]
+
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen week returns: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen week returns.")
@@ -552,7 +554,7 @@ def get_month_returns():
         cur.execute("""
             SELECT start_date, change
             FROM market_forward_returns
-            WHERE symbol = 'BTC' AND period = 'maand'
+            WHERE symbol = 'BTC' AND period = '30d'
             ORDER BY start_date ASC
         """)
         rows = cur.fetchall()
@@ -579,7 +581,7 @@ def get_quarter_returns():
         cur.execute("""
             SELECT start_date, change
             FROM market_forward_returns
-            WHERE symbol = 'BTC' AND period = 'kwartaal'
+            WHERE symbol = 'BTC' AND period = '90d'
             ORDER BY start_date ASC
         """)
         rows = cur.fetchall()
@@ -606,7 +608,7 @@ def get_year_returns():
         cur.execute("""
             SELECT start_date, change
             FROM market_forward_returns
-            WHERE symbol = 'BTC' AND period = 'jaar'
+            WHERE symbol = 'BTC' AND period = '365d'
             ORDER BY start_date ASC
         """)
         rows = cur.fetchall()
