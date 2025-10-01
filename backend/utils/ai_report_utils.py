@@ -1,4 +1,4 @@
-from backend.utils.scoring_utils import generate_scores
+from backend.utils.scoring_utils import get_scores_for_symbol  
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 import datetime
@@ -6,7 +6,7 @@ import datetime
 def generate_daily_report_sections(symbol="BTC"):
     setup = get_latest_setup_for_symbol(symbol)
     strategy = generate_strategy_from_setup(setup)
-    scores = get_scores_for_symbol(symbol)
+    scores = get_scores_for_symbol(symbol)  
 
     return {
         "btc_summary": "BTC is stabiel vandaag met lichte stijgingen...",
