@@ -35,9 +35,8 @@ celery = Celery(
         "backend.celery_task.quarterly_report_task",
         "backend.celery_task.btc_price_history_task",
         "backend.ai_tasks.trading_advice_task",
-        "backend.ai_tasks.validation_task",
-        "backend.ai_tasks.daily_report_task",  # ✅ Toegevoegd
-    ]
+        "backend.ai_tasks.validation_task"
+        ]
 )
 
 # ✅ Algemene configuratie
