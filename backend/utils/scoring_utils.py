@@ -1,3 +1,4 @@
+# ✅ backend/utils/scoring_utils.py
 import logging
 import json
 from pathlib import Path
@@ -73,6 +74,39 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
     logger.info(f"✅ Scored {count} indicators (average: {avg_score})")
     return {"scores": scores, "total_score": avg_score}
 
+# ✅ Nieuw: wrapper voor gebruik in rapporten
+def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
+    """
+    Laad data (mock of later live uit DB), bereken macro-, technische en markt-scores.
+    Retourneer scores zoals nodig voor tradingrapport.
+    """
+    # 🔁 Simulatie / tijdelijk hardcoded data (later vervangen door DB-query)
+    data = {
+        "fear_greed_index": 77,
+        "btc_dominance": 52.1,
+        "dxy": 104.3,
+        "rsi": 63,
+        "volume": 8000000000,
+        "ma_200": 71000,
+        "price": 73000,
+        "change_24h": 1.2
+    }
+
+    macro_conf = load_config("config/macro_indicators_config.json")
+    tech_conf = load_config("config/technical_indicators_config.json")
+    market_conf = load_config("config/market_data_config.json")
+
+    macro = generate_scores(data, macro_conf)
+    technical = generate_scores(data, tech_conf)
+    market = generate_scores(data, market_conf)
+
+    return {
+        "macro_score": macro["total_score"],
+        "technical_score": technical["total_score"],
+        "setup_score": 1.0,  # ➕ later dynamisch ophalen via DB of validatie
+        "sentiment_score": market["total_score"]
+    }
+
 # ✅ Testfunctie voor lokaal testen
 def test_scoring_utils():
     test_data = {
@@ -100,3 +134,4 @@ def test_scoring_utils():
 
 if __name__ == "__main__":
     test_scoring_utils()
+    print("\n✅ Scores for symbol:\n", get_scores_for_symbol("BTC"))
