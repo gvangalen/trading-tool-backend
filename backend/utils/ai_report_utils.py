@@ -1,6 +1,4 @@
-# ✅ backend/utils/ai_report_utils.py
-
-from backend.utils.ai_score_utils import get_scores_for_symbol
+from backend.utils.scoring_utils import generate_scores
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 import datetime
