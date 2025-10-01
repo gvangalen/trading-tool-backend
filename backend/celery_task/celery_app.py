@@ -36,7 +36,7 @@ celery = Celery(
         "backend.celery_task.btc_price_history_task",
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task"
-        ]
+    ]
 )
 
 # ✅ Algemene configuratie
@@ -135,7 +135,7 @@ celery.conf.beat_schedule = {
 
     # ✅ NIEUW: AI-generatie dagrapport
     "generate_daily_report_ai": {
-        "task": "backend.ai_tasks.daily_report_task.generate_daily_report_task",
+        "task": "backend.celery_task.daily_report_task.generate_daily_report",
         "schedule": crontab(hour=7, minute=30),
     },
 }
@@ -154,7 +154,6 @@ try:
     import backend.celery_task.btc_price_history_task
     import backend.ai_tasks.trading_advice_task
     import backend.ai_tasks.validation_task
-    import backend.ai_tasks.daily_report_task  # ✅ Toegevoegd
     logger.info("✅ Alle Celery taken succesvol geïmporteerd.")
 except ImportError:
     logger.error("❌ Fout bij importeren van Celery taken:")
