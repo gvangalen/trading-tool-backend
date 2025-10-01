@@ -64,7 +64,7 @@ def prompt_for_wyckoff_analysis(setup):
     return f"""
 Geef een Wyckoff-analyse op basis van deze setup.
 Fase: {setup.get('wyckoff_phase', 'onbekend')}
-Beschrijving: {setup.get('description', '')}
+Beschrijving: {setup.get('explanation', '')}
 
 Is het distributie of accumulatie? Spring of test? Range of breakout?
 """
