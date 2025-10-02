@@ -12,15 +12,6 @@ logger = logging.getLogger(__name__)
 
 # === 🎯 Strategie genereren voor één setup ===
 def generate_strategy_from_setup(setup: dict) -> dict | None:
-    """
-    Genereert automatisch een strategie met GPT op basis van een setup.
-
-    Verwacht een setup-dict met minimaal:
-    - name, trend, timeframe, symbol, indicators, macro_score, technical_score, sentiment_score
-
-    Returns:
-        dict met keys: entry, targets (list), stop_loss, risk_reward, explanation
-    """
     try:
         setup_name = setup.get("name", "Onbekende setup")
         trend = setup.get("trend", "?")
@@ -51,13 +42,14 @@ Antwoord in correct JSON-formaat met deze keys:
 entry, targets (lijst), stop_loss, risk_reward, explanation
 """
 
-        response = openai.ChatCompletion.create(
+        # ✅ NIEUWE SYNTAX VOOR OPENAI v1+
+        response = openai.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
 
-        raw_content = response["choices"][0]["message"]["content"].strip()
+        raw_content = response.choices[0].message.content.strip()
 
         # ✅ JSON proberen te parsen
         try:
