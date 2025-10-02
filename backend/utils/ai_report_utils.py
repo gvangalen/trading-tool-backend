@@ -1,16 +1,17 @@
 import os
+import json
 import logging
-from openai import OpenAI
+import openai  # ✅ v1+ correcte import
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.scoring_utils import get_scores_for_symbol
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 
 logger = logging.getLogger(__name__)
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai.api_key = os.getenv("OPENAI_API_KEY")  # ✅ correcte API-key
 
 def generate_section(prompt: str) -> str:
     try:
-        response = client.chat.completions.create(
+        response = openai.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "Je bent een professionele crypto-analist. Schrijf in het Nederlands."},
@@ -105,19 +106,28 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         return {"error": "Setup data is ongeldig (geen dict)"}
 
     strategy = generate_strategy_from_setup(setup)
+
+    # 🔄 Zorg dat strategy een dict is
+    if isinstance(strategy, str):
+        try:
+            strategy = json.loads(strategy)
+        except Exception as e:
+            logger.error(f"❌ Strategie is geen JSON: {e} → waarde: {strategy}")
+            strategy = {}
+
     scores = get_scores_for_symbol(symbol)
 
     return {
-    "btc_summary": {"text": generate_section(prompt_for_btc_summary(setup, scores))},
-    "macro_summary": {"text": generate_section(prompt_for_macro_summary(scores))},
-    "setup_checklist": {"text": generate_section(prompt_for_setup_checklist(setup))},
-    "priorities": {"text": generate_section(prompt_for_priorities(setup, scores))},
-    "wyckoff_analysis": {"text": generate_section(prompt_for_wyckoff_analysis(setup))},
-    "recommendations": {"text": generate_section(prompt_for_recommendations(strategy))},
-    "conclusion": {"text": generate_section(prompt_for_conclusion(scores))},
-    "outlook": {"text": generate_section(prompt_for_outlook(setup))},
-    "macro_score": scores.get("macro_score", 0),
-    "technical_score": scores.get("technical_score", 0),
-    "setup_score": scores.get("setup_score", 0),
-    "sentiment_score": scores.get("sentiment_score", 0),
-}
+        "btc_summary": {"text": generate_section(prompt_for_btc_summary(setup, scores))},
+        "macro_summary": {"text": generate_section(prompt_for_macro_summary(scores))},
+        "setup_checklist": {"text": generate_section(prompt_for_setup_checklist(setup))},
+        "priorities": {"text": generate_section(prompt_for_priorities(setup, scores))},
+        "wyckoff_analysis": {"text": generate_section(prompt_for_wyckoff_analysis(setup))},
+        "recommendations": {"text": generate_section(prompt_for_recommendations(strategy))},
+        "conclusion": {"text": generate_section(prompt_for_conclusion(scores))},
+        "outlook": {"text": generate_section(prompt_for_outlook(setup))},
+        "macro_score": scores.get("macro_score", 0),
+        "technical_score": scores.get("technical_score", 0),
+        "setup_score": scores.get("setup_score", 0),
+        "sentiment_score": scores.get("sentiment_score", 0),
+    }
