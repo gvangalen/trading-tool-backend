@@ -1,18 +1,16 @@
-# ✅ backend/celery_task/daily_report_task.py
-
 import os
 import json
 import logging
 from datetime import datetime
 from pytz import timezone
 from celery import shared_task
-
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- toegevoegd
 from dotenv import load_dotenv
 
-# ✅ Zorg dat .env geladen is voor OpenAI
+# ✅ Zorg dat .env geladen is en API-key ingesteld is
 load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
