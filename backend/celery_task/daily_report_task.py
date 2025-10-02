@@ -1,13 +1,14 @@
 import os
 import json
 import logging
+from dotenv import load_dotenv
 import openai
 from datetime import datetime
 from pytz import timezone
 from celery import shared_task
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- toegevoegd
-from dotenv import load_dotenv
+
 
 # ✅ Zorg dat .env geladen is en API-key ingesteld is
 load_dotenv()
