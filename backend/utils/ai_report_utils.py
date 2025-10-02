@@ -20,6 +20,9 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 def generate_section(prompt: str, retries: int = 3, model: str = "gpt-4") -> str | None:
+    """
+    Genereert een tekstuele sectie via OpenAI met herhaalpogingen.
+    """
     for attempt in range(1, retries + 1):
         try:
             response = openai.ChatCompletion.create(
@@ -91,7 +94,9 @@ Is het distributie of accumulatie? Spring of test? Range of breakout?
 """
 
 
-def prompt_for_recommendations(strategy: dict) -> str:
+def prompt_for_recommendations(strategy: dict | None) -> str:
+    if not isinstance(strategy, dict):
+        return "Geen strategie beschikbaar door AI-fout."
     return f"""
 Wat is het tradingadvies op basis van deze strategie?
 
@@ -133,7 +138,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     strategy = generate_strategy_from_setup(setup)
     if not isinstance(strategy, dict):
         logger.error(f"❌ Strategie is geen dict: {type(strategy)} → waarde: {strategy}")
-        strategy = {}  # Fallback om crash te voorkomen
+        strategy = {}
 
     scores = get_scores_for_symbol(symbol)
 
@@ -150,5 +155,4 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "technical_score": scores.get("technical_score", 0),
         "setup_score": scores.get("setup_score", 0),
         "sentiment_score": scores.get("sentiment_score", 0),
-        "strategy_error": strategy if isinstance(strategy, str) else None,  # 👈 optioneel
     }
