@@ -34,7 +34,11 @@ def generate_section(prompt: str, retries: int = 3, model: str = "gpt-4") -> str
                 ],
                 temperature=0.7
             )
-            return response.choices[0].message.content.strip()
+            content = response.choices[0].message.content.strip()
+            if not content:
+                logger.warning(f"⚠️ Lege response van OpenAI bij poging {attempt}")
+                continue
+            return content
         except Exception as e:
             logger.warning(f"⚠️ Fout bij OpenAI-aanroep (poging {attempt}/{retries}): {e}")
     logger.error("❌ Alle pogingen om sectie te genereren zijn mislukt.")
@@ -146,14 +150,14 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📊 Setup: {setup.get('name', 'Onbekend')}, Scores: {scores}")
 
     return {
-        "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)),
-        "macro_summary": generate_section(prompt_for_macro_summary(scores)),
-        "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
-        "priorities": generate_section(prompt_for_priorities(setup, scores)),
-        "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
-        "recommendations": generate_section(prompt_for_recommendations(strategy)),
-        "conclusion": generate_section(prompt_for_conclusion(scores)),
-        "outlook": generate_section(prompt_for_outlook(setup)),
+        "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)) or "Samenvatting niet beschikbaar.",
+        "macro_summary": generate_section(prompt_for_macro_summary(scores)) or "Macro-analyse ontbreekt.",
+        "setup_checklist": generate_section(prompt_for_setup_checklist(setup)) or "Geen checklist beschikbaar.",
+        "priorities": generate_section(prompt_for_priorities(setup, scores)) or "Geen prioriteiten gegenereerd.",
+        "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)) or "Wyckoff-analyse ontbreekt.",
+        "recommendations": generate_section(prompt_for_recommendations(strategy)) or "Geen aanbevelingen beschikbaar.",
+        "conclusion": generate_section(prompt_for_conclusion(scores)) or "Geen conclusie beschikbaar.",
+        "outlook": generate_section(prompt_for_outlook(setup)) or "Geen vooruitblik beschikbaar.",
         "macro_score": scores.get("macro_score", 0),
         "technical_score": scores.get("technical_score", 0),
         "setup_score": scores.get("setup_score", 0),
