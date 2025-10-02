@@ -1,17 +1,22 @@
+# ✅ backend/utils/ai_strategy_utils.py
+
 import logging
-from dotenv import load_dotenv
-import openai
 import json
 import os
+from dotenv import load_dotenv
+from openai import OpenAI, OpenAIError
 
-# ✅ OpenAI API-sleutel instellen via omgeving
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# ✅ .env laden
+load_dotenv()
+
+# ✅ OpenAI-client instellen (v1+)
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ✅ Logging configureren
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# === 🎯 Strategie genereren voor één setup ===
+
 def generate_strategy_from_setup(setup: dict) -> dict | None:
     try:
         setup_name = setup.get("name", "Onbekende setup")
@@ -43,8 +48,8 @@ Antwoord in correct JSON-formaat met deze keys:
 entry, targets (lijst), stop_loss, risk_reward, explanation
 """
 
-        # ✅ NIEUWE SYNTAX VOOR OPENAI v1+
-        response = openai.chat.completions.create(
+        # ✅ Nieuwe syntax voor OpenAI client v1+
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
@@ -52,7 +57,6 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
 
         raw_content = response.choices[0].message.content.strip()
 
-        # ✅ JSON proberen te parsen
         try:
             strategy = json.loads(raw_content)
             logger.info(f"✅ Strategie gegenereerd voor setup '{setup_name}'")
@@ -61,42 +65,31 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
             logger.error(f"❌ JSON parse-fout voor setup '{setup_name}':\n{raw_content}")
             return None
 
+    except OpenAIError as e:
+        logger.error(f"❌ OpenAI fout bij setup '{setup.get('name')}': {e}")
+        return None
     except Exception as e:
         logger.error(f"❌ Fout bij strategie-generatie voor setup '{setup.get('name')}': {e}")
         return None
 
-# === 🧠 Strategieën genereren voor alle setups ===
+
 def generate_strategy_advice(setups, macro_score, technical_score, market_data):
-    """
-    Genereert een lijst van AI-strategieën op basis van setups + scores + marktdata.
-
-    Verwacht:
-    - setups: lijst van setup dicts met ten minste 'name', 'trend', 'timeframe', 'symbol'
-    - macro_score: gemiddelde macroscore (float)
-    - technical_score: gemiddelde technische score (float)
-    - market_data: dict met 'symbol', 'price', 'change_24h'
-
-    Returns:
-        lijst met strategieën per setup
-    """
     strategies = []
 
     for setup in setups:
-        # Voeg scores toe aan setup
         setup["macro_score"] = macro_score
         setup["technical_score"] = technical_score
         setup["sentiment_score"] = setup.get("score_breakdown", {}).get("sentiment", {}).get("score", 0)
 
         strategy = generate_strategy_from_setup(setup)
         if strategy:
-            strategy_obj = {
+            strategies.append({
                 "setup_name": setup.get("name"),
                 "symbol": setup.get("symbol"),
                 "timeframe": setup.get("timeframe"),
                 "trend": setup.get("trend"),
                 "strategy": strategy,
-            }
-            strategies.append(strategy_obj)
+            })
         else:
             logger.warning(f"⚠️ Geen strategie gegenereerd voor setup: {setup.get('name')}")
 
