@@ -108,16 +108,16 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     scores = get_scores_for_symbol(symbol)
 
     return {
-        "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)),
-        "macro_summary": generate_section(prompt_for_macro_summary(scores)),
-        "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
-        "priorities": generate_section(prompt_for_priorities(setup, scores)),
-        "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
-        "recommendations": generate_section(prompt_for_recommendations(strategy)),
-        "conclusion": generate_section(prompt_for_conclusion(scores)),
-        "outlook": generate_section(prompt_for_outlook(setup)),
-        "macro_score": scores.get("macro_score", 0),
-        "technical_score": scores.get("technical_score", 0),
-        "setup_score": scores.get("setup_score", 0),
-        "sentiment_score": scores.get("sentiment_score", 0),
-    }
+    "btc_summary": {"text": generate_section(prompt_for_btc_summary(setup, scores))},
+    "macro_summary": {"text": generate_section(prompt_for_macro_summary(scores))},
+    "setup_checklist": {"text": generate_section(prompt_for_setup_checklist(setup))},
+    "priorities": {"text": generate_section(prompt_for_priorities(setup, scores))},
+    "wyckoff_analysis": {"text": generate_section(prompt_for_wyckoff_analysis(setup))},
+    "recommendations": {"text": generate_section(prompt_for_recommendations(strategy))},
+    "conclusion": {"text": generate_section(prompt_for_conclusion(scores))},
+    "outlook": {"text": generate_section(prompt_for_outlook(setup))},
+    "macro_score": scores.get("macro_score", 0),
+    "technical_score": scores.get("technical_score", 0),
+    "setup_score": scores.get("setup_score", 0),
+    "sentiment_score": scores.get("sentiment_score", 0),
+}
