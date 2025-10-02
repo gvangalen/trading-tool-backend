@@ -9,7 +9,6 @@ from celery import shared_task
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- toegevoegd
 
-
 # ✅ Zorg dat .env geladen is en API-key ingesteld is
 load_dotenv()
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -17,6 +16,10 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ✅ Controleer of API-key bestaat
+if not openai.api_key:
+    logger.error("❌ OPENAI_API_KEY ontbreekt – controleer .env bestand.")
 
 
 def save_report_to_db(date, report_data):
@@ -97,11 +100,18 @@ def generate_daily_report():
         logger.error(f"❌ Fout bij genereren rapportsecties: {e}")
         return
 
-    # ⏺ Backup opslaan (optioneel)
+    # ✅ Extra check op lege of ongeldige report_data
+    if not isinstance(report_data, dict) or not report_data.get("btc_summary"):
+        logger.error("❌ Ongeldige report_data ontvangen – mogelijk lege response van OpenAI.")
+        return
+
+    # ✅ Backup opslaan in ./backups/
     try:
-        with open(f"daily_report_{today}.json", "w") as f:
+        backup_path = f"./backups/daily_report_{today}.json"
+        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+        with open(backup_path, "w") as f:
             json.dump(report_data, f, indent=2)
-        logger.info(f"🧾 Backup opgeslagen als daily_report_{today}.json")
+        logger.info(f"🧾 Backup opgeslagen als {backup_path}")
     except Exception as e:
         logger.warning(f"⚠️ Backup json maken mislukt: {e}")
 
