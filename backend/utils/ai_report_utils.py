@@ -20,17 +20,6 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 
 def generate_section(prompt: str, retries: int = 3, model: str = "gpt-4") -> str | None:
-    """
-    Genereert een tekstuele sectie via OpenAI met herhaalpogingen.
-
-    Args:
-        prompt (str): De prompt die naar GPT gestuurd wordt.
-        retries (int): Aantal pogingen bij fout.
-        model (str): Het OpenAI model dat gebruikt wordt (standaard: gpt-4).
-
-    Returns:
-        str | None: gegenereerde tekst of None bij falen.
-    """
     for attempt in range(1, retries + 1):
         try:
             response = openai.ChatCompletion.create(
@@ -142,6 +131,10 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         return {"error": "Setup data is ongeldig (geen dict)"}
 
     strategy = generate_strategy_from_setup(setup)
+    if not isinstance(strategy, dict):
+        logger.error(f"❌ Strategie is geen dict: {type(strategy)} → waarde: {strategy}")
+        strategy = {}  # Fallback om crash te voorkomen
+
     scores = get_scores_for_symbol(symbol)
 
     return {
@@ -157,4 +150,5 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "technical_score": scores.get("technical_score", 0),
         "setup_score": scores.get("setup_score", 0),
         "sentiment_score": scores.get("sentiment_score", 0),
+        "strategy_error": strategy if isinstance(strategy, str) else None,  # 👈 optioneel
     }
