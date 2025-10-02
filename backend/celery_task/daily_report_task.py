@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import openai
 from datetime import datetime
 from pytz import timezone
 from celery import shared_task
