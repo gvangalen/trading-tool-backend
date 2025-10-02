@@ -9,6 +9,10 @@ from celery import shared_task
 
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- toegevoegd
+from dotenv import load_dotenv
+
+# ✅ Zorg dat .env geladen is voor OpenAI
+load_dotenv()
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
