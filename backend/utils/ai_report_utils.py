@@ -1,5 +1,6 @@
 import os
 import logging
+import json
 from dotenv import load_dotenv
 from openai import OpenAI, OpenAIError
 
@@ -17,6 +18,18 @@ api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     logger.error("❌ OPENAI_API_KEY ontbreekt in .env of omgeving.")
 client = OpenAI(api_key=api_key)
+
+# === ✅ Helper: veilig casten naar dict ===
+def ensure_dict(obj, fallback=None, context=""):
+    if isinstance(obj, dict):
+        return obj
+    try:
+        if isinstance(obj, str) and obj.strip().startswith("{"):
+            return json.loads(obj)
+    except Exception as e:
+        logger.warning(f"❌ Kon geen dict maken van {context}: {e}")
+    logger.warning(f"⚠️ {context} is geen dict: {obj}")
+    return fallback or {}
 
 # === ✅ Prompt genereren via OpenAI (met retries en logging) ===
 def generate_section(prompt: str, retries: int = 3, model: str = "gpt-4") -> str | None:
@@ -80,9 +93,7 @@ Beschrijving: {setup.get('explanation', '')}
 Is het distributie of accumulatie? Spring of test? Range of breakout?"""
 
 def prompt_for_recommendations(strategy: dict | None) -> str:
-    if not isinstance(strategy, dict):
-        logger.warning(f"⚠️ Strategie is geen dict → type={type(strategy)} waarde={strategy}")
-        return "Geen strategie beschikbaar door AI-fout."
+    strategy = ensure_dict(strategy, fallback={}, context="strategy")
     entry = strategy.get("entry", "n.v.t.")
     targets = strategy.get("targets", "n.v.t.")
     stop_loss = strategy.get("stop_loss", "n.v.t.")
@@ -108,40 +119,15 @@ Timeframe: {setup.get('timeframe', 'Onbekend')}"""
 # === ✅ Dagrapportgenerator ===
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📥 Start rapportgeneratie voor: {symbol}")
-    
-    setup = get_latest_setup_for_symbol(symbol)
-    logger.info(f"[SETUP] Type={type(setup)} Value={setup}")
-    if not isinstance(setup, dict):
-        logger.error(f"❌ Ongeldige setup: {setup}")
-        return {"error": "Ongeldige setup data"}
 
-    scores = get_scores_for_symbol(symbol)
-    logger.info(f"[SCORES] Type={type(scores)} Value={scores}")
-    if not isinstance(scores, dict):
-        logger.warning("⚠️ Scores ongeldig of leeg. Default = lege dict.")
-        scores = {}
-
-    strategy = generate_strategy_from_setup(setup)
-    logger.info(f"[STRATEGY] Type={type(strategy)} Value={strategy}")
-
-    if not isinstance(strategy, dict):
-        logger.warning(f"⚠️ Ongeldige strategie gegenereerd: {strategy}")
-        return {
-            "btc_summary": "Samenvatting niet beschikbaar.",
-            "macro_summary": "Macro-analyse ontbreekt.",
-            "setup_checklist": "Geen checklist beschikbaar.",
-            "priorities": "Geen prioriteiten gegenereerd.",
-            "wyckoff_analysis": "Wyckoff-analyse ontbreekt.",
-            "recommendations": "Geen strategie beschikbaar door AI-fout.",
-            "conclusion": "Geen conclusie beschikbaar.",
-            "outlook": "Geen vooruitblik beschikbaar.",
-            "macro_score": scores.get("macro_score", 0),
-            "technical_score": scores.get("technical_score", 0),
-            "setup_score": scores.get("setup_score", 0),
-            "sentiment_score": scores.get("sentiment_score", 0),
-        }
-
-    logger.info(f"🧠 Prompt generatie gestart...")
+    setup = ensure_dict(get_latest_setup_for_symbol(symbol), context="setup")
+    scores = ensure_dict(get_scores_for_symbol(symbol), context="scores")
+    strategy = ensure_dict(generate_strategy_from_setup(setup), fallback={
+        "entry": "n.v.t.",
+        "targets": "n.v.t.",
+        "stop_loss": "n.v.t.",
+        "explanation": "Strategie kon niet gegenereerd worden."
+    }, context="strategy")
 
     return {
         "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)) or "Samenvatting niet beschikbaar.",
