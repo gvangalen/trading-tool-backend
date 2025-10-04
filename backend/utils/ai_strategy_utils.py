@@ -1,3 +1,5 @@
+# ✅ backend/utils/ai_strategy_utils.py
+
 import logging
 import json
 import os
@@ -101,15 +103,12 @@ def generate_strategy_advice(setups, macro_score, technical_score, market_data):
         setup["sentiment_score"] = setup.get("score_breakdown", {}).get("sentiment", {}).get("score", 0)
 
         strategy = generate_strategy_from_setup(setup)
-        if strategy:
-            strategies.append({
-                "setup_name": setup.get("name"),
-                "symbol": setup.get("symbol"),
-                "timeframe": setup.get("timeframe"),
-                "trend": setup.get("trend"),
-                "strategy": strategy,
-            })
-        else:
-            logger.warning(f"⚠️ Geen strategie gegenereerd voor setup: {setup.get('name')}")
+        strategies.append({
+            "setup_name": setup.get("name"),
+            "symbol": setup.get("symbol"),
+            "timeframe": setup.get("timeframe"),
+            "trend": setup.get("trend"),
+            "strategy": strategy,
+        })
 
     return strategies
