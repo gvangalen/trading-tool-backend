@@ -1,5 +1,6 @@
 import os
 import logging
+import json
 from backend.utils.db import get_db_connection
 
 logger = logging.getLogger(__name__)
@@ -24,15 +25,21 @@ def generate_ai_explanation(setup_id: int) -> str:
                 return "Geen uitleg beschikbaar."
 
             name, trend, indicators = row
-            indicators = indicators or []
+
+            # ✅ Indicators veilig converteren naar lijst
             if isinstance(indicators, str):
-                indicators = [s.strip() for s in indicators.split(",")]
+                try:
+                    indicators = json.loads(indicators)  # Probeer als JSON
+                except json.JSONDecodeError:
+                    indicators = [s.strip() for s in indicators.split(",")]  # Anders: split op komma
+
+            if not isinstance(indicators, list):
+                indicators = [str(indicators)]
 
             if AI_MODE == "mock":
                 explanation = f"De setup '{name}' volgt een {trend}-trend en gebruikt indicatoren zoals: {', '.join(indicators)}."
                 logger.info(f"🧪 Mock-modus actief: gegenereerde uitleg voor setup '{name}'")
 
-                # ✅ Uitleg opslaan in database
                 cur.execute("""
                     UPDATE setups
                     SET explanation = %s
@@ -42,7 +49,7 @@ def generate_ai_explanation(setup_id: int) -> str:
 
                 return explanation
 
-            # ✅ Alleen hier de OpenAI client gebruiken
+            # ✅ OpenAI import hier
             from openai import OpenAI
             client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -63,7 +70,6 @@ def generate_ai_explanation(setup_id: int) -> str:
             explanation = response.choices[0].message.content.strip()
             logger.info(f"✅ AI-uitleg gegenereerd voor setup {setup_id}")
 
-            # ✅ Opslaan in database
             cur.execute("""
                 UPDATE setups
                 SET explanation = %s
