@@ -1,5 +1,3 @@
-# ✅ backend/utils/ai_report_utils.py
-
 import os
 import logging
 from dotenv import load_dotenv
@@ -144,8 +142,13 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
 
     strategy = generate_strategy_from_setup(setup)
     if not isinstance(strategy, dict):
-        logger.error(f"❌ Strategie is geen dict: {type(strategy)} → waarde: {strategy}")
-        strategy = {}
+        logger.warning(f"⚠️ Strategie is geen dict, type: {type(strategy)} → waarde: {strategy}")
+        strategy = {
+            "entry": "n.v.t.",
+            "targets": "n.v.t.",
+            "stop_loss": "n.v.t.",
+            "explanation": "Strategie kon niet gegenereerd worden."
+        }
 
     logger.info(f"📊 Setup: {setup.get('name', 'Onbekend')}, Scores: {scores}")
 
