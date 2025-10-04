@@ -11,14 +11,18 @@ from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === ✅ OpenAI client initialiseren ===
-load_dotenv()
+# === ✅ OpenAI client initialiseren met expliciet pad naar .env ===
+load_dotenv(dotenv_path="/home/ubuntu/trading-tool-backend/.env")  # 👈 PAS DIT AAN als je een ander pad gebruikt
 api_key = os.getenv("OPENAI_API_KEY")
+
 if not api_key:
     logger.error("❌ OPENAI_API_KEY ontbreekt in .env of omgeving.")
+else:
+    logger.info(f"🔑 [ENV DEBUG] OPENAI_API_KEY lengte: {len(api_key)}")
+
 client = OpenAI(api_key=api_key)
 
-# === ✅ Prompt genereren via OpenAI (met retries en logging) ===
+# === ✅ Prompt genereren via OpenAI ===
 def generate_section(prompt: str, retries: int = 3, model: str = "gpt-4") -> str | None:
     for attempt in range(1, retries + 1):
         try:
