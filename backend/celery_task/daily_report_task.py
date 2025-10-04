@@ -17,6 +17,28 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def ensure_dict(obj, context=""):
+    """
+    Zorgt dat het resultaat een dict is. Probeer JSON te parsen als het een string is.
+    Retourneert een lege dict als het mislukt.
+    """
+    if isinstance(obj, dict):
+        return obj
+    if isinstance(obj, str):
+        try:
+            parsed = json.loads(obj)
+            if isinstance(parsed, dict):
+                return parsed
+            else:
+                logger.warning(f"⚠️ {context}: JSON geladen maar is geen dict.")
+                return {}
+        except json.JSONDecodeError:
+            logger.error(f"❌ {context}: Kan string niet parsen als JSON:\n{obj}")
+            return {}
+    logger.warning(f"⚠️ {context}: Ongeldig type ({type(obj)}), verwacht dict of str.")
+    return {}
+
+
 def save_report_to_db(date, report_data):
     conn = get_db_connection()
     if not conn:
@@ -90,14 +112,10 @@ def generate_daily_report():
     today = datetime.now(timezone("UTC")).date()
 
     try:
-        report_data = generate_daily_report_sections(symbol="BTC")
+        raw_data = generate_daily_report_sections(symbol="BTC")
+        report_data = ensure_dict(raw_data, context="generate_daily_report")
     except Exception as e:
         logger.error(f"❌ Fout bij genereren rapportsecties: {e}")
-        return
-
-    # ✅ Fix: controleer of report_data een dict is
-    if not isinstance(report_data, dict):
-        logger.error(f"❌ Ongeldig rapportformaat ontvangen: {type(report_data)} → {report_data}")
         return
 
     if not report_data.get("btc_summary"):
