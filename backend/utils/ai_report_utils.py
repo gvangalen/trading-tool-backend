@@ -151,3 +151,4 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
 
     logger.info("✅ Dagrapport gegenereerd en klaar voor opslag.")
     return report
+    
