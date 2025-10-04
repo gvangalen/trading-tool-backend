@@ -1,5 +1,3 @@
-# ✅ backend/celery_task/daily_report_task.py
-
 import os
 import json
 import logging
@@ -7,6 +5,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 from pytz import timezone
 from celery import shared_task
+
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- AI-rapport
 
@@ -96,8 +95,13 @@ def generate_daily_report():
         logger.error(f"❌ Fout bij genereren rapportsecties: {e}")
         return
 
-    if not isinstance(report_data, dict) or not report_data.get("btc_summary"):
-        logger.error("❌ Ongeldige report_data ontvangen – mogelijk lege response van OpenAI.")
+    # ✅ Fix: controleer of report_data een dict is
+    if not isinstance(report_data, dict):
+        logger.error(f"❌ Ongeldig rapportformaat ontvangen: {type(report_data)} → {report_data}")
+        return
+
+    if not report_data.get("btc_summary"):
+        logger.error("❌ Lege of onvolledige rapportinhoud ontvangen (btc_summary ontbreekt)")
         return
 
     try:
