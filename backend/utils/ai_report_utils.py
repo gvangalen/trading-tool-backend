@@ -1,7 +1,9 @@
+# ✅ backend/utils/ai_report_utils.py
+
 import os
 import logging
 from dotenv import load_dotenv
-import openai
+from openai import OpenAI, OpenAIError  # ✅ v1+ import
 
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.scoring_utils import get_scores_for_symbol
@@ -11,20 +13,21 @@ from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === ✅ Laad .env en controleer API-key ===
+# === ✅ Laad .env en initialiseer OpenAI client ===
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     logger.error("❌ OPENAI_API_KEY ontbreekt in .env of omgeving.")
-else:
-    openai.api_key = api_key
+client = OpenAI(api_key=api_key)
 
-
-# === ✅ Prompt genereren via OpenAI ===
+# === ✅ Prompt genereren via OpenAI (v1+ syntax) ===
 def generate_section(prompt: str, retries: int = 3, model: str = "gpt-4") -> str | None:
+    """
+    Genereert een tekstuele sectie via OpenAI met herhaalpogingen.
+    """
     for attempt in range(1, retries + 1):
         try:
-            response = openai.ChatCompletion.create(
+            response = client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": "Je bent een professionele crypto-analist. Schrijf in het Nederlands."},
@@ -37,8 +40,10 @@ def generate_section(prompt: str, retries: int = 3, model: str = "gpt-4") -> str
                 logger.warning(f"⚠️ Lege response van OpenAI bij poging {attempt}")
                 continue
             return content
+        except OpenAIError as e:
+            logger.warning(f"⚠️ OpenAI fout bij poging {attempt}/{retries}: {e}")
         except Exception as e:
-            logger.warning(f"⚠️ Fout bij OpenAI-aanroep (poging {attempt}/{retries}): {e}")
+            logger.warning(f"⚠️ Overige fout bij OpenAI-aanroep (poging {attempt}/{retries}): {e}")
     logger.error("❌ Alle pogingen om sectie te genereren zijn mislukt.")
     return None
 
@@ -57,14 +62,12 @@ Sentiment score: {scores.get('sentiment_score', 0)}
 Gebruik duidelijke bewoording en korte zinnen. Maximaal 5 regels.
 """
 
-
 def prompt_for_macro_summary(scores: dict) -> str:
     return f"""
 Vat de macro-economische situatie samen voor vandaag.
 Macro-score: {scores.get('macro_score', 0)}
 Noem eventueel DXY, rente, inflatie, marktstress of andere belangrijke signalen.
 """
-
 
 def prompt_for_setup_checklist(setup: dict) -> str:
     return f"""
@@ -77,7 +80,6 @@ Indicatoren: {setup.get('indicators', [])}
 Geef een checklist-style samenvatting (✓ of ✗ per punt).
 """
 
-
 def prompt_for_priorities(setup: dict, scores: dict) -> str:
     return f"""
 Wat zijn de belangrijkste aandachtspunten voor deze setup vandaag?
@@ -85,7 +87,6 @@ Wat zijn de belangrijkste aandachtspunten voor deze setup vandaag?
 Setup: {setup.get('name', 'Onbekend')}
 Scores: {scores}
 """
-
 
 def prompt_for_wyckoff_analysis(setup: dict) -> str:
     return f"""
@@ -95,7 +96,6 @@ Beschrijving: {setup.get('explanation', '')}
 
 Is het distributie of accumulatie? Spring of test? Range of breakout?
 """
-
 
 def prompt_for_recommendations(strategy: dict | None) -> str:
     if not isinstance(strategy, dict):
@@ -109,7 +109,6 @@ Stop-loss: {strategy.get('stop_loss', 'n.v.t.')}
 Uitleg: {strategy.get('explanation', 'Geen uitleg gegenereerd.')}
 """
 
-
 def prompt_for_conclusion(scores: dict) -> str:
     return f"""
 Vat het dagrapport samen in een slotparagraaf. Noem risico’s, kansen en aanbeveling.
@@ -118,7 +117,6 @@ Technisch: {scores.get('technical_score', 0)}
 Sentiment: {scores.get('sentiment_score', 0)}
 """
 
-
 def prompt_for_outlook(setup: dict) -> str:
     return f"""
 Wat is de verwachting voor de komende 2–5 dagen op basis van deze setup?
@@ -126,7 +124,6 @@ Wat is de verwachting voor de komende 2–5 dagen op basis van deze setup?
 Setup: {setup.get('name', 'Onbekend')}
 Timeframe: {setup.get('timeframe', 'Onbekend')}
 """
-
 
 # === ✅ Hoofdfunctie voor dagrapport ===
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
