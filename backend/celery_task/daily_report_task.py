@@ -7,19 +7,11 @@ from dotenv import load_dotenv
 from datetime import datetime
 from pytz import timezone
 from celery import shared_task
-from openai import OpenAI, OpenAIError
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- AI-rapport
 
-# ✅ .env laden
+# ✅ .env laden (voor consistentie, niet strikt nodig hier)
 load_dotenv()
-
-# ✅ OpenAI client aanmaken (v1-stijl)
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("❌ OPENAI_API_KEY ontbreekt – controleer je .env bestand.")
-
-client = OpenAI(api_key=api_key)
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
@@ -112,7 +104,7 @@ def generate_daily_report():
         backup_path = f"./backups/daily_report_{today}.json"
         os.makedirs(os.path.dirname(backup_path), exist_ok=True)
         with open(backup_path, "w") as f:
-            json.dump(report_data, f, indent=2, **{"default": str})  # ✅ Fix toegepast
+            json.dump(report_data, f, indent=2, default=str)
         logger.info(f"🧾 Backup opgeslagen als {backup_path}")
     except Exception as e:
         logger.warning(f"⚠️ Backup json maken mislukt: {e}")
