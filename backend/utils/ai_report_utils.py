@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # === ✅ OpenAI client initialiseren met expliciet pad naar .env ===
-load_dotenv(dotenv_path="/home/ubuntu/trading-tool-backend/.env")  # 👈 PAS DIT AAN als je een ander pad gebruikt
+load_dotenv(dotenv_path="/home/ubuntu/trading-tool-backend/backend/.env")  # 👈 PAS DIT AAN als je een ander pad gebruikt
 api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
