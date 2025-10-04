@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-import openai
+from openai import OpenAI
 import os
 import logging
 
@@ -9,9 +9,9 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ OpenAI API key en modus instellen
-openai.api_key = os.getenv("OPENAI_API_KEY")
-AI_MODE = os.getenv("AI_MODE", "live").lower()  # "live" of "mock"
+# ✅ AI-client en modus instellen
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+AI_MODE = os.getenv("AI_MODE", "live").lower()
 
 # ✅ Router
 router = APIRouter()
@@ -39,13 +39,11 @@ async def explain_setup(payload: SetupExplainRequest):
     trend = payload.trend
     indicators = payload.indicators
 
-    # ✅ Fallback modus
     if AI_MODE == "mock":
         logger.info("🤖 AIEX01: Fallback uitleg actief (AI_MODE=mock).")
         return {"explanation": fallback_explanation(name, indicators, trend)}
 
     try:
-        # ✅ Prompt bouwen
         indicators_str = ", ".join(indicators)
         prompt = (
             f"Geef een beknopte en begrijpelijke uitleg over de trading setup '{name}' "
@@ -57,15 +55,14 @@ async def explain_setup(payload: SetupExplainRequest):
 
         logger.debug(f"📤 AIEX-PROMPT: {prompt}")
 
-        # ✅ AI-aanroep
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=150,
         )
 
-        explanation = response['choices'][0]['message']['content'].strip()
+        explanation = response.choices[0].message.content.strip()
         logger.info(f"✅ AIEX02: Uitleg succesvol gegenereerd voor setup '{name}'.")
         return {"explanation": explanation}
 
