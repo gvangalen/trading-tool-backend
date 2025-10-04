@@ -63,9 +63,15 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
 
         try:
             strategy = json.loads(raw_content)
+
+            # ✅ Verifieer of het een dict is met verwachte keys
+            if not isinstance(strategy, dict):
+                raise ValueError("Response is geen dictionary")
+
             logger.info(f"✅ Strategie gegenereerd voor setup '{setup_name}'")
             return strategy
-        except json.JSONDecodeError:
+
+        except (json.JSONDecodeError, ValueError) as parse_error:
             logger.error(f"❌ JSON parse-fout voor setup '{setup_name}':\n{raw_content}")
             return {
                 "entry": "n.v.t.",
@@ -80,7 +86,7 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
     except Exception as e:
         logger.error(f"❌ Fout bij strategie-generatie voor setup '{setup.get('name')}': {e}")
 
-    # Fallback als er iets misgaat
+    # ⛑️ Fallback als alles faalt
     return {
         "entry": "n.v.t.",
         "targets": [],
@@ -103,6 +109,7 @@ def generate_strategy_advice(setups, macro_score, technical_score, market_data):
         setup["sentiment_score"] = setup.get("score_breakdown", {}).get("sentiment", {}).get("score", 0)
 
         strategy = generate_strategy_from_setup(setup)
+
         strategies.append({
             "setup_name": setup.get("name"),
             "symbol": setup.get("symbol"),
