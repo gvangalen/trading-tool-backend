@@ -1,5 +1,3 @@
-# ✅ backend/utils/ai_report_utils.py
-
 import os
 import logging
 from dotenv import load_dotenv
@@ -22,9 +20,6 @@ client = OpenAI(api_key=api_key)
 
 # === ✅ Prompt genereren via OpenAI (v1+ syntax) ===
 def generate_section(prompt: str, retries: int = 3, model: str = "gpt-4") -> str | None:
-    """
-    Genereert een tekstuele sectie via OpenAI met herhaalpogingen.
-    """
     for attempt in range(1, retries + 1):
         try:
             logger.debug(f"[DEBUG] OpenAI prompt attempt {attempt}: {prompt[:200]}...")
@@ -133,6 +128,7 @@ Setup: {setup.get('name', 'Onbekend')}
 Timeframe: {setup.get('timeframe', 'Onbekend')}
 """
 
+
 # === ✅ Hoofdfunctie voor dagrapport ===
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     setup = get_latest_setup_for_symbol(symbol)
@@ -160,28 +156,13 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
 
     # Debug: log alle prompts
     btc_prompt = prompt_for_btc_summary(setup, scores)
-    logger.info(f"[DEBUG] BTC prompt={btc_prompt}")
-
     macro_prompt = prompt_for_macro_summary(scores)
-    logger.info(f"[DEBUG] Macro prompt={macro_prompt}")
-
     checklist_prompt = prompt_for_setup_checklist(setup)
-    logger.info(f"[DEBUG] Checklist prompt={checklist_prompt}")
-
     priorities_prompt = prompt_for_priorities(setup, scores)
-    logger.info(f"[DEBUG] Priorities prompt={priorities_prompt}")
-
     wyckoff_prompt = prompt_for_wyckoff_analysis(setup)
-    logger.info(f"[DEBUG] Wyckoff prompt={wyckoff_prompt}")
-
-    recommendations_prompt = prompt_for_recommendations(strategy)
-    logger.info(f"[DEBUG] Recommendations prompt={recommendations_prompt}")
-
+    recommendations_prompt = prompt_for_recommendations(strategy)  # ✅ GEEN OpenAI-call meer hier
     conclusion_prompt = prompt_for_conclusion(scores)
-    logger.info(f"[DEBUG] Conclusion prompt={conclusion_prompt}")
-
     outlook_prompt = prompt_for_outlook(setup)
-    logger.info(f"[DEBUG] Outlook prompt={outlook_prompt}")
 
     logger.info(f"📊 Setup: {setup.get('name', 'Onbekend')}, Scores: {scores}")
 
@@ -191,7 +172,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "setup_checklist": generate_section(checklist_prompt) or "Geen checklist beschikbaar.",
         "priorities": generate_section(priorities_prompt) or "Geen prioriteiten gegenereerd.",
         "wyckoff_analysis": generate_section(wyckoff_prompt) or "Wyckoff-analyse ontbreekt.",
-        "recommendations": generate_section(recommendations_prompt) or "Geen aanbevelingen beschikbaar.",
+        "recommendations": recommendations_prompt or "Geen aanbevelingen beschikbaar.",  # ✅ FIXED
         "conclusion": generate_section(conclusion_prompt) or "Geen conclusie beschikbaar.",
         "outlook": generate_section(outlook_prompt) or "Geen vooruitblik beschikbaar.",
         "macro_score": scores.get("macro_score", 0),
