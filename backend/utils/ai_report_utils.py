@@ -93,11 +93,11 @@ Beschrijving: {setup.get('explanation', '')}
 Is het distributie of accumulatie? Spring of test? Range of breakout?"""
 
 def prompt_for_recommendations(strategy: dict | None) -> str:
-    strategy = ensure_dict(strategy, fallback={}, context="strategy")
+    strategy = ensure_dict(strategy, fallback={}, context="strategy (in prompt_for_recommendations)")
     entry = strategy.get("entry", "n.v.t.")
     targets = strategy.get("targets", "n.v.t.")
     stop_loss = strategy.get("stop_loss", "n.v.t.")
-    explanation = strategy.get("explanation", "Geen uitleg gegenereerd.")
+    explanation = strategy.get("explanation", "Strategie niet beschikbaar.")
     return f"""Wat is het tradingadvies op basis van deze strategie?
 
 Entry: {entry}
@@ -120,16 +120,21 @@ Timeframe: {setup.get('timeframe', 'Onbekend')}"""
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📥 Start rapportgeneratie voor: {symbol}")
 
-    setup = ensure_dict(get_latest_setup_for_symbol(symbol), context="setup")
-    scores = ensure_dict(get_scores_for_symbol(symbol), context="scores")
-    strategy = ensure_dict(generate_strategy_from_setup(setup), fallback={
+    setup_raw = get_latest_setup_for_symbol(symbol)
+    setup = ensure_dict(setup_raw, context="setup")
+
+    scores_raw = get_scores_for_symbol(symbol)
+    scores = ensure_dict(scores_raw, context="scores")
+
+    strategy_raw = generate_strategy_from_setup(setup)
+    strategy = ensure_dict(strategy_raw, fallback={
         "entry": "n.v.t.",
         "targets": "n.v.t.",
         "stop_loss": "n.v.t.",
         "explanation": "Strategie kon niet gegenereerd worden."
     }, context="strategy")
 
-    return {
+    report = {
         "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)) or "Samenvatting niet beschikbaar.",
         "macro_summary": generate_section(prompt_for_macro_summary(scores)) or "Macro-analyse ontbreekt.",
         "setup_checklist": generate_section(prompt_for_setup_checklist(setup)) or "Geen checklist beschikbaar.",
@@ -143,3 +148,6 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "setup_score": scores.get("setup_score", 0),
         "sentiment_score": scores.get("sentiment_score", 0),
     }
+
+    logger.info("✅ Dagrapport gegenereerd en klaar voor opslag.")
+    return report
