@@ -17,17 +17,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def generate_strategy_from_setup(setup: dict) -> dict:
+def generate_strategy_from_setup(setup: dict | str) -> dict:
     """
     Genereert een strategie vanuit een setup met OpenAI.
     Retourneert ALTIJD een dict (ook bij fouten of JSON-problemen).
     """
+    if not isinstance(setup, dict):
+        logger.error(f"❌ Ongeldig type voor setup: {type(setup)}. Verwacht dict.")
+        return {
+            "entry": "n.v.t.",
+            "targets": [],
+            "stop_loss": "n.v.t.",
+            "risk_reward": "n.v.t.",
+            "explanation": "Strategie kon niet worden gegenereerd – setup is ongeldig."
+        }
+
     try:
         setup_name = setup.get("name", "Onbekende setup")
         trend = setup.get("trend", "?")
         timeframe = setup.get("timeframe", "1D")
         symbol = setup.get("symbol", "BTC")
-        indicators = ", ".join(setup.get("indicators", [])) or "Geen"
+        indicators = ", ".join(setup.get("indicators", [])) if isinstance(setup.get("indicators"), list) else "Geen"
         macro_score = setup.get("macro_score", "?")
         technical_score = setup.get("technical_score", "?")
         sentiment_score = setup.get("sentiment_score", "?")
@@ -52,7 +62,6 @@ Antwoord in correct JSON-formaat met deze keys:
 entry, targets (lijst), stop_loss, risk_reward, explanation
 """
 
-        # ✅ Nieuwe syntax voor OpenAI client v1+
         response = client.chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
@@ -64,7 +73,6 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
         try:
             strategy = json.loads(raw_content)
 
-            # ✅ Verifieer of het een dict is met verwachte keys
             if not isinstance(strategy, dict):
                 raise ValueError("Response is geen dictionary")
 
@@ -82,11 +90,10 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
             }
 
     except OpenAIError as e:
-        logger.error(f"❌ OpenAI fout bij setup '{setup.get('name')}': {e}")
+        logger.error(f"❌ OpenAI fout bij setup '{setup.get('name', '?')}': {e}")
     except Exception as e:
-        logger.error(f"❌ Fout bij strategie-generatie voor setup '{setup.get('name')}': {e}")
+        logger.error(f"❌ Fout bij strategie-generatie voor setup '{setup.get('name', '?')}': {e}")
 
-    # ⛑️ Fallback als alles faalt
     return {
         "entry": "n.v.t.",
         "targets": [],
@@ -103,7 +110,15 @@ def generate_strategy_advice(setups, macro_score, technical_score, market_data):
     """
     strategies = []
 
+    if not isinstance(setups, list):
+        logger.error(f"❌ Ongeldig type voor setups: {type(setups)}. Verwacht lijst.")
+        return strategies
+
     for setup in setups:
+        if not isinstance(setup, dict):
+            logger.warning(f"⚠️ Setup is geen dict: {type(setup)} → wordt overgeslagen")
+            continue
+
         setup["macro_score"] = macro_score
         setup["technical_score"] = technical_score
         setup["sentiment_score"] = setup.get("score_breakdown", {}).get("sentiment", {}).get("score", 0)
