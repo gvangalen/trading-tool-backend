@@ -100,14 +100,21 @@ Is het distributie of accumulatie? Spring of test? Range of breakout?
 
 def prompt_for_recommendations(strategy: dict | None) -> str:
     if not isinstance(strategy, dict):
+        logger.warning(f"⚠️ Strategie is geen dict → type={type(strategy)} waarde={strategy}")
         return "Geen strategie beschikbaar door AI-fout."
+
+    entry = strategy.get("entry", "n.v.t.")
+    targets = strategy.get("targets", "n.v.t.")
+    stop_loss = strategy.get("stop_loss", "n.v.t.")
+    explanation = strategy.get("explanation", "Geen uitleg gegenereerd.")
+
     return f"""
 Wat is het tradingadvies op basis van deze strategie?
 
-Entry: {strategy.get('entry', 'n.v.t.')}
-Targets: {strategy.get('targets', 'n.v.t.')}
-Stop-loss: {strategy.get('stop_loss', 'n.v.t.')}
-Uitleg: {strategy.get('explanation', 'Geen uitleg gegenereerd.')}
+Entry: {entry}
+Targets: {targets}
+Stop-loss: {stop_loss}
+Uitleg: {explanation}
 """
 
 def prompt_for_conclusion(scores: dict) -> str:
