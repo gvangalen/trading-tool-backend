@@ -26,7 +26,13 @@ def generate_trading_advice():
         # ✅ 3. Haal marktdata uit database (alleen BTC)
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("SELECT price, change_24h FROM market_data WHERE symbol = 'BTC' ORDER BY timestamp DESC LIMIT 1")
+            cur.execute("""
+                SELECT price, change_24h 
+                FROM market_data 
+                WHERE symbol = 'BTC' 
+                ORDER BY timestamp DESC 
+                LIMIT 1
+            """)
             row = cur.fetchone()
         conn.close()
 
@@ -43,11 +49,14 @@ def generate_trading_advice():
         # ✅ 4. Genereer advies via AI
         advice = generate_strategy_advice(setups, macro_score, technical_score, market_data)
 
-        # ✅ 5. Sla advies op als JSON
+        # ✅ 5. JSON-fix: alles serialiseerbaar maken
+        advice = json.loads(json.dumps(advice, default=str))  # voorkomt TypeError bij int/None
+
+        # ✅ 6. Sla advies op als JSON-bestand
         with open("trading_advice.json", "w") as f:
             json.dump(advice, f, indent=2)
 
-        logger.info("✅ Tradingadvies succesvol gegenereerd")
+        logger.info("✅ Tradingadvies succesvol gegenereerd en opgeslagen.")
 
     except Exception as e:
         logger.error(f"❌ Fout in generate_trading_advice: {e}")
