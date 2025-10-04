@@ -1,25 +1,29 @@
+# ✅ backend/celery_task/daily_report_task.py
+
 import os
 import json
 import logging
 from dotenv import load_dotenv
-import openai
 from datetime import datetime
 from pytz import timezone
 from celery import shared_task
+from openai import OpenAI, OpenAIError
 from backend.utils.db import get_db_connection
-from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- toegevoegd
+from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- AI-rapport
 
-# ✅ Zorg dat .env geladen is en API-key ingesteld is
+# ✅ .env laden
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# ✅ OpenAI client aanmaken (v1-stijl)
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError("❌ OPENAI_API_KEY ontbreekt – controleer je .env bestand.")
+
+client = OpenAI(api_key=api_key)
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ✅ Controleer of API-key bestaat
-if not openai.api_key:
-    logger.error("❌ OPENAI_API_KEY ontbreekt – controleer .env bestand.")
 
 
 def save_report_to_db(date, report_data):
@@ -100,12 +104,10 @@ def generate_daily_report():
         logger.error(f"❌ Fout bij genereren rapportsecties: {e}")
         return
 
-    # ✅ Extra check op lege of ongeldige report_data
     if not isinstance(report_data, dict) or not report_data.get("btc_summary"):
         logger.error("❌ Ongeldige report_data ontvangen – mogelijk lege response van OpenAI.")
         return
 
-    # ✅ Backup opslaan in ./backups/
     try:
         backup_path = f"./backups/daily_report_{today}.json"
         os.makedirs(os.path.dirname(backup_path), exist_ok=True)
