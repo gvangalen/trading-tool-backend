@@ -1,5 +1,3 @@
-# ✅ backend/utils/ai_strategy_utils.py
-
 import logging
 import json
 import os
@@ -17,7 +15,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-def generate_strategy_from_setup(setup: dict) -> dict | None:
+def generate_strategy_from_setup(setup: dict) -> dict:
+    """
+    Genereert een strategie vanuit een setup met OpenAI.
+    Retourneert ALTIJD een dict (ook bij fouten of JSON-problemen).
+    """
     try:
         setup_name = setup.get("name", "Onbekende setup")
         trend = setup.get("trend", "?")
@@ -63,17 +65,34 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
             return strategy
         except json.JSONDecodeError:
             logger.error(f"❌ JSON parse-fout voor setup '{setup_name}':\n{raw_content}")
-            return None
+            return {
+                "entry": "n.v.t.",
+                "targets": [],
+                "stop_loss": "n.v.t.",
+                "risk_reward": "n.v.t.",
+                "explanation": "AI-output kon niet als JSON worden gelezen."
+            }
 
     except OpenAIError as e:
         logger.error(f"❌ OpenAI fout bij setup '{setup.get('name')}': {e}")
-        return None
     except Exception as e:
         logger.error(f"❌ Fout bij strategie-generatie voor setup '{setup.get('name')}': {e}")
-        return None
+
+    # Fallback als er iets misgaat
+    return {
+        "entry": "n.v.t.",
+        "targets": [],
+        "stop_loss": "n.v.t.",
+        "risk_reward": "n.v.t.",
+        "explanation": "Strategie kon niet worden gegenereerd door een fout."
+    }
 
 
 def generate_strategy_advice(setups, macro_score, technical_score, market_data):
+    """
+    Genereert een lijst van AI-strategieën op basis van setups + scores + marktdata.
+    Retourneert lijst met strategieën per setup.
+    """
     strategies = []
 
     for setup in setups:
