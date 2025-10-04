@@ -112,7 +112,7 @@ def generate_daily_report():
         backup_path = f"./backups/daily_report_{today}.json"
         os.makedirs(os.path.dirname(backup_path), exist_ok=True)
         with open(backup_path, "w") as f:
-            json.dump(report_data, f, indent=2)
+            json.dump(report_data, f, indent=2, **{"default": str})  # ✅ Fix toegepast
         logger.info(f"🧾 Backup opgeslagen als {backup_path}")
     except Exception as e:
         logger.warning(f"⚠️ Backup json maken mislukt: {e}")
