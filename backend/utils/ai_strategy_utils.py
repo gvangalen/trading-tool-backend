@@ -17,20 +17,33 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def ensure_dict(obj, context=""):
+    """
+    Zorgt dat het object een dictionary is. Als het een string is, probeer JSON te parsen.
+    """
+    if isinstance(obj, dict):
+        return obj
+    if isinstance(obj, str):
+        try:
+            parsed = json.loads(obj)
+            if isinstance(parsed, dict):
+                return parsed
+            else:
+                logger.warning(f"⚠️ {context}: JSON geladen maar is geen dict.")
+                return {}
+        except json.JSONDecodeError:
+            logger.error(f"❌ {context}: Kan string niet parsen als JSON:\n{obj}")
+            return {}
+    logger.warning(f"⚠️ {context}: Ongeldig type ({type(obj)}), verwacht dict of str.")
+    return {}
+
+
 def generate_strategy_from_setup(setup: dict | str) -> dict:
     """
     Genereert een strategie vanuit een setup met OpenAI.
     Retourneert ALTIJD een dict (ook bij fouten of JSON-problemen).
     """
-    if not isinstance(setup, dict):
-        logger.error(f"❌ Ongeldig type voor setup: {type(setup)}. Verwacht dict.")
-        return {
-            "entry": "n.v.t.",
-            "targets": [],
-            "stop_loss": "n.v.t.",
-            "risk_reward": "n.v.t.",
-            "explanation": "Strategie kon niet worden gegenereerd – setup is ongeldig."
-        }
+    setup = ensure_dict(setup, context="generate_strategy_from_setup")
 
     try:
         setup_name = setup.get("name", "Onbekende setup")
@@ -115,13 +128,13 @@ def generate_strategy_advice(setups, macro_score, technical_score, market_data):
         return strategies
 
     for setup in setups:
-        if not isinstance(setup, dict):
-            logger.warning(f"⚠️ Setup is geen dict: {type(setup)} → wordt overgeslagen")
-            continue
+        setup = ensure_dict(setup, context="generate_strategy_advice")
+
+        score_breakdown = ensure_dict(setup.get("score_breakdown", {}), context="score_breakdown")
 
         setup["macro_score"] = macro_score
         setup["technical_score"] = technical_score
-        setup["sentiment_score"] = setup.get("score_breakdown", {}).get("sentiment", {}).get("score", 0)
+        setup["sentiment_score"] = score_breakdown.get("sentiment", {}).get("score", 0)
 
         strategy = generate_strategy_from_setup(setup)
 
