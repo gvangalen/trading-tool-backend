@@ -11,18 +11,14 @@ from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === ✅ OpenAI client initialiseren met expliciet pad naar .env ===
-load_dotenv(dotenv_path="/home/ubuntu/trading-tool-backend/backend/.env")  # 👈 PAS DIT AAN als je een ander pad gebruikt
+# === ✅ OpenAI client initialiseren ===
+load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
-
 if not api_key:
     logger.error("❌ OPENAI_API_KEY ontbreekt in .env of omgeving.")
-else:
-    logger.info(f"🔑 [ENV DEBUG] OPENAI_API_KEY lengte: {len(api_key)}")
-
 client = OpenAI(api_key=api_key)
 
-# === ✅ Prompt genereren via OpenAI ===
+# === ✅ Prompt genereren via OpenAI (met retries en logging) ===
 def generate_section(prompt: str, retries: int = 3, model: str = "gpt-4") -> str | None:
     for attempt in range(1, retries + 1):
         try:
@@ -127,12 +123,22 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
 
     strategy = generate_strategy_from_setup(setup)
     logger.info(f"[STRATEGY] Type={type(strategy)} Value={strategy}")
+
     if not isinstance(strategy, dict):
-        strategy = {
-            "entry": "n.v.t.",
-            "targets": "n.v.t.",
-            "stop_loss": "n.v.t.",
-            "explanation": "Strategie kon niet gegenereerd worden."
+        logger.warning(f"⚠️ Ongeldige strategie gegenereerd: {strategy}")
+        return {
+            "btc_summary": "Samenvatting niet beschikbaar.",
+            "macro_summary": "Macro-analyse ontbreekt.",
+            "setup_checklist": "Geen checklist beschikbaar.",
+            "priorities": "Geen prioriteiten gegenereerd.",
+            "wyckoff_analysis": "Wyckoff-analyse ontbreekt.",
+            "recommendations": "Geen strategie beschikbaar door AI-fout.",
+            "conclusion": "Geen conclusie beschikbaar.",
+            "outlook": "Geen vooruitblik beschikbaar.",
+            "macro_score": scores.get("macro_score", 0),
+            "technical_score": scores.get("technical_score", 0),
+            "setup_score": scores.get("setup_score", 0),
+            "sentiment_score": scores.get("sentiment_score", 0),
         }
 
     logger.info(f"🧠 Prompt generatie gestart...")
