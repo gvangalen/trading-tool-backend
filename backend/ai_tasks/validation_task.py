@@ -7,6 +7,7 @@ from backend.utils.setup_validator import validate_setups  # ✅ correct pad
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+
 @shared_task(name="ai_tasks.validate_setups_task")
 def validate_setups_task():
     logger.info("🧠 Start setup-validatie (AI)")
@@ -17,13 +18,13 @@ def validate_setups_task():
             logger.warning("⚠️ Geen setups gevalideerd of lege lijst ontvangen")
             return
 
-        # Optioneel: resultaten opslaan als JSON voor inspectie/debugging
+        # ✅ Optioneel: resultaten opslaan als JSON voor inspectie/debugging
         try:
             with open("validated_setups.json", "w") as f:
-                json.dump(results, f, indent=2)
+                json.dump(results, f, indent=2, default=str)
             logger.info(f"✅ {len(results)} setups gevalideerd en opgeslagen naar validated_setups.json")
-        except Exception as write_err:
-            logger.warning(f"⚠️ Kon resultaten niet opslaan als JSON: {write_err}")
+        except (TypeError, json.JSONDecodeError) as write_err:
+            logger.warning(f"⚠️ Kon resultaten niet serialiseren naar JSON: {write_err}")
 
     except Exception as e:
         logger.error(f"❌ Fout in validate_setups_task: {e}")
