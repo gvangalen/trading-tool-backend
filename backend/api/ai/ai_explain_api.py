@@ -8,6 +8,7 @@ import logging
 # ✅ Logging instellen
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
 # ✅ AI-client en modus instellen
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -56,7 +57,7 @@ async def explain_setup(payload: SetupExplainRequest):
         logger.debug(f"📤 AIEX-PROMPT: {prompt}")
 
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="DEFAULT_MODEL",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=150,
