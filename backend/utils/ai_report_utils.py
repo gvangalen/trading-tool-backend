@@ -142,7 +142,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
         "priorities": generate_section(prompt_for_priorities(setup, scores)),
         "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
-        "recommendations": prompt_for_recommendations(strategy),
+        "recommendations": generate_section(prompt_for_recommendations(strategy)),  # ✅ FIX HIER
         "conclusion": generate_section(prompt_for_conclusion(scores)),
         "outlook": generate_section(prompt_for_outlook(setup)),
         "macro_score": scores.get("macro_score", 0),
