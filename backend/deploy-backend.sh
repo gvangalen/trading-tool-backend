@@ -35,7 +35,7 @@ else
   exit 1
 fi
 
-# ✅ Zorg dat OPENAI_API_KEY doorgegeven wordt aan Celery/PM2
+# ✅ Zorg dat OPENAI_API_KEY beschikbaar is
 export OPENAI_API_KEY="$OPENAI_API_KEY"
 
 # 🧯 Stop oude processen
@@ -57,23 +57,25 @@ pm2 start uvicorn \
   -- \
   backend.main:app --host 0.0.0.0 --port 5002
 
-# 🚀 Start Celery Worker
+# 🚀 Start Celery Worker (inclusief OPENAI_API_KEY via --env)
 echo "🚀 Start Celery Worker..."
 pm2 start "$(which celery)" \
   --name celery \
   --interpreter none \
   --cwd "$BACKEND_DIR" \
+  --env "OPENAI_API_KEY=$OPENAI_API_KEY" \
   --output "$LOG_DIR/celery.log" \
   --error "$LOG_DIR/celery.err.log" \
   -- \
   -A backend.celery_task.celery_app worker --loglevel=info
 
-# ⏰ Start Celery Beat (nu: celery-app)
+# ⏰ Start Celery Beat (nu: celery-app) met expliciete OPENAI_API_KEY
 echo "⏰ Start Celery Beat (celery-app)..."
 pm2 start "$(which celery)" \
   --name celery-app \
   --interpreter none \
   --cwd "$BACKEND_DIR" \
+  --env "OPENAI_API_KEY=$OPENAI_API_KEY" \
   --output "$LOG_DIR/celery-app.log" \
   --error "$LOG_DIR/celery-app.err.log" \
   -- \
