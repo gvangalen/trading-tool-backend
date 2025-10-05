@@ -40,7 +40,7 @@ jobs:
             echo "🛠️ Genereer .env bestand vanuit GitHub Secrets..."
             cd ~/trading-tool-backend/backend
 
-            cat <<EOF > .env
+            cat <<'EOF' > .env
 OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
 DB_HOST=${{ secrets.DB_HOST }}
 DB_PORT=${{ secrets.DB_PORT }}
@@ -54,7 +54,7 @@ CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0
 AI_MODE=live
 COINGECKO_URL=https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1
 VOLUME_URL=https://api.coingecko.com/api/v3/coins/{}/?localization=false
-ASSETS_JSON='{"BTC": "bitcoin"}'
+ASSETS_JSON={"BTC": "bitcoin"}
 EOF
 
             echo "📂 Inhoud van .env:"
