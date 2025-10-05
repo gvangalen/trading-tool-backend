@@ -2,6 +2,11 @@ import os
 import sys
 import logging
 import traceback
+
+# ✅ Voeg dit toe om .env correct in te laden (voor Celery!)
+from dotenv import load_dotenv
+load_dotenv()
+
 from celery import Celery
 from celery.schedules import crontab
 
