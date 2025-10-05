@@ -6,6 +6,7 @@ from openai import OpenAI, OpenAIError
 
 # ✅ .env laden
 load_dotenv()
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
 # ✅ OpenAI-client instellen (v1+)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -33,7 +34,7 @@ def ensure_dict(obj, context=""):
     return {}
 
 
-def generate_strategy_from_setup(setup: dict | str, model: str = "gpt-3.5-turbo") -> dict:
+def generate_strategy_from_setup(setup: dict | str, model: str = DEFAULT_MODEL) -> dict:
     setup = ensure_dict(setup, context="generate_strategy_from_setup")
 
     try:
