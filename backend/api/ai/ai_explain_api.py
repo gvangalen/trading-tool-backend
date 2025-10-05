@@ -8,13 +8,15 @@ import logging
 # ✅ Logging instellen
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
-# ✅ AI-client en modus instellen
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# ✅ Configuratie ophalen uit omgeving
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 AI_MODE = os.getenv("AI_MODE", "live").lower()
 
-# ✅ Router
+# ✅ OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# ✅ API router
 router = APIRouter()
 
 # ✅ Input model
@@ -23,7 +25,7 @@ class SetupExplainRequest(BaseModel):
     trend: str
     indicators: List[str]
 
-# ✅ Fallback uitlegfunctie
+# ✅ Fallback-functie als AI faalt
 def fallback_explanation(name: Optional[str], indicators: Optional[List[str]], trend: Optional[str]) -> str:
     name = name or "deze setup"
     indicators_str = ", ".join(indicators or ["onbekend"])
@@ -33,7 +35,7 @@ def fallback_explanation(name: Optional[str], indicators: Optional[List[str]], t
         f"{indicators_str}. Deze combinatie kan helpen om kansen te signaleren in deze marktomstandigheden."
     )
 
-# ✅ POST: Uitleg genereren voor een trading setup
+# ✅ POST endpoint voor uitleggeneratie
 @router.post("/setup")
 async def explain_setup(payload: SetupExplainRequest):
     name = payload.name
@@ -57,7 +59,7 @@ async def explain_setup(payload: SetupExplainRequest):
         logger.debug(f"📤 AIEX-PROMPT: {prompt}")
 
         response = client.chat.completions.create(
-            model="DEFAULT_MODEL",
+            model=DEFAULT_MODEL,  # ✅ Correct gebruik van de variabele
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
             max_tokens=150,
