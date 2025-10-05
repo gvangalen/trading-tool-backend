@@ -37,35 +37,29 @@ jobs:
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "🛠️ Genereer .env bestand vanuit GitHub Secrets..."
+            echo "🛠️ Maak nieuwe .env aan in backend-map..."
             cd ~/trading-tool-backend/backend
 
-            cat <<'EOF' > .env
-OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-DB_HOST=${{ secrets.DB_HOST }}
-DB_PORT=${{ secrets.DB_PORT }}
-DB_NAME=${{ secrets.DB_NAME }}
-DB_USER=${{ secrets.DB_USER }}
-DB_PASS=${{ secrets.DB_PASS }}
-ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}
-API_BASE_URL=http://127.0.0.1:5002/api
-CELERY_BROKER_URL=redis://127.0.0.1:6379/0
-CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0
-AI_MODE=live
-COINGECKO_URL=https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1
-VOLUME_URL=https://api.coingecko.com/api/v3/coins/{}/?localization=false
-ASSETS_JSON={"BTC": "bitcoin"}
-EOF
+            echo "🔐 Genereer .env met secrets"
+            echo "OPENAI_API_KEY=${OPENAI_API_KEY}" > .env
+            echo "DB_HOST=${DB_HOST}" >> .env
+            echo "DB_PORT=${DB_PORT}" >> .env
+            echo "DB_NAME=${DB_NAME}" >> .env
+            echo "DB_USER=${DB_USER}" >> .env
+            echo "DB_PASS=${DB_PASS}" >> .env
+            echo "ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}" >> .env
+            echo "API_BASE_URL=http://127.0.0.1:5002/api" >> .env
+            echo "CELERY_BROKER_URL=redis://127.0.0.1:6379/0" >> .env
+            echo "CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0" >> .env
+            echo "AI_MODE=live" >> .env
+            echo "COINGECKO_URL=https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1" >> .env
+            echo "VOLUME_URL=https://api.coingecko.com/api/v3/coins/{}/?localization=false" >> .env
+            echo "ASSETS_JSON={\"BTC\": \"bitcoin\"}" >> .env
 
-            echo "📂 Inhoud van .env:"
-            cat .env | sed 's/DB_PASS=.*/DB_PASS=****/' | sed 's/OPENAI_API_KEY=.*/OPENAI_API_KEY=****/' || echo "⚠️ Kon .env niet lezen"
+            echo "📂 Toon veilige versie van .env:"
+            grep -v 'PASS\|KEY' .env || echo "⚠️ Kon .env niet tonen"
 
-            echo "🔐 Export OPENAI_API_KEY voor shellsessie"
-            export OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}"
-
-            echo "🚀 Start backend deployment script..."
+            echo "🚦 Maak script uitvoerbaar en draai het"
             chmod +x deploy-backend.sh
             dos2unix deploy-backend.sh
             ./deploy-backend.sh
-
-            echo "✅ Backend deploy afgerond en services herstart"
