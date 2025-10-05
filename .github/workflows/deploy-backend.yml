@@ -30,24 +30,24 @@ jobs:
           source: "backend/deploy-backend.sh"
           target: "~/trading-tool-backend/backend/"
 
-      - name: 🚀 SSH en draai deploy-backend.sh op server
+      - name: 🚀 SSH: draai script en schrijf .env
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "🛠️ Maak nieuwe .env aan in backend-map..."
+            echo "📁 Ga naar backend map"
             cd ~/trading-tool-backend/backend
 
-            echo "🔐 Genereer .env met secrets"
-            echo "OPENAI_API_KEY=${OPENAI_API_KEY}" > .env
-            echo "DB_HOST=${DB_HOST}" >> .env
-            echo "DB_PORT=${DB_PORT}" >> .env
-            echo "DB_NAME=${DB_NAME}" >> .env
-            echo "DB_USER=${DB_USER}" >> .env
-            echo "DB_PASS=${DB_PASS}" >> .env
-            echo "ALPHA_VANTAGE_API_KEY=${ALPHA_VANTAGE_API_KEY}" >> .env
+            echo "🧾 Genereer .env bestand"
+            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
+            echo "DB_HOST=${{ secrets.DB_HOST }}" >> .env
+            echo "DB_PORT=${{ secrets.DB_PORT }}" >> .env
+            echo "DB_NAME=${{ secrets.DB_NAME }}" >> .env
+            echo "DB_USER=${{ secrets.DB_USER }}" >> .env
+            echo "DB_PASS=${{ secrets.DB_PASS }}" >> .env
+            echo "ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}" >> .env
             echo "API_BASE_URL=http://127.0.0.1:5002/api" >> .env
             echo "CELERY_BROKER_URL=redis://127.0.0.1:6379/0" >> .env
             echo "CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0" >> .env
@@ -56,10 +56,10 @@ jobs:
             echo "VOLUME_URL=https://api.coingecko.com/api/v3/coins/{}/?localization=false" >> .env
             echo "ASSETS_JSON={\"BTC\": \"bitcoin\"}" >> .env
 
-            echo "📂 Toon veilige versie van .env:"
-            grep -v 'PASS\|KEY' .env || echo "⚠️ Kon .env niet tonen"
+            echo "✅ .env gegenereerd:"
+            grep -v 'PASS\|KEY' .env || echo "(Verborgen om veiligheidsredenen)"
 
-            echo "🚦 Maak script uitvoerbaar en draai het"
+            echo "🚀 Maak script uitvoerbaar en draai het"
             chmod +x deploy-backend.sh
             dos2unix deploy-backend.sh
             ./deploy-backend.sh
