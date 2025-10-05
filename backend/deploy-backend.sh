@@ -35,6 +35,9 @@ else
   exit 1
 fi
 
+# ✅ Zorg dat OPENAI_API_KEY doorgegeven wordt aan Celery/PM2
+export OPENAI_API_KEY="$OPENAI_API_KEY"
+
 # 🧯 Stop oude processen
 pm2 delete backend || true
 pm2 delete celery || true
@@ -76,7 +79,6 @@ pm2 start "$(which celery)" \
   -- \
   -A backend.celery_task.celery_app beat --loglevel=info
 
-  
 # 💾 PM2 config opslaan
 pm2 save
 pm2 startup | grep sudo && echo "⚠️ Voer bovenstaande 'sudo' commando éénmalig uit voor autostart bij reboot"
