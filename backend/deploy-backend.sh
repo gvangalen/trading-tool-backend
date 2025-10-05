@@ -35,19 +35,17 @@ else
   exit 1
 fi
 
-# ✅ Check of OPENAI_API_KEY aanwezig is
+# ✅ Controleer of OPENAI_API_KEY bestaat
 if [ -z "$OPENAI_API_KEY" ]; then
-  echo "❌ OPENAI_API_KEY ontbreekt of is leeg in .env"
+  echo "❌ OPENAI_API_KEY ontbreekt in omgeving of .env"
   exit 1
-else
-  echo "✅ OPENAI_API_KEY geladen uit .env"
 fi
 
 # 🧯 Stop oude processen
 pm2 delete backend || true
 pm2 delete celery || true
 pm2 delete celery-beat || true
-pm2 delete celery-app || true  # 👈 vorige naam beat-proces
+pm2 delete celery-app || true  # 👈 oude naam
 
 sleep 2
 
@@ -62,23 +60,25 @@ pm2 start uvicorn \
   -- \
   backend.main:app --host 0.0.0.0 --port 5002
 
-# 🚀 Start Celery Worker (met OPENAI_API_KEY in env)
+# 🚀 Start Celery Worker (met env fix)
 echo "🚀 Start Celery Worker..."
-OPENAI_API_KEY="$OPENAI_API_KEY" pm2 start "$(which celery)" \
+pm2 start "$(which celery)" \
   --name celery \
   --interpreter none \
   --cwd "$BACKEND_DIR" \
+  --env "OPENAI_API_KEY=$OPENAI_API_KEY" \
   --output "$LOG_DIR/celery.log" \
   --error "$LOG_DIR/celery.err.log" \
   -- \
   -A backend.celery_task.celery_app worker --loglevel=info
 
-# ⏰ Start Celery Beat (met OPENAI_API_KEY in env)
+# ⏰ Start Celery Beat (nu: celery-app) met env fix
 echo "⏰ Start Celery Beat (celery-app)..."
-OPENAI_API_KEY="$OPENAI_API_KEY" pm2 start "$(which celery)" \
+pm2 start "$(which celery)" \
   --name celery-app \
   --interpreter none \
   --cwd "$BACKEND_DIR" \
+  --env "OPENAI_API_KEY=$OPENAI_API_KEY" \
   --output "$LOG_DIR/celery-app.log" \
   --error "$LOG_DIR/celery-app.err.log" \
   -- \
@@ -86,7 +86,7 @@ OPENAI_API_KEY="$OPENAI_API_KEY" pm2 start "$(which celery)" \
 
 # 💾 PM2 config opslaan
 pm2 save
-pm2 startup | grep sudo && echo "⚠️  Voer bovenstaande 'sudo' commando éénmalig uit voor autostart bij reboot"
+pm2 startup | grep sudo && echo "⚠️ Voer bovenstaande 'sudo' commando éénmalig uit voor autostart bij reboot"
 
 # ✅ Statusoverzicht
 echo ""
