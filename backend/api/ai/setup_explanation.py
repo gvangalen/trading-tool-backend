@@ -3,12 +3,15 @@ import logging
 import json
 from backend.utils.db import get_db_connection
 
+# ✅ Logging instellen
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# 🔧 Mock of Live modus via omgeving
+# ✅ AI-configuratie laden uit omgeving
 AI_MODE = os.getenv("AI_MODE", "live").lower()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")  # Nieuw toegevoegd
 logger.info(f"🧪 AI_MODE geladen: {AI_MODE}")
+logger.info(f"🤖 OPENAI_MODEL geladen: {OPENAI_MODEL}")
 
 def generate_ai_explanation(setup_id: int) -> str:
     conn = get_db_connection()
@@ -49,7 +52,7 @@ def generate_ai_explanation(setup_id: int) -> str:
 
                 return explanation
 
-            # ✅ OpenAI import hier
+            # ✅ OpenAI import en client
             from openai import OpenAI
             client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -61,7 +64,7 @@ def generate_ai_explanation(setup_id: int) -> str:
             )
 
             response = client.chat.completions.create(
-                model="gpt-4",
+                model=OPENAI_MODEL,  # ✅ gebruikt nu .env variabele
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=150,
