@@ -19,7 +19,7 @@ if not api_key:
     logger.error("❌ OPENAI_API_KEY ontbreekt in .env of omgeving.")
 client = OpenAI(api_key=api_key)
 
-DEFAULT_MODEL = "gpt-3.5-turbo"
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
 # === ✅ Helper: veilig casten naar dict ===
 def ensure_dict(obj, fallback=None, context=""):
