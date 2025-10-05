@@ -1,5 +1,3 @@
-# ✅ backend/utils/ai_strategy_utils.py
-
 import logging
 import json
 import os
@@ -18,9 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_dict(obj, context=""):
-    """
-    Zorgt dat het object een dictionary is. Als het een string is, probeer JSON te parsen.
-    """
     if isinstance(obj, dict):
         return obj
     if isinstance(obj, str):
@@ -38,11 +33,7 @@ def ensure_dict(obj, context=""):
     return {}
 
 
-def generate_strategy_from_setup(setup: dict | str) -> dict:
-    """
-    Genereert een strategie vanuit een setup met OpenAI.
-    Retourneert ALTIJD een dict (ook bij fouten of JSON-problemen).
-    """
+def generate_strategy_from_setup(setup: dict | str, model: str = "gpt-3.5-turbo") -> dict:
     setup = ensure_dict(setup, context="generate_strategy_from_setup")
 
     try:
@@ -75,13 +66,17 @@ Antwoord in correct JSON-formaat met deze keys:
 entry, targets (lijst), stop_loss, risk_reward, explanation
 """
 
+        logger.info(f"🧠 Strategie prompt voor {setup_name} (eerste 250 tekens): {prompt[:250]}")
+
         response = client.chat.completions.create(
-            model="gpt-4",
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7
         )
 
         raw_content = response.choices[0].message.content.strip()
+
+        logger.info(f"✅ AI antwoord ontvangen voor {setup_name} (lengte: {len(raw_content)}): {raw_content[:200]}...")
 
         try:
             strategy = json.loads(raw_content)
@@ -89,7 +84,7 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
             if not isinstance(strategy, dict):
                 raise ValueError("Response is geen dictionary")
 
-            logger.info(f"✅ Strategie gegenereerd voor setup '{setup_name}'")
+            logger.info(f"✅ Strategie succesvol geparsed voor setup '{setup_name}'")
             return strategy
 
         except (json.JSONDecodeError, ValueError) as parse_error:
@@ -117,10 +112,6 @@ entry, targets (lijst), stop_loss, risk_reward, explanation
 
 
 def generate_strategy_advice(setups, macro_score, technical_score, market_data):
-    """
-    Genereert een lijst van AI-strategieën op basis van setups + scores + marktdata.
-    Retourneert lijst met strategieën per setup.
-    """
     strategies = []
 
     if not isinstance(setups, list):
