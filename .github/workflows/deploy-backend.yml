@@ -21,6 +21,15 @@ jobs:
       - name: 📦 Checkout code
         uses: actions/checkout@v3
 
+      - name: 📤 Upload backend-code naar server
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "backend/**"
+          target: "~/trading-tool-backend/backend/"
+
       - name: 📤 Upload deploy-backend.sh naar server
         uses: appleboy/scp-action@v0.1.4
         with:
@@ -57,7 +66,7 @@ jobs:
             echo "ASSETS_JSON='{\"BTC\": \"bitcoin\"}'" >> .env
 
             echo "🔁 Verplaats .env naar juiste map en start deploy script..."
-            mv .env ../.env  # ← Zorg dat .env in backend-map komt
+            mv .env ../.env
 
             chmod +x deploy-backend.sh
             dos2unix deploy-backend.sh
