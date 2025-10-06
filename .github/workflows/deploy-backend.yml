@@ -39,9 +39,6 @@ jobs:
           script: |
             echo "🎯 Start remote deployment..."
             cd ~/trading-tool-backend/backend
-            chmod +x deploy-backend.sh
-            dos2unix deploy-backend.sh
-            ./deploy-backend.sh
 
             echo "🛠️ Genereer .env bestand vanuit GitHub Secrets..."
             echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > .env
@@ -59,8 +56,11 @@ jobs:
             echo "VOLUME_URL=https://api.coingecko.com/api/v3/coins/{}/?localization=false" >> .env
             echo "ASSETS_JSON='{\"BTC\": \"bitcoin\"}'" >> .env
 
-            echo "🔁 Herstart PM2 backend en celery..."
-            pm2 restart backend || pm2 start backend
-            pm2 restart celery || pm2 start celery
+            echo "🔁 Verplaats .env naar juiste map en start deploy script..."
+            mv .env ../.env  # ← Zorg dat .env in backend-map komt
+
+            chmod +x deploy-backend.sh
+            dos2unix deploy-backend.sh
+            ./deploy-backend.sh
 
             echo "✅ Deploy en restart volledig afgerond"
