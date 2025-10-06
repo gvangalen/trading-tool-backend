@@ -21,9 +21,9 @@ client = OpenAI(api_key=api_key)
 
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
-
-# === ✅ Helper: veilig casten naar dict ===
+# === ✅ Helpers ===
 def ensure_dict(obj, fallback=None, context=""):
+    """Zorgt dat we altijd een dict terugkrijgen."""
     if isinstance(obj, dict):
         return obj
     try:
@@ -39,6 +39,11 @@ def ensure_dict(obj, fallback=None, context=""):
     logger.warning(f"⚠️ {context} is geen dict: {obj}")
     return fallback or {}
 
+def safe_get(obj, key, default=None):
+    """Veilig .get() voor dicts."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return default
 
 # === ✅ Prompt genereren via OpenAI (met logging + retries) ===
 def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) -> str:
@@ -70,13 +75,11 @@ def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) 
     logger.error("❌ Alle pogingen om sectie te genereren zijn mislukt.")
     return "Fout: AI-generatie mislukt. Check limiet of logs."
 
-
 # === ✅ Prompt templates ===
 def prompt_for_macro_summary(scores: dict) -> str:
     return f"""Vat de macro-economische situatie samen voor vandaag.
-Macro-score: {scores.get('macro_score', 0)}
+Macro-score: {safe_get(scores, 'macro_score', 0)}
 Noem eventueel DXY, rente, inflatie, marktstress of andere belangrijke signalen."""
-
 
 # === ✅ Rapport-generator voor tests (alleen macro_summary actief)
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
@@ -99,22 +102,14 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     # 🔍 TEST: alleen macro_summary actief
     report = {
         "macro_summary": generate_section(prompt_for_macro_summary(scores)),
-        # "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)),
-        # "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
-        # "priorities": generate_section(prompt_for_priorities(setup, scores)),
-        # "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
-        # "recommendations": generate_section(prompt_for_recommendations(strategy)),
-        # "conclusion": generate_section(prompt_for_conclusion(scores)),
-        # "outlook": generate_section(prompt_for_outlook(setup)),
-        "macro_score": scores.get("macro_score", 0),
-        "technical_score": scores.get("technical_score", 0),
-        "setup_score": scores.get("setup_score", 0),
-        "sentiment_score": scores.get("sentiment_score", 0),
+        "macro_score": safe_get(scores, "macro_score", 0),
+        "technical_score": safe_get(scores, "technical_score", 0),
+        "setup_score": safe_get(scores, "setup_score", 0),
+        "sentiment_score": safe_get(scores, "sentiment_score", 0),
     }
 
     logger.info("✅ Dagrapport gegenereerd met macro_summary.")
     return report
-
 
 # === ✅ Test handmatig draaien vanaf CLI
 if __name__ == "__main__":
