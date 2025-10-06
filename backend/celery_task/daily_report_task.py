@@ -119,4 +119,4 @@ def generate_daily_report():
         logger.info("🎉 Dagrapport task succesvol afgerond.")
         return report_data
     else:
-        logger.error("❌ Dagrapport kon niet worden opgeslagen.")
+        logger.error("❌ Dagrapport kon niet worden opgeslagen.
