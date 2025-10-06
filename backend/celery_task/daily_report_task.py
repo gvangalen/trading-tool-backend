@@ -7,7 +7,7 @@ from pytz import timezone
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.ai_report_utils import generate_daily_report_sections  # <-- AI-rapport
+from backend.utils.ai_report_utils import generate_daily_report_sections
 
 # ✅ .env laden (voor consistentie, niet strikt nodig hier)
 load_dotenv()
@@ -39,8 +39,7 @@ def ensure_dict(obj, context=""):
     return {}
 
 
-def save_report_to_db(date, report_data):
-    conn = get_db_connection()
+def save_report_to_db(date, report_data, conn):
     if not conn:
         logger.error("❌ Geen databaseverbinding beschikbaar.")
         return False
@@ -105,7 +104,8 @@ def save_report_to_db(date, report_data):
 def generate_daily_report():
     logger.info("📝 Genereren van dagelijks rapport gestart...")
 
-    if not get_db_connection():
+    conn = get_db_connection()
+    if not conn:
         logger.error("❌ Dagrapport geannuleerd: databaseverbinding faalt.")
         return
 
@@ -123,8 +123,9 @@ def generate_daily_report():
         return
 
     try:
-        backup_path = f"./backups/daily_report_{today}.json"
-        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+        backup_dir = os.path.join(os.getcwd(), "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        backup_path = os.path.join(backup_dir, f"daily_report_{today}.json")
         with open(backup_path, "w") as f:
             json.dump(report_data, f, indent=2, default=str)
         logger.info(f"🧾 Backup opgeslagen als {backup_path}")
@@ -132,5 +133,10 @@ def generate_daily_report():
         logger.warning(f"⚠️ Backup json maken mislukt: {e}")
 
     logger.info("💾 Rapportinhoud gegenereerd. Opslaan...")
-    save_report_to_db(today, report_data)
-    return report_data
+    save_success = save_report_to_db(today, report_data, conn)
+
+    if save_success:
+        logger.info("🎉 Dagrapport task succesvol afgerond.")
+        return report_data
+    else:
+        logger.error("❌ Dagrapport kon niet worden opgeslagen.")
