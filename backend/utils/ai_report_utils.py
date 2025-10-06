@@ -34,43 +34,29 @@ def ensure_dict(obj, fallback=None, context=""):
     logger.warning(f"⚠️ {context} is geen dict: {obj}")
     return fallback or {}
 
-# === ✅ Testversie rapportgenerator (zonder AI) ===
+# === ✅ Testversie rapportgenerator (nog meer debug) ===
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📥 Start rapportgeneratie voor: {symbol}")
 
     setup_raw = get_latest_setup_for_symbol(symbol)
-    setup = ensure_dict(setup_raw, context="setup")
+    logger.info(f"📄 SETUP RAW TYPE = {type(setup_raw)} — VALUE = {setup_raw}")
 
     scores_raw = get_scores_for_symbol(symbol)
-    scores = ensure_dict(scores_raw, context="scores")
+    logger.info(f"📊 SCORES RAW TYPE = {type(scores_raw)} — VALUE = {scores_raw}")
 
-    strategy_raw = generate_strategy_from_setup(setup)
-    strategy = ensure_dict(strategy_raw, fallback={}, context="strategy")
-
-    # 🧪 Debug logs
-    logger.info("🧪 Volledige SETUP:")
-    logger.info(setup_raw)
-    logger.info("🧪 Dict SETUP:")
-    logger.info(setup)
-
-    logger.info("🧪 Volledige SCORES:")
-    logger.info(scores_raw)
-    logger.info("🧪 Dict SCORES:")
-    logger.info(scores)
-
-    logger.info("🧪 Volledige STRATEGY:")
-    logger.info(strategy_raw)
-    logger.info("🧪 Dict STRATEGY:")
-    logger.info(strategy)
+    strategy_raw = generate_strategy_from_setup(setup_raw)
+    logger.info(f"🧠 STRATEGY RAW TYPE = {type(strategy_raw)} — VALUE = {strategy_raw}")
 
     return {
         "status": "ok",
         "symbol": symbol,
-        "setup_type": type(setup).__name__,
-        "scores_type": type(scores).__name__,
-        "strategy_type": type(strategy).__name__,
-        "debug_note": "AI output tijdelijk uitgeschakeld voor foutopsporing"
+        "setup_raw_type": str(type(setup_raw)),
+        "scores_raw_type": str(type(scores_raw)),
+        "strategy_raw_type": str(type(strategy_raw)),
+        "debug_note": "Deep type/value check voor raw data",
     }
+
+    
 
 # === ✅ Test handmatig draaien vanaf CLI
 if __name__ == "__main__":
