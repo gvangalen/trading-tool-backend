@@ -2,7 +2,7 @@ import os
 import logging
 import json
 from dotenv import load_dotenv
-from openai import OpenAI, OpenAIError
+from openai import OpenAI
 
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.scoring_utils import get_scores_for_symbol
@@ -12,18 +12,13 @@ from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === ✅ OpenAI client initialiseren ===
+# === ✅ OpenAI client initialiseren (nog niet gebruikt in deze testversie)
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    logger.error("❌ OPENAI_API_KEY ontbreekt in .env of omgeving.")
 client = OpenAI(api_key=api_key)
 
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
-
-# === ✅ Helpers ===
+# === ✅ Helper: veilig casten naar dict ===
 def ensure_dict(obj, fallback=None, context=""):
-    """Zorgt dat we altijd een dict terugkrijgen."""
     if isinstance(obj, dict):
         return obj
     try:
@@ -39,49 +34,7 @@ def ensure_dict(obj, fallback=None, context=""):
     logger.warning(f"⚠️ {context} is geen dict: {obj}")
     return fallback or {}
 
-def safe_get(obj, key, default=None):
-    """Veilig .get() voor dicts."""
-    if isinstance(obj, dict):
-        return obj.get(key, default)
-    return default
-
-# === ✅ Prompt genereren via OpenAI (met logging + retries) ===
-def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) -> str:
-    for attempt in range(1, retries + 1):
-        try:
-            logger.info(f"🔍 [AI Prompt Attempt {attempt}] Prompt (eerste 250 tekens): {prompt[:250]}")
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "Je bent een professionele crypto-analist. Schrijf in het Nederlands."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.7
-            )
-
-            # 🧪 Log de volledige OpenAI response
-            logger.info(f"🔍 Volledige OpenAI response: {response}")
-
-            content = response.choices[0].message.content.strip()
-            logger.info(f"✅ [OpenAI] Antwoord gegenereerd (lengte: {len(content)}): {content[:200]}...")
-            if not content:
-                logger.warning(f"⚠️ Lege response van OpenAI bij poging {attempt}")
-                continue
-            return content
-        except OpenAIError as e:
-            logger.warning(f"⚠️ OpenAI fout bij poging {attempt}/{retries}: {e}")
-        except Exception as e:
-            logger.warning(f"⚠️ Onverwachte fout bij OpenAI-aanroep (poging {attempt}/{retries}): {e}")
-    logger.error("❌ Alle pogingen om sectie te genereren zijn mislukt.")
-    return "Fout: AI-generatie mislukt. Check limiet of logs."
-
-# === ✅ Prompt templates ===
-def prompt_for_macro_summary(scores: dict) -> str:
-    return f"""Vat de macro-economische situatie samen voor vandaag.
-Macro-score: {safe_get(scores, 'macro_score', 0)}
-Noem eventueel DXY, rente, inflatie, marktstress of andere belangrijke signalen."""
-
-# === ✅ Rapport-generator voor tests (alleen macro_summary actief)
+# === ✅ Testversie rapportgenerator (zonder AI) ===
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📥 Start rapportgeneratie voor: {symbol}")
 
@@ -94,22 +47,30 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     strategy_raw = generate_strategy_from_setup(setup)
     strategy = ensure_dict(strategy_raw, fallback={}, context="strategy")
 
-    # 🧪 Debug log – toon alle ruwe data
-    logger.info(f"🧪 setup = {json.dumps(setup, indent=2)}")
-    logger.info(f"🧪 scores = {json.dumps(scores, indent=2)}")
-    logger.info(f"🧪 strategy = {json.dumps(strategy, indent=2)}")
+    # 🧪 Debug logs
+    logger.info("🧪 Volledige SETUP:")
+    logger.info(setup_raw)
+    logger.info("🧪 Dict SETUP:")
+    logger.info(setup)
 
-    # 🔍 TEST: alleen macro_summary actief
-    report = {
-        "macro_summary": generate_section(prompt_for_macro_summary(scores)),
-        "macro_score": safe_get(scores, "macro_score", 0),
-        "technical_score": safe_get(scores, "technical_score", 0),
-        "setup_score": safe_get(scores, "setup_score", 0),
-        "sentiment_score": safe_get(scores, "sentiment_score", 0),
+    logger.info("🧪 Volledige SCORES:")
+    logger.info(scores_raw)
+    logger.info("🧪 Dict SCORES:")
+    logger.info(scores)
+
+    logger.info("🧪 Volledige STRATEGY:")
+    logger.info(strategy_raw)
+    logger.info("🧪 Dict STRATEGY:")
+    logger.info(strategy)
+
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "setup_type": type(setup).__name__,
+        "scores_type": type(scores).__name__,
+        "strategy_type": type(strategy).__name__,
+        "debug_note": "AI output tijdelijk uitgeschakeld voor foutopsporing"
     }
-
-    logger.info("✅ Dagrapport gegenereerd met macro_summary.")
-    return report
 
 # === ✅ Test handmatig draaien vanaf CLI
 if __name__ == "__main__":
