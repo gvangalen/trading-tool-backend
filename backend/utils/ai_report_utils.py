@@ -7,6 +7,7 @@ from openai import OpenAI, OpenAIError
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.scoring_utils import get_scores_for_symbol
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
+from backend.utils.json_utils import sanitize_json_input  # ✅ NIEUW
 
 # === ✅ Logging ===
 logging.basicConfig(level=logging.INFO)
@@ -22,22 +23,6 @@ client = OpenAI(api_key=api_key)
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
 # === ✅ Helpers ===
-def ensure_dict(obj, fallback=None, context=""):
-    if isinstance(obj, dict):
-        return obj
-    try:
-        if isinstance(obj, str):
-            obj = obj.strip()
-            if obj.startswith("{"):
-                return json.loads(obj)
-            else:
-                logger.warning(f"⚠️ {context} was string zonder JSON: '{obj}'")
-                return fallback or {"error": obj}
-    except Exception as e:
-        logger.warning(f"❌ Kon geen dict maken van {context}: {e}")
-    logger.warning(f"⚠️ {context} is geen dict: {obj}")
-    return fallback or {}
-
 def safe_get(obj, key, fallback="–"):
     if isinstance(obj, dict):
         return obj.get(key, fallback)
@@ -105,7 +90,7 @@ Beschrijving: {safe_get(setup, 'explanation')}
 Is het distributie of accumulatie? Spring of test? Range of breakout?"""
 
 def prompt_for_recommendations(strategy: dict) -> str:
-    strategy = ensure_dict(strategy, fallback={}, context="strategy (in prompt_for_recommendations)")
+    strategy = sanitize_json_input(strategy, context="strategy (prompt_for_recommendations)")  # ✅
     return f"""Wat is het tradingadvies op basis van deze strategie?
 
 Entry: {safe_get(strategy, 'entry')}
@@ -129,19 +114,14 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📥 Start rapportgeneratie voor: {symbol}")
 
     setup_raw = get_latest_setup_for_symbol(symbol)
-    setup = ensure_dict(setup_raw, context="setup")
+    setup = sanitize_json_input(setup_raw, context="setup")  # ✅
 
     scores_raw = get_scores_for_symbol(symbol)
-    scores = ensure_dict(scores_raw, context="scores")
+    scores = sanitize_json_input(scores_raw, context="scores")  # ✅
 
     strategy_raw = generate_strategy_from_setup(setup)
     logger.info(f"🧪 Ruwe strategy_raw = {strategy_raw} ({type(strategy_raw)})")
-    strategy = ensure_dict(strategy_raw, fallback={
-        "entry": "n.v.t.",
-        "targets": "n.v.t.",
-        "stop_loss": "n.v.t.",
-        "explanation": "Strategie kon niet gegenereerd worden."
-    }, context="strategy")
+    strategy = sanitize_json_input(strategy_raw, context="strategy")  # ✅
 
     logger.info(f"📄 Setup = {setup} ({type(setup)})")
     logger.info(f"📊 Scores = {scores} ({type(scores)})")
