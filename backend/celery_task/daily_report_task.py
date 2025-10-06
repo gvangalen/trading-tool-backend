@@ -16,7 +16,7 @@ load_dotenv()
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
+dit werkt allemaal voor geen meter man ;x
 
 def save_report_to_db(date, report_data, conn):
     if not conn:
