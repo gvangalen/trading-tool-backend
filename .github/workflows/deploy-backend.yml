@@ -42,7 +42,7 @@ jobs:
           source: "backend/deploy-backend.sh"
           target: "~/trading-tool-backend/backend/"
 
-           - name: 🚀 SSH en draai deploy-backend.sh op server
+      - name: 🚀 SSH en draai deploy-backend.sh op server
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.HOST }}
