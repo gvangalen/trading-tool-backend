@@ -108,36 +108,18 @@ def prompt_for_outlook(setup) -> str:
 Setup: {safe_get(setup, 'name')}
 Timeframe: {safe_get(setup, 'timeframe')}"""
 
-# === ✅ Belangrijk: verbeterde sanitize_json_input
-def sanitize_json_input(obj, context="onbekend"):
-    if isinstance(obj, dict):
-        return obj
-    if isinstance(obj, str):
-        try:
-            parsed = json.loads(obj)
-            if isinstance(parsed, dict):
-                return parsed
-            else:
-                logger.warning(f"⚠️ {context}: Parsed string is geen dict: {parsed}")
-                return {}
-        except Exception as e:
-            logger.error(f"❌ {context}: Fout bij JSON-parsen van string: {e}")
-            return {}
-    logger.warning(f"⚠️ {context}: Verwacht dict of str, maar kreeg {type(obj)} → {obj}")
-    return {}
-
 # === ✅ Dagrapportgenerator
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📥 Start rapportgeneratie voor: {symbol}")
 
-    # 📦 Data ophalen
+    # 📦 Data ophalen en sanitiseren
     setup_raw = get_latest_setup_for_symbol(symbol)
-    scores_raw = get_scores_for_symbol(symbol)
-    strategy_raw = generate_strategy_from_setup(setup)
-
-    # 🧹 Data sanitiseren
     setup = sanitize_json_input(setup_raw, context="setup")
+
+    scores_raw = get_scores_for_symbol(symbol)
     scores = sanitize_json_input(scores_raw, context="scores")
+
+    strategy_raw = generate_strategy_from_setup(setup)
     strategy = sanitize_json_input(strategy_raw, context="strategy")
 
     # 🧪 Debug log
