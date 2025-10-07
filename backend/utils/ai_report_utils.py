@@ -1,5 +1,3 @@
-logger.info("🔄 Dagrapport-task versie 6-OCT-21:20 live")
-dit is helemaal geen code.
 import os
 import logging
 import json
