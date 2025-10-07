@@ -1,3 +1,5 @@
+logger.info("🔄 Dagrapport-task versie 6-OCT-21:20 live")
+
 import os
 import logging
 import json
