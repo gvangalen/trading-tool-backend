@@ -120,7 +120,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     setup = sanitize_json_input(setup_raw, context="setup")
     scores = sanitize_json_input(scores_raw, context="scores")
 
-    # ✅ Strategy ophalen op basis van gesaniteerde setup
+    # ✅ Nu pas strategy aanroepen (want setup is nu dict)
     strategy_raw = generate_strategy_from_setup(setup)
     strategy = sanitize_json_input(strategy_raw, context="strategy")
 
@@ -129,39 +129,42 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📊 Scores = {scores} ({type(scores)})")
     logger.info(f"📈 Strategy = {strategy} ({type(strategy)})")
 
-    # ❌ Validatie
-    if not isinstance(setup, dict) or not setup:
-        logger.error("❌ Setup is ongeldig of leeg.")
-    if not isinstance(scores, dict) or not scores:
-        logger.error("❌ Scores zijn ongeldig of leeg.")
-    if not isinstance(strategy, dict) or not strategy:
-        logger.error("❌ Strategy is ongeldig of leeg.")
+    # ❌ Check op fouten
+    if not isinstance(setup, dict):
+        logger.error(f"❌ Ongeldig setup object (type {type(setup)}): {setup}")
+        return {"error": "Ongeldige setup"}
+    if not isinstance(scores, dict):
+        logger.error(f"❌ Ongeldig scores object (type {type(scores)}): {scores}")
+        return {"error": "Ongeldige scores"}
+    if not isinstance(strategy, dict):
+        logger.error(f"❌ Ongeldig strategy object (type {type(strategy)}): {strategy}")
+        return {"error": "Ongeldige strategy"}
 
-    # 📤 Rapport genereren
-    report = {
-        "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)),
-        "macro_summary": generate_section(prompt_for_macro_summary(scores)),
-        "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
-        "priorities": generate_section(prompt_for_priorities(setup, scores)),
-        "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
-        "recommendations": generate_section(prompt_for_recommendations(strategy)),
-        "conclusion": generate_section(prompt_for_conclusion(scores)),
-        "outlook": generate_section(prompt_for_outlook(setup)),
-        "macro_score": safe_get(scores, "macro_score", 0),
-        "technical_score": safe_get(scores, "technical_score", 0),
-        "setup_score": safe_get(scores, "setup_score", 0),
-        "sentiment_score": safe_get(scores, "sentiment_score", 0),
-    }
+    try:
+        # 📤 Rapport genereren
+        report = {
+            "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)),
+            "macro_summary": generate_section(prompt_for_macro_summary(scores)),
+            "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
+            "priorities": generate_section(prompt_for_priorities(setup, scores)),
+            "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
+            "recommendations": generate_section(prompt_for_recommendations(strategy)),
+            "conclusion": generate_section(prompt_for_conclusion(scores)),
+            "outlook": generate_section(prompt_for_outlook(setup)),
+            "macro_score": safe_get(scores, "macro_score", 0),
+            "technical_score": safe_get(scores, "technical_score", 0),
+            "setup_score": safe_get(scores, "setup_score", 0),
+            "sentiment_score": safe_get(scores, "sentiment_score", 0),
+        }
 
-    # ✅ Check of alles goed ging
-    if not isinstance(report, dict):
-        logger.error(f"❌ Rapport is geen dict! Ontvangen: {type(report)} – Inhoud: {report}")
-        return {"error": "Rapport-generatie faalde", "raw": str(report)}
+        # ✅ EXTRA check: report moet dict zijn
+        if not isinstance(report, dict):
+            logger.error(f"❌ Rapport is geen dict! Ontvangen: {type(report)} – Inhoud: {report}")
+            return {"error": "Rapport-generatie faalde", "raw": str(report)}
 
-    logger.info("✅ Dagrapport gegenereerd en klaar voor opslag.")
-    return report
+        logger.info("✅ Dagrapport gegenereerd en klaar voor opslag.")
+        return report
 
-# === ✅ CLI Test
-if __name__ == "__main__":
-    report = generate_daily_report_sections("BTC")
-    print(json.dumps(report, indent=2, ensure_ascii=False))
+    except Exception as e:
+        logger.exception(f"❌ Fout bij genereren rapportsecties: {e}")
+        return {"error": "Fout bij genereren van rapportsecties", "exception": str(e)}
