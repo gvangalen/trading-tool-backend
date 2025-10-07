@@ -120,7 +120,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     setup = sanitize_json_input(setup_raw, context="setup")
     scores = sanitize_json_input(scores_raw, context="scores")
 
-    # ✅ Nu pas strategy aanroepen (want setup is nu dict)
+    # ✅ Strategy ophalen op basis van gesaniteerde setup
     strategy_raw = generate_strategy_from_setup(setup)
     strategy = sanitize_json_input(strategy_raw, context="strategy")
 
@@ -129,7 +129,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📊 Scores = {scores} ({type(scores)})")
     logger.info(f"📈 Strategy = {strategy} ({type(strategy)})")
 
-    # ❌ Check op fouten
+    # ❌ Validatie
     if not isinstance(setup, dict) or not setup:
         logger.error("❌ Setup is ongeldig of leeg.")
     if not isinstance(scores, dict) or not scores:
@@ -153,7 +153,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "sentiment_score": safe_get(scores, "sentiment_score", 0),
     }
 
-    # ✅ EXTRA check: report moet dict zijn
+    # ✅ Check of alles goed ging
     if not isinstance(report, dict):
         logger.error(f"❌ Rapport is geen dict! Ontvangen: {type(report)} – Inhoud: {report}")
         return {"error": "Rapport-generatie faalde", "raw": str(report)}
@@ -161,7 +161,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info("✅ Dagrapport gegenereerd en klaar voor opslag.")
     return report
 
-# === ✅ CLI Test (handmatig runnen)
+# === ✅ CLI Test
 if __name__ == "__main__":
     report = generate_daily_report_sections("BTC")
     print(json.dumps(report, indent=2, ensure_ascii=False))
