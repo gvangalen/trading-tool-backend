@@ -153,6 +153,11 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "sentiment_score": safe_get(scores, "sentiment_score", 0),
     }
 
+    # ✅ EXTRA check: report moet dict zijn
+    if not isinstance(report, dict):
+        logger.error(f"❌ Rapport is geen dict! Ontvangen: {type(report)} – Inhoud: {report}")
+        return {"error": "Rapport-generatie faalde", "raw": str(report)}
+
     logger.info("✅ Dagrapport gegenereerd en klaar voor opslag.")
     return report
 
