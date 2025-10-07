@@ -42,7 +42,7 @@ jobs:
           source: "backend/deploy-backend.sh"
           target: "~/trading-tool-backend/backend/"
 
-      - name: 🚀 SSH en draai deploy-backend.sh op server
+           - name: 🚀 SSH en draai deploy-backend.sh op server
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.HOST }}
@@ -67,7 +67,7 @@ CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0
 AI_MODE=live
 COINGECKO_URL=https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1
 VOLUME_URL=https://api.coingecko.com/api/v3/coins/{}/?localization=false
-ASSETS_JSON={"BTC":"bitcoin"}
+ASSETS_JSON='{"BTC":"bitcoin"}'
 EOF
 
             echo "✅ .env bestand aangemaakt"
