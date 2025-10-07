@@ -53,22 +53,20 @@ jobs:
             cd ~/trading-tool-backend/backend
 
             echo "🛠️ Genereer .env bestand vanuit GitHub Secrets..."
-            cat <<'EOF' > ../.env
-OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-DB_HOST=${{ secrets.DB_HOST }}
-DB_PORT=${{ secrets.DB_PORT }}
-DB_NAME=${{ secrets.DB_NAME }}
-DB_USER=${{ secrets.DB_USER }}
-DB_PASS=${{ secrets.DB_PASS }}
-ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}
-API_BASE_URL=http://127.0.0.1:5002/api
-CELERY_BROKER_URL=redis://127.0.0.1:6379/0
-CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0
-AI_MODE=live
-COINGECKO_URL=https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1
-VOLUME_URL=https://api.coingecko.com/api/v3/coins/{}/?localization=false
-ASSETS_JSON='{"BTC":"bitcoin"}'
-EOF
+            echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" > ../.env
+            echo "DB_HOST=${{ secrets.DB_HOST }}" >> ../.env
+            echo "DB_PORT=${{ secrets.DB_PORT }}" >> ../.env
+            echo "DB_NAME=${{ secrets.DB_NAME }}" >> ../.env
+            echo "DB_USER=${{ secrets.DB_USER }}" >> ../.env
+            echo "DB_PASS=${{ secrets.DB_PASS }}" >> ../.env
+            echo "ALPHA_VANTAGE_API_KEY=${{ secrets.ALPHA_VANTAGE_API_KEY }}" >> ../.env
+            echo "API_BASE_URL=http://127.0.0.1:5002/api" >> ../.env
+            echo "CELERY_BROKER_URL=redis://127.0.0.1:6379/0" >> ../.env
+            echo "CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0" >> ../.env
+            echo "AI_MODE=live" >> ../.env
+            echo "COINGECKO_URL=https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1" >> ../.env
+            echo "VOLUME_URL=https://api.coingecko.com/api/v3/coins/{}/?localization=false" >> ../.env
+            echo "ASSETS_JSON={\"BTC\":\"bitcoin\"}" >> ../.env
 
             echo "✅ .env bestand aangemaakt"
 
