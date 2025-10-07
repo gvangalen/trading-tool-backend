@@ -1,12 +1,10 @@
 import os
 import logging
 from datetime import datetime
-
 from celery import shared_task
 from dotenv import load_dotenv
-
 from backend.utils.db import get_db_connection
-from backend.utils.report_sections import generate_daily_report_sections
+from backend.utils.ai_report_utils import generate_daily_report_sections
 
 # === ✅ Logging instellen
 logger = logging.getLogger(__name__)
