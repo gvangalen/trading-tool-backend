@@ -1,7 +1,6 @@
-/**
- * ✅ Markeer een onboarding-stap als voltooid
- * @param {number} step - Bijvoorbeeld 1 = setup, 2 = technisch, 3 = macro, 4 = dashboard
- */
+# ✅ Markeer een onboarding-stap als voltooid
+# step: bijvoorbeeld 1 = setup, 2 = technisch, 3 = macro, 4 = dashboard
+
 export async function markStepDone(step) {
   const userId = localStorage.getItem("user_id");
   if (!userId) {
