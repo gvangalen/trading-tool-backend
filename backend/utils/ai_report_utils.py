@@ -7,7 +7,7 @@ from openai import OpenAI, OpenAIError
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.scoring_utils import get_scores_for_symbol
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
-from backend.utils.json_utils import sanitize_json_input  # zie onder
+from backend.utils.json_utils import sanitize_json_input
 
 # === ✅ Logging ===
 logging.basicConfig(level=logging.INFO)
@@ -112,13 +112,15 @@ Timeframe: {safe_get(setup, 'timeframe')}"""
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📥 Start rapportgeneratie voor: {symbol}")
 
-    # 📦 Data ophalen en sanitiseren
+    # 📦 Data ophalen
     setup_raw = get_latest_setup_for_symbol(symbol)
-    setup = sanitize_json_input(setup_raw, context="setup")
-
     scores_raw = get_scores_for_symbol(symbol)
+
+    # 🧹 Data sanitiseren
+    setup = sanitize_json_input(setup_raw, context="setup")
     scores = sanitize_json_input(scores_raw, context="scores")
 
+    # ✅ Nu pas strategy aanroepen (want setup is nu dict)
     strategy_raw = generate_strategy_from_setup(setup)
     strategy = sanitize_json_input(strategy_raw, context="strategy")
 
