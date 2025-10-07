@@ -111,37 +111,41 @@ Timeframe: {safe_get(setup, 'timeframe')}"""
 # === ✅ Dagrapportgenerator
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     logger.info(f"📥 Start rapportgeneratie voor: {symbol}")
+    print(f"📢 generate_daily_report_sections gestart voor {symbol}")
 
     # 📦 Data ophalen
     setup_raw = get_latest_setup_for_symbol(symbol)
     scores_raw = get_scores_for_symbol(symbol)
 
+    print("📦 Setup raw:", setup_raw)
+    print("📦 Scores raw:", scores_raw)
+
     # 🧹 Data sanitiseren
     setup = sanitize_json_input(setup_raw, context="setup")
     scores = sanitize_json_input(scores_raw, context="scores")
+
+    print("🧹 Setup sanitized:", setup)
+    print("🧹 Scores sanitized:", scores)
 
     # ✅ Nu pas strategy aanroepen (want setup is nu dict)
     strategy_raw = generate_strategy_from_setup(setup)
     strategy = sanitize_json_input(strategy_raw, context="strategy")
 
-    # 🧪 Debug log
-    logger.info(f"📄 Setup = {setup} ({type(setup)})")
-    logger.info(f"📊 Scores = {scores} ({type(scores)})")
-    logger.info(f"📈 Strategy = {strategy} ({type(strategy)})")
+    print("📈 Strategy raw:", strategy_raw)
+    print("📈 Strategy sanitized:", strategy)
 
     # ❌ Check op fouten
     if not isinstance(setup, dict):
-        logger.error(f"❌ Ongeldig setup object (type {type(setup)}): {setup}")
+        print(f"❌ Ongeldig setup object: {type(setup)} – {setup}")
         return {"error": "Ongeldige setup"}
     if not isinstance(scores, dict):
-        logger.error(f"❌ Ongeldig scores object (type {type(scores)}): {scores}")
+        print(f"❌ Ongeldig scores object: {type(scores)} – {scores}")
         return {"error": "Ongeldige scores"}
     if not isinstance(strategy, dict):
-        logger.error(f"❌ Ongeldig strategy object (type {type(strategy)}): {strategy}")
+        print(f"❌ Ongeldig strategy object: {type(strategy)} – {strategy}")
         return {"error": "Ongeldige strategy"}
 
     try:
-        # 📤 Rapport genereren
         report = {
             "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)),
             "macro_summary": generate_section(prompt_for_macro_summary(scores)),
@@ -157,14 +161,14 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
             "sentiment_score": safe_get(scores, "sentiment_score", 0),
         }
 
-        # ✅ EXTRA check: report moet dict zijn
-        if not isinstance(report, dict):
-            logger.error(f"❌ Rapport is geen dict! Ontvangen: {type(report)} – Inhoud: {report}")
-            return {"error": "Rapport-generatie faalde", "raw": str(report)}
+        print("✅ Report succesvol gegenereerd (type):", type(report))
+        for k in report:
+            print(f"📌 {k}: {type(report[k])} – {str(report[k])[:80]}...")
 
         logger.info("✅ Dagrapport gegenereerd en klaar voor opslag.")
         return report
 
     except Exception as e:
         logger.exception(f"❌ Fout bij genereren rapportsecties: {e}")
+        print(f"❌ EXCEPTION tijdens rapportgeneratie: {e}")
         return {"error": "Fout bij genereren van rapportsecties", "exception": str(e)}
