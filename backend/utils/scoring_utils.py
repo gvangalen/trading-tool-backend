@@ -3,13 +3,13 @@ import json
 from pathlib import Path
 from typing import Dict, Any
 
-from backend.utils.db import get_db_connection  # ✅ Nieuw
+from backend.utils.db import get_db_connection  # ✅ Zorg dat dit pad klopt
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ✅ Basis directory bepalen (automatisch)
+# ✅ Basis directory bepalen
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ✅ Config loader
@@ -65,11 +65,8 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
     logger.info(f"✅ Scored {count} indicators (average: {avg_score})")
     return {"scores": scores, "total_score": avg_score}
 
-# ✅ Nieuw: wrapper voor gebruik in rapporten
+# ✅ Nieuw: actuele scores ophalen uit macro_data en technical_indicators
 def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
-    """
-    Haalt macro-, technische-, sentiment- en setup-score uit DB (setups-tabel).
-    """
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding voor get_scores_for_symbol")
@@ -77,32 +74,44 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
+            # 1. Macro ophalen
             cur.execute("""
-                SELECT macro_score, technical_score, sentiment_score, setup_score
-                FROM setups
-                WHERE symbol = %s
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (symbol,))
-            row = cur.fetchone()
+                SELECT name, value FROM macro_data
+                WHERE timestamp = (SELECT MAX(timestamp) FROM macro_data)
+            """)
+            macro_rows = cur.fetchall()
+            macro_data = {name: float(value) for name, value in macro_rows}
+
+            # 2. Technische indicators ophalen
+            cur.execute("""
+                SELECT indicator, value FROM technical_indicators
+                WHERE symbol = %s AND timestamp = (
+                    SELECT MAX(timestamp) FROM technical_indicators WHERE symbol = %s
+                )
+            """, (symbol, symbol))
+            tech_rows = cur.fetchall()
+            tech_data = {indicator: float(value) for indicator, value in tech_rows}
+
+            # 3. Config laden
+            macro_conf = load_config("config/macro_indicators_config.json")
+            tech_conf = load_config("config/technical_indicators_config.json")
+
+            # 4. Scores berekenen
+            macro_scores = generate_scores(macro_data, macro_conf)
+            tech_scores = generate_scores(tech_data, tech_conf)
+
+            return {
+                "macro_score": macro_scores["total_score"],
+                "technical_score": tech_scores["total_score"],
+                "sentiment_score": 0,  # nog niet geïmplementeerd
+                "setup_score": round((macro_scores["total_score"] + tech_scores["total_score"]) / 2, 2)
+            }
+
     except Exception as e:
-        logger.error(f"❌ Database query mislukt in get_scores_for_symbol: {e}")
+        logger.error(f"❌ Fout bij ophalen en berekenen van scores: {e}")
         return {}
 
-    if row:
-        macro, technical, sentiment, setup = row
-        logger.info(f"✅ Setup-scores geladen uit DB voor {symbol}: macro={macro}, tech={technical}, sentiment={sentiment}, setup={setup}")
-        return {
-            "macro_score": macro or 0,
-            "technical_score": technical or 0,
-            "sentiment_score": sentiment or 0,
-            "setup_score": setup or 0
-        }
-
-    logger.warning(f"⚠️ Geen setup-scores gevonden in DB voor {symbol}")
-    return {}
-
-# ✅ Testfunctie voor lokaal testen
+# ✅ Testfunctie (optioneel)
 def test_scoring_utils():
     test_data = {
         "fear_greed_index": 77,
@@ -126,7 +135,7 @@ def test_scoring_utils():
     print("\n✅ Macro Scores:\n", json.dumps(macro_scores, indent=2))
     print("\n✅ Technical Scores:\n", json.dumps(tech_scores, indent=2))
     print("\n✅ Market Scores:\n", json.dumps(market_scores, indent=2))
-    print("\n✅ DB Scores:\n", json.dumps(get_scores_for_symbol("BTC"), indent=2))
+    print("\n✅ Live DB Scores:\n", json.dumps(get_scores_for_symbol("BTC"), indent=2))
 
 if __name__ == "__main__":
     test_scoring_utils()
