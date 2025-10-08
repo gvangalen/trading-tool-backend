@@ -27,18 +27,20 @@ def store_setup_scores_task():
                     INSERT INTO setup_scores (
                         setup_id, symbol,
                         macro_score, technical_score,
-                        sentiment_score, setup_score
+                        market_score, sentiment_score,
+                        setup_score
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (
                     setup_id, symbol,
                     scores.get("macro_score", 0),
                     scores.get("technical_score", 0),
+                    scores.get("market_score", 0),
                     scores.get("sentiment_score", 0),
                     scores.get("setup_score", 0)
                 ))
 
-                logger.info(f"✅ Setup {setup_id} ({symbol}) opgeslagen in setup_scores")
+                logger.info(f"✅ Setup {setup_id} ({symbol}) opgeslagen met scores: {scores}")
 
         conn.commit()
         logger.info("✅ Alle setup-scores succesvol opgeslagen.")
