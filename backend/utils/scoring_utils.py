@@ -1,8 +1,9 @@
-# ✅ backend/utils/scoring_utils.py
 import logging
 import json
 from pathlib import Path
 from typing import Dict, Any
+
+from backend.utils.db import get_db_connection  # ✅ Nieuw
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -13,9 +14,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ✅ Config loader
 def load_config(relative_path: str) -> Dict[str, Any]:
-    """
-    Load a JSON configuration file from a relative path.
-    """
     full_path = BASE_DIR / relative_path
     try:
         with open(full_path, "r") as f:
@@ -28,10 +26,6 @@ def load_config(relative_path: str) -> Dict[str, Any]:
 
 # ✅ Score calculator
 def calculate_score(value: float, thresholds: list, positive: bool = True) -> int:
-    """
-    Calculate a score between -2 and 2 based on thresholds.
-    If positive=True: higher values are better.
-    """
     if value is None:
         return 0
     try:
@@ -46,9 +40,6 @@ def calculate_score(value: float, thresholds: list, positive: bool = True) -> in
 
 # ✅ Score generator
 def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Generate individual and total scores based on the provided config.
-    """
     scores = {}
     total = 0
     count = 0
@@ -77,35 +68,39 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
 # ✅ Nieuw: wrapper voor gebruik in rapporten
 def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
     """
-    Laad data (mock of later live uit DB), bereken macro-, technische en markt-scores.
-    Retourneer scores zoals nodig voor tradingrapport.
+    Haalt macro-, technische-, sentiment- en setup-score uit DB (setups-tabel).
     """
-    # 🔁 Simulatie / tijdelijk hardcoded data (later vervangen door DB-query)
-    data = {
-        "fear_greed_index": 77,
-        "btc_dominance": 52.1,
-        "dxy": 104.3,
-        "rsi": 63,
-        "volume": 8000000000,
-        "ma_200": 71000,
-        "price": 73000,
-        "change_24h": 1.2
-    }
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen databaseverbinding voor get_scores_for_symbol")
+        return {}
 
-    macro_conf = load_config("config/macro_indicators_config.json")
-    tech_conf = load_config("config/technical_indicators_config.json")
-    market_conf = load_config("config/market_data_config.json")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT macro_score, technical_score, sentiment_score, setup_score
+                FROM setups
+                WHERE symbol = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (symbol,))
+            row = cur.fetchone()
+    except Exception as e:
+        logger.error(f"❌ Database query mislukt in get_scores_for_symbol: {e}")
+        return {}
 
-    macro = generate_scores(data, macro_conf)
-    technical = generate_scores(data, tech_conf)
-    market = generate_scores(data, market_conf)
+    if row:
+        macro, technical, sentiment, setup = row
+        logger.info(f"✅ Setup-scores geladen uit DB voor {symbol}: macro={macro}, tech={technical}, sentiment={sentiment}, setup={setup}")
+        return {
+            "macro_score": macro or 0,
+            "technical_score": technical or 0,
+            "sentiment_score": sentiment or 0,
+            "setup_score": setup or 0
+        }
 
-    return {
-        "macro_score": macro["total_score"],
-        "technical_score": technical["total_score"],
-        "setup_score": 1.0,  # ➕ later dynamisch ophalen via DB of validatie
-        "sentiment_score": market["total_score"]
-    }
+    logger.warning(f"⚠️ Geen setup-scores gevonden in DB voor {symbol}")
+    return {}
 
 # ✅ Testfunctie voor lokaal testen
 def test_scoring_utils():
@@ -131,7 +126,7 @@ def test_scoring_utils():
     print("\n✅ Macro Scores:\n", json.dumps(macro_scores, indent=2))
     print("\n✅ Technical Scores:\n", json.dumps(tech_scores, indent=2))
     print("\n✅ Market Scores:\n", json.dumps(market_scores, indent=2))
+    print("\n✅ DB Scores:\n", json.dumps(get_scores_for_symbol("BTC"), indent=2))
 
 if __name__ == "__main__":
     test_scoring_utils()
-    print("\n✅ Scores for symbol:\n", get_scores_for_symbol("BTC"))
