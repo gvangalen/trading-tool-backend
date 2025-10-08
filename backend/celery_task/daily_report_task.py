@@ -1,3 +1,4 @@
+# ✅ backend/celery_task/daily_report_task.py
 import os
 import logging
 from datetime import datetime
@@ -8,10 +9,14 @@ from backend.utils.ai_report_utils import generate_daily_report_sections
 
 # === ✅ Logging instellen
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-@shared_task
+
+@shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report(symbol: str = "BTC"):
+    """
+    Dagelijks AI-rapport genereren en opslaan in database.
+    """
     logger.info("🔄 Dagrapport-task gestart")
     load_dotenv()
 
@@ -50,27 +55,37 @@ def generate_daily_report(symbol: str = "BTC"):
         cursor = conn.cursor()
         today = datetime.now().strftime("%Y-%m-%d")
 
-        # ✅ Secties opslaan
+        logger.info(f"🚀 Start opslag van dagrapport ({symbol}) voor {today}")
+
+        # ✅ Secties opslaan in daily_reports
         for section in sections:
             title = section["title"]
             text = section["data"]
             if not text:
                 logger.warning(f"⚠️ Lege sectie: {title}")
                 continue
+
             cursor.execute(
-                "INSERT INTO daily_reports (symbol, date, section_title, section_text) VALUES (%s, %s, %s, %s)",
+                """
+                INSERT INTO daily_reports (symbol, report_date, section_title, section_text)
+                VALUES (%s, %s, %s, %s)
+                """,
                 (symbol, today, title, text)
             )
 
-        # ✅ Scores opslaan
+        # ✅ Scores opslaan in daily_scores
         cursor.execute(
-            "INSERT INTO daily_scores (symbol, date, macro_score, technical_score, setup_score, sentiment_score) VALUES (%s, %s, %s, %s, %s, %s)",
+            """
+            INSERT INTO daily_scores (symbol, report_date, macro_score, technical_score, setup_score, sentiment_score)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
             (symbol, today, macro_score, technical_score, setup_score, sentiment_score)
         )
 
         conn.commit()
         conn.close()
-        logger.info("✅ Dagrapport en scores opgeslagen in database.")
+
+        logger.info(f"✅ Dagrapport en scores opgeslagen in database voor {symbol} ({today})")
 
     except Exception as e:
-        logger.error(f"❌ Fout bij genereren rapportsecties: {e}")
+        logger.error(f"❌ Fout bij genereren rapportsecties: {e}", exc_info=True)
