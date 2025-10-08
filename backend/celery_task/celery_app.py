@@ -3,27 +3,26 @@ import sys
 import logging
 import traceback
 
-# ✅ Voeg dit toe om .env correct in te laden (voor Celery!)
 from dotenv import load_dotenv
 load_dotenv()
 
 from celery import Celery
 from celery.schedules import crontab
 
-# ✅ Veilige pad-toevoeging voor backend.* imports
+# ✅ Pad naar backend toevoegen
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-# ✅ Logging
+# ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ✅ Redis-configuratie ophalen
+# ✅ Redis configuratie
 CELERY_BROKER = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 
-# ✅ Celery-app initialiseren
+# ✅ Celery app
 celery = Celery(
     "market_dashboard",
     broker=CELERY_BROKER,
@@ -46,11 +45,11 @@ celery = Celery(
     ]
 )
 
-# ✅ Algemene configuratie
+# ✅ Configuratie
 celery.conf.enable_utc = True
 celery.conf.timezone = "UTC"
 
-# ✅ Beat scheduler: geplande taken
+# ✅ Beat scheduler configuratie
 celery.conf.beat_schedule = {
     # 📈 Live BTC/crypto prijsdata
     "fetch_market_data": {
@@ -140,17 +139,16 @@ celery.conf.beat_schedule = {
         "schedule": crontab(hour=8, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
 
-   "generate_setup_scores_task": {
-    "task": "backend.celery_task.setup_scores_task.generate_setup_scores_task",
-    "schedule": crontab(hour=2, minute=15),  # Elke nacht om 02:15
+    # 🆕 Setup score berekeningen
+    "generate_setup_scores_task": {
+        "task": "backend.celery_task.setup_scores_task.generate_setup_scores_task",
+        "schedule": crontab(hour=2, minute=15),
     },
-
-    CELERY_BEAT_SCHEDULE = {
     "store_setup_scores_daily": {
         "task": "backend.celery_task.setup_scores_task.store_setup_scores_task",
-        "schedule": crontab(hour=1, minute=0),  # Elke nacht om 01:00
+        "schedule": crontab(hour=1, minute=0),
     },
-  
+
     # ✅ NIEUW: AI-generatie dagrapport
     "generate_daily_report_ai": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
@@ -158,7 +156,7 @@ celery.conf.beat_schedule = {
     },
 }
 
-# ✅ Expliciete imports (voor logging en debugging)
+# ✅ Expliciete imports
 try:
     import backend.celery_task.market_task
     import backend.celery_task.macro_task
@@ -177,8 +175,8 @@ except ImportError:
     logger.error("❌ Fout bij importeren van Celery taken:")
     logger.error(traceback.format_exc())
 
-# ✅ Laatste melding
+# ✅ Laatste log
 logger.info(f"🚀 Celery en Beat draaien met broker: {CELERY_BROKER}")
 
-# ✅ Voor PM2 of CLI gebruik
+# ✅ Voor PM2 of CLI
 app = celery
