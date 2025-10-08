@@ -3,13 +3,11 @@ import json
 from pathlib import Path
 from typing import Dict, Any
 
-from backend.utils.db import get_db_connection  # ✅ Zorg dat dit pad klopt
+from backend.utils.db import get_db_connection
 
-# ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ✅ Basis directory bepalen
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ✅ Config loader
@@ -65,7 +63,7 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
     logger.info(f"✅ Scored {count} indicators (average: {avg_score})")
     return {"scores": scores, "total_score": avg_score}
 
-# ✅ Nieuw: actuele scores ophalen uit macro_data en technical_indicators
+# ✅ Alle actuele scores ophalen
 def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
@@ -92,17 +90,36 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             tech_rows = cur.fetchall()
             tech_data = {indicator: float(value) for indicator, value in tech_rows}
 
-            # 3. Config laden
+            # 3. Market data ophalen
+            cur.execute("""
+                SELECT price, volume, change_24h FROM market_data
+                WHERE symbol = %s
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (symbol,))
+            market_row = cur.fetchone()
+            market_data = {}
+            if market_row:
+                market_data = {
+                    "price": float(market_row[0]),
+                    "volume": float(market_row[1]),
+                    "change_24h": float(market_row[2]),
+                }
+
+            # 4. Configs laden
             macro_conf = load_config("config/macro_indicators_config.json")
             tech_conf = load_config("config/technical_indicators_config.json")
+            market_conf = load_config("config/market_data_config.json")
 
-            # 4. Scores berekenen
+            # 5. Scoreberekening
             macro_scores = generate_scores(macro_data, macro_conf)
             tech_scores = generate_scores(tech_data, tech_conf)
+            market_scores = generate_scores(market_data, market_conf)
 
             return {
                 "macro_score": macro_scores["total_score"],
                 "technical_score": tech_scores["total_score"],
+                "market_score": market_scores["total_score"],
                 "sentiment_score": 0,  # nog niet geïmplementeerd
                 "setup_score": round((macro_scores["total_score"] + tech_scores["total_score"]) / 2, 2)
             }
@@ -111,7 +128,7 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
         logger.error(f"❌ Fout bij ophalen en berekenen van scores: {e}")
         return {}
 
-# ✅ Testfunctie (optioneel)
+# ✅ Testfunctie
 def test_scoring_utils():
     test_data = {
         "fear_greed_index": 77,
