@@ -162,6 +162,8 @@ try:
     import backend.celery_task.macro_task
     import backend.celery_task.technical_task
     import backend.celery_task.setup_task
+    import backend.celery_task.setup_scores_task
+    import backend.celery_task.update_setup_scores
     import backend.celery_task.strategy_task
     import backend.celery_task.daily_report_task
     import backend.celery_task.weekly_report_task
