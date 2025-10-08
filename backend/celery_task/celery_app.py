@@ -144,6 +144,12 @@ celery.conf.beat_schedule = {
     "schedule": crontab(hour=2, minute=15),  # Elke nacht om 02:15
     },
 
+    CELERY_BEAT_SCHEDULE = {
+    "store_setup_scores_daily": {
+        "task": "backend.celery_task.setup_scores_task.store_setup_scores_task",
+        "schedule": crontab(hour=1, minute=0),  # Elke nacht om 01:00
+    },
+  
     # ✅ NIEUW: AI-generatie dagrapport
     "generate_daily_report_ai": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
