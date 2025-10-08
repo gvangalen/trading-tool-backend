@@ -40,7 +40,8 @@ celery = Celery(
         "backend.celery_task.quarterly_report_task",
         "backend.celery_task.btc_price_history_task",
         "backend.ai_tasks.trading_advice_task",
-        "backend.ai_tasks.validation_task"
+        "backend.ai_tasks.validation_task",
+        "backend.celery_task.setup_scores_task"
     ]
 )
 
@@ -136,6 +137,11 @@ celery.conf.beat_schedule = {
     "generate_quarterly_report": {
         "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
         "schedule": crontab(hour=8, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
+    },
+
+    "generate_setup_scores_task": {
+    "task": "backend.celery_task.setup_scores_task.generate_setup_scores_task",
+    "schedule": crontab(hour="*/12", minute=20),
     },
 
     # ✅ NIEUW: AI-generatie dagrapport
