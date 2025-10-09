@@ -120,23 +120,23 @@ celery.conf.beat_schedule = {
     # 🧠 Strategieën & rapporten
     "generate_ai_strategieën": {
         "task": "backend.celery_task.strategy_task.generate_strategieën_automatisch",
-        "schedule": crontab(hour=8, minute=10),
+        "schedule": crontab(hour=1, minute=10),
     },
     "generate_daily_report_pdf": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report_pdf",
-        "schedule": crontab(hour=8, minute=15),
+        "schedule": crontab(hour=1, minute=0), 
     },
     "generate_weekly_report": {
         "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
-        "schedule": crontab(hour=8, minute=20, day_of_week="monday"),
+        "schedule": crontab(hour=1, minute=20, day_of_week="monday"),
     },
     "generate_monthly_report": {
         "task": "backend.celery_task.monthly_report_task.generate_monthly_report",
-        "schedule": crontab(hour=8, minute=30, day_of_month="1"),
+        "schedule": crontab(hour=1, minute=30, day_of_month="1"),
     },
     "generate_quarterly_report": {
         "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
-        "schedule": crontab(hour=8, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
+        "schedule": crontab(hour=1, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
 
     # 🆕 Setup score berekeningen
@@ -152,7 +152,7 @@ celery.conf.beat_schedule = {
     # ✅ NIEUW: AI-generatie dagrapport
     "generate_daily_report_ai": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
-        "schedule": crontab(hour=7, minute=30),
+        "schedule": crontab(hour=2, minute=30),
     },
 }
 
