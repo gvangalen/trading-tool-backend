@@ -41,10 +41,23 @@ def generate_daily_report(symbol: str = "BTC"):
         ]
 
         # ✅ Scores ophalen met fallback
-        macro_score = full_report.get("macro_score", 0)
-        technical_score = full_report.get("technical_score", 0)
-        setup_score = full_report.get("setup_score", 0)
-        sentiment_score = full_report.get("sentiment_score", 0)
+        macro_score = full_report.get("macro_score")
+        technical_score = full_report.get("technical_score")
+        setup_score = full_report.get("setup_score")
+        sentiment_score = full_report.get("sentiment_score")
+
+        # ✅ Als één van de scores ontbreekt, gebruik setup_scores als fallback
+        if None in (macro_score, technical_score, sentiment_score):
+            logger.warning("⚠️ Ontbrekende scores in full_report. Fallback naar setup_scores.")
+            from backend.utils.scoring_utils import calculate_combined_score
+            combined = calculate_combined_score(symbol)
+            macro_score = macro_score if macro_score is not None else combined.get("macro_score", 0)
+            technical_score = technical_score if technical_score is not None else combined.get("technical_score", 0)
+            sentiment_score = sentiment_score if sentiment_score is not None else combined.get("sentiment_score", 0)
+
+        # ✅ Setup score blijft het gemiddelde van macro en technical (bij ontbreken)
+        if setup_score is None:
+            setup_score = round((macro_score + technical_score) / 2, 2)
 
         # ✅ Databaseverbinding openen
         conn = get_db_connection()
