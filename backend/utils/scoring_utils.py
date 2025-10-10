@@ -1,7 +1,7 @@
 import logging
 import json
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from backend.utils.db import get_db_connection
 
@@ -9,6 +9,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
 
 # ✅ Config loader
 def load_config(relative_path: str) -> Dict[str, Any]:
@@ -22,21 +23,39 @@ def load_config(relative_path: str) -> Dict[str, Any]:
         logger.error(f"❌ Failed to load config ({relative_path}): {e}")
         return {}
 
-# ✅ Score calculator
-def calculate_score(value: float, thresholds: list, positive: bool = True) -> int:
+
+# ✅ Score calculator (met None-ondersteuning)
+def calculate_score(value: Optional[float], thresholds: list, positive: bool = True) -> Optional[int]:
     if value is None:
-        return 0
+        logger.debug("⚠️ Geen waarde ontvangen voor scoreberekening → None")
+        return None
     try:
         value = float(value)
     except (ValueError, TypeError):
-        return 0
+        logger.warning(f"⚠️ Ongeldige waarde ({value}) → None")
+        return None
 
     if positive:
-        return 2 if value > thresholds[2] else 1 if value > thresholds[1] else -1 if value > thresholds[0] else -2
+        if value > thresholds[2]:
+            return 2
+        elif value > thresholds[1]:
+            return 1
+        elif value > thresholds[0]:
+            return -1
+        else:
+            return -2
     else:
-        return 2 if value < thresholds[0] else 1 if value < thresholds[1] else -1 if value < thresholds[2] else -2
+        if value < thresholds[0]:
+            return 2
+        elif value < thresholds[1]:
+            return 1
+        elif value < thresholds[2]:
+            return -1
+        else:
+            return -2
 
-# ✅ Score generator
+
+# ✅ Score generator (met None-filtering)
 def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     scores = {}
     total = 0
@@ -59,11 +78,12 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
             total += score
             count += 1
 
-    avg_score = round(total / count, 2) if count else 0
-    logger.info(f"✅ Scored {count} indicators (average: {avg_score})")
+    avg_score = round(total / count, 2) if count else None
+    logger.info(f"✅ {count} geldige indicatoren gescoord (gemiddelde: {avg_score})")
     return {"scores": scores, "total_score": avg_score}
 
-# ✅ Alle actuele scores ophalen
+
+# ✅ Alle actuele scores ophalen (macro / technisch / markt)
 def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
@@ -72,7 +92,7 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
-            # 1. Macro ophalen
+            # 1️⃣ Macro ophalen
             cur.execute("""
                 SELECT name, value FROM macro_data
                 WHERE timestamp = (SELECT MAX(timestamp) FROM macro_data)
@@ -80,7 +100,7 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             macro_rows = cur.fetchall()
             macro_data = {name: float(value) for name, value in macro_rows}
 
-            # 2. Technische indicators ophalen
+            # 2️⃣ Technische indicators ophalen
             cur.execute("""
                 SELECT indicator, value FROM technical_indicators
                 WHERE symbol = %s AND timestamp = (
@@ -90,7 +110,7 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             tech_rows = cur.fetchall()
             tech_data = {indicator: float(value) for indicator, value in tech_rows}
 
-            # 3. Market data ophalen
+            # 3️⃣ Market data ophalen
             cur.execute("""
                 SELECT price, volume, change_24h FROM market_data
                 WHERE symbol = %s
@@ -106,34 +126,44 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
                     "change_24h": float(market_row[2]),
                 }
 
-            # 4. Configs laden
+            # 4️⃣ Configs laden
             macro_conf = load_config("config/macro_indicators_config.json")
             tech_conf = load_config("config/technical_indicators_config.json")
             market_conf = load_config("config/market_data_config.json")
 
-            # 5. Scoreberekening
+            # 5️⃣ Scoreberekening
             macro_scores = generate_scores(macro_data, macro_conf)
             tech_scores = generate_scores(tech_data, tech_conf)
             market_scores = generate_scores(market_data, market_conf)
+
+            # 6️⃣ Berekeningen met None-handling
+            macro_avg = macro_scores["total_score"] or 0
+            tech_avg = tech_scores["total_score"] or 0
+            market_avg = market_scores["total_score"] or 0
+            setup_score = round((macro_avg + tech_avg) / 2, 2) if macro_avg or tech_avg else None
 
             return {
                 "macro_score": macro_scores["total_score"],
                 "technical_score": tech_scores["total_score"],
                 "market_score": market_scores["total_score"],
-                "sentiment_score": 0,  # nog niet geïmplementeerd
-                "setup_score": round((macro_scores["total_score"] + tech_scores["total_score"]) / 2, 2)
+                "sentiment_score": None,  # nog niet geïmplementeerd
+                "setup_score": setup_score
             }
 
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen en berekenen van scores: {e}")
+        logger.error(f"❌ Fout bij ophalen en berekenen van scores: {e}", exc_info=True)
         return {}
 
-# ✅ Gecombineerde score ophalen uit setup_scores-tabel (bijv. voor rapportage)
+    finally:
+        conn.close()
+
+
+# ✅ Gecombineerde score ophalen uit setup_scores-tabel (fallback bij rapportage)
 def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
         logger.error("❌ COMB01: Geen databaseverbinding.")
-        return {"symbol": symbol, "error": "Geen databaseverbinding", "total_score": 0}
+        return {"symbol": symbol, "error": "Geen databaseverbinding", "total_score": None}
 
     try:
         with conn.cursor() as cur:
@@ -148,19 +178,22 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
 
         if not row:
             logger.warning(f"⚠️ COMB02: Geen scoregegevens gevonden voor {symbol}")
-            return {"symbol": symbol, "error": "Geen scoregegevens", "total_score": 0}
+            return {"symbol": symbol, "error": "Geen scoregegevens", "total_score": None}
 
-        try:
-            macro = float(row[0]) if row[0] is not None else 0
-            technical = float(row[1]) if row[1] is not None else 0
-            sentiment = float(row[2]) if row[2] is not None else 0
-        except (ValueError, TypeError):
-            logger.warning(f"⚠️ COMB03: Ongeldige waarden (niet-numeriek) voor {symbol}")
-            return {"symbol": symbol, "error": "Niet-numerieke waarden", "total_score": 0}
+        def safe_float(x):
+            try:
+                return float(x) if x is not None else None
+            except (ValueError, TypeError):
+                return None
 
-        total = round((macro + technical + sentiment) / 3, 2)
+        macro = safe_float(row[0])
+        technical = safe_float(row[1])
+        sentiment = safe_float(row[2])
+
+        valid_scores = [s for s in [macro, technical, sentiment] if s is not None]
+        total = round(sum(valid_scores) / len(valid_scores), 2) if valid_scores else None
+
         logger.info(f"✅ COMB04: Totale score voor {symbol} = {total}")
-
         return {
             "symbol": symbol,
             "macro_score": macro,
@@ -170,11 +203,12 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"❌ COMB05: Fout bij scoreberekening voor {symbol}: {e}")
-        return {"symbol": symbol, "error": str(e), "total_score": 0}
+        logger.error(f"❌ COMB05: Fout bij scoreberekening voor {symbol}: {e}", exc_info=True)
+        return {"symbol": symbol, "error": str(e), "total_score": None}
 
     finally:
         conn.close()
+
 
 # ✅ Testfunctie
 def test_scoring_utils():
