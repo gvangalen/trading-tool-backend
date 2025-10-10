@@ -1,4 +1,3 @@
-# ✅ backend/celery_task/daily_report_task.py
 import os
 import logging
 from datetime import datetime
@@ -27,18 +26,6 @@ def generate_daily_report(symbol: str = "BTC"):
         if not isinstance(full_report, dict):
             logger.error("❌ Ongeldige rapportstructuur (geen dict). Afgebroken.")
             return
-
-        # ✅ Rapportsecties voorbereiden
-        sections = [
-            {"title": "Samenvatting", "data": full_report.get("btc_summary", "")},
-            {"title": "Macro", "data": full_report.get("macro_summary", "")},
-            {"title": "Checklist", "data": full_report.get("setup_checklist", "")},
-            {"title": "Prioriteiten", "data": full_report.get("priorities", "")},
-            {"title": "Wyckoff", "data": full_report.get("wyckoff_analysis", "")},
-            {"title": "Advies", "data": full_report.get("recommendations", "")},
-            {"title": "Conclusie", "data": full_report.get("conclusion", "")},
-            {"title": "Vooruitblik", "data": full_report.get("outlook", "")},
-        ]
 
         # ✅ Scores ophalen met fallback
         macro_score = full_report.get("macro_score")
@@ -70,35 +57,44 @@ def generate_daily_report(symbol: str = "BTC"):
 
         logger.info(f"🚀 Start opslag van dagrapport ({symbol}) voor {today}")
 
-        # ✅ Secties opslaan in daily_reports
-        for section in sections:
-            title = section["title"]
-            text = section["data"]
-            if not text:
-                logger.warning(f"⚠️ Lege sectie: {title}")
-                continue
-
-            cursor.execute(
-                """
-                INSERT INTO daily_reports (symbol, report_date, section_title, section_text)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (symbol, today, title, text)
-            )
-
-        # ✅ Scores opslaan in daily_scores
+        # ✅ Volledig rapport opslaan in één rij
         cursor.execute(
             """
-            INSERT INTO daily_scores (symbol, report_date, macro_score, technical_score, setup_score, sentiment_score)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO daily_reports (
+                report_date, symbol, btc_summary, macro_summary,
+                setup_checklist, priorities, wyckoff_analysis,
+                recommendations, conclusion, outlook,
+                macro_score, technical_score, setup_score, sentiment_score
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                today, symbol,
+                full_report.get("btc_summary", ""),
+                full_report.get("macro_summary", ""),
+                full_report.get("setup_checklist", ""),
+                full_report.get("priorities", ""),
+                full_report.get("wyckoff_analysis", ""),
+                full_report.get("recommendations", ""),
+                full_report.get("conclusion", ""),
+                full_report.get("outlook", ""),
+                macro_score, technical_score, setup_score, sentiment_score
+            )
+        )
+
+        # ✅ Scores apart opslaan in daily_scores (optioneel)
+        cursor.execute(
+            """
+            INSERT INTO daily_scores (
+                symbol, report_date,
+                macro_score, technical_score, setup_score, sentiment_score
+            ) VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (symbol, today, macro_score, technical_score, setup_score, sentiment_score)
         )
 
         conn.commit()
         conn.close()
-
-        logger.info(f"✅ Dagrapport en scores opgeslagen in database voor {symbol} ({today})")
+        logger.info(f"✅ Dagrapport en scores opgeslagen voor {symbol} ({today})")
 
     except Exception as e:
         logger.error(f"❌ Fout bij genereren rapportsecties: {e}", exc_info=True)
