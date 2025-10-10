@@ -57,6 +57,9 @@ def generate_daily_report(symbol: str = "BTC"):
 
         logger.info(f"🚀 Start opslag van dagrapport ({symbol}) voor {today}")
 
+        # ✅ Debuglog vóór INSERT
+        logger.info("🧪 INSERT INTO daily_reports met kolommen: report_date, symbol, btc_summary, macro_summary, ...")
+
         # ✅ Volledig rapport opslaan in één rij
         cursor.execute(
             """
@@ -81,7 +84,7 @@ def generate_daily_report(symbol: str = "BTC"):
             )
         )
 
-        # ✅ Scores apart opslaan in daily_scores (optioneel)
+        # ✅ Scores apart opslaan in daily_scores
         cursor.execute(
             """
             INSERT INTO daily_scores (
