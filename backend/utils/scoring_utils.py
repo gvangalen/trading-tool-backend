@@ -11,31 +11,20 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# ✅ Config loader (met auto-fix voor foutieve stringwaarden)
+# ✅ Config loader
 def load_config(relative_path: str) -> Dict[str, Any]:
     full_path = BASE_DIR / relative_path
     try:
         with open(full_path, "r") as f:
             config = json.load(f)
         logger.info(f"✅ Config loaded from {relative_path}")
-
-        # 🧠 Auto-fix: strings die eigenlijk JSON zijn decoderen
-        for k, v in list(config.items()):
-            if isinstance(v, str):
-                try:
-                    config[k] = json.loads(v)
-                    logger.warning(f"⚠️ Auto-converted string config for '{k}' in {relative_path}")
-                except json.JSONDecodeError:
-                    logger.error(f"❌ Kon string config niet converteren voor '{k}': {v}")
-
         return config
-
     except Exception as e:
         logger.error(f"❌ Failed to load config ({relative_path}): {e}")
         return {}
 
 
-# ✅ Score calculator (met None-ondersteuning)
+# ✅ Score calculator
 def calculate_score(value: Optional[float], thresholds: list, positive: bool = True) -> Optional[int]:
     if value is None:
         logger.debug("⚠️ Geen waarde ontvangen voor scoreberekening → None")
@@ -66,26 +55,13 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
             return -2
 
 
-# ✅ Score generator (met string-fix)
+# ✅ Score generator
 def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     scores = {}
     total = 0
     count = 0
 
     for name, conf in config.items():
-        # 🧩 Fix: als conf een string is, probeer te converteren naar dict
-        if isinstance(conf, str):
-            logger.warning(f"⚠️ Config voor '{name}' is string i.p.v. dict → converteren...")
-            try:
-                conf = json.loads(conf)
-            except json.JSONDecodeError:
-                logger.error(f"❌ Kan string niet decoden voor indicator '{name}': {conf}")
-                continue  # skip deze indicator
-
-        if not isinstance(conf, dict):
-            logger.error(f"❌ Ongeldige config voor '{name}': verwacht dict maar kreeg {type(conf)}")
-            continue
-
         value = data.get(name)
         thresholds = conf.get("thresholds", [0, 50, 100])
         positive = conf.get("positive", True)
@@ -107,7 +83,7 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
     return {"scores": scores, "total_score": avg_score}
 
 
-# ✅ Alle actuele scores ophalen (macro / technisch / markt)
+# ✅ Alle actuele scores ophalen
 def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
@@ -155,22 +131,30 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             tech_conf = load_config("config/technical_indicators_config.json")
             market_conf = load_config("config/market_data_config.json")
 
+            # ➕ Split macro_config op in macro & sentiment
+            macro_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "macro"}
+            sentiment_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "sentiment"}
+
+            # ➕ Split macro_data op in macro & sentiment
+            sentiment_data = {k: v for k, v in macro_data.items() if k in sentiment_indicators}
+            macro_data_cleaned = {k: v for k, v in macro_data.items() if k not in sentiment_data}
+
             # 5️⃣ Scoreberekening
-            macro_scores = generate_scores(macro_data, macro_conf)
+            macro_scores = generate_scores(macro_data_cleaned, macro_indicators)
             tech_scores = generate_scores(tech_data, tech_conf)
             market_scores = generate_scores(market_data, market_conf)
+            sentiment_scores = generate_scores(sentiment_data, sentiment_indicators)
 
-            # 6️⃣ Berekeningen met None-handling
+            # 6️⃣ Setup score berekening
             macro_avg = macro_scores["total_score"] or 0
             tech_avg = tech_scores["total_score"] or 0
-            market_avg = market_scores["total_score"] or 0
-            setup_score = round((macro_avg + tech_avg) / 2, 2) if (macro_avg or tech_avg) else None
+            setup_score = round((macro_avg + tech_avg) / 2, 2) if macro_avg or tech_avg else None
 
             return {
                 "macro_score": macro_scores["total_score"],
                 "technical_score": tech_scores["total_score"],
                 "market_score": market_scores["total_score"],
-                "sentiment_score": None,  # nog niet geïmplementeerd
+                "sentiment_score": sentiment_scores["total_score"],
                 "setup_score": setup_score
             }
 
@@ -182,7 +166,7 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
         conn.close()
 
 
-# ✅ Gecombineerde score ophalen uit setup_scores-tabel (fallback bij rapportage)
+# ✅ Gecombineerde score uit setup_scores
 def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
@@ -195,7 +179,7 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
                 SELECT macro_score, technical_score, sentiment_score
                 FROM setup_scores
                 WHERE symbol = %s
-                ORDER BY created_at DESC  -- ✅ timestamp vervangen door created_at
+                ORDER BY timestamp DESC
                 LIMIT 1
             """, (symbol,))
             row = cur.fetchone()
