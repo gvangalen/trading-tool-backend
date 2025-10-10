@@ -128,6 +128,54 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
         logger.error(f"❌ Fout bij ophalen en berekenen van scores: {e}")
         return {}
 
+# ✅ Gecombineerde score ophalen uit setup_scores-tabel (bijv. voor rapportage)
+def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ COMB01: Geen databaseverbinding.")
+        return {"symbol": symbol, "error": "Geen databaseverbinding", "total_score": 0}
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT macro_score, technical_score, sentiment_score
+                FROM setup_scores
+                WHERE symbol = %s
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (symbol,))
+            row = cur.fetchone()
+
+        if not row:
+            logger.warning(f"⚠️ COMB02: Geen scoregegevens gevonden voor {symbol}")
+            return {"symbol": symbol, "error": "Geen scoregegevens", "total_score": 0}
+
+        try:
+            macro = float(row[0]) if row[0] is not None else 0
+            technical = float(row[1]) if row[1] is not None else 0
+            sentiment = float(row[2]) if row[2] is not None else 0
+        except (ValueError, TypeError):
+            logger.warning(f"⚠️ COMB03: Ongeldige waarden (niet-numeriek) voor {symbol}")
+            return {"symbol": symbol, "error": "Niet-numerieke waarden", "total_score": 0}
+
+        total = round((macro + technical + sentiment) / 3, 2)
+        logger.info(f"✅ COMB04: Totale score voor {symbol} = {total}")
+
+        return {
+            "symbol": symbol,
+            "macro_score": macro,
+            "technical_score": technical,
+            "sentiment_score": sentiment,
+            "total_score": total
+        }
+
+    except Exception as e:
+        logger.error(f"❌ COMB05: Fout bij scoreberekening voor {symbol}: {e}")
+        return {"symbol": symbol, "error": str(e), "total_score": 0}
+
+    finally:
+        conn.close()
+
 # ✅ Testfunctie
 def test_scoring_utils():
     test_data = {
@@ -153,6 +201,8 @@ def test_scoring_utils():
     print("\n✅ Technical Scores:\n", json.dumps(tech_scores, indent=2))
     print("\n✅ Market Scores:\n", json.dumps(market_scores, indent=2))
     print("\n✅ Live DB Scores:\n", json.dumps(get_scores_for_symbol("BTC"), indent=2))
+    print("\n✅ Combined Score (setup_scores):\n", json.dumps(calculate_combined_score("BTC"), indent=2))
+
 
 if __name__ == "__main__":
     test_scoring_utils()
