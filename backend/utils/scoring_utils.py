@@ -178,7 +178,7 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
                 SELECT macro_score, technical_score, sentiment_score
                 FROM setup_scores
                 WHERE symbol = %s
-                ORDER BY timestamp DESC
+                ORDER BY created_at DESC
                 LIMIT 1
             """, (symbol,))
             row = cur.fetchone()
@@ -215,7 +215,6 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
 
     finally:
         conn.close()
-
 
 # ✅ CLI testfunctie (voor debug)
 def test_scoring_utils():
