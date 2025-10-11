@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
 # ✅ Config loader
 def load_config(relative_path: str) -> Dict[str, Any]:
     full_path = BASE_DIR / relative_path
@@ -23,7 +22,6 @@ def load_config(relative_path: str) -> Dict[str, Any]:
         logger.error(f"❌ Failed to load config ({relative_path}): {e}")
         return {}
 
-
 # ✅ Score calculator per waarde
 def calculate_score(value: Optional[float], thresholds: list, positive: bool = True) -> Optional[int]:
     if value is None:
@@ -34,6 +32,10 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
     except (ValueError, TypeError):
         logger.warning(f"⚠️ Ongeldige waarde ({value}) → None")
         return None
+
+    if len(thresholds) != 3:
+        logger.warning(f"⚠️ Ongeldige thresholds ({thresholds}) – fallback naar [0, 50, 100]")
+        thresholds = [0, 50, 100]
 
     if positive:
         if value > thresholds[2]:
@@ -54,7 +56,6 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
         else:
             return -2
 
-
 # ✅ Score generator op basis van config en data
 def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     scores = {}
@@ -66,7 +67,16 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
         thresholds = conf.get("thresholds", [0, 50, 100])
         positive = conf.get("positive", True)
 
+        # ✅ Check thresholds lengte en fallback
+        if len(thresholds) != 3:
+            logger.warning(f"⚠️ [{name}] heeft ongeldige thresholds {thresholds} – fallback naar [0, 50, 100]")
+            thresholds = [0, 50, 100]
+
         score = calculate_score(value, thresholds, positive)
+
+        # ✅ Log per indicator
+        logger.info(f"📊 Indicator: {name} → waarde={value}, score={score}, thresholds={thresholds}, positief={positive}")
+
         scores[name] = {
             "value": value,
             "score": score,
@@ -81,7 +91,6 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
     avg_score = round(total / count, 2) if count else None
     logger.info(f"✅ {count} geldige indicatoren gescoord (gemiddelde: {avg_score})")
     return {"scores": scores, "total_score": avg_score}
-
 
 # ✅ Haal macro, technical, market en sentiment scores op uit DB
 def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
@@ -100,7 +109,7 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             macro_rows = cur.fetchall()
             macro_data = {name: float(value) for name, value in macro_rows}
 
-            # 2️⃣ Technische indicators ophalen (✅ FIXED haakje verwijderd!)
+            # 2️⃣ Technische indicators ophalen
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
@@ -164,8 +173,7 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
     finally:
         conn.close()
 
-
-# ✅ Haal gecombineerde score op uit setup_scores tabel (voor fallback of rapportage)
+# ✅ Haal gecombineerde score op uit setup_scores tabel
 def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
@@ -216,7 +224,7 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
     finally:
         conn.close()
 
-# ✅ CLI testfunctie (voor debug)
+# ✅ CLI testfunctie
 def test_scoring_utils():
     test_data = {
         "fear_greed_index": 77,
