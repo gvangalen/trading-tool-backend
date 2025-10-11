@@ -1,12 +1,25 @@
 import logging
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, HTTPException
 from backend.utils.db import get_db_connection
 from backend.models.technical_model import TechnicalIndicator
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# ✅ Veilige conversies
+def safe_float(value):
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+def safe_int(value):
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 # ✅ GET all
 @router.get("/technical_data")
@@ -28,8 +41,8 @@ async def get_technical_data():
             {
                 "symbol": row[0],
                 "indicator": row[1],
-                "waarde": float(row[2]),
-                "score": int(row[3]),
+                "waarde": safe_float(row[2]),
+                "score": safe_int(row[3]),
                 "advies": row[4],
                 "uitleg": row[5],
                 "timestamp": row[6].isoformat(),
@@ -81,7 +94,7 @@ async def save_technical_data(item: TechnicalIndicator):
     finally:
         if conn:
             conn.close()
-            
+
 # ✅ Dagdata per indicator
 @router.get("/technical_data/day")
 async def get_latest_day_data():
@@ -122,8 +135,8 @@ async def get_latest_day_data():
             {
                 "symbol": row[0],
                 "indicator": row[1],
-                "waarde": float(row[2]),
-                "score": int(row[3]),
+                "waarde": safe_float(row[2]),
+                "score": safe_int(row[3]),
                 "advies": row[4],
                 "uitleg": row[5],
                 "timestamp": row[6].isoformat(),
@@ -156,8 +169,8 @@ async def get_technical_week_data():
                 {
                     "symbol": row[0],
                     "indicator": row[1],
-                    "waarde": float(row[2]),
-                    "score": int(row[3]),
+                    "waarde": safe_float(row[2]),
+                    "score": safe_int(row[3]),
                     "advies": row[4],
                     "uitleg": row[5],
                     "timestamp": row[6].isoformat(),
@@ -190,8 +203,8 @@ async def get_technical_month_data():
                 {
                     "symbol": row[0],
                     "indicator": row[1],
-                    "waarde": float(row[2]),
-                    "score": int(row[3]),
+                    "waarde": safe_float(row[2]),
+                    "score": safe_int(row[3]),
                     "advies": row[4],
                     "uitleg": row[5],
                     "timestamp": row[6].isoformat(),
@@ -224,8 +237,8 @@ async def get_technical_quarter_data():
                 {
                     "symbol": row[0],
                     "indicator": row[1],
-                    "waarde": float(row[2]),
-                    "score": int(row[3]),
+                    "waarde": safe_float(row[2]),
+                    "score": safe_int(row[3]),
                     "advies": row[4],
                     "uitleg": row[5],
                     "timestamp": row[6].isoformat(),
@@ -257,8 +270,8 @@ async def get_technical_for_symbol(symbol: str):
                 {
                     "symbol": row[0],
                     "indicator": row[1],
-                    "waarde": float(row[2]),
-                    "score": int(row[3]),
+                    "waarde": safe_float(row[2]),
+                    "score": safe_int(row[3]),
                     "advies": row[4],
                     "uitleg": row[5],
                     "timestamp": row[6].isoformat(),
