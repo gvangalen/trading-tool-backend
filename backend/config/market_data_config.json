@@ -1,9 +1,4 @@
 {
-  "coingecko_url": "https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1",
-  "volume_url": "https://api.coingecko.com/api/v3/coins/{id}",
-  "assets": {
-    "BTC": "bitcoin"  
-  },
   "indicators": {
     "price": {
       "thresholds": [25000, 35000, 45000],
@@ -29,5 +24,10 @@
       "explanation": "Het volume in USD is een maatstaf voor interesse en bevestiging.",
       "action": "Hoog volume kan beweging bevestigen. Laag volume wijst op twijfel."
     }
+  },
+  "coingecko_url": "https://api.coingecko.com/api/v3/coins/{id}/ohlc?vs_currency=usd&days=1",
+  "volume_url": "https://api.coingecko.com/api/v3/coins/{id}",
+  "assets": {
+    "BTC": "bitcoin"
   }
 }
