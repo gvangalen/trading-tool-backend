@@ -102,9 +102,10 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
 
             # 2️⃣ Technische indicators ophalen
             cur.execute("""
-                SELECT indicator, value FROM technical_indicators
-                WHERE symbol = %s AND timestamp = (
-                    SELECT MAX(timestamp) FROM technical_indicators WHERE symbol = %s
+                SELECT DISTINCT ON (indicator) indicator, value
+                FROM technical_indicators
+                WHERE symbol = %s
+                ORDER BY indicator, timestamp DESC
                 )
             """, (symbol, symbol))
             tech_rows = cur.fetchall()
