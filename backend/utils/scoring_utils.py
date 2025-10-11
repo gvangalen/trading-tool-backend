@@ -24,7 +24,7 @@ def load_config(relative_path: str) -> Dict[str, Any]:
         return {}
 
 
-# ✅ Score calculator
+# ✅ Score calculator per waarde
 def calculate_score(value: Optional[float], thresholds: list, positive: bool = True) -> Optional[int]:
     if value is None:
         logger.debug("⚠️ Geen waarde ontvangen voor scoreberekening → None")
@@ -55,7 +55,7 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
             return -2
 
 
-# ✅ Score generator
+# ✅ Score generator op basis van config en data
 def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     scores = {}
     total = 0
@@ -83,7 +83,7 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
     return {"scores": scores, "total_score": avg_score}
 
 
-# ✅ Alle actuele scores ophalen
+# ✅ Haal macro, technical, market en sentiment scores op uit DB
 def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
@@ -100,14 +100,13 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             macro_rows = cur.fetchall()
             macro_data = {name: float(value) for name, value in macro_rows}
 
-            # 2️⃣ Technische indicators ophalen
+            # 2️⃣ Technische indicators ophalen (✅ FIXED haakje verwijderd!)
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
                 WHERE symbol = %s
                 ORDER BY indicator, timestamp DESC
-                )
-            """, (symbol, symbol))
+            """, (symbol,))
             tech_rows = cur.fetchall()
             tech_data = {indicator: float(value) for indicator, value in tech_rows}
 
@@ -132,21 +131,20 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             tech_conf = load_config("config/technical_indicators_config.json")
             market_conf = load_config("config/market_data_config.json")
 
-            # ➕ Split macro_config op in macro & sentiment
+            # ➕ Opsplitsen macro-config in macro en sentiment
             macro_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "macro"}
             sentiment_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "sentiment"}
 
-            # ➕ Split macro_data op in macro & sentiment
             sentiment_data = {k: v for k, v in macro_data.items() if k in sentiment_indicators}
             macro_data_cleaned = {k: v for k, v in macro_data.items() if k not in sentiment_data}
 
-            # 5️⃣ Scoreberekening
+            # 5️⃣ Scoreberekening per categorie
             macro_scores = generate_scores(macro_data_cleaned, macro_indicators)
             tech_scores = generate_scores(tech_data, tech_conf)
             market_scores = generate_scores(market_data, market_conf)
             sentiment_scores = generate_scores(sentiment_data, sentiment_indicators)
 
-            # 6️⃣ Setup score berekening
+            # 6️⃣ Setup score = gemiddelde van macro + technische scores
             macro_avg = macro_scores["total_score"] or 0
             tech_avg = tech_scores["total_score"] or 0
             setup_score = round((macro_avg + tech_avg) / 2, 2) if macro_avg or tech_avg else None
@@ -167,7 +165,7 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
         conn.close()
 
 
-# ✅ Gecombineerde score uit setup_scores
+# ✅ Haal gecombineerde score op uit setup_scores tabel (voor fallback of rapportage)
 def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
@@ -219,7 +217,7 @@ def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
         conn.close()
 
 
-# ✅ Testfunctie
+# ✅ CLI testfunctie (voor debug)
 def test_scoring_utils():
     test_data = {
         "fear_greed_index": 77,
