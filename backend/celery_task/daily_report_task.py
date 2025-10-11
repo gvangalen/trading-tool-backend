@@ -14,7 +14,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report(symbol: str = "BTC"):
     """
-    Dagelijks AI-rapport genereren en opslaan in database.
+    Dagelijks AI-rapport genereren en veilig opslaan in database.
+    Dubbele entries worden overschreven met de nieuwste data.
     """
     logger.info("🔄 Dagrapport-task gestart")
     load_dotenv()
@@ -33,16 +34,16 @@ def generate_daily_report(symbol: str = "BTC"):
         setup_score = full_report.get("setup_score")
         sentiment_score = full_report.get("sentiment_score")
 
-        # ✅ Als één van de scores ontbreekt, gebruik setup_scores als fallback
+        # ✅ Als één van de scores ontbreekt → fallback naar setup_scores
         if None in (macro_score, technical_score, sentiment_score):
             logger.warning("⚠️ Ontbrekende scores in full_report. Fallback naar setup_scores.")
             from backend.utils.scoring_utils import calculate_combined_score
             combined = calculate_combined_score(symbol)
-            macro_score = macro_score if macro_score is not None else combined.get("macro_score", 0)
-            technical_score = technical_score if technical_score is not None else combined.get("technical_score", 0)
-            sentiment_score = sentiment_score if sentiment_score is not None else combined.get("sentiment_score", 0)
+            macro_score = macro_score or combined.get("macro_score", 0)
+            technical_score = technical_score or combined.get("technical_score", 0)
+            sentiment_score = sentiment_score or combined.get("sentiment_score", 0)
 
-        # ✅ Setup score blijft het gemiddelde van macro en technical (bij ontbreken)
+        # ✅ Setup score = gemiddelde macro + technische score (indien None)
         if setup_score is None:
             setup_score = round((macro_score + technical_score) / 2, 2)
 
@@ -56,11 +57,9 @@ def generate_daily_report(symbol: str = "BTC"):
         today = datetime.now().strftime("%Y-%m-%d")
 
         logger.info(f"🚀 Start opslag van dagrapport ({symbol}) voor {today}")
+        logger.info("🧪 INSERT INTO daily_reports ... ON CONFLICT DO UPDATE")
 
-        # ✅ Debuglog vóór INSERT
-        logger.info("🧪 INSERT INTO daily_reports met kolommen: report_date, symbol, btc_summary, macro_summary, ...")
-
-        # ✅ Volledig rapport opslaan in één rij
+        # ✅ Conflict-safe insert voor daily_reports
         cursor.execute(
             """
             INSERT INTO daily_reports (
@@ -69,6 +68,19 @@ def generate_daily_report(symbol: str = "BTC"):
                 recommendations, conclusion, outlook,
                 macro_score, technical_score, setup_score, sentiment_score
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (report_date, symbol) DO UPDATE
+            SET btc_summary = EXCLUDED.btc_summary,
+                macro_summary = EXCLUDED.macro_summary,
+                setup_checklist = EXCLUDED.setup_checklist,
+                priorities = EXCLUDED.priorities,
+                wyckoff_analysis = EXCLUDED.wyckoff_analysis,
+                recommendations = EXCLUDED.recommendations,
+                conclusion = EXCLUDED.conclusion,
+                outlook = EXCLUDED.outlook,
+                macro_score = EXCLUDED.macro_score,
+                technical_score = EXCLUDED.technical_score,
+                setup_score = EXCLUDED.setup_score,
+                sentiment_score = EXCLUDED.sentiment_score
             """,
             (
                 today, symbol,
@@ -84,20 +96,25 @@ def generate_daily_report(symbol: str = "BTC"):
             )
         )
 
-        # ✅ Scores apart opslaan in daily_scores
+        # ✅ Conflict-safe insert voor daily_scores
         cursor.execute(
             """
             INSERT INTO daily_scores (
                 symbol, report_date,
                 macro_score, technical_score, setup_score, sentiment_score
             ) VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (symbol, report_date) DO UPDATE
+            SET macro_score = EXCLUDED.macro_score,
+                technical_score = EXCLUDED.technical_score,
+                setup_score = EXCLUDED.setup_score,
+                sentiment_score = EXCLUDED.sentiment_score
             """,
             (symbol, today, macro_score, technical_score, setup_score, sentiment_score)
         )
 
         conn.commit()
         conn.close()
-        logger.info(f"✅ Dagrapport en scores opgeslagen voor {symbol} ({today})")
+        logger.info(f"✅ Dagrapport en scores succesvol opgeslagen of bijgewerkt voor {symbol} ({today})")
 
     except Exception as e:
         logger.error(f"❌ Fout bij genereren rapportsecties: {e}", exc_info=True)
