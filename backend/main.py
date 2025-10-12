@@ -7,8 +7,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-# ✅ .env inladen
-load_dotenv()
+# ✅ .env forceren met pad (werkt altijd, ook met pm2)
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path=dotenv_path)
 
 # ✅ Rootpad toevoegen voor correcte backend imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -88,3 +89,6 @@ print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
 for route in app.routes:
     print(f"{route.path} - methods: {route.methods}")
 print()
+
+# ✅ Debug: check env-variabele voor ASSETS_JSON
+print("🔍 ASSETS_JSON uit .env:", os.getenv("ASSETS_JSON"))
