@@ -113,7 +113,7 @@ def process_technical_indicator(name, value, config):
             "interpretation": interpretation,
             "score": score,
             "explanation": config.get("explanation"),
-            "action": config.get("action")
+            "action": config.get("action"),
         }
 
         logger.info(f"✅ {name}: {value} → {interpretation} (score: {score})")
@@ -133,17 +133,18 @@ def process_all_technical(data: dict):
     """
     try:
         config = load_technical_config()
+        indicators = config.get("indicators", {})
     except Exception as e:
         logger.error(f"❌ Config laden mislukt: {e}")
         return {}
 
     results = {}
     for name, raw_value in data.items():
-        if name not in config.get("indicators", {}):
+        if name not in indicators:
             logger.warning(f"⚠️ Geen interpretatieconfig voor: {name}")
             continue
 
-        result = process_technical_indicator(name, raw_value, config["indicators"][name])
+        result = process_technical_indicator(name, raw_value, indicators[name])
         if result:
             results[name] = result
 
