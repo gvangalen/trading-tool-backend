@@ -62,6 +62,10 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
     total = 0
     count = 0
 
+    # 🔤 Zorg voor lowercase keys in data & config
+    data = {k.lower(): v for k, v in data.items()}
+    config = {k.lower(): v for k, v in config.items()}
+
     for name, conf in config.items():
         value = data.get(name)
         thresholds = conf.get("thresholds", [0, 50, 100])
