@@ -2,12 +2,11 @@ import os
 import sys
 import logging
 import traceback
-
 from dotenv import load_dotenv
-load_dotenv()
 
-from celery import Celery
-from celery.schedules import crontab
+# ✅ .env forceren met absoluut pad (werkt ook via PM2 of systemctl)
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path=dotenv_path)
 
 # ✅ Pad naar backend toevoegen
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -18,11 +17,17 @@ if BASE_DIR not in sys.path:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# ✅ Debug: controleer of ASSETS_JSON nu geladen wordt
+logger.info(f"🔍 ASSETS_JSON uit .env: {os.getenv('ASSETS_JSON')}")
+
 # ✅ Redis configuratie
 CELERY_BROKER = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 
 # ✅ Celery app
+from celery import Celery
+from celery.schedules import crontab
+
 celery = Celery(
     "market_dashboard",
     broker=CELERY_BROKER,
@@ -63,7 +68,7 @@ celery.conf.beat_schedule = {
         "schedule": crontab(hour=0, minute=12),
     },
 
-    # 📊 Technische indicatoren (per periode)
+    # 📊 Technische indicatoren
     "fetch_technical_data_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
         "schedule": crontab(hour=0, minute=10),
@@ -81,7 +86,7 @@ celery.conf.beat_schedule = {
         "schedule": crontab(hour=0, minute=25),
     },
 
-    # ✅ BTC prijs historiek (dagelijks)
+    # ✅ BTC prijs historiek
     "fetch_btc_daily_price": {
         "task": "backend.celery_task.btc_price_history_task.fetch_btc_history_daily",
         "schedule": crontab(hour=1, minute=10),
@@ -97,7 +102,7 @@ celery.conf.beat_schedule = {
         "schedule": crontab(hour=2, minute=0),
     },
 
-    # ✅ Wekelijkse en maandelijkse/kwartaal marketdata
+    # ✅ Wekelijkse/maandelijkse/kwartaal data
     "save_market_data_30d": {
         "task": "backend.celery_task.market_task.save_market_data_30d",
         "schedule": crontab(hour=1, minute=45),
@@ -124,7 +129,7 @@ celery.conf.beat_schedule = {
     },
     "generate_daily_report_pdf": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report_pdf",
-        "schedule": crontab(hour=1, minute=0), 
+        "schedule": crontab(hour=1, minute=0),
     },
     "generate_weekly_report": {
         "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
@@ -149,7 +154,7 @@ celery.conf.beat_schedule = {
         "schedule": crontab(hour=1, minute=0),
     },
 
-    # ✅ NIEUW: AI-generatie dagrapport
+    # ✅ Dagelijks AI-rapport
     "generate_daily_report_ai": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
         "schedule": crontab(hour=2, minute=30),
