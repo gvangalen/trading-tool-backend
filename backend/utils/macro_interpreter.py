@@ -3,8 +3,9 @@ import httpx
 import logging
 from backend.config.config_loader import load_macro_config
 
+# ✅ Logging instellen
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # ✅ API URL's
 YAHOO_BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=1d&interval=1d"
@@ -72,12 +73,23 @@ async def process_macro_indicator(name, config):
     if value is None:
         raise RuntimeError(f"❌ [FAIL] Geen waarde gevonden voor {name}")
 
+    # ✅ Threshold-validatie
     thresholds = config.get("thresholds", [])
+    if len(thresholds) != 3:
+        logger.warning(f"⚠️ Ongeldige thresholds voor {name}: {thresholds} → fallback [0, 50, 100]")
+        thresholds = [0, 50, 100]
+
     positive = config.get("positive", True)
 
+    # ✅ Berekeningen
     score = calculate_score(value, thresholds, positive)
     trend = determine_trend(value, thresholds, positive)
     interpretation = interpret_value(value, thresholds, positive)
+
+    logger.info(
+        f"📊 [{name}] value={value} | thresholds={thresholds} | "
+        f"score={score} | trend={trend} | correlation={config.get('correlation')} | source={source}"
+    )
 
     return {
         "name": name,
@@ -143,31 +155,37 @@ async def fetch_fear_greed_value():
 
 # ✅ Interpretatiefuncties
 def calculate_score(value, thresholds, positive=True):
+    """
+    ➤ Berekent een schaalbare score (25–100) op basis van thresholds.
+    """
     if value is None or not thresholds or len(thresholds) != 3:
         return 0
 
     v = float(value)
     if positive:
         if v >= thresholds[2]:
-            return 90
+            return 100
         elif v >= thresholds[1]:
-            return 70
+            return 75
         elif v >= thresholds[0]:
             return 50
         else:
-            return 30
+            return 25
     else:
         if v <= thresholds[0]:
-            return 90
+            return 100
         elif v <= thresholds[1]:
-            return 70
+            return 75
         elif v <= thresholds[2]:
             return 50
         else:
-            return 30
+            return 25
 
 
 def determine_trend(value, thresholds, positive=True):
+    """
+    ➤ Beschrijft de sterkte van de beweging ('Zeer sterk', 'Sterk', 'Neutraal', 'Zwak').
+    """
     if value is None:
         return "Onbekend"
 
@@ -193,6 +211,9 @@ def determine_trend(value, thresholds, positive=True):
 
 
 def interpret_value(value, thresholds, positive=True):
+    """
+    ➤ Beschrijft richting ('Sterke stijging', 'Dalend', enz.).
+    """
     if value is None:
         return "Ongeldig"
 
