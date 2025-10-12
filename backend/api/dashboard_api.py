@@ -7,7 +7,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ 1. Gecombineerde dashboarddata
+
 @router.get("/dashboard")
 async def get_dashboard_data():
     conn = get_db_connection()
@@ -31,13 +31,12 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH01: Market data fout: {e}")
                 market_data = []
 
-            # ✅ Technical data (alle indicatornamen lowercase)
+            # ✅ Technical data (dynamisch laden, lowercase keys)
             try:
                 cur.execute("""
                     SELECT symbol, LOWER(indicator) AS indicator, value, score, timestamp
                     FROM technical_indicators
                     WHERE symbol = 'BTC'
-                    AND LOWER(indicator) IN ('rsi', 'volume', 'ma_200')
                     ORDER BY indicator, timestamp DESC
                 """)
                 rows = cur.fetchall()
@@ -83,14 +82,11 @@ async def get_dashboard_data():
         # ✅ Scoreberekeningen (0–100 schaal)
         macro_score = len(macro_data) * 10 if macro_data else 0
 
-        # 🔧 Nieuwe technische scoreberekening
-        valid_indicators = ["rsi", "volume", "ma_200"]
+        # ✅ Dynamische technische score
         max_score_per_indicator = 3
-        used_scores = [v["score"] for k, v in technical_data.items() if k in valid_indicators]
-
-        raw_total = sum(used_scores)
-        total_possible = len(valid_indicators) * max_score_per_indicator
-        technical_score = round((raw_total / total_possible) * 100, 2) if total_possible else 0
+        used_scores = [v["score"] for v in technical_data.values()]
+        total_possible = len(used_scores) * max_score_per_indicator
+        technical_score = round((sum(used_scores) / total_possible) * 100, 2) if total_possible else 0
 
         setup_score = len(setups) * 10 if setups else 0
 
@@ -100,10 +96,15 @@ async def get_dashboard_data():
             if macro_data else "❌ Geen macrodata"
         )
 
-        technical_explanation = (
-            "📈 Laatste RSI: " + str(technical_data.get("rsi", {}).get("value", "n.v.t."))
-            if technical_data else "❌ Geen technische data"
-        )
+        # Dynamisch uitleg-blok
+        if technical_data:
+            lines = [
+                f"{k.upper()}: {v.get('value')} (score {v.get('score')})"
+                for k, v in technical_data.items()
+            ]
+            technical_explanation = "📈 " + " • ".join(lines)
+        else:
+            technical_explanation = "❌ Geen technische data"
 
         setup_explanation = (
             f"🧠 {len(setups)} setups geladen"
@@ -133,7 +134,7 @@ async def get_dashboard_data():
     finally:
         conn.close()
 
-# ✅ 2. Healthcheck
+
 @router.get("/dashboard/health")
 async def health_check():
     try:
@@ -146,7 +147,7 @@ async def health_check():
         logger.error(f"❌ HEALTH02: {e}")
         raise HTTPException(status_code=500, detail="HEALTH02: Interne fout")
 
-# ✅ 3. Tradingadvies per asset
+
 @router.get("/dashboard/trading_advice")
 async def get_trading_advice(symbol: str = "BTC"):
     conn = get_db_connection()
@@ -169,7 +170,7 @@ async def get_trading_advice(symbol: str = "BTC"):
     finally:
         conn.close()
 
-# ✅ 4. Top setups (voor component)
+
 @router.get("/dashboard/top_setups")
 async def get_top_setups():
     conn = get_db_connection()
@@ -190,7 +191,7 @@ async def get_top_setups():
     finally:
         conn.close()
 
-# ✅ 5. Setup summary (per unieke naam)
+
 @router.get("/dashboard/setup_summary")
 async def get_setup_summary():
     conn = get_db_connection()
