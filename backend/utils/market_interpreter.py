@@ -15,6 +15,7 @@ def interpret_market_data(data, config_path=CONFIG_PATH):
     """
     try:
         config = load_config_file(config_path)
+        indicators = config.get("indicators", {})
     except Exception as e:
         logger.error(f"❌ Fout bij laden market config: {e}")
         return {}
@@ -22,7 +23,7 @@ def interpret_market_data(data, config_path=CONFIG_PATH):
     results = {}
 
     for key, raw_value in data.items():
-        if key not in config:
+        if key not in indicators:
             logger.warning(f"⚠️ Geen interpretatieconfig gevonden voor: {key}")
             continue
 
@@ -37,8 +38,8 @@ def interpret_market_data(data, config_path=CONFIG_PATH):
             }
             continue
 
-        thresholds = config[key].get("thresholds", [])
-        is_positive = config[key].get("positive", True)
+        thresholds = indicators[key].get("thresholds", [])
+        is_positive = indicators[key].get("positive", True)
 
         score = calculate_score(value, thresholds, is_positive)
         label = generate_label(value, thresholds, is_positive)
@@ -49,6 +50,7 @@ def interpret_market_data(data, config_path=CONFIG_PATH):
             "label": label,
         }
 
+    logger.info(f"✅ Geïnterpreteerde market data: {results}")
     return results
 
 
