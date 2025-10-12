@@ -31,13 +31,13 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH01: Market data fout: {e}")
                 market_data = []
 
-            # ✅ Technical data (RSI, Volume, 200MA uit nieuwe tabel)
+            # ✅ Technical data (alle indicatornamen lowercase)
             try:
                 cur.execute("""
-                    SELECT symbol, indicator, value, score, timestamp
+                    SELECT symbol, LOWER(indicator) AS indicator, value, score, timestamp
                     FROM technical_indicators
                     WHERE symbol = 'BTC'
-                    AND indicator IN ('RSI', 'Volume', '200MA')
+                    AND LOWER(indicator) IN ('rsi', 'volume', 'ma_200')
                     ORDER BY indicator, timestamp DESC
                 """)
                 rows = cur.fetchall()
@@ -80,19 +80,24 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH04: Setups fout: {e}")
                 setups = []
 
-        # ✅ Dummy scoreberekening (later vervangen door AI)
+        # ✅ Scores berekenen
         macro_score = len(macro_data) * 10 if macro_data else 0
-        technical_score = len(technical_data) * 10 if technical_data else 0
+
+        # 🔧 Nieuwe technische scoreberekening (op basis van score-waarden)
+        valid_indicators = ["rsi", "volume", "ma_200"]
+        used_scores = [v["score"] for k, v in technical_data.items() if k in valid_indicators]
+        technical_score = round(sum(used_scores) / len(used_scores), 2) if used_scores else 0
+
         setup_score = len(setups) * 10 if setups else 0
 
-        # ✅ Dummy uitleg per score
+        # ✅ Uitleg per score
         macro_explanation = (
             "📊 Gebaseerd op " + ", ".join(d['name'] for d in macro_data)
             if macro_data else "❌ Geen macrodata"
         )
 
         technical_explanation = (
-            "📈 Laatste RSI: " + str(technical_data.get("RSI", {}).get("value", "n.v.t."))
+            "📈 Laatste RSI: " + str(technical_data.get("rsi", {}).get("value", "n.v.t."))
             if technical_data else "❌ Geen technische data"
         )
 
