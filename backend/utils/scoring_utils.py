@@ -118,7 +118,8 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
                 ORDER BY indicator, timestamp DESC
             """, (symbol,))
             tech_rows = cur.fetchall()
-            tech_data = {indicator: float(value) for indicator, value in tech_rows}
+            tech_data = {indicator.lower(): float(value) for indicator, value in tech_rows}
+            logger.debug(f"🔍 Technische data geladen: {list(tech_data.keys())}")
 
             # 3️⃣ Market data ophalen
             cur.execute("""
