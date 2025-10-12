@@ -80,13 +80,17 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH04: Setups fout: {e}")
                 setups = []
 
-        # ✅ Scores berekenen
+        # ✅ Scoreberekeningen (0–100 schaal)
         macro_score = len(macro_data) * 10 if macro_data else 0
 
-        # 🔧 Nieuwe technische scoreberekening (op basis van score-waarden)
+        # 🔧 Nieuwe technische scoreberekening
         valid_indicators = ["rsi", "volume", "ma_200"]
+        max_score_per_indicator = 3
         used_scores = [v["score"] for k, v in technical_data.items() if k in valid_indicators]
-        technical_score = round(sum(used_scores) / len(used_scores), 2) if used_scores else 0
+
+        raw_total = sum(used_scores)
+        total_possible = len(valid_indicators) * max_score_per_indicator
+        technical_score = round((raw_total / total_possible) * 100, 2) if total_possible else 0
 
         setup_score = len(setups) * 10 if setups else 0
 
