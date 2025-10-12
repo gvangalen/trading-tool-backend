@@ -67,14 +67,11 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
         thresholds = conf.get("thresholds", [0, 50, 100])
         positive = conf.get("positive", True)
 
-        # ✅ Check thresholds lengte en fallback
         if len(thresholds) != 3:
             logger.warning(f"⚠️ [{name}] heeft ongeldige thresholds {thresholds} – fallback naar [0, 50, 100]")
             thresholds = [0, 50, 100]
 
         score = calculate_score(value, thresholds, positive)
-
-        # ✅ Log per indicator
         logger.info(f"📊 Indicator: {name} → waarde={value}, score={score}, thresholds={thresholds}, positief={positive}")
 
         scores[name] = {
@@ -138,10 +135,9 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             # 4️⃣ Configs laden
             macro_conf_full = load_config("config/macro_indicators_config.json")
             tech_conf = load_config("config/technical_indicators_config.json")
-            market_conf = load_config("config/market_data_config.json")
-
-            # ✅ macro_conf bevat nu 'indicators'
+            market_conf_full = load_config("config/market_data_config.json")
             macro_conf = macro_conf_full.get("indicators", {})
+            market_conf = market_conf_full.get("indicators", {})
 
             # ➕ Opsplitsen macro-config in macro en sentiment
             macro_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "macro"}
@@ -242,7 +238,7 @@ def test_scoring_utils():
 
     macro_conf = load_config("config/macro_indicators_config.json").get("indicators", {})
     tech_conf = load_config("config/technical_indicators_config.json")
-    market_conf = load_config("config/market_data_config.json")
+    market_conf = load_config("config/market_data_config.json").get("indicators", {})
 
     macro_scores = generate_scores(test_data, macro_conf)
     tech_scores = generate_scores(test_data, tech_conf)
