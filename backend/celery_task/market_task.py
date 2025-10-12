@@ -21,10 +21,16 @@ logger = logging.getLogger(__name__)
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 ASSETS_JSON = os.getenv("ASSETS_JSON", '{"BTC": "bitcoin"}')
 
+ASSETS_JSON = os.getenv("ASSETS_JSON", '{"BTC": "bitcoin"}')
+
 try:
-    ASSETS = json.loads(ASSETS_JSON)
-except json.JSONDecodeError:
-    logger.error("❌ Ongeldige JSON in ASSETS_JSON.")
+    # 👇 Dubbel geescaped JSON fixen
+    if ASSETS_JSON.startswith('"') and ASSETS_JSON.endswith('"'):
+        ASSETS_JSON = json.loads(ASSETS_JSON)  # eerste decode (string → string)
+
+    ASSETS = json.loads(ASSETS_JSON)  # tweede decode (string → dict)
+except Exception as e:
+    logger.error(f"❌ Ongeldige JSON in ASSETS_JSON: {e}")
     ASSETS = {"BTC": "bitcoin"}
 
 TIMEOUT = 10
