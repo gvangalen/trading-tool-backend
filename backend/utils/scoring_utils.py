@@ -136,9 +136,12 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
                 }
 
             # 4️⃣ Configs laden
-            macro_conf = load_config("config/macro_indicators_config.json")
+            macro_conf_full = load_config("config/macro_indicators_config.json")
             tech_conf = load_config("config/technical_indicators_config.json")
             market_conf = load_config("config/market_data_config.json")
+
+            # ✅ macro_conf bevat nu 'indicators'
+            macro_conf = macro_conf_full.get("indicators", {})
 
             # ➕ Opsplitsen macro-config in macro en sentiment
             macro_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "macro"}
@@ -237,7 +240,7 @@ def test_scoring_utils():
         "change_24h": 1.2
     }
 
-    macro_conf = load_config("config/macro_indicators_config.json")
+    macro_conf = load_config("config/macro_indicators_config.json").get("indicators", {})
     tech_conf = load_config("config/technical_indicators_config.json")
     market_conf = load_config("config/market_data_config.json")
 
