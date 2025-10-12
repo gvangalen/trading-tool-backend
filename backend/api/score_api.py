@@ -2,7 +2,7 @@ import logging
 import json
 from fastapi import APIRouter, HTTPException
 from backend.utils.scoring_utils import load_config, generate_scores
-from backend.api.ai.ai_score_generator import calculate_combined_score  
+from backend.utils.scoring_utils import calculate_combined_score
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
