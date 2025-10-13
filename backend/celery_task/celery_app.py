@@ -101,6 +101,12 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.market_task.save_forward_returns",
         "schedule": crontab(hour=2, minute=0),
     },
+    
+    # 🧠 Opslaan van market_score in setup_scores
+    "save_market_score": {
+        "task": "backend.celery_task.market_task.save_market_score",
+        "schedule": crontab(hour=2, minute=5),
+    },
 
     # ✅ Wekelijkse/maandelijkse/kwartaal data
     "save_market_data_30d": {
