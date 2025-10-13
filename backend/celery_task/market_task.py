@@ -276,3 +276,36 @@ def calculate_and_save_forward_returns():
     except Exception as e:
         logger.error("❌ Fout tijdens berekening van forward returns.")
         logger.error(traceback.format_exc())
+
+# ✅ 6. Market score berekenen en opslaan in setup_scores
+@shared_task(name="backend.celery_task.market_task.save_market_score")
+def save_market_score(symbol: str = "BTC"):
+    logger.info(f"🧠 Start berekening en opslag market_score voor {symbol}...")
+
+    try:
+        from backend.utils.scoring_util import get_scores_for_symbol
+        from backend.utils.db import get_db_connection
+
+        scores = get_scores_for_symbol(symbol)
+        market_score = scores.get("market_score")
+
+        if market_score is None:
+            logger.warning(f"⚠️ Geen market_score beschikbaar voor {symbol}. Skip opslag.")
+            return
+
+        conn = get_db_connection()
+        if not conn:
+            logger.error("❌ Geen databaseverbinding.")
+            return
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO setup_scores (symbol, market_score, created_at)
+                VALUES (%s, %s, NOW())
+            """, (symbol, market_score))
+            conn.commit()
+            logger.info(f"✅ Market_score voor {symbol} opgeslagen in setup_scores: {market_score}")
+
+    except Exception as e:
+        logger.error("❌ Fout bij berekening/opslag van market_score")
+        logger.error(traceback.format_exc())
