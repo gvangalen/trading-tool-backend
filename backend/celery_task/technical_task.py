@@ -7,6 +7,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 import requests
 
 # ✅ Eigen utils
+from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import process_all_technical
 
 # ✅ Logging
@@ -38,6 +39,7 @@ def safe_request(url, method="GET", payload=None, headers=None):
         logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
         raise
 
+
 # ✅ RSI berekenen
 def calculate_rsi(closes, period=14):
     if len(closes) < period + 1:
@@ -54,7 +56,8 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-# ✅ POST wrapper
+
+# ✅ API POST wrapper
 def post_technical_data(payload: dict):
     try:
         url = f"{API_BASE_URL}/technical_data"
@@ -68,7 +71,30 @@ def post_technical_data(payload: dict):
         logger.error(f"❌ Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
 
-# ✅ Technische data ophalen en posten (alleen dagdata!)
+
+# ✅ Nieuwe functie: technische score direct in database opslaan
+def store_technical_score_db(symbol, indicator, value, score, advies, uitleg, timestamp):
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen databaseverbinding bij opslaan technische score.")
+        return
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (symbol, indicator, value, score, advies, uitleg, timestamp))
+        conn.commit()
+        logger.info(f"🗃️ Technische score opgeslagen in DB voor {indicator} ({symbol})")
+    except Exception as e:
+        logger.error(f"❌ Fout bij opslaan technische score ({indicator}): {e}")
+        logger.error(traceback.format_exc())
+    finally:
+        conn.close()
+
+
+# ✅ Technische data ophalen, berekenen en direct opslaan
 def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300):
     try:
         logger.info(f"🚀 Start ophalen technische dagdata ({symbol})...")
@@ -84,6 +110,7 @@ def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limi
             logger.warning("⚠️ Niet genoeg candles voor 200MA (dagdata)")
             return
 
+        # Berekeningen
         rsi = calculate_rsi(closes)
         volume = round(sum(volumes), 2)
         ma_200 = round(sum(closes[-200:]) / 200, 2)
@@ -92,6 +119,7 @@ def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limi
 
         logger.info(f"📊 Berekende waarden - RSI: {rsi}, Volume: {volume}, MA-ratio: {ma_200_ratio}")
 
+        # Interpretatie + scoreberekening
         result = process_all_technical({
             "rsi": rsi,
             "volume": volume,
@@ -100,6 +128,7 @@ def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limi
 
         utc_now = datetime.utcnow().replace(microsecond=0)
 
+        # ✅ Opslaan via API én direct in database
         for indicator, data in result.items():
             payload = {
                 "symbol": our_symbol,
@@ -108,13 +137,27 @@ def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limi
                 "score": data.get("score"),
                 "advies": data.get("action"),
                 "uitleg": data.get("explanation"),
-                "timestamp": utc_now.isoformat(),  # ⏰ Alleen deze meesturen
+                "timestamp": utc_now.isoformat(),
             }
+
+            # 🔁 API-call (voor frontend sync)
             post_technical_data(payload)
+
+            # 🗃️ Direct opslaan in database
+            store_technical_score_db(
+                symbol=our_symbol,
+                indicator=indicator,
+                value=data.get("value"),
+                score=data.get("score"),
+                advies=data.get("action"),
+                uitleg=data.get("explanation"),
+                timestamp=utc_now,
+            )
 
     except Exception as e:
         logger.error("❌ Fout bij ophalen/verwerken technische data")
         logger.error(traceback.format_exc())
+
 
 # ✅ Dagelijkse Celery taak
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
