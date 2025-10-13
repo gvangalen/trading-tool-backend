@@ -2,12 +2,12 @@ import os
 import logging
 import json
 from dotenv import load_dotenv
-from openai import OpenAI, OpenAIError
+from openai import OpenAI
 
 from backend.utils.setup_utils import get_latest_setup_for_symbol
-from backend.utils.scoring_utils import get_scores_for_symbol
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 from backend.utils.json_utils import sanitize_json_input
+from backend.utils.db import get_db_connection
 
 # === ✅ Logging naar bestand + console
 LOG_FILE = "/tmp/daily_report_debug.log"
@@ -16,10 +16,11 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
         logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()  # print ook naar stdout
+        logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
 
 def log_and_print(msg: str):
     """Logt én print altijd, onafhankelijk van Celery of PM2."""
@@ -42,16 +43,49 @@ client = OpenAI(api_key=api_key)
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
 
-# === ✅ Helper
 def safe_get(obj, key, fallback="–"):
     if isinstance(obj, dict):
         return obj.get(key, fallback)
     return fallback
 
 
-# === ✅ AI-aanroep met debug
+# ✅ Nieuw: Haal scores uit de database
+def get_scores_from_db(symbol: str):
+    """Haalt de meest recente scores op uit daily_scores-tabel."""
+    conn = get_db_connection()
+    if not conn:
+        log_and_print("❌ Kan geen DB-verbinding maken voor scores.")
+        return {}
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT macro_score, technical_score, setup_score, sentiment_score
+                FROM daily_scores
+                WHERE symbol = %s
+                ORDER BY report_date DESC
+                LIMIT 1
+            """, (symbol,))
+            row = cur.fetchone()
+            if row:
+                return {
+                    "macro_score": row[0],
+                    "technical_score": row[1],
+                    "setup_score": row[2],
+                    "sentiment_score": row[3],
+                }
+            else:
+                log_and_print("⚠️ Geen scores gevonden in daily_scores.")
+                return {}
+    except Exception as e:
+        log_and_print(f"❌ Fout bij ophalen van scores uit DB: {e}")
+        return {}
+    finally:
+        conn.close()
+
+
 def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) -> str:
-    for attempt in range(1, retries + 1):
+    for attempt in range(1, retries + 3):
         try:
             log_and_print(f"🔍 [AI Attempt {attempt}] Prompt (eerste 200): {prompt[:200]}")
             response = client.chat.completions.create(
@@ -136,7 +170,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
 
     # 1️⃣ Data ophalen
     setup_raw = get_latest_setup_for_symbol(symbol)
-    scores_raw = get_scores_for_symbol(symbol)
+    scores_raw = get_scores_from_db(symbol)
     log_and_print(f"📦 setup_raw: {repr(setup_raw)[:200]}")
     log_and_print(f"📦 scores_raw: {repr(scores_raw)[:200]}")
 
