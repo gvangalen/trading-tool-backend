@@ -5,11 +5,11 @@ from celery import shared_task
 from dotenv import load_dotenv
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections
+from backend.utils.scoring_utils import calculate_combined_score
 
 # === ✅ Logging instellen
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
 
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report(symbol: str = "BTC"):
@@ -28,26 +28,25 @@ def generate_daily_report(symbol: str = "BTC"):
             logger.error("❌ Ongeldige rapportstructuur (geen dict). Afgebroken.")
             return
 
-        # ✅ Scores ophalen met fallback
+        # ✅ Scores ophalen uit het rapport
         macro_score = full_report.get("macro_score")
         technical_score = full_report.get("technical_score")
         setup_score = full_report.get("setup_score")
         sentiment_score = full_report.get("sentiment_score")
 
-        # ✅ Als één van de scores ontbreekt → fallback naar setup_scores
-        if None in (macro_score, technical_score, sentiment_score):
-            logger.warning("⚠️ Ontbrekende scores in full_report. Fallback naar setup_scores.")
-            from backend.utils.scoring_utils import calculate_combined_score
+        # ✅ Fallback bij ontbrekende of niet-numerieke scores
+        if not all(isinstance(s, (int, float)) for s in [macro_score, technical_score, sentiment_score]):
+            logger.warning("⚠️ Ontbrekende of ongeldige scores. Fallback naar calculate_combined_score().")
             combined = calculate_combined_score(symbol)
-            macro_score = macro_score or combined.get("macro_score", 0)
-            technical_score = technical_score or combined.get("technical_score", 0)
-            sentiment_score = sentiment_score or combined.get("sentiment_score", 0)
+            macro_score = macro_score if isinstance(macro_score, (int, float)) else combined.get("macro_score", 0)
+            technical_score = technical_score if isinstance(technical_score, (int, float)) else combined.get("technical_score", 0)
+            sentiment_score = sentiment_score if isinstance(sentiment_score, (int, float)) else combined.get("sentiment_score", 0)
 
-        # ✅ Setup score = gemiddelde macro + technische score (indien None)
-        if setup_score is None:
+        # ✅ Setup score = gemiddelde van macro + technical (fallback)
+        if not isinstance(setup_score, (int, float)):
             setup_score = round((macro_score + technical_score) / 2, 2)
 
-        # ✅ Databaseverbinding openen
+        # ✅ Verbinden met DB
         conn = get_db_connection()
         if not conn:
             logger.error("❌ Geen databaseverbinding. Rapport niet opgeslagen.")
@@ -59,7 +58,7 @@ def generate_daily_report(symbol: str = "BTC"):
         logger.info(f"🚀 Start opslag van dagrapport ({symbol}) voor {today}")
         logger.info("🧪 INSERT INTO daily_reports ... ON CONFLICT DO UPDATE")
 
-        # ✅ Conflict-safe insert voor daily_reports
+        # ✅ Insert of update naar daily_reports
         cursor.execute(
             """
             INSERT INTO daily_reports (
@@ -96,7 +95,7 @@ def generate_daily_report(symbol: str = "BTC"):
             )
         )
 
-        # ✅ Conflict-safe insert voor daily_scores
+        # ✅ Ook opslaan in daily_scores (voor grafieken, analyse)
         cursor.execute(
             """
             INSERT INTO daily_scores (
