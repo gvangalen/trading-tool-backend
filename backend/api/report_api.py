@@ -1,8 +1,9 @@
 import logging
 import io
+import os
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 
 from backend.utils.db import get_db_connection
 from backend.utils.pdf_generator import generate_pdf_report
@@ -170,13 +171,8 @@ async def get_quarterly_report():
     finally:
         conn.close()
 
-# ✅ Algemeen rapport ophalen met optionele datum
 @router.get("/report/{report_type}")
 async def get_report_by_type(report_type: str, date: str = Query(None)):
-    """
-    Haal een rapport op voor een specifiek type (daily, weekly, monthly, quarterly),
-    eventueel gefilterd op datum via ?date=YYYY-MM-DD.
-    """
     table = get_table_name(report_type)
     logger.info(f"[get_report_by_type] Rapport ophalen uit {table} voor {date or 'latest'}")
 
@@ -215,19 +211,25 @@ async def generate_report(report_type: str):
 async def export_report_pdf(report_type: str, date: str = Query(...)):
     table = get_table_name(report_type)
     logger.info(f"[export_report_pdf] PDF genereren voor {report_type} op {date}")
-    try:
-        report = fetch_report(table, date)
-        if not report:
-            raise HTTPException(status_code=404, detail="Rapport niet gevonden")
-        pdf_buffer = generate_pdf_report(report)
 
-        filename = f"{report_type}_report_{date}.pdf"
+    # Pad naar PDF-bestand
+    pdf_dir = f"backend/static/reports/{report_type}"
+    pdf_path = os.path.join(pdf_dir, f"{report_type}_report_{date}.pdf")
 
-        headers = {
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        }
+    if os.path.exists(pdf_path):
+        logger.info(f"[export_report_pdf] Bestaande PDF gevonden: {pdf_path}")
+        return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
 
-        return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)
-    except Exception as e:
-        logger.error(f"[export_report_pdf] Fout bij exporteren: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij PDF-export")
+    # Zo niet: rapport ophalen en PDF maken
+    report = fetch_report(table, date)
+    if not report:
+        raise HTTPException(status_code=404, detail="Rapport niet gevonden")
+
+    pdf_buffer = generate_pdf_report(report)
+
+    os.makedirs(pdf_dir, exist_ok=True)
+    with open(pdf_path, "wb") as f:
+        f.write(pdf_buffer.getbuffer())
+
+    logger.info(f"[export_report_pdf] PDF opgeslagen: {pdf_path}")
+    return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
