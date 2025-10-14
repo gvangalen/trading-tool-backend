@@ -3,9 +3,12 @@ import logging
 from datetime import datetime
 from celery import shared_task
 from dotenv import load_dotenv
-from backend.utils.db import get_db_connection
+
+from backend.utils.db import get_db_connection, get_db_session
 from backend.utils.ai_report_utils import generate_daily_report_sections
 from backend.utils.scoring_utils import calculate_combined_score
+from backend.utils.pdf_report import generate_pdf_report
+from backend.models.report import DailyReport
 
 # === ✅ Logging instellen
 logger = logging.getLogger(__name__)
@@ -114,6 +117,16 @@ def generate_daily_report(symbol: str = "BTC"):
         conn.commit()
         conn.close()
         logger.info(f"✅ Dagrapport en scores succesvol opgeslagen of bijgewerkt voor {symbol} ({today})")
+
+        # ✅ PDF genereren op basis van de opgeslagen rapportgegevens
+        db = get_db_session()
+        db_report = db.query(DailyReport).filter_by(report_date=today, symbol=symbol).first()
+
+        if db_report:
+            generate_pdf_report(db_report, report_type="daily")
+            logger.info(f"🖨️ PDF gegenereerd voor {symbol} op {today}")
+        else:
+            logger.warning(f"⚠️ Geen rapport gevonden in DB om PDF van te maken voor {today}")
 
     except Exception as e:
         logger.error(f"❌ Fout bij genereren rapportsecties: {e}", exc_info=True)
