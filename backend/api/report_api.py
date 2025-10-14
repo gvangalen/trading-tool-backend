@@ -85,20 +85,23 @@ def fetch_report_history(table: str):
 # 1. RAPPORT PER TYPE
 # ==========================
 
-# ✅ Dagelijks rapport ophalen
+# ✅ Dagelijks rapport ophalen (alleen BTC)
 @router.get("/report/daily")
 async def get_daily_report():
-    logger.info("[get_daily_report] Dagelijks rapport ophalen")
+    logger.info("[get_daily_report] Dagelijks rapport ophalen voor BTC")
     conn = get_db_connection()
     if not conn:
         logger.error("[get_daily_report] Geen databaseverbinding")
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM daily_reports ORDER BY report_date DESC LIMIT 1")
+            cur.execute(
+                "SELECT * FROM daily_reports WHERE symbol = %s ORDER BY report_date DESC LIMIT 1",
+                ("BTC",)
+            )
             row = cur.fetchone()
             if not row:
-                logger.warning("[get_daily_report] Geen rapport gevonden")
+                logger.warning("[get_daily_report] Geen BTC-rapport gevonden")
                 return {}
             return dict(zip([desc[0] for desc in cur.description], row))
     except Exception as e:
