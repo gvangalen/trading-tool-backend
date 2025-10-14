@@ -219,8 +219,15 @@ async def export_report_pdf(report_type: str, date: str = Query(...)):
         report = fetch_report(table, date)
         if not report:
             raise HTTPException(status_code=404, detail="Rapport niet gevonden")
-        pdf_bytes = generate_pdf_report(report)
-        return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf")
+        pdf_buffer = generate_pdf_report(report)
+
+        filename = f"{report_type}_report_{date}.pdf"
+
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+
+        return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)
     except Exception as e:
         logger.error(f"[export_report_pdf] Fout bij exporteren: {e}")
         raise HTTPException(status_code=500, detail="Fout bij PDF-export")
