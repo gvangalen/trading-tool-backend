@@ -1,5 +1,3 @@
-# backend/api/report_api.py
-
 import logging
 import io
 from datetime import datetime
@@ -85,7 +83,6 @@ def fetch_report_history(table: str):
 # 1. RAPPORT PER TYPE
 # ==========================
 
-# ✅ Dagelijks rapport ophalen (alleen BTC)
 @router.get("/report/daily")
 async def get_daily_report():
     logger.info("[get_daily_report] Dagelijks rapport ophalen voor BTC")
@@ -110,7 +107,6 @@ async def get_daily_report():
     finally:
         conn.close()
 
-# ✅ Wekelijks rapport ophalen
 @router.get("/report/weekly")
 async def get_weekly_report():
     logger.info("[get_weekly_report] Wekelijks rapport ophalen")
@@ -132,7 +128,6 @@ async def get_weekly_report():
     finally:
         conn.close()
 
-# ✅ Maandelijks rapport ophalen
 @router.get("/report/monthly")
 async def get_monthly_report():
     logger.info("[get_monthly_report] Maandelijks rapport ophalen")
@@ -154,7 +149,6 @@ async def get_monthly_report():
     finally:
         conn.close()
 
-# ✅ Kwartaalrapport ophalen
 @router.get("/report/quarterly")
 async def get_quarterly_report():
     logger.info("[get_quarterly_report] Kwartaalrapport ophalen")
@@ -175,6 +169,26 @@ async def get_quarterly_report():
         raise HTTPException(status_code=500, detail="Fout bij ophalen kwartaalrapport")
     finally:
         conn.close()
+
+# ✅ Algemeen rapport ophalen met optionele datum
+@router.get("/report/{report_type}")
+async def get_report_by_type(report_type: str, date: str = Query(None)):
+    """
+    Haal een rapport op voor een specifiek type (daily, weekly, monthly, quarterly),
+    eventueel gefilterd op datum via ?date=YYYY-MM-DD.
+    """
+    table = get_table_name(report_type)
+    logger.info(f"[get_report_by_type] Rapport ophalen uit {table} voor {date or 'latest'}")
+
+    try:
+        report = fetch_report(table, date)
+        if not report:
+            logger.warning(f"[get_report_by_type] Geen rapport gevonden voor {report_type} ({date or 'latest'})")
+            return {}
+        return report
+    except Exception as e:
+        logger.error(f"[get_report_by_type] Fout bij ophalen rapport ({report_type}): {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen rapport")
 
 # ==========================
 # 2. HISTORY, GENERATE, PDF
