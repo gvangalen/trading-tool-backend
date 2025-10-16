@@ -62,22 +62,21 @@ def fetch_report(table: str, date: str | None = None):
     try:
         with conn.cursor() as cur:
             if date:
-                logger.info(f"[fetch_report] 📅 Ophalen {table}: report_date={date}, symbol=BTC")
-                # 🔧 cast naar tekst voorkomt typeproblemen bij vergelijking
-                cur.execute(
-                    f"SELECT * FROM {table} WHERE report_date::text = %s AND symbol = %s",
-                    (date, "BTC"),
-                )
+                logger.info(f"[fetch_report] 📅 Query uitvoeren op {table} voor datum={date}")
+                sql = f"SELECT * FROM {table} WHERE report_date::text = %s AND symbol = %s"
+                logger.info(f"[fetch_report] 🔍 SQL: {sql}")
+                cur.execute(sql, (date, "BTC"))
             else:
-                logger.info(f"[fetch_report] 📄 Ophalen laatste rapport uit {table} (symbol=BTC)")
-                cur.execute(
-                    f"SELECT * FROM {table} WHERE symbol = %s ORDER BY report_date DESC LIMIT 1",
-                    ("BTC",),
-                )
+                logger.info(f"[fetch_report] 📄 Query uitvoeren op {table} voor laatste BTC-rapport")
+                sql = f"SELECT * FROM {table} WHERE symbol = %s ORDER BY report_date DESC LIMIT 1"
+                logger.info(f"[fetch_report] 🔍 SQL: {sql}")
+                cur.execute(sql, ("BTC",))
 
             row = cur.fetchone()
+            logger.info(f"[fetch_report] 📊 Fetchone resultaat: {row}")
+
             if not row:
-                logger.warning(f"[fetch_report] ⚠️ Geen rapport gevonden in {table} ({date or 'latest'})")
+                logger.warning(f"[fetch_report] ⚠️ Geen data gevonden in {table} ({date or 'latest'})")
                 return {}
 
             columns = [d[0] for d in cur.description]
@@ -87,10 +86,9 @@ def fetch_report(table: str, date: str | None = None):
 
     except Exception as e:
         logger.exception(f"[fetch_report] ❌ Fout bij ophalen uit {table}: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen rapport")
+        raise HTTPException(status_code=500, detail=f"Fout bij ophalen rapport: {str(e)}")
     finally:
         conn.close()
-
 
 def fetch_report_history(table: str):
     """📜 Haal de laatste 30 rapportdatums op uit de database."""
