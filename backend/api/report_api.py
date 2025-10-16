@@ -43,36 +43,23 @@ def get_generate_task(report_type: str):
     return mapping[report_type]
 
 def fetch_report(table: str, date: str | None = None):
-    """
-    Haal één rapport op.
-    - Met date: exact die dag + symbol='BTC'
-    - Zonder date: laatste rapport voor symbol='BTC'
-    """
+    """Haalt één rapport op uit de database."""
     conn = get_db_connection()
     if not conn:
         logger.error(f"[fetch_report] ❌ Geen databaseverbinding voor {table}")
         raise HTTPException(status_code=500, detail="Geen databaseverbinding")
-
     try:
         with conn.cursor() as cur:
             if date:
-                logger.info(f"[fetch_report] 📅 {table}: report_date={date}, symbol=BTC")
-                cur.execute(
-                    f"SELECT * FROM {table} WHERE report_date = %s AND symbol = %s",
-                    (date, "BTC"),
-                )
+                logger.info(f"[fetch_report] 📅 Ophalen {table}: report_date={date}, symbol=BTC")
+                cur.execute(f"SELECT * FROM {table} WHERE report_date=%s AND symbol=%s", (date, "BTC"))
             else:
-                logger.info(f"[fetch_report] 📄 {table}: laatste rapport (symbol=BTC)")
-                cur.execute(
-                    f"SELECT * FROM {table} WHERE symbol = %s ORDER BY report_date DESC LIMIT 1",
-                    ("BTC",),
-                )
-
+                logger.info(f"[fetch_report] 📄 Ophalen laatste rapport uit {table} (symbol=BTC)")
+                cur.execute(f"SELECT * FROM {table} WHERE symbol=%s ORDER BY report_date DESC LIMIT 1", ("BTC",))
             row = cur.fetchone()
             if not row:
-                logger.warning(f"[fetch_report] ⚠️ Geen rapport in {table} voor {date or 'latest'} (symbol=BTC)")
+                logger.warning(f"[fetch_report] ⚠️ Geen rapport gevonden in {table} ({date or 'latest'})")
                 return {}
-
             data = dict(zip([d[0] for d in cur.description], row))
             logger.info(f"[fetch_report] ✅ Gevonden: {data.get('report_date')} ({data.get('symbol')})")
             return data
@@ -90,8 +77,7 @@ def fetch_report_history(table: str):
     try:
         with conn.cursor() as cur:
             cur.execute(f"SELECT report_date FROM {table} ORDER BY report_date DESC LIMIT 30")
-            rows = cur.fetchall()
-            return [r[0] for r in rows]
+            return [r[0] for r in cur.fetchall()]
     except Exception as e:
         logger.exception(f"[fetch_report_history] ❌ Fout bij ophalen history uit {table}: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen rapportgeschiedenis")
@@ -102,19 +88,17 @@ def fetch_report_history(table: str):
 # 1. SPECIFIEKE ENDPOINTS PER TYPE (backwards compatible)
 # ==========================
 
-@router.get("/report/daily")
+@router.get("/report/daily/latest")
 async def get_daily_report():
-    logger.info("[get_daily_report] Dagelijks rapport ophalen (BTC)")
+    """Ophalen van het laatste dagelijkse rapport."""
+    logger.info("[get_daily_report] Laatste dagelijkse rapport ophalen (BTC)")
     conn = get_db_connection()
     if not conn:
         logger.error("[get_daily_report] ❌ Geen databaseverbinding")
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM daily_reports WHERE symbol = %s ORDER BY report_date DESC LIMIT 1",
-                ("BTC",),
-            )
+            cur.execute("SELECT * FROM daily_reports WHERE symbol=%s ORDER BY report_date DESC LIMIT 1", ("BTC",))
             row = cur.fetchone()
             if not row:
                 logger.warning("[get_daily_report] ⚠️ Geen BTC-rapport gevonden")
@@ -126,7 +110,7 @@ async def get_daily_report():
     finally:
         conn.close()
 
-@router.get("/report/weekly")
+@router.get("/report/weekly/latest")
 async def get_weekly_report():
     logger.info("[get_weekly_report] Wekelijks rapport ophalen (BTC)")
     conn = get_db_connection()
@@ -135,10 +119,7 @@ async def get_weekly_report():
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM weekly_reports WHERE symbol = %s ORDER BY report_date DESC LIMIT 1",
-                ("BTC",),
-            )
+            cur.execute("SELECT * FROM weekly_reports WHERE symbol=%s ORDER BY report_date DESC LIMIT 1", ("BTC",))
             row = cur.fetchone()
             if not row:
                 logger.warning("[get_weekly_report] ⚠️ Geen rapport gevonden")
@@ -150,7 +131,7 @@ async def get_weekly_report():
     finally:
         conn.close()
 
-@router.get("/report/monthly")
+@router.get("/report/monthly/latest")
 async def get_monthly_report():
     logger.info("[get_monthly_report] Maandelijks rapport ophalen (BTC)")
     conn = get_db_connection()
@@ -159,10 +140,7 @@ async def get_monthly_report():
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM monthly_reports WHERE symbol = %s ORDER BY report_date DESC LIMIT 1",
-                ("BTC",),
-            )
+            cur.execute("SELECT * FROM monthly_reports WHERE symbol=%s ORDER BY report_date DESC LIMIT 1", ("BTC",))
             row = cur.fetchone()
             if not row:
                 logger.warning("[get_monthly_report] ⚠️ Geen rapport gevonden")
@@ -174,7 +152,7 @@ async def get_monthly_report():
     finally:
         conn.close()
 
-@router.get("/report/quarterly")
+@router.get("/report/quarterly/latest")
 async def get_quarterly_report():
     logger.info("[get_quarterly_report] Kwartaalrapport ophalen (BTC)")
     conn = get_db_connection()
@@ -183,10 +161,7 @@ async def get_quarterly_report():
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt")
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM quarterly_reports WHERE symbol = %s ORDER BY report_date DESC LIMIT 1",
-                ("BTC",),
-            )
+            cur.execute("SELECT * FROM quarterly_reports WHERE symbol=%s ORDER BY report_date DESC LIMIT 1", ("BTC",))
             row = cur.fetchone()
             if not row:
                 logger.warning("[get_quarterly_report] ⚠️ Geen rapport gevonden")
@@ -202,19 +177,16 @@ async def get_quarterly_report():
 # 2. GENERIEKE ENDPOINTS (met datum)
 # ==========================
 
-@router.get("/report/{report_type}")
+@router.get("/report/{report_type}/by-date")
 async def get_report_by_type(report_type: str, date: str | None = Query(None)):
-    """
-    Haal rapport op per type ('daily','weekly','monthly','quarterly').
-    Optioneel ?date=YYYY-MM-DD voor een specifieke dag.
-    """
+    """Ophalen van rapport op specifieke datum."""
     table = get_table_name(report_type)
-    logger.info(f"[get_report_by_type] {report_type} voor {date or 'latest'}")
+    logger.info(f"[get_report_by_type] Rapport ophalen uit {table} voor {date or 'latest'}")
     try:
         report = fetch_report(table, date)
         if not report:
             logger.warning(f"[get_report_by_type] ⚠️ Geen rapport voor {report_type} ({date or 'latest'})")
-            return {}
+            raise HTTPException(status_code=404, detail="Geen rapport gevonden")
         return report
     except Exception as e:
         logger.error(f"[get_report_by_type] ❌ Fout ({report_type}): {e}")
@@ -239,28 +211,22 @@ async def generate_report(report_type: str):
 
 @router.get("/report/{report_type}/export/pdf")
 async def export_report_pdf(report_type: str, date: str = Query(...)):
-    """
-    Download PDF voor een bestaand rapport.
-    - We proberen eerst een cached PDF op schijf.
-    - Bestaat die niet: rapport ophalen -> PDF genereren -> opslaan -> terugsturen.
-    """
+    """Exporteer of genereer PDF voor rapport."""
     table = get_table_name(report_type)
     logger.info(f"[export_report_pdf] PDF {report_type} op {date}")
 
     pdf_dir = f"backend/static/reports/{report_type}"
     pdf_path = os.path.join(pdf_dir, f"{report_type}_report_{date}.pdf")
 
-    # 1) Cache hit
     if os.path.exists(pdf_path):
         logger.info(f"[export_report_pdf] 📄 Bestaande PDF: {pdf_path}")
         return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
 
-    # 2) Geen cache: haal rapport + maak PDF
     report = fetch_report(table, date)
     if not report:
         raise HTTPException(status_code=404, detail="Rapport niet gevonden")
 
-    pdf_buffer = generate_pdf_report(report)  # -> BytesIO
+    pdf_buffer = generate_pdf_report(report)
     os.makedirs(pdf_dir, exist_ok=True)
     with open(pdf_path, "wb") as f:
         f.write(pdf_buffer.getbuffer())
