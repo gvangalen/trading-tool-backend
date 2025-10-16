@@ -12,195 +12,198 @@ from backend.celery_task.weekly_report_task import generate_weekly_report
 from backend.celery_task.monthly_report_task import generate_monthly_report
 from backend.celery_task.quarterly_report_task import generate_quarterly_report
 
-# ==========================
-# CONFIGURATIE
-# ==========================
-
 router = APIRouter()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # ==========================
-# HELPERS
+# HELPER FUNCTIES
 # ==========================
 
-def get_table_name(report_type: str):
-    """Koppel report_type aan de juiste databasetabel."""
-    mapping = {
-        "daily": "daily_reports",
-        "weekly": "weekly_reports",
-        "monthly": "monthly_reports",
-        "quarterly": "quarterly_reports",
-    }
-    if report_type not in mapping:
-        logger.error(f"[get_table_name] ❌ Ongeldig report_type: {report_type}")
-        raise HTTPException(status_code=400, detail=f"Ongeldig report type: {report_type}")
-    return mapping[report_type]
-
-
-def get_generate_task(report_type: str):
-    """Koppel report_type aan de juiste Celery-taak."""
-    mapping = {
-        "daily": generate_daily_report,
-        "weekly": generate_weekly_report,
-        "monthly": generate_monthly_report,
-        "quarterly": generate_quarterly_report,
-    }
-    if report_type not in mapping:
-        logger.error(f"[get_generate_task] ❌ Ongeldig report_type: {report_type}")
-        raise HTTPException(status_code=400, detail=f"Ongeldig report type: {report_type}")
-    return mapping[report_type]
-
-
 def fetch_report(table: str, date: str | None = None):
-    """📄 Haalt één rapport op uit de database (optioneel met datum)."""
     conn = get_db_connection()
     if not conn:
-        logger.error(f"[fetch_report] ❌ Geen databaseverbinding voor {table}")
         raise HTTPException(status_code=500, detail="Geen databaseverbinding")
-
     try:
         with conn.cursor() as cur:
             if date:
-                logger.info(f"[fetch_report] 📅 Query uitvoeren op {table} voor datum={date}")
-                sql = f"SELECT * FROM {table} WHERE report_date::text = %s AND symbol = %s"
-                logger.info(f"[fetch_report] 🔍 SQL: {sql}")
-                cur.execute(sql, (date, "BTC"))
+                logger.info(f"[fetch_report] 📅 Ophalen {table}: {date}")
+                cur.execute(f"SELECT * FROM {table} WHERE report_date::text = %s AND symbol=%s", (date, "BTC"))
             else:
-                logger.info(f"[fetch_report] 📄 Query uitvoeren op {table} voor laatste BTC-rapport")
-                sql = f"SELECT * FROM {table} WHERE symbol = %s ORDER BY report_date DESC LIMIT 1"
-                logger.info(f"[fetch_report] 🔍 SQL: {sql}")
-                cur.execute(sql, ("BTC",))
-
+                logger.info(f"[fetch_report] 📄 Ophalen laatste rapport uit {table}")
+                cur.execute(f"SELECT * FROM {table} WHERE symbol=%s ORDER BY report_date DESC LIMIT 1", ("BTC",))
             row = cur.fetchone()
-            logger.info(f"[fetch_report] 📊 Fetchone resultaat: {row}")
-
             if not row:
-                logger.warning(f"[fetch_report] ⚠️ Geen data gevonden in {table} ({date or 'latest'})")
+                logger.warning(f"[fetch_report] ⚠️ Geen rapport gevonden in {table}")
                 return {}
-
-            columns = [d[0] for d in cur.description]
-            data = dict(zip(columns, row))
+            data = dict(zip([d[0] for d in cur.description], row))
             logger.info(f"[fetch_report] ✅ Rapport gevonden: {data.get('report_date')} ({data.get('symbol')})")
             return data
-
     except Exception as e:
-        logger.exception(f"[fetch_report] ❌ Fout bij ophalen uit {table}: {e}")
-        raise HTTPException(status_code=500, detail=f"Fout bij ophalen rapport: {str(e)}")
+        logger.exception(f"[fetch_report] ❌ Fout: {e}")
+        raise HTTPException(status_code=500, detail="Databasefout")
     finally:
         conn.close()
 
-def fetch_report_history(table: str):
-    """📜 Haal de laatste 30 rapportdatums op uit de database."""
+def fetch_history(table: str):
     conn = get_db_connection()
     if not conn:
-        logger.error(f"[fetch_report_history] ❌ Geen databaseverbinding voor {table}")
         raise HTTPException(status_code=500, detail="Geen databaseverbinding")
-
     try:
         with conn.cursor() as cur:
             cur.execute(f"SELECT report_date FROM {table} ORDER BY report_date DESC LIMIT 30")
-            rows = [r[0] for r in cur.fetchall()]
-            logger.info(f"[fetch_report_history] ✅ {len(rows)} datums gevonden in {table}")
-            return rows
-    except Exception as e:
-        logger.exception(f"[fetch_report_history] ❌ Fout bij ophalen history uit {table}: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen rapportgeschiedenis")
+            return [r[0] for r in cur.fetchall()]
     finally:
         conn.close()
 
-# ==========================
-# 1. FRONTEND-COMPATIBELE ROUTES
-# ==========================
-
-@router.get("/report/{report_type}/latest")
-async def get_latest_report(report_type: str):
-    """✅ Haal het laatste rapport op (bijv. /api/report/daily/latest)."""
-    table = get_table_name(report_type)
-    logger.info(f"[get_latest_report] Route aangeroepen voor {report_type}")
-    try:
-        report = fetch_report(table)
-        if not report:
-            logger.warning(f"[get_latest_report] ⚠️ Geen rapport gevonden in {table}")
-            raise HTTPException(status_code=404, detail="Geen rapport gevonden")
-        return report
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"[get_latest_report] ❌ Fout: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen laatste rapport")
-
-
-@router.get("/report/{report_type}/by-date")
-async def get_report_by_date(report_type: str, date: str = Query(...)):
-    """✅ Haal rapport op voor specifieke datum (bijv. /api/report/daily/by-date?date=2025-10-14)."""
-    table = get_table_name(report_type)
-    logger.info(f"[get_report_by_date] Route aangeroepen: type={report_type}, date={date}")
-
-    try:
-        report = fetch_report(table, date)
-        if not report:
-            logger.warning(f"[get_report_by_date] ⚠️ Geen rapport gevonden in {table} voor {date}")
-            raise HTTPException(status_code=404, detail=f"Geen rapport gevonden voor {date}")
-        return report
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"[get_report_by_date] ❌ Fout: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen rapport op datum")
-
-
-@router.get("/report/{report_type}/history")
-async def get_report_history(report_type: str):
-    """📜 Geef een lijst met de laatste 30 rapportdatums terug."""
-    table = get_table_name(report_type)
-    logger.info(f"[get_report_history] Route aangeroepen voor {report_type}")
-    return fetch_report_history(table)
-
-# ==========================
-# 2. GENEREREN EN EXPORTEREN
-# ==========================
-
-@router.post("/report/{report_type}/generate")
-async def generate_report(report_type: str):
-    """🧠 Start Celery-taak om rapport te genereren."""
-    task = get_generate_task(report_type)
-    logger.info(f"[generate_report] Route aangeroepen voor {report_type}")
-
-    try:
-        celery_task = task.delay()
-        logger.info(f"[generate_report] ✅ Celery-taak gestart: {celery_task.id}")
-        return {"message": "Taak gestart", "task_id": celery_task.id}
-    except Exception as e:
-        logger.exception(f"[generate_report] ❌ Starten taak mislukt: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij starten Celery-taak")
-
-
-@router.get("/report/{report_type}/export/pdf")
-async def export_report_pdf(report_type: str, date: str = Query(...)):
-    """📄 Exporteer of genereer PDF voor rapport."""
-    table = get_table_name(report_type)
-    logger.info(f"[export_report_pdf] Route aangeroepen: type={report_type}, date={date}")
-
+def export_pdf(report_type: str, report: dict, date: str):
     pdf_dir = f"backend/static/reports/{report_type}"
+    os.makedirs(pdf_dir, exist_ok=True)
     pdf_path = os.path.join(pdf_dir, f"{report_type}_report_{date}.pdf")
 
-    # ✅ Cache check
-    if os.path.exists(pdf_path):
-        logger.info(f"[export_report_pdf] 📄 Bestaande PDF teruggegeven: {pdf_path}")
-        return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
-
-    # 🚀 Anders genereren
-    report = fetch_report(table, date)
-    if not report:
-        logger.warning(f"[export_report_pdf] ⚠️ Geen rapport gevonden voor {report_type} op {date}")
-        raise HTTPException(status_code=404, detail="Rapport niet gevonden")
-
     pdf_buffer = generate_pdf_report(report)
-    os.makedirs(pdf_dir, exist_ok=True)
-
     with open(pdf_path, "wb") as f:
         f.write(pdf_buffer.getbuffer())
 
-    logger.info(f"[export_report_pdf] ✅ PDF succesvol opgeslagen: {pdf_path}")
+    logger.info(f"[export_pdf] ✅ PDF opgeslagen: {pdf_path}")
     return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
+
+
+# ==========================
+# DAGRAPPORT
+# ==========================
+
+@router.get("/report/daily/latest")
+async def get_daily_latest():
+    data = fetch_report("daily_reports")
+    if not data:
+        raise HTTPException(status_code=404, detail="Geen dagelijks rapport gevonden")
+    return data
+
+@router.get("/report/daily/by-date")
+async def get_daily_by_date(date: str = Query(...)):
+    data = fetch_report("daily_reports", date)
+    if not data:
+        raise HTTPException(status_code=404, detail="Geen dagelijks rapport op deze datum")
+    return data
+
+@router.get("/report/daily/history")
+async def get_daily_history():
+    return fetch_history("daily_reports")
+
+@router.post("/report/daily/generate")
+async def generate_daily():
+    task = generate_daily_report.delay()
+    return {"message": "Dagrapport taak gestart", "task_id": task.id}
+
+@router.get("/report/daily/export/pdf")
+async def export_daily_pdf(date: str = Query(...)):
+    report = fetch_report("daily_reports", date)
+    if not report:
+        raise HTTPException(status_code=404, detail="Geen dagelijks rapport gevonden")
+    return export_pdf("daily", report, date)
+
+
+# ==========================
+# WEEKRAPPORT
+# ==========================
+
+@router.get("/report/weekly/latest")
+async def get_weekly_latest():
+    data = fetch_report("weekly_reports")
+    if not data:
+        raise HTTPException(status_code=404, detail="Geen weekrapport gevonden")
+    return data
+
+@router.get("/report/weekly/by-date")
+async def get_weekly_by_date(date: str = Query(...)):
+    data = fetch_report("weekly_reports", date)
+    if not data:
+        raise HTTPException(status_code=404, detail="Geen weekrapport op deze datum")
+    return data
+
+@router.get("/report/weekly/history")
+async def get_weekly_history():
+    return fetch_history("weekly_reports")
+
+@router.post("/report/weekly/generate")
+async def generate_weekly():
+    task = generate_weekly_report.delay()
+    return {"message": "Weekrapport taak gestart", "task_id": task.id}
+
+@router.get("/report/weekly/export/pdf")
+async def export_weekly_pdf(date: str = Query(...)):
+    report = fetch_report("weekly_reports", date)
+    if not report:
+        raise HTTPException(status_code=404, detail="Geen weekrapport gevonden")
+    return export_pdf("weekly", report, date)
+
+
+# ==========================
+# MAANDRAPPORT
+# ==========================
+
+@router.get("/report/monthly/latest")
+async def get_monthly_latest():
+    data = fetch_report("monthly_reports")
+    if not data:
+        raise HTTPException(status_code=404, detail="Geen maandrapport gevonden")
+    return data
+
+@router.get("/report/monthly/by-date")
+async def get_monthly_by_date(date: str = Query(...)):
+    data = fetch_report("monthly_reports", date)
+    if not data:
+        raise HTTPException(status_code=404, detail="Geen maandrapport op deze datum")
+    return data
+
+@router.get("/report/monthly/history")
+async def get_monthly_history():
+    return fetch_history("monthly_reports")
+
+@router.post("/report/monthly/generate")
+async def generate_monthly():
+    task = generate_monthly_report.delay()
+    return {"message": "Maandrapport taak gestart", "task_id": task.id}
+
+@router.get("/report/monthly/export/pdf")
+async def export_monthly_pdf(date: str = Query(...)):
+    report = fetch_report("monthly_reports", date)
+    if not report:
+        raise HTTPException(status_code=404, detail="Geen maandrapport gevonden")
+    return export_pdf("monthly", report, date)
+
+
+# ==========================
+# KWARTAALRAPPORT
+# ==========================
+
+@router.get("/report/quarterly/latest")
+async def get_quarterly_latest():
+    data = fetch_report("quarterly_reports")
+    if not data:
+        raise HTTPException(status_code=404, detail="Geen kwartaalrapport gevonden")
+    return data
+
+@router.get("/report/quarterly/by-date")
+async def get_quarterly_by_date(date: str = Query(...)):
+    data = fetch_report("quarterly_reports", date)
+    if not data:
+        raise HTTPException(status_code=404, detail="Geen kwartaalrapport op deze datum")
+    return data
+
+@router.get("/report/quarterly/history")
+async def get_quarterly_history():
+    return fetch_history("quarterly_reports")
+
+@router.post("/report/quarterly/generate")
+async def generate_quarterly():
+    task = generate_quarterly_report.delay()
+    return {"message": "Kwartaalrapport taak gestart", "task_id": task.id}
+
+@router.get("/report/quarterly/export/pdf")
+async def export_quarterly_pdf(date: str = Query(...)):
+    report = fetch_report("quarterly_reports", date)
+    if not report:
+        raise HTTPException(status_code=404, detail="Geen kwartaalrapport gevonden")
+    return export_pdf("quarterly", report, date)
