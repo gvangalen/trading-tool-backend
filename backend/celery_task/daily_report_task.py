@@ -10,15 +10,19 @@ from backend.utils.scoring_utils import calculate_combined_score
 from backend.utils.pdf_report import generate_pdf_report
 from backend.models.report import DailyReport
 
-# === ✅ Logging instellen
-logger = logging.getLogger(__name__)
+# === 🧩 Logging configuratie
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
+
+# =====================================================
+# 🚀 Hoofd Celery-task: Dagrapport genereren
+# =====================================================
 
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
     """
-    Dagelijks AI-rapport genereren en veilig opslaan in database.
+    Dagelijks AI-rapport genereren en veilig opslaan in de database.
     Dubbele entries worden overschreven op basis van report_date.
     """
     load_dotenv()
@@ -26,15 +30,19 @@ def generate_daily_report():
     logger.info(f"🔄 Dagrapport-task gestart voor {today}")
 
     try:
+        # =====================================================
         # 🧠 1. Rapport genereren via AI-module
+        # =====================================================
         logger.info("📝 Rapportgeneratie gestart via AI-module...")
         full_report = generate_daily_report_sections("BTC")
 
         if not isinstance(full_report, dict):
             logger.error("❌ Ongeldige rapportstructuur (geen dict). Afgebroken.")
-            return
+            return {"status": "invalid_structure"}
 
-        # 📊 2. Scores ophalen of berekenen
+        # =====================================================
+        # 📊 2. Scores ophalen of fallback berekenen
+        # =====================================================
         macro_score = full_report.get("macro_score")
         technical_score = full_report.get("technical_score")
         setup_score = full_report.get("setup_score")
@@ -50,17 +58,29 @@ def generate_daily_report():
         if not isinstance(setup_score, (int, float)):
             setup_score = round((macro_score + technical_score) / 2, 2)
 
+        # =====================================================
         # 💾 3. Opslaan in database (INSERT / UPDATE)
+        # =====================================================
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
-                logger.info(f"🚀 Opslaan van dagrapport voor {today}")
+                logger.info(f"🚀 Opslaan van dagrapport in database ({today})")
 
                 cursor.execute(
                     """
                     INSERT INTO daily_reports (
-                        report_date, btc_summary, macro_summary, setup_checklist, priorities,
-                        wyckoff_analysis, recommendations, conclusion, outlook,
-                        macro_score, technical_score, setup_score, sentiment_score
+                        report_date,
+                        btc_summary,
+                        macro_summary,
+                        setup_checklist,
+                        priorities,
+                        wyckoff_analysis,
+                        recommendations,
+                        conclusion,
+                        outlook,
+                        macro_score,
+                        technical_score,
+                        setup_score,
+                        sentiment_score
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (report_date) DO UPDATE
@@ -87,26 +107,33 @@ def generate_daily_report():
                         full_report.get("recommendations", ""),
                         full_report.get("conclusion", ""),
                         full_report.get("outlook", ""),
-                        macro_score, technical_score, setup_score, sentiment_score
-                    )
+                        macro_score,
+                        technical_score,
+                        setup_score,
+                        sentiment_score,
+                    ),
                 )
 
                 conn.commit()
                 logger.info(f"✅ Dagrapport succesvol opgeslagen of bijgewerkt ({today})")
 
+        # =====================================================
         # 🖨️ 4. PDF genereren uit database-record
+        # =====================================================
         try:
             db = get_db_session()
             db_report = db.query(DailyReport).filter_by(report_date=today).first()
             if db_report:
                 generate_pdf_report(db_report, report_type="daily")
-                logger.info(f"🖨️ PDF gegenereerd ({today})")
+                logger.info(f"🖨️ PDF succesvol gegenereerd ({today})")
             else:
                 logger.warning(f"⚠️ Geen rapport gevonden in DB om PDF te genereren ({today})")
         except Exception as pdf_err:
-            logger.error(f"❌ PDF-generatie mislukt: {pdf_err}")
+            logger.error(f"❌ PDF-generatie mislukt: {pdf_err}", exc_info=True)
 
         logger.info("🏁 Dagrapport-task succesvol afgerond.")
+        return {"status": "ok", "date": today}
 
     except Exception as e:
         logger.error(f"❌ Fout tijdens rapportgeneratie: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
