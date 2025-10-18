@@ -1,4 +1,3 @@
-# backend/celery_task/daily_report_task.py
 import os
 import logging
 from datetime import datetime
@@ -17,21 +16,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
-def generate_daily_report(symbol: str = "BTC"):
+def generate_daily_report():
     """
     Dagelijks AI-rapport genereren en veilig opslaan in database.
-    Dubbele entries worden overschreven met de nieuwste data.
+    ⚙️ Eén rapport per dag (BTC-only setup, geen symbol meer nodig).
     """
     load_dotenv()
     today = datetime.now().strftime("%Y-%m-%d")
-    logger.info(f"🔄 Dagrapport-task gestart voor {symbol} ({today})")
+    logger.info(f"🔄 Dagrapport-task gestart ({today})")
 
     try:
         # =====================================================
         # 🧠 1. Rapport genereren via AI-module
         # =====================================================
         logger.info("📝 Rapportgeneratie gestart via AI-module...")
-        full_report = generate_daily_report_sections(symbol)
+        full_report = generate_daily_report_sections("BTC")  # Altijd BTC
 
         if not isinstance(full_report, dict):
             logger.error("❌ Ongeldige rapportstructuur (geen dict). Afgebroken.")
@@ -47,7 +46,7 @@ def generate_daily_report(symbol: str = "BTC"):
 
         if not all(isinstance(s, (int, float)) for s in [macro_score, technical_score, sentiment_score]):
             logger.warning("⚠️ Ontbrekende of ongeldige scores. Gebruik fallback calculate_combined_score().")
-            combined = calculate_combined_score(symbol)
+            combined = calculate_combined_score("BTC")
             macro_score = macro_score if isinstance(macro_score, (int, float)) else combined.get("macro_score", 0)
             technical_score = technical_score if isinstance(technical_score, (int, float)) else combined.get("technical_score", 0)
             sentiment_score = sentiment_score if isinstance(sentiment_score, (int, float)) else combined.get("sentiment_score", 0)
@@ -65,12 +64,12 @@ def generate_daily_report(symbol: str = "BTC"):
                 cursor.execute(
                     """
                     INSERT INTO daily_reports (
-                        report_date, symbol,
+                        report_date,
                         btc_summary, macro_summary, setup_checklist, priorities,
                         wyckoff_analysis, recommendations, conclusion, outlook,
                         macro_score, technical_score, setup_score, sentiment_score
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (report_date, symbol) DO UPDATE
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (report_date) DO UPDATE
                     SET btc_summary = EXCLUDED.btc_summary,
                         macro_summary = EXCLUDED.macro_summary,
                         setup_checklist = EXCLUDED.setup_checklist,
@@ -85,7 +84,7 @@ def generate_daily_report(symbol: str = "BTC"):
                         sentiment_score = EXCLUDED.sentiment_score
                     """,
                     (
-                        today, symbol,
+                        today,
                         full_report.get("btc_summary", ""),
                         full_report.get("macro_summary", ""),
                         full_report.get("setup_checklist", ""),
@@ -98,19 +97,19 @@ def generate_daily_report(symbol: str = "BTC"):
                     )
                 )
 
-                # Optioneel: scores ook in daily_scores opslaan
+                # ✅ Optioneel: scores loggen in daily_scores
                 cursor.execute(
                     """
                     INSERT INTO daily_scores (
-                        symbol, report_date, macro_score, technical_score, setup_score, sentiment_score
-                    ) VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (symbol, report_date) DO UPDATE
+                        report_date, macro_score, technical_score, setup_score, sentiment_score
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (report_date) DO UPDATE
                     SET macro_score = EXCLUDED.macro_score,
                         technical_score = EXCLUDED.technical_score,
                         setup_score = EXCLUDED.setup_score,
                         sentiment_score = EXCLUDED.sentiment_score
                     """,
-                    (symbol, today, macro_score, technical_score, setup_score, sentiment_score)
+                    (today, macro_score, technical_score, setup_score, sentiment_score)
                 )
 
                 conn.commit()
@@ -121,10 +120,10 @@ def generate_daily_report(symbol: str = "BTC"):
         # =====================================================
         try:
             db = get_db_session()
-            db_report = db.query(DailyReport).filter_by(report_date=today, symbol=symbol).first()
+            db_report = db.query(DailyReport).filter_by(report_date=today).first()
             if db_report:
                 generate_pdf_report(db_report, report_type="daily")
-                logger.info(f"🖨️ PDF gegenereerd voor {symbol} ({today})")
+                logger.info(f"🖨️ PDF gegenereerd ({today})")
             else:
                 logger.warning(f"⚠️ Geen rapport gevonden in DB om PDF te genereren ({today})")
         except Exception as pdf_err:
