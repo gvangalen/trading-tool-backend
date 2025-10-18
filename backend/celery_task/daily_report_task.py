@@ -19,26 +19,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def generate_daily_report():
     """
     Dagelijks AI-rapport genereren en veilig opslaan in database.
-    ⚙️ Eén rapport per dag (BTC-only setup, geen symbol meer nodig).
+    Dubbele entries worden overschreven op basis van report_date.
     """
     load_dotenv()
     today = datetime.now().strftime("%Y-%m-%d")
-    logger.info(f"🔄 Dagrapport-task gestart ({today})")
+    logger.info(f"🔄 Dagrapport-task gestart voor {today}")
 
     try:
-        # =====================================================
         # 🧠 1. Rapport genereren via AI-module
-        # =====================================================
         logger.info("📝 Rapportgeneratie gestart via AI-module...")
-        full_report = generate_daily_report_sections("BTC")  # Altijd BTC
+        full_report = generate_daily_report_sections("BTC")
 
         if not isinstance(full_report, dict):
             logger.error("❌ Ongeldige rapportstructuur (geen dict). Afgebroken.")
             return
 
-        # =====================================================
         # 📊 2. Scores ophalen of berekenen
-        # =====================================================
         macro_score = full_report.get("macro_score")
         technical_score = full_report.get("technical_score")
         setup_score = full_report.get("setup_score")
@@ -54,9 +50,7 @@ def generate_daily_report():
         if not isinstance(setup_score, (int, float)):
             setup_score = round((macro_score + technical_score) / 2, 2)
 
-        # =====================================================
         # 💾 3. Opslaan in database (INSERT / UPDATE)
-        # =====================================================
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 logger.info(f"🚀 Opslaan van dagrapport voor {today}")
@@ -64,11 +58,11 @@ def generate_daily_report():
                 cursor.execute(
                     """
                     INSERT INTO daily_reports (
-                        report_date,
-                        btc_summary, macro_summary, setup_checklist, priorities,
+                        report_date, btc_summary, macro_summary, setup_checklist, priorities,
                         wyckoff_analysis, recommendations, conclusion, outlook,
                         macro_score, technical_score, setup_score, sentiment_score
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (report_date) DO UPDATE
                     SET btc_summary = EXCLUDED.btc_summary,
                         macro_summary = EXCLUDED.macro_summary,
@@ -97,27 +91,10 @@ def generate_daily_report():
                     )
                 )
 
-                # ✅ Optioneel: scores loggen in daily_scores
-                cursor.execute(
-                    """
-                    INSERT INTO daily_scores (
-                        report_date, macro_score, technical_score, setup_score, sentiment_score
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (report_date) DO UPDATE
-                    SET macro_score = EXCLUDED.macro_score,
-                        technical_score = EXCLUDED.technical_score,
-                        setup_score = EXCLUDED.setup_score,
-                        sentiment_score = EXCLUDED.sentiment_score
-                    """,
-                    (today, macro_score, technical_score, setup_score, sentiment_score)
-                )
-
                 conn.commit()
                 logger.info(f"✅ Dagrapport succesvol opgeslagen of bijgewerkt ({today})")
 
-        # =====================================================
         # 🖨️ 4. PDF genereren uit database-record
-        # =====================================================
         try:
             db = get_db_session()
             db_report = db.query(DailyReport).filter_by(report_date=today).first()
