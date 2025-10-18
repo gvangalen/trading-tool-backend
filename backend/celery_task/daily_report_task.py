@@ -4,15 +4,16 @@ from datetime import datetime
 from celery import shared_task
 from dotenv import load_dotenv
 
-from backend.utils.db import get_db_connection, get_db_session
+from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections
 from backend.utils.scoring_utils import calculate_combined_score
 from backend.utils.pdf_report import generate_pdf_report
-from backend.models.report import DailyReport
 
 # === ✅ Logging instellen
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+load_dotenv()  # ✅ .env laden als fallback
 
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report(symbol: str = "BTC"):
@@ -21,7 +22,6 @@ def generate_daily_report(symbol: str = "BTC"):
     Dubbele entries worden overschreven met de nieuwste data.
     """
     logger.info("🔄 Dagrapport-task gestart")
-    load_dotenv()
 
     try:
         logger.info("📝 Rapportgeneratie gestart...")
@@ -115,18 +115,21 @@ def generate_daily_report(symbol: str = "BTC"):
         )
 
         conn.commit()
-        conn.close()
-        logger.info(f"✅ Dagrapport en scores succesvol opgeslagen of bijgewerkt voor {symbol} ({today})")
 
-        # ✅ PDF genereren op basis van de opgeslagen rapportgegevens
-        db = get_db_session()
-        db_report = db.query(DailyReport).filter_by(report_date=today, symbol=symbol).first()
+        # ✅ Ophalen rapport voor PDF-generatie
+        cursor.execute("SELECT * FROM daily_reports WHERE report_date = %s AND symbol = %s LIMIT 1;", (today, symbol))
+        row = cursor.fetchone()
 
-        if db_report:
-            generate_pdf_report(db_report, report_type="daily")
+        if row:
+            cols = [desc[0] for desc in cursor.description]
+            report_dict = dict(zip(cols, row))
+            generate_pdf_report(report_dict, report_type="daily")
             logger.info(f"🖨️ PDF gegenereerd voor {symbol} op {today}")
         else:
             logger.warning(f"⚠️ Geen rapport gevonden in DB om PDF van te maken voor {today}")
+
+        conn.close()
+        logger.info(f"✅ Dagrapport en scores succesvol opgeslagen of bijgewerkt voor {symbol} ({today})")
 
     except Exception as e:
         logger.error(f"❌ Fout bij genereren rapportsecties: {e}", exc_info=True)
