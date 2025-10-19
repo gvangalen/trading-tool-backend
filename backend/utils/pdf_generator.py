@@ -15,7 +15,7 @@ SECTION_COLORS = {
     "wyckoff_analysis": (0, 128, 128),     # Teal
     "recommendations": (178, 34, 34),      # Firebrick
     "conclusion": (0, 100, 0),             # Dark Green
-    "outlook": (112, 128, 144),            # Slate Gray
+    "outlook": (112, 128, 144),            # Slate Gray,
 }
 
 # 🧾 Vertalingen / titels voor de PDF-secties
@@ -30,11 +30,24 @@ SECTION_LABELS = {
     "outlook": "🔮 Vooruitblik",
 }
 
+
 # 📄 PDF Klasse met custom layout
 class PDF(FPDF):
     def header(self):
+        """Voeg een dynamische header toe op basis van report_type"""
         self.set_font("Helvetica", "B", 14)
-        self.cell(0, 10, "📊 Daily Trading Report (BTC)", ln=True, align="C")
+
+        title_map = {
+            "daily": "📊 Daily Trading Report (BTC)",
+            "weekly": "📅 Weekly Trading Report (BTC)",
+            "monthly": "🗓️ Monthly Trading Report (BTC)",
+            "quarterly": "📈 Quarterly Trading Report (BTC)",
+        }
+
+        report_type = getattr(self, "report_type", "daily")
+        title = title_map.get(report_type, "📊 Trading Report")
+
+        self.cell(0, 10, title, ln=True, align="C")
         self.set_font("Helvetica", "", 10)
         self.cell(0, 10, datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), ln=True, align="C")
         self.ln(5)
@@ -56,8 +69,15 @@ class PDF(FPDF):
 
 
 # 🧠 Hooffunctie om rapportdata (dict) om te zetten naar PDF
-def generate_pdf_report(data: dict) -> io.BytesIO:
+def generate_pdf_report(data: dict, report_type: str = "daily") -> io.BytesIO:
+    """
+    Genereer een PDF op basis van rapportdata.
+    :param data: Dict met rapportinhoud (uit DB)
+    :param report_type: 'daily', 'weekly', 'monthly', 'quarterly'
+    :return: BytesIO-object met PDF-inhoud
+    """
     pdf = PDF()
+    pdf.report_type = report_type  # sla type op voor header
     pdf.add_page()
 
     # Doorloop alle bekende secties op basis van databasekolommen
@@ -68,6 +88,7 @@ def generate_pdf_report(data: dict) -> io.BytesIO:
             pdf.section_title(label, rgb=color)
 
             try:
+                # JSON of string formatting
                 body = (
                     json.dumps(value, indent=2, ensure_ascii=False)
                     if isinstance(value, dict)
@@ -79,12 +100,14 @@ def generate_pdf_report(data: dict) -> io.BytesIO:
 
             pdf.section_body(body)
 
-    # Genereer PDF in geheugen
+    # 📁 Genereer PDF in geheugen
     output = io.BytesIO()
     try:
-        pdf_bytes = pdf.output(dest='S').encode('latin-1')  # FPDF geeft tekst terug in Latin-1
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')  # FPDF output als bytes
         output.write(pdf_bytes)
         output.seek(0)
+
+        logger.info(f"✅ PDF succesvol gegenereerd ({report_type})")
         return output
     except Exception as e:
         logger.error(f"❌ PDF-generatie mislukt: {e}")
