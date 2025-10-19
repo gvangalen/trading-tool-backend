@@ -314,5 +314,3 @@ async def export_quarterly_pdf(date: str = Query(...)):
         conn.close()
 
 
-# ✅ Zorg dat deze router opgepikt wordt door safe_include()
-__all__ = ["router"]
