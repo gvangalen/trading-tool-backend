@@ -11,7 +11,6 @@ from reportlab.lib.colors import HexColor
 
 logger = logging.getLogger(__name__)
 
-# === 🎨 Sectiekleuren (RGB in HEX)
 SECTION_COLORS = {
     "btc_summary": "#4682B4",       # steelblue
     "macro_summary": "#696969",     # dimgray
@@ -23,7 +22,6 @@ SECTION_COLORS = {
     "outlook": "#708090",           # slategray
 }
 
-# === 🧩 Sectielabels
 SECTION_LABELS = {
     "btc_summary": "📊 Bitcoin Samenvatting",
     "macro_summary": "🌍 Macro Overzicht",
@@ -37,14 +35,16 @@ SECTION_LABELS = {
 
 
 def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bool = True) -> io.BytesIO:
-    """
-    ✅ Unicode-proof PDF generator met kleuren, emoji-ondersteuning en veilige opslag
-    """
     buffer = io.BytesIO()
     today_str = datetime.now().strftime("%Y-%m-%d")
-    folder = f"reports/pdf/{report_type}"
+
+    # 🔒 Zorg dat opslagmap in /static/pdf/... zit
+    base_folder = os.path.abspath("static/pdf")
+    folder = os.path.join(base_folder, report_type)
     os.makedirs(folder, exist_ok=True)
-    pdf_path = f"{folder}/{today_str}.pdf"
+    pdf_path = os.path.join(folder, f"{report_type}_{today_str}.pdf")
+
+    logger.info(f"⏳ Genereren van PDF gestart voor type '{report_type}' op {pdf_path}")
 
     # === 📄 Documentinstellingen
     doc = SimpleDocTemplate(
@@ -68,13 +68,12 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
     story.append(Paragraph(datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), styles["Normal"]))
     story.append(Spacer(1, 12))
 
-    # === 🧱 Secties genereren
+    # === 🧱 Secties toevoegen
     for key, label in SECTION_LABELS.items():
         value = data.get(key)
         if not value:
             continue
 
-        # Titelblok met kleur
         color = HexColor(SECTION_COLORS.get(key, "#808080"))
         header_style = ParagraphStyle(
             name=f"{key}_header",
@@ -87,7 +86,6 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
         )
         story.append(Paragraph(label, header_style))
 
-        # Tekstinhoud
         try:
             if isinstance(value, (dict, list)):
                 body = json.dumps(value, indent=2, ensure_ascii=False)
@@ -97,7 +95,6 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
             logger.warning(f"⚠️ Fout bij converteren van sectie '{key}': {e}")
             body = f"[Fout bij renderen van deze sectie: {e}]"
 
-        # Emoji & unicode veilig
         body = body.replace("\n", "<br/>")
         story.append(Paragraph(body, styles["Content"]))
         story.append(Spacer(1, 6))
@@ -111,6 +108,10 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
             with open(pdf_path, "wb") as f:
                 f.write(buffer.getvalue())
             logger.info(f"✅ PDF opgeslagen op: {pdf_path}")
+            if pdf_path.startswith(os.path.abspath("static")):
+                logger.info(f"🌐 PDF beschikbaar via URL: /{os.path.relpath(pdf_path, 'static')}")
+            else:
+                logger.warning("❗ PDF is buiten de /static map opgeslagen, dus NIET downloadbaar via de frontend.")
 
         return buffer
 
