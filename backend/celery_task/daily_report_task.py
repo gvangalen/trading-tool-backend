@@ -41,7 +41,7 @@ def generate_daily_report():
         if not isinstance(setup_score, (int, float)):
             setup_score = round((macro_score + technical_score) / 2, 2)
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().date()
         conn = get_db_connection()
         cursor = conn.cursor()
 
