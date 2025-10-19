@@ -134,12 +134,17 @@ async def get_weekly_by_date(date: str = Query(...)):
         conn.close()
 
 @router.get("/report/weekly/history")
-async def get_weekly_history():
+async def get_weekly_report_history():
+    logger.info("🚀 Weekly report history endpoint aangeroepen")
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT report_date FROM weekly_reports ORDER BY report_date DESC LIMIT 30;")
-            return [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT report_date FROM weekly_reports ORDER BY report_date DESC LIMIT 10;")
+            rows = cur.fetchall()
+            logger.info(f"🧪 Gevonden {len(rows)} weekly reports: {rows}")
+            if not rows:
+                raise HTTPException(status_code=404, detail="Geen weekly reports gevonden.")
+            return [row[0] for row in rows]
     finally:
         conn.close()
 
@@ -201,12 +206,17 @@ async def get_monthly_by_date(date: str = Query(...)):
         conn.close()
 
 @router.get("/report/monthly/history")
-async def get_monthly_history():
+async def get_monthly_report_history():
+    logger.info("🚀 Monthly report history endpoint aangeroepen")
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT report_date FROM monthly_reports ORDER BY report_date DESC LIMIT 30;")
-            return [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT report_date FROM monthly_reports ORDER BY report_date DESC LIMIT 10;")
+            rows = cur.fetchall()
+            logger.info(f"🧪 Gevonden {len(rows)} monthly reports: {rows}")
+            if not rows:
+                raise HTTPException(status_code=404, detail="Geen monthly reports gevonden.")
+            return [row[0] for row in rows]
     finally:
         conn.close()
 
@@ -268,15 +278,20 @@ async def get_quarterly_by_date(date: str = Query(...)):
         conn.close()
 
 @router.get("/report/quarterly/history")
-async def get_quarterly_history():
+async def get_quarterly_report_history():
+    logger.info("🚀 Quarterly report history endpoint aangeroepen")
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT report_date FROM quarterly_reports ORDER BY report_date DESC LIMIT 30;")
-            return [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT report_date FROM quarterly_reports ORDER BY report_date DESC LIMIT 10;")
+            rows = cur.fetchall()
+            logger.info(f"🧪 Gevonden {len(rows)} quarterly reports: {rows}")
+            if not rows:
+                raise HTTPException(status_code=404, detail="Geen quarterly reports gevonden.")
+            return [row[0] for row in rows]
     finally:
         conn.close()
-
+        
 @router.post("/report/quarterly/generate")
 async def generate_quarterly():
     task = generate_quarterly_report.delay()
