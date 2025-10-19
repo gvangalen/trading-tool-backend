@@ -62,12 +62,17 @@ async def get_daily_by_date(date: str = Query(...)):
         conn.close()
 
 @router.get("/report/daily/history")
-async def get_daily_history():
+async def get_daily_report_history():
+    logger.info("🚀 Daily report history endpoint aangeroepen")
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT report_date FROM daily_reports ORDER BY report_date DESC LIMIT 30;")
-            return [r[0] for r in cur.fetchall()]
+            cur.execute("SELECT report_date FROM daily_reports ORDER BY report_date DESC LIMIT 10;")
+            rows = cur.fetchall()
+            logger.info(f"🧪 Gevonden {len(rows)} daily reports: {rows}")
+            if not rows:
+                raise HTTPException(status_code=404, detail="Geen daily reports gevonden.")
+            return [row[0] for row in rows]
     finally:
         conn.close()
 
