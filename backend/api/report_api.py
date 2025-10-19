@@ -14,12 +14,10 @@ router = APIRouter()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("backend.api.report_api")
 
-
 # ==========================
 # 📦 PDF EXPORT HELPER
 # ==========================
 def export_pdf(report_type: str, report: dict, date: str):
-    """Genereert of serveert PDF-bestand."""
     pdf_dir = f"backend/static/reports/{report_type}"
     os.makedirs(pdf_dir, exist_ok=True)
     pdf_path = os.path.join(pdf_dir, f"{report_type}_report_{date}.pdf")
@@ -46,9 +44,7 @@ async def get_daily_latest():
             if not row:
                 raise HTTPException(status_code=404, detail="Geen dagelijks rapport gevonden")
             cols = [desc[0] for desc in cur.description]
-            data = dict(zip(cols, row))
-            logger.info(f"[get_daily_latest] ✅ Rapport gevonden: {data.get('report_date')}")
-            return data
+            return dict(zip(cols, row))
     finally:
         conn.close()
 
@@ -76,9 +72,7 @@ async def get_daily_history():
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT report_date FROM daily_reports ORDER BY report_date DESC LIMIT 30;")
-            result = [r[0] for r in cur.fetchall()]
-            logger.info(f"[get_daily_history] ✅ {len(result)} datums opgehaald")
-            return result
+            return [r[0] for r in cur.fetchall()]
     finally:
         conn.close()
 
@@ -318,3 +312,7 @@ async def export_quarterly_pdf(date: str = Query(...)):
             return export_pdf("quarterly", report, date)
     finally:
         conn.close()
+
+
+# ✅ Zorg dat deze router opgepikt wordt door safe_include()
+__all__ = ["router"]
