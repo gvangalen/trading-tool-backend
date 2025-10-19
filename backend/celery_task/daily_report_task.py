@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections
 from backend.utils.scoring_utils import calculate_combined_score
-from backend.utils.pdf_report import generate_pdf_report
+from backend.utils.pdf_generator import generate_pdf_report
 
 # === Logging
 logger = logging.getLogger(__name__)
