@@ -3,96 +3,117 @@ import io
 import json
 import logging
 from datetime import datetime
-from fpdf import FPDF
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.units import cm
+from reportlab.lib.colors import HexColor
 
 logger = logging.getLogger(__name__)
 
+# === 🎨 Sectiekleuren (RGB in HEX)
 SECTION_COLORS = {
-    "btc_summary": (70, 130, 180),
-    "macro_summary": (105, 105, 105),
-    "setup_checklist": (218, 165, 32),
-    "priorities": (255, 140, 0),
-    "wyckoff_analysis": (0, 128, 128),
-    "recommendations": (178, 34, 34),
-    "conclusion": (0, 100, 0),
-    "outlook": (112, 128, 144),
+    "btc_summary": "#4682B4",       # steelblue
+    "macro_summary": "#696969",     # dimgray
+    "setup_checklist": "#DAA520",   # goldenrod
+    "priorities": "#FF8C00",        # darkorange
+    "wyckoff_analysis": "#008080",  # teal
+    "recommendations": "#B22222",   # firebrick
+    "conclusion": "#006400",        # darkgreen
+    "outlook": "#708090",           # slategray
 }
 
+# === 🧩 Sectielabels
 SECTION_LABELS = {
-    "btc_summary": "Bitcoin Samenvatting",
-    "macro_summary": "Macro Overzicht",
-    "setup_checklist": "Setup Checklist",
-    "priorities": "Dagelijkse Prioriteiten",
-    "wyckoff_analysis": "Wyckoff Analyse",
-    "recommendations": "Aanbevelingen",
-    "conclusion": "Conclusie",
-    "outlook": "Vooruitblik",
+    "btc_summary": "📊 Bitcoin Samenvatting",
+    "macro_summary": "🌍 Macro Overzicht",
+    "setup_checklist": "✅ Setup Checklist",
+    "priorities": "🎯 Dagelijkse Prioriteiten",
+    "wyckoff_analysis": "🌀 Wyckoff Analyse",
+    "recommendations": "💡 Aanbevelingen",
+    "conclusion": "🧠 Conclusie",
+    "outlook": "🔮 Vooruitblik",
 }
 
-FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-
-class PDF(FPDF):
-    def header(self):
-        self.set_font("DejaVu", "", 14)
-        self.cell(0, 10, "Daily Trading Report (BTC)", ln=True, align="C")
-        self.set_font("DejaVu", "", 10)
-        self.cell(0, 10, datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), ln=True, align="C")
-        self.ln(5)
-
-    def section_title(self, title, rgb=(200, 200, 200)):
-        self.set_fill_color(*rgb)
-        self.set_font("DejaVu", "B", 12)
-        self.set_text_color(255, 255, 255)
-        self.cell(0, 8, f" {title}", ln=True, fill=True)
-        self.set_text_color(0, 0, 0)
-        self.ln(2)
-
-    def section_body(self, text):
-        self.set_font("DejaVu", "", 10)
-        self.multi_cell(0, 6, text)
-        self.ln(2)
 
 def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bool = True) -> io.BytesIO:
-    pdf = PDF()
-    pdf.add_page()
+    """
+    ✅ Unicode-proof PDF generator met kleuren, emoji-ondersteuning en veilige opslag
+    """
+    buffer = io.BytesIO()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    folder = f"reports/pdf/{report_type}"
+    os.makedirs(folder, exist_ok=True)
+    pdf_path = f"{folder}/{today_str}.pdf"
 
-    # ✅ Unicode font toevoegen
-    pdf.add_font("DejaVu", "", FONT_PATH, uni=True)
-    pdf.add_font("DejaVu", "B", FONT_PATH, uni=True)
+    # === 📄 Documentinstellingen
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=2 * cm,
+        leftMargin=2 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
+        title=f"{report_type.capitalize()} Trading Report ({today_str})",
+    )
 
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='SectionHeader', fontSize=13, leading=16, spaceAfter=10, spaceBefore=14, fontName='Helvetica-Bold'))
+    styles.add(ParagraphStyle(name='Content', fontSize=10.5, leading=14, spaceAfter=8, fontName='Helvetica'))
+
+    story = []
+
+    # === 🧾 Header
+    story.append(Paragraph("📈 Daily Trading Report (BTC)", styles["Title"]))
+    story.append(Paragraph(datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), styles["Normal"]))
+    story.append(Spacer(1, 12))
+
+    # === 🧱 Secties genereren
     for key, label in SECTION_LABELS.items():
         value = data.get(key)
-        if value:
-            color = SECTION_COLORS.get(key, (128, 128, 128))
-            pdf.section_title(label, rgb=color)
-            try:
-                body = (
-                    json.dumps(value, indent=2, ensure_ascii=False)
-                    if isinstance(value, dict)
-                    else str(value)
-                )
-            except Exception as e:
-                logger.warning(f"Fout bij converteren van sectie '{key}': {e}")
-                body = f"[Fout bij renderen van deze sectie: {e}]"
-            pdf.section_body(body)
+        if not value:
+            continue
 
-    output = io.BytesIO()
+        # Titelblok met kleur
+        color = HexColor(SECTION_COLORS.get(key, "#808080"))
+        header_style = ParagraphStyle(
+            name=f"{key}_header",
+            fontName="Helvetica-Bold",
+            fontSize=12,
+            leading=14,
+            textColor=color,
+            spaceBefore=10,
+            spaceAfter=6,
+        )
+        story.append(Paragraph(label, header_style))
+
+        # Tekstinhoud
+        try:
+            if isinstance(value, (dict, list)):
+                body = json.dumps(value, indent=2, ensure_ascii=False)
+            else:
+                body = str(value)
+        except Exception as e:
+            logger.warning(f"⚠️ Fout bij converteren van sectie '{key}': {e}")
+            body = f"[Fout bij renderen van deze sectie: {e}]"
+
+        # Emoji & unicode veilig
+        body = body.replace("\n", "<br/>")
+        story.append(Paragraph(body, styles["Content"]))
+        story.append(Spacer(1, 6))
+
+    # === 📦 PDF genereren
     try:
-        pdf_output = pdf.output(dest='S').encode("utf-8")
-        output.write(pdf_output)
-        output.seek(0)
+        doc.build(story)
+        buffer.seek(0)
 
         if save_to_disk:
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            folder = f"reports/pdf/{report_type}"
-            os.makedirs(folder, exist_ok=True)
-            path = f"{folder}/{today_str}.pdf"
-            with open(path, "wb") as f:
-                f.write(pdf_output)
-            logger.info(f"PDF opgeslagen op {path}")
+            with open(pdf_path, "wb") as f:
+                f.write(buffer.getvalue())
+            logger.info(f"✅ PDF opgeslagen op: {pdf_path}")
 
-        return output
+        return buffer
 
     except Exception as e:
-        logger.error(f"PDF-generatie mislukt: {e}")
+        logger.error(f"❌ PDF-generatie mislukt: {e}")
         raise
