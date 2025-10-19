@@ -1,5 +1,3 @@
-# backend/celery_task/daily_report_task.py
-
 import os
 import logging
 from datetime import datetime
