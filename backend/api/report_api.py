@@ -295,3 +295,7 @@ async def export_quarterly_pdf(date: str = Query(...)):
             return export_pdf("quarterly", report, date)
     finally:
         conn.close()
+
+print("📦 report_api routes:")
+for route in router.routes:
+    print(f"{route.path} - {route.methods}")
