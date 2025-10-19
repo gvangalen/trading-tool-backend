@@ -5,6 +5,7 @@ import importlib
 import traceback
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles  # ✅ toegevoegd
 from dotenv import load_dotenv
 
 # ✅ .env forceren met pad (werkt altijd, ook met pm2)
@@ -39,6 +40,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ✅ Static files beschikbaar maken (voor PDF downloads)
+app.mount("/static", StaticFiles(directory="backend/static"), name="static")
 
 # ✅ Veilige router-loader
 def safe_include(import_path, name=""):
