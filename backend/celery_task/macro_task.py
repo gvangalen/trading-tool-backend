@@ -11,16 +11,16 @@ from backend.config.config_loader import load_macro_config
 from backend.utils.macro_interpreter import process_macro_indicator
 from backend.utils.db import get_db_connection
 
-# ✅ Logging
+# === ✅ Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ Basisconfig
+# === ✅ Basisconfig
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
-# ✅ API-call met retries
+# === ✅ Retry wrapper voor POST
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=3, max=20), reraise=True)
 def safe_post(url, payload=None):
     try:
@@ -35,7 +35,7 @@ def safe_post(url, payload=None):
         logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
         raise
 
-# ✅ Check of indicator vandaag al is opgeslagen
+# === ✅ Check of macro-indicator vandaag al in database zit
 def already_fetched_today(indicator_name: str) -> bool:
     try:
         conn = get_db_connection()
@@ -49,7 +49,7 @@ def already_fetched_today(indicator_name: str) -> bool:
         logger.error(f"⚠️ Fout bij controleren op bestaande macro-data: {e}")
         return False
 
-# ✅ Directe opslag in macro_data-tabel
+# === ✅ Directe opslag in macro_data tabel
 def store_macro_score_db(payload: dict):
     conn = get_db_connection()
     if not conn:
@@ -82,7 +82,7 @@ def store_macro_score_db(payload: dict):
     finally:
         conn.close()
 
-# ✅ Hoofd Celery-task
+# === ✅ Celery-task: macrodata ophalen en verwerken
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
     logger.info("🚀 Start ophalen + verwerken van macro-indicatoren...")
@@ -94,6 +94,7 @@ def fetch_macro_data():
             logger.warning("⚠️ Geen indicatoren gevonden in config.")
             return
 
+        # ✅ Alleen whitelisted indicators (aanpasbaar)
         whitelist = ["fear_greed", "dxy"]
 
         for name, indicator_config in indicators.items():
@@ -132,7 +133,7 @@ def fetch_macro_data():
                     "trend": result.get("trend", ""),
                     "interpretation": result.get("interpretation", ""),
                     "action": result.get("action", ""),
-                    "symbol": "BTC",
+                    "symbol": result.get("symbol", "BTC"),
                     "source": result.get("source", ""),
                     "category": result.get("category", ""),
                     "correlation": result.get("correlation", ""),
