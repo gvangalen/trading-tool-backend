@@ -13,8 +13,8 @@ from backend.celery_task.monthly_report_task import generate_monthly_report
 from backend.celery_task.quarterly_report_task import generate_quarterly_report
 
 router = APIRouter()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("backend.api.report_api")
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 def export_pdf(report_type: str, report: dict, date: str):
     pdf_dir = f"backend/static/reports/{report_type}"
