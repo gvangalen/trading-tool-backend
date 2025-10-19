@@ -29,32 +29,36 @@ SECTION_LABELS = {
     "outlook": "Vooruitblik",
 }
 
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 class PDF(FPDF):
     def header(self):
-        self.set_font("Helvetica", "B", 14)
+        self.set_font("DejaVu", "", 14)
         self.cell(0, 10, "Daily Trading Report (BTC)", ln=True, align="C")
-        self.set_font("Helvetica", "", 10)
+        self.set_font("DejaVu", "", 10)
         self.cell(0, 10, datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), ln=True, align="C")
         self.ln(5)
 
     def section_title(self, title, rgb=(200, 200, 200)):
         self.set_fill_color(*rgb)
-        self.set_font("Helvetica", "B", 12)
+        self.set_font("DejaVu", "B", 12)
         self.set_text_color(255, 255, 255)
         self.cell(0, 8, f" {title}", ln=True, fill=True)
         self.set_text_color(0, 0, 0)
         self.ln(2)
 
     def section_body(self, text):
-        self.set_font("Helvetica", "", 10)
+        self.set_font("DejaVu", "", 10)
         self.multi_cell(0, 6, text)
         self.ln(2)
-
 
 def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bool = True) -> io.BytesIO:
     pdf = PDF()
     pdf.add_page()
+
+    # ✅ Unicode font toevoegen
+    pdf.add_font("DejaVu", "", FONT_PATH, uni=True)
+    pdf.add_font("DejaVu", "B", FONT_PATH, uni=True)
 
     for key, label in SECTION_LABELS.items():
         value = data.get(key)
@@ -74,7 +78,7 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
 
     output = io.BytesIO()
     try:
-        pdf_output = pdf.output(dest='S').encode('latin-1', errors='ignore')  # 🔧 emoji's of rare karakters worden genegeerd
+        pdf_output = pdf.output(dest='S').encode("utf-8")
         output.write(pdf_output)
         output.seek(0)
 
