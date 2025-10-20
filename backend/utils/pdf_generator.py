@@ -8,6 +8,11 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.units import cm
 from reportlab.lib.colors import HexColor
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+# ✅ Unicode font registreren
+pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +38,6 @@ SECTION_LABELS = {
     "outlook": "🔮 Vooruitblik",
 }
 
-
 def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bool = True) -> io.BytesIO:
     buffer = io.BytesIO()
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -58,8 +62,8 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
     )
 
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name='SectionHeader', fontSize=13, leading=16, spaceAfter=10, spaceBefore=14, fontName='Helvetica-Bold'))
-    styles.add(ParagraphStyle(name='Content', fontSize=10.5, leading=14, spaceAfter=8, fontName='Helvetica'))
+    styles.add(ParagraphStyle(name='SectionHeader', fontSize=13, leading=16, spaceAfter=10, spaceBefore=14, fontName='STSong-Light'))
+    styles.add(ParagraphStyle(name='Content', fontSize=10.5, leading=14, spaceAfter=8, fontName='STSong-Light'))
 
     story = []
 
@@ -77,7 +81,7 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
         color = HexColor(SECTION_COLORS.get(key, "#808080"))
         header_style = ParagraphStyle(
             name=f"{key}_header",
-            fontName="Helvetica-Bold",
+            fontName="STSong-Light",
             fontSize=12,
             leading=14,
             textColor=color,
