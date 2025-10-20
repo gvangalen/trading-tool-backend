@@ -6,6 +6,7 @@ import traceback
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.routing import APIRoute
 from dotenv import load_dotenv
 
 # ✅ .env forceren met pad (werkt altijd, ook met pm2)
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 # ✅ FastAPI app aanmaken
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# ✅ CORS-configuratie (fix voor PDF download & credentials)
+# ✅ CORS-configuratie (voor PDF downloads & credentials)
 allow_origins = [
     "http://localhost:3000",
     "http://143.47.186.148",
@@ -35,8 +36,8 @@ allow_origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,       # ❌ niet meer ["*"] want dit blokkeert bij credentials
-    allow_credentials=True,            # nodig voor blob/pdf downloads
+    allow_origins=allow_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -88,10 +89,13 @@ def health_check():
 def test_cors():
     return {"success": True, "message": "CORS werkt correct vanaf frontend."}
 
-# ✅ Debug: alle routes loggen
+# ✅ Debug: alle routes loggen zonder crash
 print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
 for route in app.routes:
-    print(f"{route.path} - methods: {route.methods}")
+    if isinstance(route, APIRoute):
+        print(f"{route.path} - methods: {route.methods}")
+    else:
+        print(f"{route.path} - <non-API route>")
 print()
 
 # ✅ Debug: check env-variabele voor ASSETS_JSON
