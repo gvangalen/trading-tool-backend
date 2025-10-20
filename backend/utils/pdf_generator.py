@@ -2,6 +2,8 @@ import os
 import io
 import json
 import logging
+import unicodedata
+import re
 from datetime import datetime
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -11,11 +13,12 @@ from reportlab.lib.colors import HexColor
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
-# ✅ Unicode font registreren
+# ✅ Unicode font registreren (ondersteunt UTF‑8)
 pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 
 logger = logging.getLogger(__name__)
 
+# 🎨 Sectiekleuren
 SECTION_COLORS = {
     "btc_summary": "#4682B4",       # steelblue
     "macro_summary": "#696969",     # dimgray
@@ -24,9 +27,10 @@ SECTION_COLORS = {
     "wyckoff_analysis": "#008080",  # teal
     "recommendations": "#B22222",   # firebrick
     "conclusion": "#006400",        # darkgreen
-    "outlook": "#708090",           # slategray
+    "outlook": "#708090",           # slategray,
 }
 
+# 🧩 Sectielabels met emoji’s (worden straks opgeschoond)
 SECTION_LABELS = {
     "btc_summary": "📊 Bitcoin Samenvatting",
     "macro_summary": "🌍 Macro Overzicht",
@@ -38,11 +42,29 @@ SECTION_LABELS = {
     "outlook": "🔮 Vooruitblik",
 }
 
+# 🧹 Helper om ongeldige tekens/emoji’s te verwijderen
+def clean_text(text: str) -> str:
+    """
+    Verwijdert emoji’s en niet‑Latin‑1 tekens om PDF‑encoding‑fouten te voorkomen.
+    """
+    if not isinstance(text, str):
+        return str(text)
+    try:
+        # Normaliseer en verwijder tekens buiten Latin‑1 bereik
+        return unicodedata.normalize("NFKD", text).encode("latin-1", "ignore").decode("latin-1")
+    except Exception:
+        # Fallback voor zeldzame gevallen
+        return re.sub(r"[^\x00-\x7F]+", "", text)
+
+
 def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bool = True) -> io.BytesIO:
+    """
+    Genereert een PDF‑rapport met unicode‑veilige tekst.
+    """
     buffer = io.BytesIO()
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # 🔒 Zorg dat opslagmap in /static/pdf/... zit
+    # 📁 Opslagpad binnen static/pdf/[type]
     base_folder = os.path.abspath("static/pdf")
     folder = os.path.join(base_folder, report_type)
     os.makedirs(folder, exist_ok=True)
@@ -61,14 +83,28 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
         title=f"{report_type.capitalize()} Trading Report ({today_str})",
     )
 
+    # 📚 Stijlen
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name='SectionHeader', fontSize=13, leading=16, spaceAfter=10, spaceBefore=14, fontName='STSong-Light'))
-    styles.add(ParagraphStyle(name='Content', fontSize=10.5, leading=14, spaceAfter=8, fontName='STSong-Light'))
+    styles.add(ParagraphStyle(
+        name='SectionHeader',
+        fontSize=13,
+        leading=16,
+        spaceAfter=10,
+        spaceBefore=14,
+        fontName='STSong-Light',
+    ))
+    styles.add(ParagraphStyle(
+        name='Content',
+        fontSize=10.5,
+        leading=14,
+        spaceAfter=8,
+        fontName='STSong-Light',
+    ))
 
     story = []
 
     # === 🧾 Header
-    story.append(Paragraph("📈 Daily Trading Report (BTC)", styles["Title"]))
+    story.append(Paragraph(clean_text("📈 Daily Trading Report (BTC)"), styles["Title"]))
     story.append(Paragraph(datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), styles["Normal"]))
     story.append(Spacer(1, 12))
 
@@ -88,8 +124,11 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
             spaceBefore=10,
             spaceAfter=6,
         )
-        story.append(Paragraph(label, header_style))
 
+        # 🔤 Sectietitel
+        story.append(Paragraph(clean_text(label), header_style))
+
+        # 📄 Sectie‑inhoud
         try:
             if isinstance(value, (dict, list)):
                 body = json.dumps(value, indent=2, ensure_ascii=False)
@@ -99,11 +138,11 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
             logger.warning(f"⚠️ Fout bij converteren van sectie '{key}': {e}")
             body = f"[Fout bij renderen van deze sectie: {e}]"
 
-        body = body.replace("\n", "<br/>")
+        body = clean_text(body).replace("\n", "<br/>")
         story.append(Paragraph(body, styles["Content"]))
         story.append(Spacer(1, 6))
 
-    # === 📦 PDF genereren
+    # === 🖨️ PDF genereren
     try:
         doc.build(story)
         buffer.seek(0)
@@ -115,10 +154,10 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
             if pdf_path.startswith(os.path.abspath("static")):
                 logger.info(f"🌐 PDF beschikbaar via URL: /{os.path.relpath(pdf_path, 'static')}")
             else:
-                logger.warning("❗ PDF is buiten de /static map opgeslagen, dus NIET downloadbaar via de frontend.")
+                logger.warning("❗ PDF buiten /static map opgeslagen – niet direct downloadbaar via frontend.")
 
         return buffer
 
     except Exception as e:
-        logger.error(f"❌ PDF-generatie mislukt: {e}")
+        logger.error(f"❌ PDF‑generatie mislukt: {e}", exc_info=True)
         raise
