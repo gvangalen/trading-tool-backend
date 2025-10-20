@@ -5,7 +5,7 @@ import importlib
 import traceback
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles  # ✅ toegevoegd
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 # ✅ .env forceren met pad (werkt altijd, ook met pm2)
@@ -26,17 +26,17 @@ logger = logging.getLogger(__name__)
 # ✅ FastAPI app aanmaken
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# ✅ CORS-configuratie
-origins = [
+# ✅ CORS-configuratie (fix voor PDF download & credentials)
+allow_origins = [
     "http://localhost:3000",
     "http://143.47.186.148",
     "http://143.47.186.148:3000",
-    "http://143.47.186.148:5002",
 ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allow_origins,       # ❌ niet meer ["*"] want dit blokkeert bij credentials
+    allow_credentials=True,            # nodig voor blob/pdf downloads
     allow_methods=["*"],
     allow_headers=["*"],
 )
