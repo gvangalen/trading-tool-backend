@@ -1,23 +1,32 @@
-import smtplib
 import os
-from email.message import EmailMessage
-from dotenv import load_dotenv
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 
-load_dotenv()
 
-def send_email_with_attachment(subject, body, filepath, filename="report.pdf"):
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = os.getenv("EMAIL_USERNAME")
-    msg["To"] = os.getenv("EMAIL_RECEIVER")
-    msg.set_content(body)
+def send_email_with_attachment(subject: str, body: str, attachment_path: str):
+    host = os.getenv("EMAIL_HOST")
+    port = int(os.getenv("EMAIL_PORT", 587))
+    username = os.getenv("EMAIL_USERNAME")
+    password = os.getenv("EMAIL_PASSWORD")
+    receiver = os.getenv("EMAIL_RECEIVER")
 
-    # Voeg de PDF toe als bijlage
-    with open(filepath, "rb") as f:
-        file_data = f.read()
-        msg.add_attachment(file_data, maintype="application", subtype="pdf", filename=filename)
+    msg = MIMEMultipart()
+    msg['From'] = username
+    msg['To'] = receiver
+    msg['Subject'] = subject
 
-    with smtplib.SMTP(os.getenv("EMAIL_HOST"), int(os.getenv("EMAIL_PORT"))) as smtp:
-        smtp.starttls()
-        smtp.login(os.getenv("EMAIL_USERNAME"), os.getenv("EMAIL_PASSWORD"))
-        smtp.send_message(msg)
+    msg.attach(MIMEText(body, 'plain'))
+
+    with open(attachment_path, "rb") as f:
+        part = MIMEApplication(f.read(), Name=os.path.basename(attachment_path))
+        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(attachment_path)}"'
+        msg.attach(part)
+
+    with smtplib.SMTP(host, port) as server:
+        server.starttls()
+        server.login(username, password)
+        server.send_message(msg)
+
+    print(f"✅ E-mail verzonden naar {receiver}")
