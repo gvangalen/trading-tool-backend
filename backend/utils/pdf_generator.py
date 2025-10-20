@@ -10,11 +10,6 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.units import cm
 from reportlab.lib.colors import HexColor
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-
-# ✅ Unicode font registreren (ondersteunt UTF‑8)
-pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +25,7 @@ SECTION_COLORS = {
     "outlook": "#708090",           # slategray,
 }
 
-# 🧩 Sectielabels met emoji’s (worden straks opgeschoond)
+# 🧩 Sectielabels met emoji’s (worden opgeschoond)
 SECTION_LABELS = {
     "btc_summary": "📊 Bitcoin Samenvatting",
     "macro_summary": "🌍 Macro Overzicht",
@@ -44,18 +39,12 @@ SECTION_LABELS = {
 
 # 🧹 Helper om emoji’s te strippen
 def strip_emoji(text: str) -> str:
-    """
-    Verwijdert emoji’s en symbolen buiten het BMP‑bereik (die PDF‑encoding breken).
-    """
     if not isinstance(text, str):
         return str(text)
     return re.sub(r'[\U00010000-\U0010ffff]', '', text)
 
-# 🧹 Helper om overige tekens te normaliseren
+# 🧹 Helper om niet‑printbare tekens te verwijderen
 def clean_text(text: str) -> str:
-    """
-    Verwijdert niet‑Latin‑1 tekens en normaliseert tekst.
-    """
     if not isinstance(text, str):
         return str(text)
     try:
@@ -64,15 +53,11 @@ def clean_text(text: str) -> str:
     except Exception:
         return re.sub(r"[^\x00-\x7F]+", "", text)
 
-
+# 🧾 PDF generator
 def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bool = True) -> io.BytesIO:
-    """
-    Genereert een PDF‑rapport met veilige unicode‑afhandeling.
-    """
     buffer = io.BytesIO()
     today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # 📁 Opslagpad binnen static/pdf/[type]
     base_folder = os.path.abspath("static/pdf")
     folder = os.path.join(base_folder, report_type)
     os.makedirs(folder, exist_ok=True)
@@ -80,7 +65,6 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
 
     logger.info(f"⏳ Genereren van PDF gestart voor type '{report_type}' op {pdf_path}")
 
-    # === 📄 Documentinstellingen
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
@@ -91,22 +75,23 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
         title=f"{report_type.capitalize()} Trading Report ({today_str})",
     )
 
-    # 📚 Stijlen
     styles = getSampleStyleSheet()
     styles.add(ParagraphStyle(
         name='SectionHeader',
         fontSize=13,
-        leading=16,
-        spaceAfter=10,
-        spaceBefore=14,
-        fontName='STSong-Light',
+        leading=18,
+        spaceAfter=12,
+        spaceBefore=16,
+        fontName='Helvetica-Bold',
+        textColor=HexColor("#333333"),
     ))
     styles.add(ParagraphStyle(
         name='Content',
-        fontSize=10.5,
-        leading=14,
-        spaceAfter=8,
-        fontName='STSong-Light',
+        fontSize=11,
+        leading=16,
+        spaceAfter=10,
+        spaceBefore=6,
+        fontName='Helvetica',
     ))
 
     story = []
@@ -116,7 +101,7 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
     story.append(Paragraph(datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), styles["Normal"]))
     story.append(Spacer(1, 12))
 
-    # === 🧱 Secties toevoegen
+    # === 🧱 Secties
     for key, label in SECTION_LABELS.items():
         value = data.get(key)
         if not value:
@@ -125,18 +110,18 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
         color = HexColor(SECTION_COLORS.get(key, "#808080"))
         header_style = ParagraphStyle(
             name=f"{key}_header",
-            fontName="STSong-Light",
+            fontName="Helvetica-Bold",
             fontSize=12,
-            leading=14,
+            leading=16,
             textColor=color,
-            spaceBefore=10,
-            spaceAfter=6,
+            spaceBefore=12,
+            spaceAfter=8,
         )
 
-        # 🔤 Sectietitel zonder emoji
+        # 🔤 Titel (emoji gestript)
         story.append(Paragraph(clean_text(strip_emoji(label)), header_style))
 
-        # 📄 Sectie‑inhoud
+        # 📄 Inhoud
         try:
             if isinstance(value, (dict, list)):
                 body = json.dumps(value, indent=2, ensure_ascii=False)
@@ -150,7 +135,7 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
         story.append(Paragraph(body, styles["Content"]))
         story.append(Spacer(1, 6))
 
-    # === 🖨️ PDF genereren
+    # === 🖨️ PDF bouwen
     try:
         doc.build(story)
         buffer.seek(0)
@@ -167,5 +152,5 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
         return buffer
 
     except Exception as e:
-        logger.error(f"❌ PDF‑generatie mislukt: {e}", exc_info=True)
+        logger.error(f"❌ PDF-generatie mislukt: {e}", exc_info=True)
         raise
