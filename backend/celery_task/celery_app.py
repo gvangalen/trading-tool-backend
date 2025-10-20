@@ -56,19 +56,14 @@ celery.conf.timezone = "UTC"
 
 # ✅ Beat scheduler configuratie
 celery.conf.beat_schedule = {
-    # 📈 Live BTC/crypto prijsdata
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
         "schedule": crontab(minute="*/5"),
     },
-
-    # 📊 Macro-indicatoren
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
         "schedule": crontab(hour=0, minute=12),
     },
-
-    # 📊 Technische indicatoren
     "fetch_technical_data_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
         "schedule": crontab(hour=0, minute=10),
@@ -85,14 +80,10 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.technical_task.fetch_technical_data_quarter",
         "schedule": crontab(hour=0, minute=25),
     },
-
-    # ✅ BTC prijs historiek
     "fetch_btc_daily_price": {
         "task": "backend.celery_task.btc_price_history_task.fetch_btc_history_daily",
         "schedule": crontab(hour=1, minute=10),
     },
-
-    # 📚 Historiek en forward returns
     "save_market_data_7d": {
         "task": "backend.celery_task.market_task.save_market_data_7d",
         "schedule": crontab(hour=1, minute=30),
@@ -101,14 +92,10 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.market_task.save_forward_returns",
         "schedule": crontab(hour=2, minute=0),
     },
-    
-    # 🧠 Opslaan van market_score in setup_scores
     "save_market_score": {
         "task": "backend.celery_task.market_task.save_market_score",
         "schedule": crontab(hour=2, minute=5),
     },
-
-    # ✅ Wekelijkse/maandelijkse/kwartaal data
     "save_market_data_30d": {
         "task": "backend.celery_task.market_task.save_market_data_30d",
         "schedule": crontab(hour=1, minute=45),
@@ -117,8 +104,6 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.market_task.save_market_data_90d",
         "schedule": crontab(hour=1, minute=50),
     },
-
-    # 🤖 AI-validatie en advies
     "validate_setups_task": {
         "task": "backend.ai_tasks.validation_task.validate_setups_task",
         "schedule": crontab(minute=0, hour="*/6"),
@@ -127,10 +112,8 @@ celery.conf.beat_schedule = {
         "task": "backend.ai_tasks.trading_advice_task.generate_trading_advice",
         "schedule": crontab(minute=5, hour="*/6"),
     },
-
-    # 🧠 Strategieën & rapporten
-    "generate_ai_strategieën": {
-        "task": "backend.celery_task.strategy_task.generate_strategieën_automatisch",
+    "generate_ai_strategieen": {
+        "task": "backend.celery_task.strategy_task.generate_strategieen_automatisch",
         "schedule": crontab(hour=1, minute=10),
     },
     "generate_daily_report_pdf": {
@@ -149,8 +132,6 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
         "schedule": crontab(hour=1, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
-
-    # 🆕 Setup score berekeningen
     "generate_setup_scores_task": {
         "task": "backend.celery_task.setup_scores_task.generate_setup_scores_task",
         "schedule": crontab(hour=2, minute=15),
@@ -159,11 +140,13 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.setup_scores_task.store_setup_scores_task",
         "schedule": crontab(hour=1, minute=0),
     },
-
-    # ✅ Dagelijks AI-rapport
     "generate_daily_report_ai": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
         "schedule": crontab(hour=2, minute=30),
+    },
+    "send_daily_report_email": {
+        "task": "backend.celery_task.daily_report_task.send_daily_report_email",
+        "schedule": crontab(hour=7, minute=0),
     },
 }
 
