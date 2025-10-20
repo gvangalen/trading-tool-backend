@@ -42,24 +42,32 @@ SECTION_LABELS = {
     "outlook": "🔮 Vooruitblik",
 }
 
-# 🧹 Helper om ongeldige tekens/emoji’s te verwijderen
+# 🧹 Helper om emoji’s te strippen
+def strip_emoji(text: str) -> str:
+    """
+    Verwijdert emoji’s en symbolen buiten het BMP‑bereik (die PDF‑encoding breken).
+    """
+    if not isinstance(text, str):
+        return str(text)
+    return re.sub(r'[\U00010000-\U0010ffff]', '', text)
+
+# 🧹 Helper om overige tekens te normaliseren
 def clean_text(text: str) -> str:
     """
-    Verwijdert emoji’s en niet‑Latin‑1 tekens om PDF‑encoding‑fouten te voorkomen.
+    Verwijdert niet‑Latin‑1 tekens en normaliseert tekst.
     """
     if not isinstance(text, str):
         return str(text)
     try:
-        # Normaliseer en verwijder tekens buiten Latin‑1 bereik
+        text = strip_emoji(text)
         return unicodedata.normalize("NFKD", text).encode("latin-1", "ignore").decode("latin-1")
     except Exception:
-        # Fallback voor zeldzame gevallen
         return re.sub(r"[^\x00-\x7F]+", "", text)
 
 
 def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bool = True) -> io.BytesIO:
     """
-    Genereert een PDF‑rapport met unicode‑veilige tekst.
+    Genereert een PDF‑rapport met veilige unicode‑afhandeling.
     """
     buffer = io.BytesIO()
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -104,7 +112,7 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
     story = []
 
     # === 🧾 Header
-    story.append(Paragraph(clean_text("📈 Daily Trading Report (BTC)"), styles["Title"]))
+    story.append(Paragraph(clean_text(strip_emoji("📈 Daily Trading Report (BTC)")), styles["Title"]))
     story.append(Paragraph(datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), styles["Normal"]))
     story.append(Spacer(1, 12))
 
@@ -125,8 +133,8 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
             spaceAfter=6,
         )
 
-        # 🔤 Sectietitel
-        story.append(Paragraph(clean_text(label), header_style))
+        # 🔤 Sectietitel zonder emoji
+        story.append(Paragraph(clean_text(strip_emoji(label)), header_style))
 
         # 📄 Sectie‑inhoud
         try:
@@ -138,7 +146,7 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
             logger.warning(f"⚠️ Fout bij converteren van sectie '{key}': {e}")
             body = f"[Fout bij renderen van deze sectie: {e}]"
 
-        body = clean_text(body).replace("\n", "<br/>")
+        body = clean_text(strip_emoji(body)).replace("\n", "<br/>")
         story.append(Paragraph(body, styles["Content"]))
         story.append(Spacer(1, 6))
 
