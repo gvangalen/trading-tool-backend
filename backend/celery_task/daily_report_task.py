@@ -8,11 +8,13 @@ from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections
 from backend.utils.scoring_utils import calculate_combined_score
 from backend.utils.pdf_generator import generate_pdf_report
+from backend.utils.email_utils import send_email_with_attachment  # ✅ nieuw toegevoegd
 
 # === Logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 load_dotenv()
+
 
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
@@ -105,13 +107,27 @@ def generate_daily_report():
         if row:
             cols = [desc[0] for desc in cursor.description]
             report_dict = dict(zip(cols, row))
-            generate_pdf_report(report_dict, report_type="daily")
+            pdf_buffer = generate_pdf_report(report_dict, report_type="daily")
             logger.info(f"🖨️ PDF gegenereerd voor {today}")
+
+            # === 📩 E-MAIL STUREN NA PDF-GENERATIE
+            pdf_path = os.path.join("static", "pdf", "daily", f"daily_report_{today}.pdf")
+            try:
+                subject = f"📈 BTC Daily Report – {today}"
+                body = (
+                    f"Hierbij het automatisch gegenereerde dagelijkse Bitcoin rapport voor {today}.\n\n"
+                    "Bekijk de belangrijkste samenvatting, Wyckoff-analyse en strategieën in de bijlage."
+                )
+                send_email_with_attachment(subject, body, pdf_path)
+                logger.info(f"📤 Dagrapport verzonden via e-mail ({pdf_path})")
+            except Exception as e:
+                logger.error(f"❌ Fout bij verzenden van e-mail: {e}", exc_info=True)
+
         else:
             logger.warning(f"⚠️ Geen rapport gevonden voor PDF voor {today}")
 
         conn.close()
-        logger.info(f"✅ Dagrapport succesvol opgeslagen en verwerkt ({today})")
+        logger.info(f"✅ Dagrapport succesvol opgeslagen, PDF gemaakt en e-mail verzonden ({today})")
 
     except Exception as e:
         logger.error(f"❌ Fout tijdens rapportgeneratie: {e}", exc_info=True)
