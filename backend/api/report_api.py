@@ -17,16 +17,27 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 def export_pdf(report_type: str, report: dict, date: str):
-    pdf_dir = f"backend/static/reports/{report_type}"
+    # 📁 Zet opslagpad in frontend-toegankelijke static folder
+    pdf_dir = os.path.join("static", "pdf", report_type)
     os.makedirs(pdf_dir, exist_ok=True)
-    pdf_path = os.path.join(pdf_dir, f"{report_type}_report_{date}.pdf")
 
-    pdf_buffer = generate_pdf_report(report)
+    # 📄 Bestandsnaam
+    filename = f"{report_type}_report_{date}.pdf"
+    pdf_path = os.path.join(pdf_dir, filename)
+
+    # 🛠️ Genereer en schrijf PDF
+    pdf_buffer = generate_pdf_report(report, report_type=report_type, save_to_disk=False)
     with open(pdf_path, "wb") as f:
         f.write(pdf_buffer.getbuffer())
 
-    logger.info(f"[export_pdf] ✅ PDF opgeslagen: {pdf_path}")
-    return FileResponse(pdf_path, media_type="application/pdf", filename=os.path.basename(pdf_path))
+    logger.info(f"[export_pdf] ✅ PDF opgeslagen op: {pdf_path}")
+
+    # 🌐 Retourneer als FileResponse vanuit juiste path
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        filename=filename
+    )
 
 # === DAILY ===
 @router.get("/report/daily/latest")
