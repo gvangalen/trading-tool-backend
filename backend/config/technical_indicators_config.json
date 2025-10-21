@@ -9,23 +9,103 @@
       "thresholds": [30, 50, 70],
       "positive": false,
       "explanation": "RSI geeft overbought of oversold situaties aan.",
-      "action": "Bij RSI < 30 is er vaak sprake van een koopmoment. RSI > 70 duidt op oververhitting."
+      "action": "Bij RSI < 30 is er vaak sprake van een koopmoment. RSI > 70 duidt op oververhitting.",
+      "scoring": {
+        "0-30": {
+          "score": 90,
+          "trend": "Oversold",
+          "interpretation": "RSI is extreem laag, wat duidt op een mogelijke bodem of koopmoment.",
+          "action": "Overweeg om long te gaan als andere signalen dit bevestigen."
+        },
+        "30-50": {
+          "score": 60,
+          "trend": "Neutraal / Herstel",
+          "interpretation": "RSI bevindt zich in een opwaartse fase na oversold of neutrale fase.",
+          "action": "Afwachten of herstel zich doorzet of nieuwe bevestiging krijgen."
+        },
+        "50-70": {
+          "score": 40,
+          "trend": "Bullish",
+          "interpretation": "RSI is boven gemiddeld – markt heeft momentum omhoog.",
+          "action": "Let op mogelijke oververhitting. Trailing stop mogelijk inzetten."
+        },
+        "70-100": {
+          "score": 20,
+          "trend": "Overbought",
+          "interpretation": "RSI is zeer hoog – risico op correctie neemt toe.",
+          "action": "Overweeg om winst te nemen of shortkansen te zoeken."
+        }
+      }
     },
+
     "volume": {
       "symbol": "BTCUSDT",
       "source": "binance",
       "thresholds": [1000, 2500, 5000],
       "positive": true,
       "explanation": "Hoger volume bevestigt de richting van een trend.",
-      "action": "Stijgend volume = bevestiging van momentum. Laag volume = twijfel."
+      "action": "Stijgend volume = bevestiging van momentum. Laag volume = twijfel.",
+      "scoring": {
+        "0-1000": {
+          "score": 20,
+          "trend": "Zwak",
+          "interpretation": "Zeer laag volume, weinig interesse of consolidatie.",
+          "action": "Afwachten. Nog geen momentum aanwezig."
+        },
+        "1000-2500": {
+          "score": 50,
+          "trend": "Gemiddeld",
+          "interpretation": "Volume is normaal – nog geen duidelijke kracht.",
+          "action": "Zoek naar extra bevestiging via prijsactie of RSI."
+        },
+        "2500-5000": {
+          "score": 75,
+          "trend": "Sterk",
+          "interpretation": "Hoger dan gemiddeld volume – bevestiging van huidige beweging.",
+          "action": "Volg de trend als deze zich voortzet."
+        },
+        "5000-∞": {
+          "score": 90,
+          "trend": "Explosief",
+          "interpretation": "Zeer hoog volume – sterke impuls of capitulatie.",
+          "action": "Actief handelen met duidelijke trendvoorkeur."
+        }
+      }
     },
+
     "ma_200": {
       "symbol": "BTCUSDT",
       "source": "binance",
       "thresholds": [0.95, 1.0, 1.05],
       "positive": true,
       "explanation": "De MA-200 is een belangrijke langetermijnindicator.",
-      "action": "Asset boven MA-200 is bullish. Onder MA-200 is bearish."
+      "action": "Asset boven MA-200 is bullish. Onder MA-200 is bearish.",
+      "scoring": {
+        "0-0.95": {
+          "score": 20,
+          "trend": "Bearish",
+          "interpretation": "Asset noteert duidelijk onder de 200MA – zwakte of downtrend.",
+          "action": "Shortkansen zoeken of risico beperken bij longs."
+        },
+        "0.95-1.0": {
+          "score": 40,
+          "trend": "Neutraal / Onder",
+          "interpretation": "Asset zit net onder de 200MA – cruciale zone.",
+          "action": "Afwachten op uitbraak of bevestiging richting."
+        },
+        "1.0-1.05": {
+          "score": 70,
+          "trend": "Boven MA",
+          "interpretation": "Asset zit boven de 200MA – positief momentum bouwt op.",
+          "action": "Overweeg long setups of trendvolgende trades."
+        },
+        "1.05-∞": {
+          "score": 90,
+          "trend": "Sterk Bullish",
+          "interpretation": "Asset beweegt krachtig boven 200MA – duidelijke trend omhoog.",
+          "action": "Actief meebewegen met trend."
+        }
+      }
     }
   }
 }
