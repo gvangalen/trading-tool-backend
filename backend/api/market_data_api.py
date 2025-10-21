@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import httpx
 from backend.utils.db import get_db_connection
 from backend.config.config_loader import load_market_config
+from backend.utils.scoring_util import get_scores_for_symbol
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -161,10 +162,15 @@ def get_latest_btc_price():
 
 @router.get("/market_data/interpreted")
 async def fetch_interpreted_data():
+    """
+    Geeft de laatst bekende BTC-marketdata inclusief automatische score,
+    interpretatie en actie vanuit scoring_util.
+    """
     try:
+        from backend.utils.scoring_util import get_scores_for_symbol
+
         conn = get_db_connection()
         cur = conn.cursor()
-
         cur.execute("""
             SELECT symbol, price, change_24h, volume, timestamp
             FROM market_data
@@ -178,44 +184,32 @@ async def fetch_interpreted_data():
         if not row:
             raise HTTPException(status_code=404, detail="Geen BTC data gevonden")
 
-        price = row[1]
-        change = row[2]
-        volume = row[3]
+        symbol = row[0]
+        price = float(row[1])
+        change = float(row[2])
+        volume = float(row[3])
+        timestamp = row[4]
 
-        score = 0
-        advies = []
-
-        if change > 2:
-            score += 2
-            advies.append("Sterke prijsstijging – mogelijk momentum")
-        elif change < -2:
-            score -= 2
-            advies.append("Prijsdaling – verhoogde voorzichtigheid")
-
-        if volume and volume > 10_000_000_000:
-            score += 1
-            advies.append("Hoog volume – bevestigt beweging")
-
-        interpretatie = "Neutraal"
-        if score >= 2:
-            interpretatie = "Bullish"
-        elif score <= -2:
-            interpretatie = "Bearish"
+        # ✅ Bereken automatisch market score + interpretatie
+        scores = get_scores_for_symbol(symbol)
+        market_details = scores.get("scores", {}).get("market", {})
+        market_score = scores.get("market_score", 0)
 
         return {
-            "symbol": row[0],
-            "timestamp": row[4].isoformat(),
+            "symbol": symbol,
+            "timestamp": timestamp.isoformat(),
             "price": price,
             "change_24h": change,
             "volume": volume,
-            "score": score,
-            "advies": advies,
-            "interpretatie": interpretatie
+            "score": market_score,
+            "trend": market_details.get("trend", "Onbekend"),
+            "interpretation": market_details.get("interpretation", "Geen interpretatie beschikbaar"),
+            "action": market_details.get("action", "Geen actie"),
         }
-    except Exception as e:
-        logger.error(f"❌ [interpreted] Fout bij interpretatie: {e}")
-        raise HTTPException(status_code=500, detail="❌ Interpretatiefout.")
 
+    except Exception as e:
+        logger.error(f"❌ [interpreted] Fout bij interpretatie via scoring_util: {e}")
+        raise HTTPException(status_code=500, detail="❌ Interpretatiefout via scoring_util.")
 
 @router.get("/market_data/test")
 async def test_market_api():
