@@ -8,7 +8,7 @@ import requests
 
 # ✅ Eigen utils
 from backend.utils.db import get_db_connection
-from backend.utils.technical_interpreter import process_all_technical
+from backend.utils.scoring_utils import load_config, generate_scores
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
@@ -24,11 +24,13 @@ HEADERS = {"Content-Type": "application/json"}
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="GET", payload=None, headers=None):
     try:
-        if method.upper() == "POST":
-            response = requests.request(method, url, json=payload, headers=headers or HEADERS, timeout=TIMEOUT)
-        else:
-            response = requests.request(method, url, params=payload, headers=headers or HEADERS, timeout=TIMEOUT)
-
+        response = requests.request(
+            method, url,
+            json=payload if method.upper() == "POST" else None,
+            params=payload if method.upper() == "GET" else None,
+            headers=headers or HEADERS,
+            timeout=TIMEOUT
+        )
         response.raise_for_status()
         logger.info(f"✅ API-call succesvol: {url}")
         return response.json()
@@ -38,7 +40,6 @@ def safe_request(url, method="GET", payload=None, headers=None):
     except Exception as e:
         logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
         raise
-
 
 # ✅ RSI berekenen
 def calculate_rsi(closes, period=14):
@@ -56,7 +57,6 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-
 # ✅ API POST wrapper
 def post_technical_data(payload: dict):
     try:
@@ -71,9 +71,8 @@ def post_technical_data(payload: dict):
         logger.error(f"❌ Fout bij opslaan technische data: {e}")
         logger.error(traceback.format_exc())
 
-
-# ✅ Nieuwe functie: technische score direct in database opslaan
-def store_technical_score_db(symbol, indicator, value, score, advies, uitleg, timestamp):
+# ✅ Directe DB opslag
+def store_technical_score_db(symbol, indicator, value, score, timestamp, uitleg="", advies=""):
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding bij opslaan technische score.")
@@ -93,8 +92,7 @@ def store_technical_score_db(symbol, indicator, value, score, advies, uitleg, ti
     finally:
         conn.close()
 
-
-# ✅ Technische data ophalen, berekenen en direct opslaan
+# ✅ Dagdata ophalen, scoren, opslaan
 def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300):
     try:
         logger.info(f"🚀 Start ophalen technische dagdata ({symbol})...")
@@ -117,47 +115,45 @@ def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limi
         current_price = closes[-1]
         ma_200_ratio = round(current_price / ma_200, 3)
 
-        logger.info(f"📊 Berekende waarden - RSI: {rsi}, Volume: {volume}, MA-ratio: {ma_200_ratio}")
-
-        # Interpretatie + scoreberekening
-        result = process_all_technical({
+        raw_data = {
             "rsi": rsi,
             "volume": volume,
             "ma_200": ma_200_ratio
-        })
+        }
+
+        logger.info(f"📊 Berekende waarden: {raw_data}")
+
+        # ✅ Config en scoring
+        config = load_config("config/technical_indicators_config.json")
+        scores = generate_scores(raw_data, config)
 
         utc_now = datetime.utcnow().replace(microsecond=0)
 
-        # ✅ Opslaan via API én direct in database
-        for indicator, data in result.items():
+        for indicator, details in scores["scores"].items():
             payload = {
                 "symbol": our_symbol,
                 "indicator": indicator,
-                "value": data.get("value"),
-                "score": data.get("score"),
-                "advies": data.get("action"),
-                "uitleg": data.get("explanation"),
+                "value": details["value"],
+                "score": details["score"],
+                "advies": config[indicator].get("action", ""),
+                "uitleg": config[indicator].get("explanation", ""),
                 "timestamp": utc_now.isoformat(),
             }
 
-            # 🔁 API-call (voor frontend sync)
             post_technical_data(payload)
-
-            # 🗃️ Direct opslaan in database
             store_technical_score_db(
                 symbol=our_symbol,
                 indicator=indicator,
-                value=data.get("value"),
-                score=data.get("score"),
-                advies=data.get("action"),
-                uitleg=data.get("explanation"),
+                value=details["value"],
+                score=details["score"],
+                advies=payload["advies"],
+                uitleg=payload["uitleg"],
                 timestamp=utc_now,
             )
 
     except Exception as e:
         logger.error("❌ Fout bij ophalen/verwerken technische data")
         logger.error(traceback.format_exc())
-
 
 # ✅ Dagelijkse Celery taak
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
