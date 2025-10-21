@@ -1,9 +1,10 @@
 import logging
-from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException, Request, Query
+from datetime import datetime
+from fastapi import APIRouter, HTTPException, Request
 from backend.utils.db import get_db_connection
 from backend.utils.macro_interpreter import process_macro_indicator
 from backend.config.config_loader import load_macro_config
+from backend.utils.scoring_utils import generate_scores
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -11,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 try:
     MACRO_CONFIG = load_macro_config()
-    logger.info("🚀 macro_data_api.py geladen – alle macro-routes zijn actief.")
+    logger.info("\ud83d\ude80 macro_data_api.py geladen – alle macro-routes zijn actief.")
 except Exception as e:
     MACRO_CONFIG = {}
     logger.error(f"❌ [INIT] Config niet geladen bij opstarten: {e}")
@@ -22,23 +23,9 @@ def get_db_cursor():
         raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
     return conn, conn.cursor()
 
-def validate_macro_config(name: str, config: dict, full_config: dict):
-    symbol = config.get("symbol")
-    source = config.get("source")
-    base_urls = full_config.get("base_urls", {})
-
-    if not symbol or not source:
-        raise ValueError(f"❌ [CFG03] 'symbol' of 'source' ontbreekt in config voor '{name}'")
-
-    if source not in base_urls:
-        raise ValueError(f"❌ [CFG04] Geen base_url gedefinieerd voor source '{source}'")
-
-    api_url = base_urls[source].format(symbol=symbol)
-    return api_url
-
 @router.post("/macro_data")
 async def add_macro_indicator(request: Request):
-    logger.info("📥 [add] Nieuwe macro-indicator toevoegen...")
+    logger.info("📅 [add] Nieuwe macro-indicator toevoegen...")
     data = await request.json()
     name = data.get("name")
     if not name:
@@ -49,35 +36,39 @@ async def add_macro_indicator(request: Request):
         raise HTTPException(status_code=400, detail=f"❌ [CFG02] Indicator '{name}' niet gevonden in config.")
 
     indicator_config = config_data["indicators"][name]
-    try:
-        _ = validate_macro_config(name, indicator_config, config_data)
-    except Exception as e:
-        logger.error(str(e))
-        raise HTTPException(status_code=500, detail=str(e))
 
     try:
-        if all(k in data for k in ("value", "score", "interpretation", "action")):
-            logger.info(f"📥 [add] Externe data ontvangen voor '{name}'")
+        if "value" in data:
+            logger.info(f"📅 [add] Externe waarde ontvangen voor '{name}' → {data['value']}")
             result = {
                 "name": name,
                 "value": data["value"],
-                "score": data["score"],
-                "interpretation": data["interpretation"],
-                "action": data["action"],
+                "symbol": indicator_config.get("symbol", ""),
+                "source": indicator_config.get("source", ""),
             }
         else:
-            logger.info(f"⚙️ [add] Geen externe data, interpreter wordt aangeroepen voor '{name}'")
+            logger.info(f"⚙️ [add] Ophalen via interpreter voor '{name}'")
             result = await process_macro_indicator(name, indicator_config)
 
-        if not result or "value" not in result or "score" not in result or "interpretation" not in result or "action" not in result:
-            raise ValueError("❌ Interpreterresultaat incompleet")
+        if not result or "value" not in result:
+            raise ValueError(f"❌ Geen geldige waarde ontvangen voor {name}")
 
-        value = float(result.get("value"))
-        score = result.get("score")
+        value = float(result["value"])
 
     except Exception as e:
         logger.error(f"❌ [INT01] Interpreterfout: {e}")
-        raise HTTPException(status_code=500, detail=f"❌ [INT01] Verwerking indicator mislukt: {e}")
+        raise HTTPException(status_code=500, detail=f"❌ [INT01] Ophalen indicator mislukt: {e}")
+
+    try:
+        score_data = generate_scores({name: value}, {name: indicator_config})
+        score_info = score_data["scores"].get(name, {})
+        score = score_info.get("score", 0)
+        trend = score_info.get("trend", "")
+        interpretation = indicator_config.get("explanation", "")
+        action = indicator_config.get("action", "")
+    except Exception as e:
+        logger.error(f"❌ [SCORE01] Fout bij berekenen score voor {name}: {e}")
+        raise HTTPException(status_code=500, detail="❌ [SCORE01] Scoreberekening mislukt.")
 
     conn, cur = get_db_cursor()
     try:
@@ -85,16 +76,16 @@ async def add_macro_indicator(request: Request):
             INSERT INTO macro_data (name, value, trend, interpretation, action, score, timestamp)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
-            result["name"],
+            name,
             value,
-            result.get("trend", ""),
-            result["interpretation"],
-            result["action"],
+            trend,
+            interpretation,
+            action,
             score,
             datetime.utcnow()
         ))
         conn.commit()
-        logger.info(f"✅ [add] '{name}' opgeslagen met waarde {value}, score {score}, trend {result.get('trend', '')}")
+        logger.info(f"✅ [add] '{name}' opgeslagen met value={value}, score={score}, trend={trend}")
         return {"message": f"Indicator '{name}' succesvol opgeslagen."}
     except Exception as e:
         logger.error(f"❌ [DB02] Fout bij opslaan macro data: {e}")
@@ -104,7 +95,7 @@ async def add_macro_indicator(request: Request):
 
 @router.get("/macro_data")
 async def get_macro_indicators():
-    logger.info("📤 [get] Ophalen macro-indicatoren...")
+    logger.info("📄 [get] Ophalen macro-indicatoren...")
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
@@ -133,62 +124,14 @@ async def get_macro_indicators():
     finally:
         conn.close()
 
-@router.get("/macro_data/list")
-async def get_macro_data_list():
-    return await get_macro_indicators()
-
-@router.delete("/macro_data/{name}")
-async def delete_macro_indicator(name: str):
-    logger.info(f"🗑️ [delete] Probeer macro-indicator '{name}' te verwijderen...")
-    conn, cur = get_db_cursor()
-    try:
-        cur.execute("DELETE FROM macro_data WHERE name = %s RETURNING id;", (name,))
-        deleted = cur.fetchone()
-        if not deleted:
-            raise HTTPException(status_code=404, detail=f"Indicator '{name}' niet gevonden.")
-        conn.commit()
-        logger.info(f"✅ [delete] Indicator '{name}' verwijderd")
-        return {"message": f"Indicator '{name}' verwijderd."}
-    except Exception as e:
-        logger.error(f"❌ [delete] Verwijderen mislukt: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB04] Verwijderen mislukt.")
-    finally:
-        conn.close()
-
-@router.patch("/macro_data/{name}")
-async def update_macro_value(name: str, request: Request):
-    logger.info(f"✏️ [patch] Bijwerken van '{name}'...")
-    conn, cur = get_db_cursor()
-    try:
-        data = await request.json()
-        value = float(data.get("value"))
-        cur.execute("UPDATE macro_data SET value = %s, timestamp = %s WHERE name = %s RETURNING id;",
-                    (value, datetime.utcnow(), name))
-        updated = cur.fetchone()
-        if not updated:
-            raise HTTPException(status_code=404, detail=f"Indicator '{name}' niet gevonden.")
-        conn.commit()
-        logger.info(f"✅ [patch] Indicator '{name}' bijgewerkt naar {value}")
-        return {"message": f"{name} bijgewerkt naar {value}."}
-    except Exception as e:
-        logger.error(f"❌ [patch] Bijwerken mislukt: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB05] Bijwerken mislukt.")
-    finally:
-        conn.close()
-
-
-# ✅ GET: Macro-data per periode (gebaseerd op timestamp, niet meer op timeframe)
-
 @router.get("/macro_data/day")
 async def get_latest_macro_day_data():
-    logger.info("📤 [get/day] Ophalen macro-dagdata (met fallback)...")
+    logger.info("📄 [get/day] Ophalen macro-dagdata (met fallback)...")
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
-
     try:
         with conn.cursor() as cur:
-            # ✅ Eerst proberen: data van vandaag
             cur.execute("""
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
@@ -196,22 +139,15 @@ async def get_latest_macro_day_data():
                 ORDER BY timestamp DESC;
             """)
             rows = cur.fetchall()
-
-            # 🔁 Fallback: pak laatste beschikbare dag
             if not rows:
                 cur.execute("""
-                    SELECT timestamp
-                    FROM macro_data
-                    ORDER BY timestamp DESC
-                    LIMIT 1;
+                    SELECT timestamp FROM macro_data ORDER BY timestamp DESC LIMIT 1;
                 """)
                 fallback_ts = cur.fetchone()
                 if not fallback_ts:
                     logger.warning("⚠️ Geen fallback-timestamp gevonden.")
                     return []
-
                 fallback_date = fallback_ts[0].date()
-
                 cur.execute("""
                     SELECT name, value, trend, interpretation, action, score, timestamp
                     FROM macro_data
@@ -219,7 +155,6 @@ async def get_latest_macro_day_data():
                     ORDER BY timestamp DESC;
                 """, (fallback_date,))
                 rows = cur.fetchall()
-
         return [
             {
                 "name": row[0],
@@ -232,7 +167,6 @@ async def get_latest_macro_day_data():
             }
             for row in rows
         ]
-
     except Exception as e:
         logger.error(f"❌ [get/day] Fout bij ophalen macro dagdata: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB06] Ophalen macro dagdata mislukt.")
@@ -241,7 +175,7 @@ async def get_latest_macro_day_data():
 
 @router.get("/macro_data/week")
 async def get_macro_week_data():
-    logger.info("📤 [get/week] Ophalen macro-data (laatste 7 dagen)...")
+    logger.info("📄 [get/week] Ophalen macro-data (laatste 7 dagen)...")
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
@@ -270,10 +204,9 @@ async def get_macro_week_data():
     finally:
         conn.close()
 
-
 @router.get("/macro_data/month")
 async def get_macro_month_data():
-    logger.info("📤 [get/month] Ophalen macro-data (laatste 30 dagen)...")
+    logger.info("📄 [get/month] Ophalen macro-data (laatste 30 dagen)...")
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
@@ -302,10 +235,9 @@ async def get_macro_month_data():
     finally:
         conn.close()
 
-
 @router.get("/macro_data/quarter")
 async def get_macro_quarter_data():
-    logger.info("📤 [get/quarter] Ophalen macro-data (laatste 90 dagen)...")
+    logger.info("📄 [get/quarter] Ophalen macro-data (laatste 90 dagen)...")
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
