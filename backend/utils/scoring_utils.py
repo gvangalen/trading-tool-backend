@@ -179,6 +179,40 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
 
 
 # =========================================================
+# ✅ Setup match functies
+# =========================================================
+def match_setups_to_score(setups: list, total_score: float) -> list:
+    """
+    ➤ Filtert setups die passen bij de huidige dagscore.
+    """
+    matching = []
+    for setup in setups:
+        min_score = setup.get("min_score", 0)
+        max_score = setup.get("max_score", 100)
+        if min_score <= total_score <= max_score:
+            matching.append(setup)
+    return matching
+
+
+def find_best_matching_setup(setups: list, total_score: float) -> Optional[dict]:
+    """
+    ➤ Geeft setup terug met dichtsbijzijnde scorematch.
+    """
+    best_setup = None
+    smallest_diff = float("inf")
+    for setup in setups:
+        min_score = setup.get("min_score", 0)
+        max_score = setup.get("max_score", 100)
+        if min_score <= total_score <= max_score:
+            center = (min_score + max_score) / 2
+            diff = abs(center - total_score)
+            if diff < smallest_diff:
+                smallest_diff = diff
+                best_setup = setup
+    return best_setup
+
+
+# =========================================================
 # ✅ Haal actuele macro / technical / market / sentiment data uit DB
 # =========================================================
 def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
