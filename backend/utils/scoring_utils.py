@@ -24,6 +24,28 @@ def load_config(relative_path: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"❌ Failed to load config ({relative_path}): {e}")
         return {}
+        
+# =========================================================
+# ✅ Dashboard Scorefunctie 
+# =========================================================
+def get_dashboard_scores(macro_data, technical_data, setups):
+    """
+    ➤ Bereken macro, technical en setup score voor dashboard.
+    """
+    macro_scores = [d["score"] for d in macro_data if isinstance(d.get("score"), (int, float))]
+    macro_score = round(sum(macro_scores) / len(macro_scores), 2) if macro_scores else 0
+
+    used_scores = [v["score"] for v in technical_data.values()]
+    total_possible = len(used_scores) * 100
+    technical_score = round((sum(used_scores) / total_possible) * 100, 2) if total_possible else 0
+
+    setup_score = len(setups) * 10 if setups else 0
+
+    return {
+        "macro": macro_score,
+        "technical": technical_score,
+        "setup": setup_score
+    }
 
 
 # =========================================================
