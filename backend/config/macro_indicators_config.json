@@ -4,6 +4,7 @@
     "alpha_vantage": "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={symbol}&apikey=demo",
     "alternative": "https://api.alternative.me/fng/?limit=1"
   },
+
   "indicators": {
     "S&P500": {
       "symbol": "^GSPC",
@@ -12,10 +13,24 @@
       "positive": true,
       "category": "macro",
       "correlation": "positief",
-      "explanation": "Hogere S&P500-standen duiden vaak op een gezonde aandelenmarkt.",
-      "action": "Bij een sterke S&P500 is het marktsentiment positief. Positief voor crypto.",
-      "timeframe": "1D"
+      "explanation": "Hogere S&P500-standen duiden vaak op een gezonde aandelenmarkt en toenemend risico-appetijt.",
+      "timeframe": "1D",
+      "interpretations": {
+        "0": "Zwakke aandelenmarkt, risicomijdend sentiment",
+        "25": "Onder druk, voorzichtigheid geboden",
+        "50": "Neutraal marktsentiment",
+        "75": "Sterk positief sentiment, gezonde markt",
+        "100": "Zeer sterke aandelenmarkt, bullish momentum"
+      },
+      "actions": {
+        "0": "Vermijd risicovolle assets",
+        "25": "Wees selectief met nieuwe posities",
+        "50": "Afwachtend, bevestiging zoeken",
+        "75": "Positieve setups zijn kansrijk",
+        "100": "Overweeg winsten te nemen bij oververhitting"
+      }
     },
+
     "vix": {
       "symbol": "^VIX",
       "source": "yahoo",
@@ -24,9 +39,23 @@
       "category": "macro",
       "correlation": "negatief",
       "explanation": "Een hogere VIX duidt op meer angst en volatiliteit op de markt.",
-      "action": "Bij hoge VIX is voorzichtigheid geboden. Negatief voor risicovolle assets zoals crypto.",
-      "timeframe": "1D"
+      "timeframe": "1D",
+      "interpretations": {
+        "0": "Extreme angst en onzekerheid",
+        "25": "Verhoogde angst, risico’s nemen af",
+        "50": "Gemiddeld volatiliteitsniveau",
+        "75": "Rustige markt, vertrouwen neemt toe",
+        "100": "Zeer lage angst, zelfgenoegzaamheid mogelijk"
+      },
+      "actions": {
+        "0": "Bescherm kapitaal, hoge volatiliteit",
+        "25": "Voorzichtig, markt nerveus",
+        "50": "Normale volatiliteit – neutraal",
+        "75": "Positief klimaat voor risk assets",
+        "100": "Waak voor complacency – mogelijk topvorming"
+      }
     },
+
     "dxy": {
       "symbol": "DX-Y.NYB",
       "fallback_symbol": "EURUSD",
@@ -36,9 +65,23 @@
       "category": "macro",
       "correlation": "negatief",
       "explanation": "Een sterke dollarindex (DXY) drukt vaak op de prijs van Bitcoin.",
-      "action": "Bij stijgende DXY is vaak een dalende BTC-prijs te zien. Bearish signaal.",
-      "timeframe": "1D"
+      "timeframe": "1D",
+      "interpretations": {
+        "0": "Sterke stijging van de dollar – druk op BTC",
+        "25": "Lichte stijging – voorzichtig bearish",
+        "50": "Neutraal – evenwicht tussen valuta",
+        "75": "Lichte verzwakking dollar – mild bullish",
+        "100": "Zwakke dollar – sterk bullish voor BTC"
+      },
+      "actions": {
+        "0": "Vermijd longposities in BTC",
+        "25": "Bescherm bestaande posities",
+        "50": "Afwachten op bevestiging",
+        "75": "Bereid long setups voor",
+        "100": "Goede kans voor BTC-rally"
+      }
     },
+
     "fear_greed": {
       "symbol": "fear_greed",
       "source": "alternative",
@@ -46,9 +89,22 @@
       "positive": false,
       "category": "sentiment",
       "correlation": "negatief",
-      "explanation": "De Fear & Greed Index meet het marktsentiment in crypto.",
-      "action": "Bij extreme fear (<25) kan er sprake zijn van een koopkans. Bij extreme greed (>75) oppassen voor correctie.",
-      "timeframe": "1D"
+      "explanation": "De Fear & Greed Index meet het marktsentiment binnen crypto.",
+      "timeframe": "1D",
+      "interpretations": {
+        "0": "Extreme fear – paniekfase",
+        "25": "Angst overheerst, ondergewaardeerde markt",
+        "50": "Neutraal marktsentiment",
+        "75": "Matige greed – optimistische fase",
+        "100": "Extreme greed – kans op correctie"
+      },
+      "actions": {
+        "0": "Overweeg instapmoment – contrair signaal",
+        "25": "Potentiële koopkans bij bevestiging",
+        "50": "Afwachtende houding",
+        "75": "Wees alert op oververhitting",
+        "100": "Winst nemen of risico afbouwen"
+      }
     }
   }
 }
