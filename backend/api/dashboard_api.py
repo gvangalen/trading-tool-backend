@@ -56,7 +56,7 @@ async def get_dashboard_data():
             # ✅ Macro data
             try:
                 cur.execute("""
-                    SELECT DISTINCT ON (name) name, value, trend, interpretation, action, timestamp
+                    SELECT DISTINCT ON (name) name, value, trend, interpretation, action, score, timestamp
                     FROM macro_data
                     ORDER BY name, timestamp DESC
                 """)
@@ -80,9 +80,9 @@ async def get_dashboard_data():
                 setups = []
 
         # ✅ Scoreberekeningen (0–100 schaal)
-        macro_score = len(macro_data) * 10 if macro_data else 0
+        macro_scores = [d["score"] for d in macro_data if isinstance(d.get("score"), (int, float))]
+        macro_score = round(sum(macro_scores) / len(macro_scores), 2) if macro_scores else 0
 
-        # ✅ Dynamische technische score
         max_score_per_indicator = 3
         used_scores = [v["score"] for v in technical_data.values()]
         total_possible = len(used_scores) * max_score_per_indicator
@@ -96,7 +96,6 @@ async def get_dashboard_data():
             if macro_data else "❌ Geen macrodata"
         )
 
-        # Dynamisch uitleg-blok
         if technical_data:
             lines = [
                 f"{k.upper()}: {v.get('value')} (score {v.get('score')})"
