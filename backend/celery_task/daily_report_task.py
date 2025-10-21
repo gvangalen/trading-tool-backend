@@ -6,15 +6,14 @@ from dotenv import load_dotenv
 
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections
-from backend.utils.scoring_utils import calculate_combined_score
+from backend.utils.scoring_utils import calculate_combined_score, get_scores_for_symbol  # ✅ toegevoegd
 from backend.utils.pdf_generator import generate_pdf_report
-from backend.utils.email_utils import send_email_with_attachment  # ✅ nieuw toegevoegd
+from backend.utils.email_utils import send_email_with_attachment  # ✅ toegevoegd
 
 # === Logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 load_dotenv()
-
 
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
@@ -33,15 +32,14 @@ def generate_daily_report():
         setup_score = full_report.get("setup_score")
         sentiment_score = full_report.get("sentiment_score")
 
-        if not all(isinstance(s, (int, float)) for s in [macro_score, technical_score, sentiment_score]):
-            logger.warning("⚠️ Scores missen of ongeldig – fallback naar calculate_combined_score()")
-            combined = calculate_combined_score("BTC")
-            macro_score = macro_score if isinstance(macro_score, (int, float)) else combined.get("macro_score", 0)
-            technical_score = technical_score if isinstance(technical_score, (int, float)) else combined.get("technical_score", 0)
-            sentiment_score = sentiment_score if isinstance(sentiment_score, (int, float)) else combined.get("sentiment_score", 0)
-
-        if not isinstance(setup_score, (int, float)):
-            setup_score = round((macro_score + technical_score) / 2, 2)
+        # 🔄 Fallback via live scores als macro/technical/sentiment ontbreekt of nul is
+        if not all(isinstance(s, (int, float)) and s != 0 for s in [macro_score, technical_score]):
+            logger.warning("🔄 Fallback naar get_scores_for_symbol() voor macro/technical")
+            score_dict = get_scores_for_symbol("BTC")
+            macro_score = score_dict.get("macro_score") or 0
+            technical_score = score_dict.get("technical_score") or 0
+            sentiment_score = score_dict.get("sentiment_score") or 0
+            setup_score = score_dict.get("setup_score") or round((macro_score + technical_score) / 2, 2)
 
         today = datetime.now().date()
         conn = get_db_connection()
@@ -110,7 +108,7 @@ def generate_daily_report():
             pdf_buffer = generate_pdf_report(report_dict, report_type="daily")
             logger.info(f"🖨️ PDF gegenereerd voor {today}")
 
-            # === 📩 E-MAIL STUREN NA PDF-GENERATIE
+            # 📩 E-mail versturen
             pdf_path = os.path.join("static", "pdf", "daily", f"daily_report_{today}.pdf")
             try:
                 subject = f"📈 BTC Daily Report – {today}"
@@ -122,7 +120,6 @@ def generate_daily_report():
                 logger.info(f"📤 Dagrapport verzonden via e-mail ({pdf_path})")
             except Exception as e:
                 logger.error(f"❌ Fout bij verzenden van e-mail: {e}", exc_info=True)
-
         else:
             logger.warning(f"⚠️ Geen rapport gevonden voor PDF voor {today}")
 
