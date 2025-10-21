@@ -2,6 +2,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from backend.utils.db import get_db_connection
 import psycopg2.extras
+from backend.utils.scoring_util import get_dashboard_scores
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -79,16 +80,10 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH04: Setups fout: {e}")
                 setups = []
 
-        # ✅ Scoreberekeningen (0–100 schaal)
-        macro_scores = [d["score"] for d in macro_data if isinstance(d.get("score"), (int, float))]
-        macro_score = round(sum(macro_scores) / len(macro_scores), 2) if macro_scores else 0
-
-        max_score_per_indicator = 100
-        used_scores = [v["score"] for v in technical_data.values()]
-        total_possible = len(used_scores) * max_score_per_indicator
-        technical_score = round((sum(used_scores) / total_possible) * 100, 2) if total_possible else 0
-
-        setup_score = len(setups) * 10 if setups else 0
+        scores = get_dashboard_scores(macro_data, technical_data, setups)
+        macro_score = scores["macro"]
+        technical_score = scores["technical"]
+        setup_score = scores["setup"]
 
         # ✅ Uitleg per score
         macro_explanation = (
