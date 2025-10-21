@@ -1,5 +1,6 @@
 import logging
-from backend.config.config_loader import load_technical_config  # ✅ Config loader
+from backend.config.config_loader import load_technical_config
+from backend.utils.scoring_utils import calculate_score_from_config  # 👈 Nieuwe scoringmethode
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -25,98 +26,31 @@ def extract_nested_value(data, key_path):
         return None
 
 
-def interpret_value(value, thresholds, positive=True):
-    """
-    ➤ Geeft interpretatie ('Zwak', 'Neutraal', 'Sterk', 'Zeer sterk') op basis van thresholds.
-    """
-    if value is None:
-        return "Ongeldig"
-
-    try:
-        v = float(value)
-    except ValueError:
-        logger.warning(f"⚠️ Ongeldige numerieke waarde: {value}")
-        return "Ongeldig"
-
-    if positive:
-        if v >= thresholds[2]:
-            return "Zeer sterk"
-        elif v >= thresholds[1]:
-            return "Sterk"
-        elif v >= thresholds[0]:
-            return "Neutraal"
-        else:
-            return "Zwak"
-    else:
-        if v <= thresholds[0]:
-            return "Zeer sterk"
-        elif v <= thresholds[1]:
-            return "Sterk"
-        elif v <= thresholds[2]:
-            return "Neutraal"
-        else:
-            return "Zwak"
-
-
-def calculate_score(value, thresholds, positive=True):
-    """
-    ➤ Genereert een score op basis van thresholds (0–3)
-    """
-    if value is None:
-        return 0
-
-    try:
-        v = float(value)
-    except ValueError:
-        return 0
-
-    if positive:
-        if v >= thresholds[2]:
-            return 3
-        elif v >= thresholds[1]:
-            return 2
-        elif v >= thresholds[0]:
-            return 1
-        else:
-            return 0
-    else:
-        if v <= thresholds[0]:
-            return 3
-        elif v <= thresholds[1]:
-            return 2
-        elif v <= thresholds[2]:
-            return 1
-        else:
-            return 0
-
-
 def process_technical_indicator(name, value, config):
     """
-    ➤ Verwerkt één technische indicator volgens de config.
+    ➤ Verwerkt één technische indicator volgens de config + scoringsutils
     Returns:
-        dict met name, value, interpretation, score, etc.
+        dict met name, value, trend, interpretation, score, explanation, action
     """
     try:
-        thresholds = config.get("thresholds", [])
-        positive = config.get("positive", True)
+        if value is None:
+            raise ValueError("Waarde is None")
 
-        if not thresholds or len(thresholds) != 3:
-            logger.error(f"❌ Ongeldige thresholds-configuratie voor '{name}': {thresholds}")
-            return None
-
-        interpretation = interpret_value(value, thresholds, positive)
-        score = calculate_score(value, thresholds, positive)
+        score_data = calculate_score_from_config(value, config)
+        if not score_data:
+            raise ValueError("Scoredata ontbreekt")
 
         result = {
             "name": name,
             "value": value,
-            "interpretation": interpretation,
-            "score": score,
+            "score": score_data["score"],
+            "trend": score_data["trend"],
+            "interpretation": score_data["interpretation"],
+            "action": score_data["action"],
             "explanation": config.get("explanation"),
-            "action": config.get("action"),
         }
 
-        logger.info(f"✅ {name}: {value} → {interpretation} (score: {score})")
+        logger.info(f"✅ {name}: {value} → {result['trend']} (score: {result['score']})")
         return result
 
     except Exception as e:
