@@ -39,22 +39,22 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
 
     if positive:
         if value > thresholds[2]:
-            return 2
+            return 100
         elif value > thresholds[1]:
-            return 1
+            return 75
         elif value > thresholds[0]:
-            return -1
+            return 50
         else:
-            return -2
+            return 25
     else:
         if value < thresholds[0]:
-            return 2
+            return 100
         elif value < thresholds[1]:
-            return 1
+            return 75
         elif value < thresholds[2]:
-            return -1
+            return 50
         else:
-            return -2
+            return 25
 
 # ✅ Score generator op basis van config en data
 def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
@@ -62,7 +62,6 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
     total = 0
     count = 0
 
-    # 🔤 Zorg voor lowercase keys in data & config
     data = {k.lower(): v for k, v in data.items()}
     config = {k.lower(): v for k, v in config.items()}
 
@@ -102,7 +101,6 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
-            # 1️⃣ Macro ophalen
             cur.execute("""
                 SELECT name, value FROM macro_data
                 WHERE timestamp = (SELECT MAX(timestamp) FROM macro_data)
@@ -110,7 +108,6 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             macro_rows = cur.fetchall()
             macro_data = {name: float(value) for name, value in macro_rows}
 
-            # 2️⃣ Technische indicators ophalen
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
@@ -119,9 +116,7 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             """, (symbol,))
             tech_rows = cur.fetchall()
             tech_data = {indicator.lower(): float(value) for indicator, value in tech_rows}
-            logger.debug(f"🔍 Technische data geladen: {list(tech_data.keys())}")
 
-            # 3️⃣ Market data ophalen
             cur.execute("""
                 SELECT price, volume, change_24h FROM market_data
                 WHERE symbol = %s
@@ -137,27 +132,23 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
                     "change_24h": float(market_row[2]),
                 }
 
-            # 4️⃣ Configs laden
             macro_conf_full = load_config("config/macro_indicators_config.json")
             tech_conf = load_config("config/technical_indicators_config.json")
             market_conf_full = load_config("config/market_data_config.json")
             macro_conf = macro_conf_full.get("indicators", {})
             market_conf = market_conf_full.get("indicators", {})
 
-            # ➕ Opsplitsen macro-config in macro en sentiment
             macro_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "macro"}
             sentiment_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "sentiment"}
 
             sentiment_data = {k: v for k, v in macro_data.items() if k in sentiment_indicators}
             macro_data_cleaned = {k: v for k, v in macro_data.items() if k not in sentiment_data}
 
-            # 5️⃣ Scoreberekening per categorie
             macro_scores = generate_scores(macro_data_cleaned, macro_indicators)
             tech_scores = generate_scores(tech_data, tech_conf)
             market_scores = generate_scores(market_data, market_conf)
             sentiment_scores = generate_scores(sentiment_data, sentiment_indicators)
 
-            # 6️⃣ Setup score = gemiddelde van macro + technische scores
             macro_avg = macro_scores["total_score"] or 0
             tech_avg = tech_scores["total_score"] or 0
             setup_score = round((macro_avg + tech_avg) / 2, 2) if macro_avg or tech_avg else None
@@ -173,57 +164,6 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen en berekenen van scores: {e}", exc_info=True)
         return {}
-
-    finally:
-        conn.close()
-
-# ✅ Haal gecombineerde score op uit setup_scores tabel
-def calculate_combined_score(symbol: str = "BTC") -> Dict[str, Any]:
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ COMB01: Geen databaseverbinding.")
-        return {"symbol": symbol, "error": "Geen databaseverbinding", "total_score": None}
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT macro_score, technical_score, sentiment_score
-                FROM setup_scores
-                WHERE symbol = %s
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (symbol,))
-            row = cur.fetchone()
-
-        if not row:
-            logger.warning(f"⚠️ COMB02: Geen scoregegevens gevonden voor {symbol}")
-            return {"symbol": symbol, "error": "Geen scoregegevens", "total_score": None}
-
-        def safe_float(x):
-            try:
-                return float(x) if x is not None else None
-            except (ValueError, TypeError):
-                return None
-
-        macro = safe_float(row[0])
-        technical = safe_float(row[1])
-        sentiment = safe_float(row[2])
-
-        valid_scores = [s for s in [macro, technical, sentiment] if s is not None]
-        total = round(sum(valid_scores) / len(valid_scores), 2) if valid_scores else None
-
-        logger.info(f"✅ COMB04: Totale score voor {symbol} = {total}")
-        return {
-            "symbol": symbol,
-            "macro_score": macro,
-            "technical_score": technical,
-            "sentiment_score": sentiment,
-            "total_score": total
-        }
-
-    except Exception as e:
-        logger.error(f"❌ COMB05: Fout bij scoreberekening voor {symbol}: {e}", exc_info=True)
-        return {"symbol": symbol, "error": str(e), "total_score": None}
 
     finally:
         conn.close()
@@ -253,7 +193,6 @@ def test_scoring_utils():
     print("\n✅ Technical Scores:\n", json.dumps(tech_scores, indent=2))
     print("\n✅ Market Scores:\n", json.dumps(market_scores, indent=2))
     print("\n✅ Live DB Scores:\n", json.dumps(get_scores_for_symbol("BTC"), indent=2))
-    print("\n✅ Combined Score (setup_scores):\n", json.dumps(calculate_combined_score("BTC"), indent=2))
 
 
 if __name__ == "__main__":
