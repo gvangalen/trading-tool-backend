@@ -73,37 +73,20 @@ async def process_macro_indicator(name, config):
     if value is None:
         raise RuntimeError(f"❌ [FAIL] Geen waarde gevonden voor {name}")
 
-    # ✅ Threshold-validatie
-    thresholds = config.get("thresholds", [])
-    if len(thresholds) != 3:
-        logger.warning(f"⚠️ Ongeldige thresholds voor {name}: {thresholds} → fallback [0, 50, 100]")
-        thresholds = [0, 50, 100]
-
-    positive = config.get("positive", True)
-
-    # ✅ Berekeningen
-    score = calculate_score(value, thresholds, positive)
-    trend = determine_trend(value, thresholds, positive)
-    interpretation = interpret_value(value, thresholds, positive)
-
-    logger.info(
-        f"📊 [{name}] value={value} | thresholds={thresholds} | "
-        f"score={score} | trend={trend} | correlation={config.get('correlation')} | source={source}"
-    )
-
     return {
         "name": name,
         "value": value,
-        "score": score,
-        "trend": trend,
-        "interpretation": interpretation,
         "symbol": symbol,
         "source": source,
         "category": config.get("category"),
         "correlation": config.get("correlation"),
         "explanation": config.get("explanation"),
-        "action": config.get("action"),
+        "timeframe": config.get("timeframe"),
         "link": generate_chart_link(source, symbol),
+        "thresholds": config.get("thresholds", []),
+        "positive": config.get("positive", True),
+        "interpretations": config.get("interpretations"),
+        "actions": config.get("actions")
     }
 
 
@@ -153,91 +136,7 @@ async def fetch_fear_greed_value():
         return None
 
 
-# ✅ Interpretatiefuncties
-def calculate_score(value, thresholds, positive=True):
-    """
-    ➤ Berekent een schaalbare score (25–100) op basis van thresholds.
-    """
-    if value is None or not thresholds or len(thresholds) != 3:
-        return 0
-
-    v = float(value)
-    if positive:
-        if v >= thresholds[2]:
-            return 100
-        elif v >= thresholds[1]:
-            return 75
-        elif v >= thresholds[0]:
-            return 50
-        else:
-            return 25
-    else:
-        if v <= thresholds[0]:
-            return 100
-        elif v <= thresholds[1]:
-            return 75
-        elif v <= thresholds[2]:
-            return 50
-        else:
-            return 25
-
-
-def determine_trend(value, thresholds, positive=True):
-    """
-    ➤ Beschrijft de sterkte van de beweging ('Zeer sterk', 'Sterk', 'Neutraal', 'Zwak').
-    """
-    if value is None:
-        return "Onbekend"
-
-    v = float(value)
-    if positive:
-        if v >= thresholds[2]:
-            return "Zeer sterk"
-        elif v >= thresholds[1]:
-            return "Sterk"
-        elif v >= thresholds[0]:
-            return "Neutraal"
-        else:
-            return "Zwak"
-    else:
-        if v <= thresholds[0]:
-            return "Zeer sterk"
-        elif v <= thresholds[1]:
-            return "Sterk"
-        elif v <= thresholds[2]:
-            return "Neutraal"
-        else:
-            return "Zwak"
-
-
-def interpret_value(value, thresholds, positive=True):
-    """
-    ➤ Beschrijft richting ('Sterke stijging', 'Dalend', enz.).
-    """
-    if value is None:
-        return "Ongeldig"
-
-    v = float(value)
-    if positive:
-        if v >= thresholds[2]:
-            return "Sterke stijging"
-        elif v >= thresholds[1]:
-            return "Stijgend"
-        elif v >= thresholds[0]:
-            return "Neutraal"
-        else:
-            return "Dalend"
-    else:
-        if v <= thresholds[0]:
-            return "Sterke daling"
-        elif v <= thresholds[1]:
-            return "Dalend"
-        elif v <= thresholds[2]:
-            return "Neutraal"
-        else:
-            return "Stijgend"
-
-
+# ✅ Externe chartlink
 def generate_chart_link(source, symbol):
     if not source or not symbol:
         return None
