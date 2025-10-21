@@ -10,6 +10,7 @@ from celery import shared_task
 from backend.config.config_loader import load_macro_config
 from backend.utils.macro_interpreter import process_macro_indicator
 from backend.utils.db import get_db_connection
+from backend.utils.scoring_utils import generate_scores, load_config  # ✅ Nieuw
 
 # === ✅ Logging
 logging.basicConfig(level=logging.INFO)
@@ -94,8 +95,7 @@ def fetch_macro_data():
             logger.warning("⚠️ Geen indicatoren gevonden in config.")
             return
 
-        # ✅ Alleen whitelisted indicators (aanpasbaar)
-        whitelist = ["fear_greed", "dxy"]
+        whitelist = ["fear_greed", "dxy"]  # ✅ Pas dit aan indien nodig
 
         for name, indicator_config in indicators.items():
             if name not in whitelist:
@@ -125,18 +125,25 @@ def fetch_macro_data():
                     logger.warning(f"⚠️ Ongeldige waarde voor {name}: {result.get('value')}")
                     continue
 
+                # ✅ Bereken score + uitleg via scoring_utils
+                all_scores = generate_scores(
+                    {name: result["value"]},
+                    {name: indicator_config}
+                )
+                score_info = all_scores["scores"].get(name, {})
+
                 # ✅ Payload voorbereiden
                 payload = {
-                    "name": result["name"],
+                    "name": name,
                     "value": result["value"],
-                    "score": result.get("score", 0),
-                    "trend": result.get("trend", ""),
-                    "interpretation": result.get("interpretation", ""),
-                    "action": result.get("action", ""),
+                    "score": score_info.get("score", 0),
+                    "trend": score_info.get("trend", ""),  # evt. later toevoegen
+                    "interpretation": indicator_config.get("explanation", ""),
+                    "action": indicator_config.get("action", ""),
                     "symbol": result.get("symbol", "BTC"),
                     "source": result.get("source", ""),
-                    "category": result.get("category", ""),
-                    "correlation": result.get("correlation", ""),
+                    "category": indicator_config.get("category", ""),
+                    "correlation": indicator_config.get("correlation", ""),
                     "link": result.get("link", ""),
                 }
 
@@ -144,10 +151,10 @@ def fetch_macro_data():
                     f"📤 POST {name} | value={result['value']} | score={payload['score']} | trend={payload['trend']}"
                 )
 
-                # 🔁 Eerst API (voor dashboard sync)
+                # 🔁 API sync
                 safe_post(f"{API_BASE_URL}/macro_data", payload=payload)
 
-                # 🗃️ Daarna DB-opslag
+                # 💾 DB opslag
                 store_macro_score_db(payload)
 
             except RetryError:
