@@ -77,3 +77,18 @@ async def combined_score(symbol: str = "BTC"):
     except Exception as e:
         logger.error(f"❌ Combined-score fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/api/scores/daily")
+async def get_daily_scores(symbol: str = "BTC"):
+    """
+    ➤ Haalt de meest actuele scores op uit de database via get_scores_for_symbol.
+    Wordt gebruikt in dashboard en rapport.
+    """
+    try:
+        scores = get_scores_for_symbol(symbol)
+        if not scores:
+            raise HTTPException(status_code=404, detail="Geen scores gevonden")
+        return scores
+    except Exception as e:
+        logger.error(f"❌ Fout in /api/scores/daily: {e}")
+        raise HTTPException(status_code=500, detail="Interne fout bij ophalen scores")
