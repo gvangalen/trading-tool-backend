@@ -6,9 +6,9 @@ from dotenv import load_dotenv
 
 from backend.utils.db import get_db_connection
 from backend.utils.ai_report_utils import generate_daily_report_sections
-from backend.utils.scoring_utils import calculate_combined_score, get_scores_for_symbol  # ✅ toegevoegd
+from backend.utils.scoring_utils import get_scores_for_symbol
 from backend.utils.pdf_generator import generate_pdf_report
-from backend.utils.email_utils import send_email_with_attachment  # ✅ toegevoegd
+from backend.utils.email_utils import send_email_with_attachment
 
 # === Logging
 logger = logging.getLogger(__name__)
@@ -19,33 +19,44 @@ load_dotenv()
 def generate_daily_report():
     logger.info("🔄 Dagrapport-task gestart")
 
+    today = datetime.now().date()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
     try:
+        # 1️⃣ Scores berekenen en direct opslaan in daily_scores
+        logger.info("🧮 Scores berekenen via get_scores_for_symbol()")
+        score_dict = get_scores_for_symbol("BTC")
+        macro_score = score_dict.get("macro_score") or 0
+        technical_score = score_dict.get("technical_score") or 0
+        sentiment_score = score_dict.get("sentiment_score") or 0
+        setup_score = score_dict.get("setup_score") or round((macro_score + technical_score) / 2, 2)
+
+        logger.info(f"💾 Scores opslaan in daily_scores voor {today}")
+        cursor.execute(
+            """
+            INSERT INTO daily_scores (
+                report_date, macro_score, technical_score, setup_score, sentiment_score
+            ) VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (report_date) DO UPDATE
+            SET macro_score = EXCLUDED.macro_score,
+                technical_score = EXCLUDED.technical_score,
+                setup_score = EXCLUDED.setup_score,
+                sentiment_score = EXCLUDED.sentiment_score
+            """,
+            (today, macro_score, technical_score, setup_score, sentiment_score)
+        )
+        conn.commit()
+
+        # 2️⃣ AI-rapport genereren (deze haalt scores op uit daily_scores)
         logger.info("📝 Rapportgeneratie gestart...")
-        full_report = generate_daily_report_sections("BTC")  # nog altijd BTC-gebaseerd
+        full_report = generate_daily_report_sections("BTC")
 
         if not isinstance(full_report, dict):
             logger.error("❌ Ongeldige rapportstructuur (geen dict). Afgebroken.")
             return
 
-        macro_score = full_report.get("macro_score")
-        technical_score = full_report.get("technical_score")
-        setup_score = full_report.get("setup_score")
-        sentiment_score = full_report.get("sentiment_score")
-
-        # 🔄 Fallback via live scores als macro/technical/sentiment ontbreekt of nul is
-        if not all(isinstance(s, (int, float)) and s != 0 for s in [macro_score, technical_score]):
-            logger.warning("🔄 Fallback naar get_scores_for_symbol() voor macro/technical")
-            score_dict = get_scores_for_symbol("BTC")
-            macro_score = score_dict.get("macro_score") or 0
-            technical_score = score_dict.get("technical_score") or 0
-            sentiment_score = score_dict.get("sentiment_score") or 0
-            setup_score = score_dict.get("setup_score") or round((macro_score + technical_score) / 2, 2)
-
-        today = datetime.now().date()
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        logger.info(f"🚀 Opslaan dagrapport voor {today}")
+        logger.info(f"📥 Dagrapport opslaan in daily_reports voor {today}")
         cursor.execute(
             """
             INSERT INTO daily_reports (
@@ -82,24 +93,9 @@ def generate_daily_report():
             )
         )
 
-        # ✅ Scores apart loggen (voor grafieken)
-        cursor.execute(
-            """
-            INSERT INTO daily_scores (
-                report_date, macro_score, technical_score, setup_score, sentiment_score
-            ) VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (report_date) DO UPDATE
-            SET macro_score = EXCLUDED.macro_score,
-                technical_score = EXCLUDED.technical_score,
-                setup_score = EXCLUDED.setup_score,
-                sentiment_score = EXCLUDED.sentiment_score
-            """,
-            (today, macro_score, technical_score, setup_score, sentiment_score)
-        )
-
         conn.commit()
 
-        # ✅ PDF genereren
+        # 3️⃣ PDF genereren op basis van daily_reports
         cursor.execute("SELECT * FROM daily_reports WHERE report_date = %s LIMIT 1;", (today,))
         row = cursor.fetchone()
         if row:
@@ -108,7 +104,7 @@ def generate_daily_report():
             pdf_buffer = generate_pdf_report(report_dict, report_type="daily")
             logger.info(f"🖨️ PDF gegenereerd voor {today}")
 
-            # 📩 E-mail versturen
+            # 4️⃣ E-mail versturen
             pdf_path = os.path.join("static", "pdf", "daily", f"daily_report_{today}.pdf")
             try:
                 subject = f"📈 BTC Daily Report – {today}"
@@ -123,8 +119,8 @@ def generate_daily_report():
         else:
             logger.warning(f"⚠️ Geen rapport gevonden voor PDF voor {today}")
 
-        conn.close()
-        logger.info(f"✅ Dagrapport succesvol opgeslagen, PDF gemaakt en e-mail verzonden ({today})")
-
     except Exception as e:
         logger.error(f"❌ Fout tijdens rapportgeneratie: {e}", exc_info=True)
+    finally:
+        conn.close()
+        logger.info(f"✅ Dagrapport voltooid voor {today}")
