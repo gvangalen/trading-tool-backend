@@ -46,7 +46,8 @@ celery = Celery(
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task",
         "backend.celery_task.setup_scores_task",
-        "backend.celery_task.update_setup_scores"
+        "backend.celery_task.update_setup_scores",
+        "backend.celery_task.store_daily_scores_task",  # ✅ NIEUW
     ]
 )
 
@@ -140,6 +141,10 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.setup_scores_task.store_setup_scores_task",
         "schedule": crontab(hour=1, minute=0),
     },
+    "store_daily_scores": {
+        "task": "backend.celery_task.store_daily_scores_task.store_daily_scores_task",
+        "schedule": crontab(hour=0, minute=45),  # ✅ NIEUW
+    },
     "generate_daily_report_ai": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
         "schedule": crontab(hour=2, minute=30),
@@ -158,6 +163,7 @@ try:
     import backend.celery_task.setup_task
     import backend.celery_task.setup_scores_task
     import backend.celery_task.update_setup_scores
+    import backend.celery_task.store_daily_scores_task  # ✅ NIEUW
     import backend.celery_task.strategy_task
     import backend.celery_task.daily_report_task
     import backend.celery_task.weekly_report_task
