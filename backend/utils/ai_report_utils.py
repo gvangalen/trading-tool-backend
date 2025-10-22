@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 
 def log_and_print(msg: str):
-    """Logt én print altijd (handig voor PM2/Celery debugging)."""
     logger.info(msg)
     try:
         with open(LOG_FILE, "a") as f:
@@ -51,7 +50,6 @@ def safe_get(obj, key, fallback="–"):
 # =====================================================
 
 def get_scores_from_db():
-    """Haalt de meest recente scores op uit daily_scores-tabel (BTC default)."""
     conn = get_db_connection()
     if not conn:
         log_and_print("❌ Kan geen DB-verbinding maken voor scores.")
@@ -90,7 +88,6 @@ def get_scores_from_db():
 # =====================================================
 
 def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) -> str:
-    """Genereert AI-output met retry-logica."""
     for attempt in range(1, retries + 1):
         try:
             log_and_print(f"🔍 [AI Attempt {attempt}] Prompt (eerste 180): {prompt[:180]}")
@@ -182,6 +179,13 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     # 1️⃣ Data ophalen
     setup_raw = get_latest_setup_for_symbol(symbol)
     scores_raw = get_scores_from_db()
+
+    # 🔄 Fallback bij lege score
+    if not scores_raw:
+        log_and_print("🧪 Geen scores in daily_scores – fallback naar live scoreberekening")
+        from backend.utils.scoring_utils import get_scores_for_symbol
+        scores_raw = get_scores_for_symbol(symbol)
+
     log_and_print(f"📦 setup_raw: {repr(setup_raw)[:180]}")
     log_and_print(f"📦 scores_raw: {repr(scores_raw)[:180]}")
 
@@ -191,13 +195,10 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     log_and_print(f"🧹 setup sanitized ({type(setup)}): {repr(setup)[:180]}")
     log_and_print(f"🧹 scores sanitized ({type(scores)}): {repr(scores)[:180]}")
 
-    # 3️⃣ AI-strategie genereren
+    # 3️⃣ Strategie
     strategy_raw = generate_strategy_from_setup(setup)
-    log_and_print(f"📈 strategy_raw: {repr(strategy_raw)[:180]}")
     strategy = sanitize_json_input(strategy_raw, context="strategy")
-    log_and_print(f"📈 strategy sanitized ({type(strategy)}): {repr(strategy)[:180]}")
 
-    # 4️⃣ Validatie
     if not isinstance(setup, dict) or not setup:
         log_and_print("❌ Ongeldige setup → stop.")
         return {"error": "Ongeldige setup"}
@@ -208,7 +209,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         log_and_print("❌ Ongeldige strategy → stop.")
         return {"error": "Ongeldige strategy"}
 
-    # 5️⃣ Rapport genereren met AI
+    # 4️⃣ AI-secties genereren
     try:
         report = {
             "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)),
@@ -226,9 +227,6 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         }
 
         log_and_print(f"✅ Rapport succesvol gegenereerd ({len(report)} velden)")
-        for k, v in report.items():
-            log_and_print(f"📌 {k}: {str(v)[:120]}")
-
         return report
 
     except Exception as e:
