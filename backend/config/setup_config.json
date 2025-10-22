@@ -1,0 +1,49 @@
+{
+  "setups": [
+    {
+      "name": "Simple DCA bij Fear",
+      "symbol": "BTC",
+      "category": "DCA",
+      "strategy_type": "passief",
+      "score_range": [0, 40],
+      "filters": {
+        "macro": true,
+        "sentiment": true,
+        "rsi": false,
+        "volume": false
+      },
+      "explanation": "Deze setup is bedoeld voor accumulatie bij angst in de markt. Actief bij lage sentiment- en macro scores.",
+      "action": "Voer een kleine aankoop uit (bijv. €30) als deze setup actief is.",
+      "dynamic_investment": true
+    },
+    {
+      "name": "Momentum Breakout (4H)",
+      "symbol": "BTC",
+      "category": "scalp",
+      "strategy_type": "actief",
+      "score_range": [75, 100],
+      "filters": {
+        "rsi": true,
+        "volume": true,
+        "macro": false
+      },
+      "explanation": "Deze setup zoekt naar sterke uitbraken op korte termijn met bevestiging via RSI en volume.",
+      "action": "Overweeg een breakout trade met duidelijke SL/TP op basis van 4H structuur.",
+      "dynamic_investment": true
+    },
+    {
+      "name": "Macro Trend Follow",
+      "symbol": "BTC",
+      "category": "swing",
+      "strategy_type": "trend",
+      "score_range": [60, 100],
+      "filters": {
+        "macro": true,
+        "technical": true
+      },
+      "explanation": "Deze setup volgt de langetermijn trend bij hoge macro- en technische score.",
+      "action": "Overweeg een swingtrade met duidelijke trailing stop of laddered targets.",
+      "dynamic_investment": false
+    }
+  ]
+}
