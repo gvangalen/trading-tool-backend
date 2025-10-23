@@ -2,7 +2,6 @@ import logging
 import json
 from fastapi import APIRouter, HTTPException
 from backend.utils.scoring_utils import load_config, generate_scores
-from backend.utils.scoring_utils import calculate_combined_score
 from backend.utils.scoring_utils import get_scores_for_symbol
 
 router = APIRouter()
