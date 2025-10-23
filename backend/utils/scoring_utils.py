@@ -24,36 +24,14 @@ def load_config(relative_path: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"❌ Failed to load config ({relative_path}): {e}")
         return {}
-        
-# =========================================================
-# ✅ Dashboard Scorefunctie 
-# =========================================================
-def get_dashboard_scores(macro_data, technical_data, setups):
-    """
-    ➤ Bereken macro, technical en setup score voor dashboard.
-    """
-    macro_scores = [d["score"] for d in macro_data if isinstance(d.get("score"), (int, float))]
-    macro_score = round(sum(macro_scores) / len(macro_scores), 2) if macro_scores else 0
-
-    used_scores = [v["score"] for v in technical_data.values()]
-    total_possible = len(used_scores) * 100
-    technical_score = round((sum(used_scores) / total_possible) * 100, 2) if total_possible else 0
-
-    setup_score = len(setups) * 10 if setups else 0
-
-    return {
-        "macro": macro_score,
-        "technical": technical_score,
-        "setup": setup_score
-    }
 
 
 # =========================================================
-# ✅ Universele Scorefunctie (25–100 schaal)
+# ✅ Score logica per type
 # =========================================================
 def calculate_score(value: Optional[float], thresholds: list, positive: bool = True) -> Optional[int]:
     """
-    ➤ Basisfunctie voor ruwe score (25–100 schaal)
+    ➤ Basis scorefunctie met minimale waarde van 10 (nooit 0).
     """
     if value is None:
         return None
@@ -65,7 +43,6 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
     if len(thresholds) != 3:
         thresholds = [0, 50, 100]
 
-    # Positieve of negatieve correlatie
     if positive:
         if value >= thresholds[2]:
             return 100
@@ -87,25 +64,21 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
 
 
 # =========================================================
-# ✅ Unified interpretatie + trend + actie
+# ✅ Score + Interpretatie + Trend per datapunt
 # =========================================================
 def calculate_score_from_config(value: float, config: dict) -> dict:
-    """
-    ➤ Geeft score + trend + interpretatie + actie terug voor macro/technical indicatoren.
-    """
     thresholds = config.get("thresholds", [0, 50, 100])
     positive = config.get("positive", True)
     score = calculate_score(value, thresholds, positive)
 
     if score is None:
         return {
-            "score": 0,
+            "score": 10,
             "trend": "Onbekend",
             "interpretation": "Geen geldige waarde ontvangen.",
             "action": config.get("action", "")
         }
 
-    # Trend bepalen
     if score >= 90:
         trend = "Zeer sterk"
     elif score >= 75:
@@ -115,38 +88,45 @@ def calculate_score_from_config(value: float, config: dict) -> dict:
     else:
         trend = "Zwak"
 
-    # Interpretatie op basis van correlatie
     correlation = config.get("correlation", "positief")
     if correlation == "positief":
-        if score >= 75:
-            interpretation = "Sterk positief signaal"
-        elif score >= 50:
-            interpretation = "Neutraal / licht positief"
-        else:
-            interpretation = "Negatief signaal"
+        interpretation = (
+            "Sterk positief signaal" if score >= 75 else
+            "Neutraal / licht positief" if score >= 50 else
+            "Negatief signaal"
+        )
     else:
-        if score >= 75:
-            interpretation = "Sterk negatief signaal"
-        elif score >= 50:
-            interpretation = "Neutraal / afwachtend"
-        else:
-            interpretation = "Positief teken"
+        interpretation = (
+            "Sterk negatief signaal" if score >= 75 else
+            "Neutraal / afwachtend" if score >= 50 else
+            "Positief teken"
+        )
 
     return {
         "score": score,
         "trend": trend,
         "interpretation": interpretation,
-        "action": config.get("action", "")
+        "action": config.get("actions", {}).get(str(score), "")
     }
 
 
 # =========================================================
-# ✅ Batch generator voor alle indicatoren
+# ✅ Per-type scoregenerator
 # =========================================================
+def calculate_macro_scores(data: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
+    return generate_scores(data, config)
+
+def calculate_technical_scores(data: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
+    return generate_scores(data, config)
+
+def calculate_market_scores(data: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
+    return generate_scores(data, config)
+
+def calculate_sentiment_scores(data: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
+    return generate_scores(data, config)
+
+
 def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    ➤ Verwerkt meerdere indicatoren (macro / technical / market)
-    """
     scores = {}
     total = 0
     count = 0
@@ -173,31 +153,18 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
             total += score
             count += 1
 
-    avg_score = round(total / count, 2) if count else 0
+    avg_score = round(total / count, 2) if count else 10
     logger.info(f"✅ {count} geldige indicatoren gescoord (gemiddelde: {avg_score})")
     return {"scores": scores, "total_score": avg_score}
 
 
 # =========================================================
-# ✅ Setup match functies
+# ✅ Setup Score Matching
 # =========================================================
 def match_setups_to_score(setups: list, total_score: float) -> list:
-    """
-    ➤ Filtert setups die passen bij de huidige dagscore.
-    """
-    matching = []
-    for setup in setups:
-        min_score = setup.get("min_score", 0)
-        max_score = setup.get("max_score", 100)
-        if min_score <= total_score <= max_score:
-            matching.append(setup)
-    return matching
-
+    return [s for s in setups if s.get("min_score", 0) <= total_score <= s.get("max_score", 100)]
 
 def find_best_matching_setup(setups: list, total_score: float) -> Optional[dict]:
-    """
-    ➤ Geeft setup terug met dichtsbijzijnde scorematch.
-    """
     best_setup = None
     smallest_diff = float("inf")
     for setup in setups:
@@ -213,7 +180,7 @@ def find_best_matching_setup(setups: list, total_score: float) -> Optional[dict]
 
 
 # =========================================================
-# ✅ Haal actuele macro / technical / market / sentiment data uit DB
+# ✅ Data ophalen + scores berekenen
 # =========================================================
 def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
     conn = get_db_connection()
@@ -223,7 +190,6 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
-            # Macro
             cur.execute("""
                 SELECT name, value FROM macro_data
                 WHERE timestamp = (SELECT MAX(timestamp) FROM macro_data)
@@ -231,7 +197,6 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             macro_rows = cur.fetchall()
             macro_data = {name: float(value) for name, value in macro_rows}
 
-            # Technical
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
@@ -241,7 +206,6 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             tech_rows = cur.fetchall()
             tech_data = {indicator.lower(): float(value) for indicator, value in tech_rows}
 
-            # Market
             cur.execute("""
                 SELECT price, volume, change_24h FROM market_data
                 WHERE symbol = %s
@@ -254,10 +218,9 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
                 market_data = {
                     "price": float(market_row[0]),
                     "volume": float(market_row[1]),
-                    "change_24h": float(market_row[2]),
+                    "change_24h": float(market_row[2])
                 }
 
-            # Configs
             macro_conf_full = load_config("config/macro_indicators_config.json")
             tech_conf = load_config("config/technical_indicators_config.json")
             market_conf_full = load_config("config/market_data_config.json")
@@ -265,18 +228,16 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             macro_conf = macro_conf_full.get("indicators", {})
             market_conf = market_conf_full.get("indicators", {})
 
-            # Macro & sentiment splitsen
             macro_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "macro"}
             sentiment_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "sentiment"}
 
             sentiment_data = {k: v for k, v in macro_data.items() if k in sentiment_indicators}
             macro_data_cleaned = {k: v for k, v in macro_data.items() if k not in sentiment_data}
 
-            # Scoreberekening per categorie
-            macro_scores = generate_scores(macro_data_cleaned, macro_indicators)
-            tech_scores = generate_scores(tech_data, tech_conf.get("indicators", {}))
-            market_scores = generate_scores(market_data, market_conf)
-            sentiment_scores = generate_scores(sentiment_data, sentiment_indicators)
+            macro_scores = calculate_macro_scores(macro_data_cleaned, macro_indicators)
+            tech_scores = calculate_technical_scores(tech_data, tech_conf.get("indicators", {}))
+            market_scores = calculate_market_scores(market_data, market_conf)
+            sentiment_scores = calculate_sentiment_scores(sentiment_data, sentiment_indicators)
 
             macro_avg = macro_scores["total_score"]
             tech_avg = tech_scores["total_score"]
@@ -293,13 +254,32 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen en berekenen van scores: {e}", exc_info=True)
         return {}
-
     finally:
         conn.close()
 
 
 # =========================================================
-# ✅ Testfunctie
+# ✅ Dashboard functie
+# =========================================================
+def get_dashboard_scores(macro_data, technical_data, setups):
+    macro_scores = [d["score"] for d in macro_data if isinstance(d.get("score"), (int, float))]
+    macro_score = round(sum(macro_scores) / len(macro_scores), 2) if macro_scores else 10
+
+    used_scores = [v["score"] for v in technical_data.values()]
+    total_possible = len(used_scores) * 100
+    technical_score = round((sum(used_scores) / total_possible) * 100, 2) if total_possible else 10
+
+    setup_score = len(setups) * 10 if setups else 10
+
+    return {
+        "macro": macro_score,
+        "technical": technical_score,
+        "setup": setup_score
+    }
+
+
+# =========================================================
+# ✅ Test
 # =========================================================
 def test_scoring_utils():
     test_data = {
