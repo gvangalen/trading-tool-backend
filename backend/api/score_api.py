@@ -1,5 +1,6 @@
 import logging
 import json
+from fastapi.responses import JSONResponse
 from fastapi import APIRouter, HTTPException
 from backend.utils.scoring_utils import load_config, generate_scores
 from backend.utils.scoring_utils import get_scores_for_symbol
@@ -75,8 +76,15 @@ async def get_daily_scores():
     try:
         scores = get_scores_for_symbol()  # ✅ zonder symbol!
         if not scores:
-            raise HTTPException(status_code=404, detail="Geen scores gevonden in database")
+            logger.warning("⚠️ Geen scores gevonden in database")
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "Geen scores gevonden in database"}
+            )
         return scores
     except Exception as e:
         logger.error(f"❌ Fout in /api/scores/daily: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Interne fout bij ophalen scores")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Interne fout bij ophalen scores"}
+        )
