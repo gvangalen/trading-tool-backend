@@ -65,19 +65,6 @@ async def market_score():
         logger.error(f"❌ Market-score fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ Gecombineerde AI-score uit database
-@router.get("/score/combined/{symbol}")
-async def combined_score(symbol: str = "BTC"):
-    """
-    Retourneert gecombineerde AI-score op basis van macro, technical en sentiment uit setup_scores-tabel.
-    """
-    try:
-        result = calculate_combined_score(symbol)
-        return result
-    except Exception as e:
-        logger.error(f"❌ Combined-score fout: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 # ✅ Dagelijkse gecombineerde score ophalen
 @router.get("/scores/daily")
 async def get_daily_scores():
