@@ -182,7 +182,7 @@ def find_best_matching_setup(setups: list, total_score: float) -> Optional[dict]
 # =========================================================
 # ✅ Data ophalen + scores berekenen
 # =========================================================
-def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
+def get_scores_for_symbol() -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding voor get_scores_for_symbol")
@@ -200,18 +200,16 @@ def get_scores_for_symbol(symbol: str = "BTC") -> Dict[str, Any]:
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
-                WHERE symbol = %s
                 ORDER BY indicator, timestamp DESC
-            """, (symbol,))
+            """)
             tech_rows = cur.fetchall()
             tech_data = {indicator.lower(): float(value) for indicator, value in tech_rows}
 
             cur.execute("""
                 SELECT price, volume, change_24h FROM market_data
-                WHERE symbol = %s
                 ORDER BY timestamp DESC
                 LIMIT 1
-            """, (symbol,))
+            """)
             market_row = cur.fetchone()
             market_data = {}
             if market_row:
