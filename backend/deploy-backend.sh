@@ -3,7 +3,7 @@ set -e
 
 # 📂 Directories
 BACKEND_DIR="$HOME/trading-tool-backend"
-ENV_FILE="$BACKEND_DIR/backend/.env"
+ENV_FILE="$BACKEND_DIR/.env"
 LOG_DIR="/var/log/pm2"
 
 # ✅ PATH fix
