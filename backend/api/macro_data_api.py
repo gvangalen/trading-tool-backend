@@ -1,3 +1,10 @@
+import os
+from dotenv import load_dotenv
+
+# ✅ Forceren van laden van .env bestand
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path=dotenv_path)
+
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
@@ -12,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 try:
     MACRO_CONFIG = load_macro_config()
-    logger.info("\ud83d\ude80 macro_data_api.py geladen – alle macro-routes zijn actief.")
+    logger.info("🚀 macro_data_api.py geladen – alle macro-routes zijn actief.")
 except Exception as e:
     MACRO_CONFIG = {}
     logger.error(f"❌ [INIT] Config niet geladen bij opstarten: {e}")
@@ -22,7 +29,7 @@ def get_db_cursor():
     if not conn:
         raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
     return conn, conn.cursor()
-
+    
 @router.post("/macro_data")
 async def add_macro_indicator(request: Request):
     logger.info("📅 [add] Nieuwe macro-indicator toevoegen...")
