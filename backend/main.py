@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 # ✅ .env forceren met pad (werkt altijd, ook met pm2)
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path)
+print("✅ TESTENV: DATABASE_URL =", os.getenv("DATABASE_URL"))
+print("✅ TESTENV: VOLUME_URL =", os.getenv("VOLUME_URL"))
 
 # ✅ Rootpad toevoegen voor correcte backend imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
