@@ -30,9 +30,7 @@ def load_config(relative_path: str) -> Dict[str, Any]:
 # ✅ Score logica per type
 # =========================================================
 def calculate_score(value: Optional[float], thresholds: list, positive: bool = True) -> Optional[int]:
-    """
-    ➤ Basis scorefunctie met minimale waarde van 10 (nooit 0).
-    """
+    """➤ Basis scorefunctie met minimale waarde van 10 (nooit 0)."""
     if value is None:
         return None
     try:
@@ -126,6 +124,9 @@ def calculate_sentiment_scores(data: Dict[str, float], config: Dict[str, Any]) -
     return generate_scores(data, config)
 
 
+# =========================================================
+# ✅ Universele generator
+# =========================================================
 def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
     scores = {}
     total = 0
@@ -190,35 +191,50 @@ def get_scores_for_symbol() -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
+            # === Macro data ophalen ===
             cur.execute("""
                 SELECT name, value FROM macro_data
                 WHERE timestamp = (SELECT MAX(timestamp) FROM macro_data)
             """)
             macro_rows = cur.fetchall()
-            macro_data = {name: float(value) for name, value in macro_rows}
+            macro_data = {
+                name: float(value)
+                for name, value in macro_rows
+                if value is not None
+            }
 
+            # === Technische data ophalen ===
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
                 ORDER BY indicator, timestamp DESC
             """)
             tech_rows = cur.fetchall()
-            tech_data = {indicator.lower(): float(value) for indicator, value in tech_rows}
+            tech_data = {}
+            for indicator, value in tech_rows:
+                if value is None:
+                    logger.warning(f"⚠️ Indicator '{indicator}' heeft geen waarde (None) — wordt overgeslagen")
+                    continue
+                try:
+                    tech_data[indicator.lower()] = float(value)
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"⚠️ Ongeldige waarde voor '{indicator}': {value} ({e})")
 
+            # === Marktdata ophalen ===
             cur.execute("""
                 SELECT price, volume, change_24h FROM market_data
-                ORDER BY timestamp DESC
-                LIMIT 1
+                ORDER BY timestamp DESC LIMIT 1
             """)
             market_row = cur.fetchone()
             market_data = {}
             if market_row:
                 market_data = {
-                    "price": float(market_row[0]),
-                    "volume": float(market_row[1]),
-                    "change_24h": float(market_row[2])
+                    "price": float(market_row[0] or 0),
+                    "volume": float(market_row[1] or 0),
+                    "change_24h": float(market_row[2] or 0)
                 }
 
+            # === Configs laden ===
             macro_conf_full = load_config("config/macro_indicators_config.json")
             tech_conf = load_config("config/technical_indicators_config.json")
             market_conf_full = load_config("config/market_data_config.json")
@@ -232,6 +248,7 @@ def get_scores_for_symbol() -> Dict[str, Any]:
             sentiment_data = {k: v for k, v in macro_data.items() if k in sentiment_indicators}
             macro_data_cleaned = {k: v for k, v in macro_data.items() if k not in sentiment_data}
 
+            # === Scores berekenen ===
             macro_scores = calculate_macro_scores(macro_data_cleaned, macro_indicators)
             tech_scores = calculate_technical_scores(tech_data, tech_conf.get("indicators", {}))
             market_scores = calculate_market_scores(market_data, market_conf)
@@ -241,9 +258,11 @@ def get_scores_for_symbol() -> Dict[str, Any]:
             tech_avg = tech_scores["total_score"]
             setup_score = round((macro_avg + tech_avg) / 2, 2)
 
+            logger.info(f"✅ Scores berekend: macro={macro_avg}, tech={tech_avg}, setup={setup_score}")
+
             return {
-                "macro_score": macro_scores["total_score"],
-                "technical_score": tech_scores["total_score"],
+                "macro_score": macro_avg,
+                "technical_score": tech_avg,
                 "market_score": market_scores["total_score"],
                 "sentiment_score": sentiment_scores["total_score"],
                 "setup_score": setup_score
@@ -274,35 +293,3 @@ def get_dashboard_scores(macro_data, technical_data, setups):
         "technical": technical_score,
         "setup": setup_score
     }
-
-
-# =========================================================
-# ✅ Test
-# =========================================================
-def test_scoring_utils():
-    test_data = {
-        "fear_greed": 77,
-        "dxy": 104.3,
-        "rsi": 63,
-        "volume": 3800,
-        "ma_200": 1.02,
-        "price": 73000,
-        "change_24h": 1.2
-    }
-
-    macro_conf = load_config("config/macro_indicators_config.json").get("indicators", {})
-    tech_conf = load_config("config/technical_indicators_config.json").get("indicators", {})
-    market_conf = load_config("config/market_data_config.json").get("indicators", {})
-
-    macro_scores = generate_scores(test_data, macro_conf)
-    tech_scores = generate_scores(test_data, tech_conf)
-    market_scores = generate_scores(test_data, market_conf)
-
-    print("\n✅ Macro Scores:\n", json.dumps(macro_scores, indent=2))
-    print("\n✅ Technical Scores:\n", json.dumps(tech_scores, indent=2))
-    print("\n✅ Market Scores:\n", json.dumps(market_scores, indent=2))
-    print("\n✅ Combined DB Fetch:\n", json.dumps(get_scores_for_symbol("BTC"), indent=2))
-
-
-if __name__ == "__main__":
-    test_scoring_utils()
