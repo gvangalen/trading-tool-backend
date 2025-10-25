@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import httpx
 from backend.utils.db import get_db_connection
 from backend.config.config_loader import load_market_config
-from backend.utils.scoring_util import get_scores_for_symbol
+from backend.utils.scoring_utils import get_scores_for_symbol
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
