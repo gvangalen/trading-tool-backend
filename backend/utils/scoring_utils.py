@@ -65,47 +65,36 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
 # ✅ Score + Interpretatie + Trend per datapunt
 # =========================================================
 def calculate_score_from_config(value: float, config: dict) -> dict:
-    thresholds = config.get("thresholds", [0, 50, 100])
-    positive = config.get("positive", True)
-    score = calculate_score(value, thresholds, positive)
-
-    if score is None:
-        return {
-            "score": 10,
-            "trend": "Onbekend",
-            "interpretation": "Geen geldige waarde ontvangen.",
-            "action": config.get("action", "")
-        }
-
-    if score >= 90:
-        trend = "Zeer sterk"
-    elif score >= 75:
-        trend = "Sterk"
-    elif score >= 50:
-        trend = "Neutraal"
-    else:
-        trend = "Zwak"
-
-    correlation = config.get("correlation", "positief")
-    if correlation == "positief":
-        interpretation = (
-            "Sterk positief signaal" if score >= 75 else
-            "Neutraal / licht positief" if score >= 50 else
-            "Negatief signaal"
-        )
-    else:
-        interpretation = (
-            "Sterk negatief signaal" if score >= 75 else
-            "Neutraal / afwachtend" if score >= 50 else
-            "Positief teken"
-        )
-
-    return {
-        "score": score,
-        "trend": trend,
-        "interpretation": interpretation,
-        "action": config.get("actions", {}).get(str(score), "")
+    scoring = config.get("scoring", {})
+    fallback = {
+        "score": 10,
+        "trend": "Onbekend",
+        "interpretation": "Geen geldige waarde ontvangen.",
+        "action": config.get("action", "")
     }
+
+    if not scoring or value is None:
+        return fallback
+
+    try:
+        for range_key, details in scoring.items():
+            if "+" in range_key:
+                # voorbeeld: "5000+" betekent vanaf 5000 en hoger
+                lower = float(range_key.replace("+", ""))
+                if value >= lower:
+                    return details
+            elif "-" in range_key:
+                parts = range_key.split("-")
+                if len(parts) == 2:
+                    lower = float(parts[0])
+                    upper = float(parts[1])
+                    if lower <= value < upper:
+                        return details
+        # fallback als geen range matched
+        return fallback
+    except Exception as e:
+        logger.warning(f"⚠️ Fout bij score interpretatie: {e}")
+        return fallback
 
 
 # =========================================================
