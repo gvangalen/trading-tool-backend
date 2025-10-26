@@ -64,7 +64,7 @@
           "interpretation": "Hoger dan gemiddeld volume – bevestiging van huidige beweging.",
           "action": "Volg de trend als deze zich voortzet."
         },
-        "5000-∞": {
+        "5000+": {
           "score": 90,
           "trend": "Explosief",
           "interpretation": "Zeer hoog volume – sterke impuls of capitulatie.",
@@ -99,7 +99,7 @@
           "interpretation": "Asset zit boven de 200MA – positief momentum bouwt op.",
           "action": "Overweeg long setups of trendvolgende trades."
         },
-        "1.05-∞": {
+        "1.05+": {
           "score": 90,
           "trend": "Sterk Bullish",
           "interpretation": "Asset beweegt krachtig boven 200MA – duidelijke trend omhoog.",
