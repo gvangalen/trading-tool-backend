@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 load_dotenv()
 
-
 # =====================================================
 # 🧠 Hulpfunctie: scores ophalen uit daily_scores
 # =====================================================
@@ -28,7 +27,7 @@ def get_scores_from_db():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT macro_score, technical_score, setup_score, sentiment_score
+                SELECT macro_score, technical_score, setup_score, sentiment_score, market_score
                 FROM daily_scores
                 ORDER BY report_date DESC
                 LIMIT 1
@@ -43,13 +42,13 @@ def get_scores_from_db():
                 "technical_score": float(row[1]) if row[1] is not None else 0,
                 "setup_score": float(row[2]) if row[2] is not None else 0,
                 "sentiment_score": float(row[3]) if row[3] is not None else 0,
+                "market_score": float(row[4]) if row[4] is not None else 0,
             }
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen van scores: {e}")
         return {}
     finally:
         conn.close()
-
 
 # =====================================================
 # 🧾 Dagrapport genereren
@@ -71,12 +70,14 @@ def generate_daily_report():
         scores = get_scores_from_db()
         if not scores:
             logger.warning("⚠️ Geen scores beschikbaar — rapport wordt wel aangemaakt, maar scores = 0")
+
         macro_score = scores.get("macro_score", 0)
         technical_score = scores.get("technical_score", 0)
         setup_score = scores.get("setup_score", 0)
         sentiment_score = scores.get("sentiment_score", 0)
+        market_score = scores.get("market_score", 0)
 
-        # 2️⃣ AI-rapport genereren (deze gebruikt o.a. scores)
+        # 2️⃣ AI-rapport genereren (gebruikt o.a. scores en marktdata)
         logger.info("🧠 Rapportgeneratie gestart...")
         full_report = generate_daily_report_sections("BTC")
 
@@ -92,8 +93,8 @@ def generate_daily_report():
                 report_date, btc_summary, macro_summary,
                 setup_checklist, priorities, wyckoff_analysis,
                 recommendations, conclusion, outlook,
-                macro_score, technical_score, setup_score, sentiment_score
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                macro_score, technical_score, setup_score, sentiment_score, market_score
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (report_date) DO UPDATE
             SET btc_summary = EXCLUDED.btc_summary,
                 macro_summary = EXCLUDED.macro_summary,
@@ -106,7 +107,8 @@ def generate_daily_report():
                 macro_score = EXCLUDED.macro_score,
                 technical_score = EXCLUDED.technical_score,
                 setup_score = EXCLUDED.setup_score,
-                sentiment_score = EXCLUDED.sentiment_score
+                sentiment_score = EXCLUDED.sentiment_score,
+                market_score = EXCLUDED.market_score
             """,
             (
                 today,
@@ -118,7 +120,7 @@ def generate_daily_report():
                 full_report.get("recommendations", ""),
                 full_report.get("conclusion", ""),
                 full_report.get("outlook", ""),
-                macro_score, technical_score, setup_score, sentiment_score
+                macro_score, technical_score, setup_score, sentiment_score, market_score
             )
         )
         conn.commit()
@@ -137,10 +139,18 @@ def generate_daily_report():
 
         # 5️⃣ E-mail versturen
         pdf_path = os.path.join("static", "pdf", "daily", f"daily_report_{today}.pdf")
+
+        # Extra prijsinformatie uit rapport (optioneel)
+        market_data = full_report.get("market_data", {})
+        price = market_data.get("price", "–")
+        volume = market_data.get("volume", "–")
+        change_24h = market_data.get("change_24h", "–")
+
         try:
             subject = f"📈 BTC Daily Report – {today}"
             body = (
                 f"Hierbij het automatisch gegenereerde dagelijkse Bitcoin rapport voor {today}.\n\n"
+                f"Huidige prijs: ${price} | Volume: {volume} | 24u verandering: {change_24h}%\n\n"
                 "Bekijk de belangrijkste samenvatting, Wyckoff-analyse en strategieën in de bijlage."
             )
             send_email_with_attachment(subject, body, pdf_path)
