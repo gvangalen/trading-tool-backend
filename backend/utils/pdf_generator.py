@@ -101,6 +101,23 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
     story.append(Paragraph(datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), styles["Normal"]))
     story.append(Spacer(1, 12))
 
+    # === 💰 Marktdata blok (optioneel)
+    market_data = data.get("market_data")
+    if isinstance(market_data, dict):
+        story.append(Paragraph(clean_text("💰 Marktgegevens"), styles["SectionHeader"]))
+        price = market_data.get("price", "–")
+        volume = market_data.get("volume", "–")
+        change = market_data.get("change_24h", "–")
+
+        # Optioneel: format volume als bijv. 1.2B
+        if isinstance(volume, (int, float)):
+            volume = f"{volume/1e9:.1f}B" if volume > 1e9 else f"{volume/1e6:.1f}M"
+        change_str = f"{change}%" if isinstance(change, (int, float)) else change
+
+        price_line = f"Prijs: ${price} | Volume: {volume} | 24h Verandering: {change_str}"
+        story.append(Paragraph(price_line, styles["Content"]))
+        story.append(Spacer(1, 12))
+
     # === 🧱 Secties
     for key, label in SECTION_LABELS.items():
         value = data.get(key)
