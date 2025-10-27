@@ -27,7 +27,7 @@ def load_config(relative_path: str) -> Dict[str, Any]:
 
 
 # =========================================================
-# ✅ Score logica per type
+# ✅ Basis scorefunctie
 # =========================================================
 def calculate_score(value: Optional[float], thresholds: list, positive: bool = True) -> Optional[int]:
     """➤ Basis scorefunctie met minimale waarde van 10 (nooit 0)."""
@@ -62,7 +62,7 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
 
 
 # =========================================================
-# ✅ Score + Interpretatie + Trend per datapunt
+# ✅ Score + interpretatie per indicator
 # =========================================================
 def calculate_score_from_config(value: float, config: dict) -> dict:
     scoring = config.get("scoring", {})
@@ -79,7 +79,6 @@ def calculate_score_from_config(value: float, config: dict) -> dict:
     try:
         for range_key, details in scoring.items():
             if "+" in range_key:
-                # voorbeeld: "5000+" betekent vanaf 5000 en hoger
                 lower = float(range_key.replace("+", ""))
                 if value >= lower:
                     return details
@@ -90,11 +89,48 @@ def calculate_score_from_config(value: float, config: dict) -> dict:
                     upper = float(parts[1])
                     if lower <= value < upper:
                         return details
-        # fallback als geen range matched
         return fallback
     except Exception as e:
         logger.warning(f"⚠️ Fout bij score interpretatie: {e}")
         return fallback
+
+
+# =========================================================
+# ✅ Universele scoregenerator met afronding
+# =========================================================
+def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+    scores = {}
+    total = 0
+    count = 0
+
+    data = {k.lower(): v for k, v in data.items()}
+    config = {k.lower(): v for k, v in config.items()}
+
+    for name, conf in config.items():
+        value = data.get(name)
+        result = calculate_score_from_config(value, conf)
+
+        score = result["score"]
+        if isinstance(score, (int, float)):
+            score = round(score)  # ✅ afronden op hele getallen
+
+        scores[name] = {
+            "value": value,
+            "score": score,
+            "trend": result["trend"],
+            "interpretation": result["interpretation"],
+            "action": result["action"],
+            "thresholds": conf.get("thresholds"),
+            "positive": conf.get("positive", True)
+        }
+
+        if isinstance(score, (int, float)):
+            total += score
+            count += 1
+
+    avg_score = round(total / count) if count else 10  # ✅ afronden op hele getallen
+    logger.info(f"✅ {count} geldige indicatoren gescoord (gemiddelde: {avg_score})")
+    return {"scores": scores, "total_score": avg_score}
 
 
 # =========================================================
@@ -114,42 +150,7 @@ def calculate_sentiment_scores(data: Dict[str, float], config: Dict[str, Any]) -
 
 
 # =========================================================
-# ✅ Universele generator
-# =========================================================
-def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
-    scores = {}
-    total = 0
-    count = 0
-
-    data = {k.lower(): v for k, v in data.items()}
-    config = {k.lower(): v for k, v in config.items()}
-
-    for name, conf in config.items():
-        value = data.get(name)
-        result = calculate_score_from_config(value, conf)
-        score = result["score"]
-
-        scores[name] = {
-            "value": value,
-            "score": score,
-            "trend": result["trend"],
-            "interpretation": result["interpretation"],
-            "action": result["action"],
-            "thresholds": conf.get("thresholds"),
-            "positive": conf.get("positive", True)
-        }
-
-        if isinstance(score, (int, float)):
-            total += score
-            count += 1
-
-    avg_score = round(total / count, 2) if count else 10
-    logger.info(f"✅ {count} geldige indicatoren gescoord (gemiddelde: {avg_score})")
-    return {"scores": scores, "total_score": avg_score}
-
-
-# =========================================================
-# ✅ Setup Score Matching
+# ✅ Setup Matching (ongewijzigd)
 # =========================================================
 def match_setups_to_score(setups: list, total_score: float) -> list:
     return [s for s in setups if s.get("min_score", 0) <= total_score <= s.get("max_score", 100)]
@@ -170,7 +171,7 @@ def find_best_matching_setup(setups: list, total_score: float) -> Optional[dict]
 
 
 # =========================================================
-# ✅ Data ophalen + scores berekenen
+# ✅ Scores ophalen uit database + totaal berekenen
 # =========================================================
 def get_scores_for_symbol() -> Dict[str, Any]:
     conn = get_db_connection()
@@ -180,19 +181,15 @@ def get_scores_for_symbol() -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
-            # === Macro data ophalen ===
+            # === Macro data ===
             cur.execute("""
                 SELECT name, value FROM macro_data
                 WHERE timestamp = (SELECT MAX(timestamp) FROM macro_data)
             """)
             macro_rows = cur.fetchall()
-            macro_data = {
-                name: float(value)
-                for name, value in macro_rows
-                if value is not None
-            }
+            macro_data = {name: float(value) for name, value in macro_rows if value is not None}
 
-            # === Technische data ophalen ===
+            # === Technische data ===
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
@@ -209,7 +206,7 @@ def get_scores_for_symbol() -> Dict[str, Any]:
                 except (ValueError, TypeError) as e:
                     logger.warning(f"⚠️ Ongeldige waarde voor '{indicator}': {value} ({e})")
 
-            # === Marktdata ophalen ===
+            # === Marktdata ===
             cur.execute("""
                 SELECT price, volume, change_24h FROM market_data
                 ORDER BY timestamp DESC LIMIT 1
@@ -243,17 +240,19 @@ def get_scores_for_symbol() -> Dict[str, Any]:
             market_scores = calculate_market_scores(market_data, market_conf)
             sentiment_scores = calculate_sentiment_scores(sentiment_data, sentiment_indicators)
 
-            macro_avg = macro_scores["total_score"]
-            tech_avg = tech_scores["total_score"]
-            setup_score = round((macro_avg + tech_avg) / 2, 2)
+            macro_avg = round(macro_scores["total_score"])
+            tech_avg = round(tech_scores["total_score"])
+            market_avg = round(market_scores["total_score"])
+            sentiment_avg = round(sentiment_scores["total_score"])
+            setup_score = round((macro_avg + tech_avg) / 2)
 
-            logger.info(f"✅ Scores berekend: macro={macro_avg}, tech={tech_avg}, setup={setup_score}")
+            logger.info(f"✅ Scores berekend: macro={macro_avg}, tech={tech_avg}, market={market_avg}, sentiment={sentiment_avg}, setup={setup_score}")
 
             return {
                 "macro_score": macro_avg,
                 "technical_score": tech_avg,
-                "market_score": market_scores["total_score"],
-                "sentiment_score": sentiment_scores["total_score"],
+                "market_score": market_avg,
+                "sentiment_score": sentiment_avg,
                 "setup_score": setup_score
             }
 
@@ -265,17 +264,17 @@ def get_scores_for_symbol() -> Dict[str, Any]:
 
 
 # =========================================================
-# ✅ Dashboard functie
+# ✅ Dashboard Score Berekening (ook afgerond)
 # =========================================================
 def get_dashboard_scores(macro_data, technical_data, setups):
     macro_scores = [d["score"] for d in macro_data if isinstance(d.get("score"), (int, float))]
-    macro_score = round(sum(macro_scores) / len(macro_scores), 2) if macro_scores else 10
+    macro_score = round(sum(macro_scores) / len(macro_scores)) if macro_scores else 10
 
     used_scores = [v["score"] for v in technical_data.values()]
     total_possible = len(used_scores) * 100
-    technical_score = round((sum(used_scores) / total_possible) * 100, 2) if total_possible else 10
+    technical_score = round((sum(used_scores) / total_possible) * 100) if total_possible else 10
 
-    setup_score = len(setups) * 10 if setups else 10
+    setup_score = round(len(setups) * 10) if setups else 10
 
     return {
         "macro": macro_score,
