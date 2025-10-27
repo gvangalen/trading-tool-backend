@@ -18,7 +18,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-
 def log_and_print(msg: str):
     logger.info(msg)
     try:
@@ -28,27 +27,22 @@ def log_and_print(msg: str):
         pass
     print(msg)
 
-
 # === ✅ OpenAI client initialiseren
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     log_and_print("❌ OPENAI_API_KEY ontbreekt in .env of omgeving.")
 client = OpenAI(api_key=api_key)
-
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
 
 def safe_get(obj, key, fallback="–"):
     if isinstance(obj, dict):
         return obj.get(key, fallback)
     return fallback
 
-
 # =====================================================
 # 📊 Scores ophalen uit daily_scores
 # =====================================================
-
 def get_scores_from_db():
     conn = get_db_connection()
     if not conn:
@@ -58,7 +52,7 @@ def get_scores_from_db():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT macro_score, technical_score, setup_score, sentiment_score
+                SELECT macro_score, technical_score, setup_score, sentiment_score, market_score
                 FROM daily_scores
                 ORDER BY report_date DESC
                 LIMIT 1
@@ -70,6 +64,7 @@ def get_scores_from_db():
                     "technical_score": row[1],
                     "setup_score": row[2],
                     "sentiment_score": row[3],
+                    "market_score": row[4],
                 }
                 log_and_print(f"📊 Laatste scores geladen: {scores}")
                 return scores
@@ -82,11 +77,37 @@ def get_scores_from_db():
     finally:
         conn.close()
 
+# =====================================================
+# 📈 Laatste prijs, volume, change ophalen uit market_data
+# =====================================================
+def get_latest_market_data():
+    conn = get_db_connection()
+    if not conn:
+        return {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT price, volume, change_24h
+                FROM market_data
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+            if row:
+                return {
+                    "price": round(row[0], 2),
+                    "volume": row[1],
+                    "change_24h": row[2],
+                }
+    except Exception as e:
+        log_and_print(f"❌ Fout bij ophalen van market_data: {e}")
+        return {}
+    finally:
+        conn.close()
 
 # =====================================================
 # 🧠 AI-sectie genereren
 # =====================================================
-
 def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) -> str:
     for attempt in range(1, retries + 1):
         try:
@@ -110,24 +131,30 @@ def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) 
     log_and_print("❌ Alle AI-pogingen mislukt.")
     return "Fout: AI-generatie mislukt."
 
-
 # =====================================================
 # 🧩 Prompts per sectie
 # =====================================================
+def prompt_for_btc_summary(setup, scores, market_data=None) -> str:
+    prijsinfo = ""
+    if market_data:
+        prijsinfo = (
+            f"\nPrijs: ${market_data.get('price', '?')}, "
+            f"Volume: ${market_data.get('volume', '?')}, "
+            f"24u verandering: {market_data.get('change_24h', '?')}%"
+        )
 
-def prompt_for_btc_summary(setup, scores) -> str:
     return f"""Geef een korte samenvatting van de huidige situatie voor Bitcoin:
 Setup: {safe_get(setup, 'name')}
 Timeframe: {safe_get(setup, 'timeframe')}
 Technische score: {safe_get(scores, 'technical_score', 0)}
 Setup score: {safe_get(scores, 'setup_score', 0)}
-Sentiment score: {safe_get(scores, 'sentiment_score', 0)}"""
-
+Sentiment score: {safe_get(scores, 'sentiment_score', 0)}
+Macro score: {safe_get(scores, 'macro_score', 0)}
+Market score: {safe_get(scores, 'market_score', 0)}{prijsinfo}"""
 
 def prompt_for_macro_summary(scores) -> str:
     return f"""Vat de macro-economische situatie samen.
 Macro-score: {safe_get(scores, 'macro_score', 0)}"""
-
 
 def prompt_for_setup_checklist(setup) -> str:
     return f"""Controleer A+ criteria voor de setup.
@@ -135,18 +162,15 @@ Setup: {safe_get(setup, 'name')}
 Timeframe: {safe_get(setup, 'timeframe')}
 Indicatoren: {safe_get(setup, 'indicators', [])}"""
 
-
 def prompt_for_priorities(setup, scores) -> str:
     return f"""Belangrijkste aandachtspunten vandaag:
 Setup: {safe_get(setup, 'name')}
 Scores: {scores}"""
 
-
 def prompt_for_wyckoff_analysis(setup) -> str:
     return f"""Wyckoff-analyse van de marktstructuur:
 Fase: {safe_get(setup, 'wyckoff_phase')}
 Beschrijving: {safe_get(setup, 'explanation')}"""
-
 
 def prompt_for_recommendations(strategy) -> str:
     return f"""Tradingadvies op basis van strategie:
@@ -155,32 +179,27 @@ Targets: {safe_get(strategy, 'targets')}
 Stop-loss: {safe_get(strategy, 'stop_loss')}
 Uitleg: {safe_get(strategy, 'explanation')}"""
 
-
 def prompt_for_conclusion(scores) -> str:
     return f"""Slotconclusie van de dag:
 Macro: {safe_get(scores, 'macro_score', 0)}
 Technisch: {safe_get(scores, 'technical_score', 0)}
 Sentiment: {safe_get(scores, 'sentiment_score', 0)}"""
 
-
 def prompt_for_outlook(setup) -> str:
     return f"""Verwachting voor de komende 2–5 dagen:
 Setup: {safe_get(setup, 'name')}
 Timeframe: {safe_get(setup, 'timeframe')}"""
 
-
 # =====================================================
 # 🚀 Hoofdfunctie: Dagrapport genereren
 # =====================================================
-
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     log_and_print(f"🚀 Start rapportgeneratie voor: {symbol}")
 
-    # 1️⃣ Data ophalen
     setup_raw = get_latest_setup_for_symbol(symbol)
     scores_raw = get_scores_from_db()
+    market_data = get_latest_market_data()
 
-    # 🔄 Fallback bij lege score
     if not scores_raw:
         log_and_print("🧪 Geen scores in daily_scores – fallback naar live scoreberekening")
         from backend.utils.scoring_utils import get_scores_for_symbol
@@ -189,30 +208,21 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     log_and_print(f"📦 setup_raw: {repr(setup_raw)[:180]}")
     log_and_print(f"📦 scores_raw: {repr(scores_raw)[:180]}")
 
-    # 2️⃣ Sanitize
     setup = sanitize_json_input(setup_raw, context="setup")
     scores = sanitize_json_input(scores_raw, context="scores")
-    log_and_print(f"🧹 setup sanitized ({type(setup)}): {repr(setup)[:180]}")
-    log_and_print(f"🧹 scores sanitized ({type(scores)}): {repr(scores)[:180]}")
-
-    # 3️⃣ Strategie
     strategy_raw = generate_strategy_from_setup(setup)
     strategy = sanitize_json_input(strategy_raw, context="strategy")
 
     if not isinstance(setup, dict) or not setup:
-        log_and_print("❌ Ongeldige setup → stop.")
         return {"error": "Ongeldige setup"}
     if not isinstance(scores, dict) or not scores:
-        log_and_print("❌ Ongeldige scores → stop.")
         return {"error": "Ongeldige scores"}
     if not isinstance(strategy, dict) or not strategy:
-        log_and_print("❌ Ongeldige strategy → stop.")
         return {"error": "Ongeldige strategy"}
 
-    # 4️⃣ AI-secties genereren
     try:
         report = {
-            "btc_summary": generate_section(prompt_for_btc_summary(setup, scores)),
+            "btc_summary": generate_section(prompt_for_btc_summary(setup, scores, market_data)),
             "macro_summary": generate_section(prompt_for_macro_summary(scores)),
             "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
             "priorities": generate_section(prompt_for_priorities(setup, scores)),
@@ -224,8 +234,9 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
             "technical_score": safe_get(scores, "technical_score", 0),
             "setup_score": safe_get(scores, "setup_score", 0),
             "sentiment_score": safe_get(scores, "sentiment_score", 0),
+            "market_score": safe_get(scores, "market_score", 0),
+            "market_data": market_data,
         }
-
         log_and_print(f"✅ Rapport succesvol gegenereerd ({len(report)} velden)")
         return report
 
@@ -233,10 +244,6 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         log_and_print(f"❌ Exception tijdens rapportgeneratie: {e}")
         return {"error": str(e)}
 
-
-# =====================================================
-# 🧪 CLI-test
-# =====================================================
 if __name__ == "__main__":
     result = generate_daily_report_sections("BTC")
     print("\n🎯 RESULTAAT:")
