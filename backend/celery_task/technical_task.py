@@ -124,32 +124,33 @@ def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limi
         logger.info(f"📊 Berekende waarden: {raw_data}")
 
         # ✅ Config en scoring
-        config = load_config("config/technical_indicators_config.json")
-        scores = generate_scores(raw_data, config)
+config = load_config("config/technical_indicators_config.json")
+indicator_config = config.get("indicators", {})
+scores = generate_scores(raw_data, indicator_config)
 
-        utc_now = datetime.utcnow().replace(microsecond=0)
+utc_now = datetime.utcnow().replace(microsecond=0)
 
-        for indicator, details in scores["scores"].items():
-            payload = {
-                "symbol": our_symbol,
-                "indicator": indicator,
-                "value": details["value"],
-                "score": details["score"],
-                "advies": config[indicator].get("action", ""),
-                "uitleg": config[indicator].get("explanation", ""),
-                "timestamp": utc_now.isoformat(),
-            }
+for indicator, details in scores["scores"].items():
+    payload = {
+        "symbol": our_symbol,
+        "indicator": indicator,
+        "value": details["value"],
+        "score": details["score"],
+        "advies": indicator_config[indicator].get("action", ""),
+        "uitleg": indicator_config[indicator].get("explanation", ""),
+        "timestamp": utc_now.isoformat(),
+    }
 
-            post_technical_data(payload)
-            store_technical_score_db(
-                symbol=our_symbol,
-                indicator=indicator,
-                value=details["value"],
-                score=details["score"],
-                advies=payload["advies"],
-                uitleg=payload["uitleg"],
-                timestamp=utc_now,
-            )
+    post_technical_data(payload)
+    store_technical_score_db(
+        symbol=our_symbol,
+        indicator=indicator,
+        value=details["value"],
+        score=details["score"],
+        advies=payload["advies"],
+        uitleg=payload["uitleg"],
+        timestamp=utc_now,
+    )
 
     except Exception as e:
         logger.error("❌ Fout bij ophalen/verwerken technische data")
