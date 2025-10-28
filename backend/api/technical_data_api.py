@@ -148,37 +148,60 @@ async def get_latest_day_data():
     finally:
         conn.close()
 
-# ✅ WEEK
+# ✅ WEEK (laatste 7 unieke dagen met data)
 @router.get("/technical_data/week")
 async def get_technical_week_data():
-    logger.info("📤 [get/week] Ophalen technical-indicators (7 dagen)...")
+    logger.info("📤 [get/week] Ophalen technical-indicators (laatste 7 unieke dagen)...")
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
+
+            # 🗓️ Stap 1: haal de laatste 7 unieke datums op waarop data is opgeslagen
+            cur.execute("""
+                SELECT DISTINCT DATE(timestamp) AS dag
+                FROM technical_indicators
+                WHERE symbol = 'BTC'
+                ORDER BY dag DESC
+                LIMIT 7;
+            """)
+            date_rows = cur.fetchall()
+            dagen = [r[0] for r in date_rows]
+
+            if not dagen:
+                logger.warning("⚠️ Geen dagen gevonden in de laatste week.")
+                return []
+
+            logger.info(f"📅 Geselecteerde dagen voor weekdata: {dagen}")
+
+            # 🧮 Stap 2: haal alle technische data op voor die dagen
             cur.execute("""
                 SELECT symbol, indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
-                WHERE timestamp >= NOW() - INTERVAL '7 days'
-                ORDER BY timestamp DESC
-                LIMIT 100;
-            """)
+                WHERE symbol = 'BTC'
+                AND DATE(timestamp) = ANY(%s)
+                ORDER BY timestamp DESC;
+            """, (dagen,))
             rows = cur.fetchall()
-            return [
-                {
-                    "symbol": row[0],
-                    "indicator": row[1],
-                    "waarde": safe_float(row[2]),
-                    "score": safe_int(row[3]),
-                    "advies": row[4],
-                    "uitleg": row[5],
-                    "timestamp": row[6].isoformat(),
-                } for row in rows
-            ]
+
+        logger.info(f"✅ Weekdata opgehaald: {len(rows)} rijen gevonden.")
+
+        return [
+            {
+                "symbol": row[0],
+                "indicator": row[1],
+                "waarde": safe_float(row[2]),
+                "score": safe_int(row[3]),
+                "advies": row[4],
+                "uitleg": row[5],
+                "timestamp": row[6].isoformat(),
+            } for row in rows
+        ]
+
     except Exception as e:
         logger.error(f"❌ [get/week] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB02] Ophalen weekdata mislukt.")
+        raise HTTPException(status_code=500, detail=f"❌ [DB02] Ophalen weekdata mislukt: {e}")
     finally:
         conn.close()
 
