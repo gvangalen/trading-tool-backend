@@ -205,68 +205,112 @@ async def get_technical_week_data():
     finally:
         conn.close()
 
-# ✅ MONTH
+# ✅ MONTH (4 recente weken)
 @router.get("/technical_data/month")
 async def get_technical_month_data():
-    logger.info("📤 [get/month] Ophalen technical-indicators (30 dagen)...")
+    logger.info("📤 [get/month] Ophalen technical-indicators (4 recente weken)...")
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
+            # 🗓️ Stap 1: haal de 4 meest recente unieke weken op (op basis van eerste dag van de week)
+            cur.execute("""
+                SELECT DISTINCT DATE_TRUNC('week', timestamp)::date AS week_start
+                FROM technical_indicators
+                WHERE symbol = 'BTC'
+                ORDER BY week_start DESC
+                LIMIT 4;
+            """)
+            week_rows = cur.fetchall()
+            weken = [r[0] for r in week_rows]
+
+            if not weken:
+                logger.warning("⚠️ Geen weken gevonden in de maanddata.")
+                return []
+
+            logger.info(f"📅 Geselecteerde weken: {weken}")
+
+            # 🧮 Stap 2: haal alle technische data op die in die weken valt
             cur.execute("""
                 SELECT symbol, indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
-                WHERE timestamp >= NOW() - INTERVAL '30 days'
-                ORDER BY timestamp DESC
-                LIMIT 100;
-            """)
+                WHERE symbol = 'BTC'
+                AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
+                ORDER BY timestamp DESC;
+            """, (weken,))
             rows = cur.fetchall()
-            return [
-                {
-                    "symbol": row[0],
-                    "indicator": row[1],
-                    "waarde": safe_float(row[2]),
-                    "score": safe_int(row[3]),
-                    "advies": row[4],
-                    "uitleg": row[5],
-                    "timestamp": row[6].isoformat(),
-                } for row in rows
-            ]
+
+        logger.info(f"✅ Maanddata opgehaald: {len(rows)} rijen gevonden.")
+
+        return [
+            {
+                "symbol": row[0],
+                "indicator": row[1],
+                "waarde": safe_float(row[2]),
+                "score": safe_int(row[3]),
+                "advies": row[4],
+                "uitleg": row[5],
+                "timestamp": row[6].isoformat(),
+            } for row in rows
+        ]
+
     except Exception as e:
         logger.error(f"❌ [get/month] Databasefout: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB03] Ophalen maanddata mislukt.")
     finally:
         conn.close()
 
-# ✅ QUARTER
+# ✅ QUARTER (12 recente weken)
 @router.get("/technical_data/quarter")
 async def get_technical_quarter_data():
-    logger.info("📤 [get/quarter] Ophalen technical-indicators (90 dagen)...")
+    logger.info("📤 [get/quarter] Ophalen technical-indicators (12 recente weken)...")
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
+            # 🗓️ Stap 1: haal de 12 meest recente unieke weken op
+            cur.execute("""
+                SELECT DISTINCT DATE_TRUNC('week', timestamp)::date AS week_start
+                FROM technical_indicators
+                WHERE symbol = 'BTC'
+                ORDER BY week_start DESC
+                LIMIT 12;
+            """)
+            week_rows = cur.fetchall()
+            weken = [r[0] for r in week_rows]
+
+            if not weken:
+                logger.warning("⚠️ Geen weken gevonden voor kwartaaldata.")
+                return []
+
+            logger.info(f"📅 Geselecteerde weken (quarter): {weken}")
+
+            # 🧮 Stap 2: haal alle technische data op voor die weken
             cur.execute("""
                 SELECT symbol, indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
-                WHERE timestamp >= NOW() - INTERVAL '90 days'
-                ORDER BY timestamp DESC
-                LIMIT 100;
-            """)
+                WHERE symbol = 'BTC'
+                AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
+                ORDER BY timestamp DESC;
+            """, (weken,))
             rows = cur.fetchall()
-            return [
-                {
-                    "symbol": row[0],
-                    "indicator": row[1],
-                    "waarde": safe_float(row[2]),
-                    "score": safe_int(row[3]),
-                    "advies": row[4],
-                    "uitleg": row[5],
-                    "timestamp": row[6].isoformat(),
-                } for row in rows
-            ]
+
+        logger.info(f"✅ Kwartaaldata opgehaald: {len(rows)} rijen gevonden.")
+
+        return [
+            {
+                "symbol": row[0],
+                "indicator": row[1],
+                "waarde": safe_float(row[2]),
+                "score": safe_int(row[3]),
+                "advies": row[4],
+                "uitleg": row[5],
+                "timestamp": row[6].isoformat(),
+            } for row in rows
+        ]
+
     except Exception as e:
         logger.error(f"❌ [get/quarter] Databasefout: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB04] Ophalen kwartaaldata mislukt.")
