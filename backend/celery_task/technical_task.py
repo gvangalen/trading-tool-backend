@@ -73,6 +73,7 @@ def post_technical_data(payload: dict):
 
 # ✅ Directe DB opslag
 def store_technical_score_db(symbol, indicator, value, score, timestamp, uitleg="", advies=""):
+    """Slaat technische score op, tenzij dezelfde combinatie al bestaat."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding bij opslaan technische score.")
@@ -80,15 +81,30 @@ def store_technical_score_db(symbol, indicator, value, score, timestamp, uitleg=
 
     try:
         with conn.cursor() as cur:
+            # 🕵️‍♂️ Controleer of er al een entry bestaat voor deze dag/indicator
+            cur.execute("""
+                SELECT 1 FROM technical_indicators
+                WHERE symbol = %s AND indicator = %s AND DATE(timestamp) = DATE(%s)
+            """, (symbol, indicator, timestamp))
+            exists = cur.fetchone()
+
+            if exists:
+                logger.info(f"⏩ Entry al aanwezig: {symbol} | {indicator} | {timestamp}")
+                return  # 👉 skip dubbele invoer
+
+            # 🆕 Nog niet aanwezig → toevoegen
             cur.execute("""
                 INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (symbol, indicator, value, score, advies, uitleg, timestamp))
+
         conn.commit()
         logger.info(f"🗃️ Technische score opgeslagen in DB voor {indicator} ({symbol})")
+
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan technische score ({indicator}): {e}")
         logger.error(traceback.format_exc())
+
     finally:
         conn.close()
 
