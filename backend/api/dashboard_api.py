@@ -2,7 +2,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from backend.utils.db import get_db_connection
 import psycopg2.extras
-from backend.utils.scoring_util import get_dashboard_scores
+from backend.utils.scoring_utils import get_dashboard_scores
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
