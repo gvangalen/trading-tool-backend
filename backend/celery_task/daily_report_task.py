@@ -138,7 +138,7 @@ def generate_daily_report():
         logger.info(f"🖨️ PDF gegenereerd voor {today}")
 
         # 5️⃣ E-mail versturen
-        pdf_path = os.path.join("static", "pdf", "daily", f"daily_report_{today}.pdf")
+        pdf_path = os.path.join("static", "pdf", "daily", f"daily_{today}.pdf")
 
         # Extra prijsinformatie uit rapport (optioneel)
         market_data = full_report.get("market_data", {})
