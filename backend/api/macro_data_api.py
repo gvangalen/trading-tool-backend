@@ -182,28 +182,44 @@ async def get_latest_macro_day_data():
 
 @router.get("/macro_data/week")
 async def get_macro_week_data():
-    logger.info("📄 [get/week] Ophalen macro-data (laatste 7 dagen)...")
-    conn, cur = get_db_cursor()
+    logger.info("📤 [get/week] Ophalen macro-data (laatste 7 unieke dagen)...")
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
-        cur.execute("""
-            SELECT name, value, trend, interpretation, action, score, timestamp
-            FROM macro_data
-            WHERE timestamp >= NOW() - INTERVAL '7 days'
-            ORDER BY timestamp DESC
-            LIMIT 50;
-        """)
-        rows = cur.fetchall()
+        with conn.cursor() as cur:
+            # 🗓️ Stap 1: unieke datums ophalen
+            cur.execute("""
+                SELECT DISTINCT DATE(timestamp) AS dag
+                FROM macro_data
+                ORDER BY dag DESC
+                LIMIT 7;
+            """)
+            dagen = [r[0] for r in cur.fetchall()]
+            if not dagen:
+                return []
+
+            logger.info(f"📅 Weekdagen: {dagen}")
+
+            # 🧮 Stap 2: data ophalen voor deze dagen
+            cur.execute("""
+                SELECT name, value, trend, interpretation, action, score, timestamp
+                FROM macro_data
+                WHERE DATE(timestamp) = ANY(%s)
+                ORDER BY timestamp DESC;
+            """, (dagen,))
+            rows = cur.fetchall()
+
         return [
             {
-                "name": row[0],
-                "value": row[1],
+                "indicator": row[0],
+                "waarde": row[1],
                 "trend": row[2],
                 "interpretation": row[3],
                 "action": row[4],
                 "score": row[5],
-                "timestamp": row[6].isoformat() if row[6] else None
-            }
-            for row in rows
+                "timestamp": row[6].isoformat()
+            } for row in rows
         ]
     except Exception as e:
         logger.error(f"❌ [get/week] Databasefout: {e}")
@@ -213,28 +229,42 @@ async def get_macro_week_data():
 
 @router.get("/macro_data/month")
 async def get_macro_month_data():
-    logger.info("📄 [get/month] Ophalen macro-data (laatste 30 dagen)...")
-    conn, cur = get_db_cursor()
+    logger.info("📤 [get/month] Ophalen macro-data (4 recente weken)...")
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
-        cur.execute("""
-            SELECT name, value, trend, interpretation, action, score, timestamp
-            FROM macro_data
-            WHERE timestamp >= NOW() - INTERVAL '30 days'
-            ORDER BY timestamp DESC
-            LIMIT 50;
-        """)
-        rows = cur.fetchall()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT DATE_TRUNC('week', timestamp)::date AS week_start
+                FROM macro_data
+                ORDER BY week_start DESC
+                LIMIT 4;
+            """)
+            weken = [r[0] for r in cur.fetchall()]
+            if not weken:
+                return []
+
+            logger.info(f"📅 Maandweken: {weken}")
+
+            cur.execute("""
+                SELECT name, value, trend, interpretation, action, score, timestamp
+                FROM macro_data
+                WHERE DATE_TRUNC('week', timestamp)::date = ANY(%s)
+                ORDER BY timestamp DESC;
+            """, (weken,))
+            rows = cur.fetchall()
+
         return [
             {
-                "name": row[0],
-                "value": row[1],
+                "indicator": row[0],
+                "waarde": row[1],
                 "trend": row[2],
                 "interpretation": row[3],
                 "action": row[4],
                 "score": row[5],
-                "timestamp": row[6].isoformat() if row[6] else None
-            }
-            for row in rows
+                "timestamp": row[6].isoformat()
+            } for row in rows
         ]
     except Exception as e:
         logger.error(f"❌ [get/month] Databasefout: {e}")
@@ -244,28 +274,42 @@ async def get_macro_month_data():
 
 @router.get("/macro_data/quarter")
 async def get_macro_quarter_data():
-    logger.info("📄 [get/quarter] Ophalen macro-data (laatste 90 dagen)...")
-    conn, cur = get_db_cursor()
+    logger.info("📤 [get/quarter] Ophalen macro-data (12 recente weken)...")
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
-        cur.execute("""
-            SELECT name, value, trend, interpretation, action, score, timestamp
-            FROM macro_data
-            WHERE timestamp >= NOW() - INTERVAL '90 days'
-            ORDER BY timestamp DESC
-            LIMIT 50;
-        """)
-        rows = cur.fetchall()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT DATE_TRUNC('week', timestamp)::date AS week_start
+                FROM macro_data
+                ORDER BY week_start DESC
+                LIMIT 12;
+            """)
+            weken = [r[0] for r in cur.fetchall()]
+            if not weken:
+                return []
+
+            logger.info(f"📅 Kwartaalweken: {weken}")
+
+            cur.execute("""
+                SELECT name, value, trend, interpretation, action, score, timestamp
+                FROM macro_data
+                WHERE DATE_TRUNC('week', timestamp)::date = ANY(%s)
+                ORDER BY timestamp DESC;
+            """, (weken,))
+            rows = cur.fetchall()
+
         return [
             {
-                "name": row[0],
-                "value": row[1],
+                "indicator": row[0],
+                "waarde": row[1],
                 "trend": row[2],
                 "interpretation": row[3],
                 "action": row[4],
                 "score": row[5],
-                "timestamp": row[6].isoformat() if row[6] else None
-            }
-            for row in rows
+                "timestamp": row[6].isoformat()
+            } for row in rows
         ]
     except Exception as e:
         logger.error(f"❌ [get/quarter] Databasefout: {e}")
