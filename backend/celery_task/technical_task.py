@@ -129,7 +129,7 @@ def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limi
 
     except Exception as e:
         logger.error("❌ Fout bij ophalen/verwerken technische data")
-        logger.error(traceback
+        logger.error(traceback.format_exc())
 
 # ✅ Dagelijkse Celery taak
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
