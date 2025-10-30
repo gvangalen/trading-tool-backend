@@ -10,7 +10,7 @@ from celery import shared_task
 from backend.config.config_loader import load_macro_config
 from backend.utils.macro_interpreter import process_macro_indicator
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import generate_scores, load_config  # ✅ Nieuw
+from backend.utils.scoring_utils import generate_scores, load_config  # ✅ Centrale scoringlogica
 
 # === ✅ Logging
 logging.basicConfig(level=logging.INFO)
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
+
 
 # === ✅ Retry wrapper voor POST
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=3, max=20), reraise=True)
@@ -36,6 +37,7 @@ def safe_post(url, payload=None):
         logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
         raise
 
+
 # === ✅ Check of macro-indicator vandaag al in database zit
 def already_fetched_today(indicator_name: str) -> bool:
     try:
@@ -50,6 +52,7 @@ def already_fetched_today(indicator_name: str) -> bool:
         logger.error(f"⚠️ Fout bij controleren op bestaande macro-data: {e}")
         return False
 
+
 # === ✅ Directe opslag in macro_data tabel
 def store_macro_score_db(payload: dict):
     conn = get_db_connection()
@@ -59,7 +62,8 @@ def store_macro_score_db(payload: dict):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO macro_data (name, value, score, trend, interpretation, action, symbol, source, category, correlation, link, timestamp)
+                INSERT INTO macro_data 
+                (name, value, score, trend, interpretation, action, symbol, source, category, correlation, link, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 payload.get("name"),
@@ -83,6 +87,7 @@ def store_macro_score_db(payload: dict):
     finally:
         conn.close()
 
+
 # === ✅ Celery-task: macrodata ophalen en verwerken
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
@@ -95,7 +100,7 @@ def fetch_macro_data():
             logger.warning("⚠️ Geen indicatoren gevonden in config.")
             return
 
-        whitelist = ["fear_greed", "dxy"]  # ✅ Pas dit aan indien nodig
+        whitelist = ["fear_greed", "dxy"]  # ✅ Pas aan indien gewenst
 
         for name, indicator_config in indicators.items():
             if name not in whitelist:
@@ -107,7 +112,9 @@ def fetch_macro_data():
                 continue
 
             logger.info(f"➡️ Verwerk: {name}...")
+
             try:
+                # 🔄 Ophalen van actuele waarde
                 try:
                     result = asyncio.run(process_macro_indicator(name, indicator_config))
                 except Exception as async_error:
@@ -132,14 +139,14 @@ def fetch_macro_data():
                 )
                 score_info = all_scores["scores"].get(name, {})
 
-                # ✅ Payload voorbereiden
+                # ✅ Payload op basis van dynamische score-info
                 payload = {
                     "name": name,
                     "value": result["value"],
-                    "score": score_info.get("score", 0),
-                    "trend": score_info.get("trend", ""),  # evt. later toevoegen
-                    "interpretation": indicator_config.get("explanation", ""),
-                    "action": indicator_config.get("action", ""),
+                    "score": score_info.get("score", 10),
+                    "trend": score_info.get("trend", "–"),
+                    "interpretation": score_info.get("interpretation", "–"),
+                    "action": score_info.get("action", "–"),
                     "symbol": result.get("symbol", "BTC"),
                     "source": result.get("source", ""),
                     "category": indicator_config.get("category", ""),
