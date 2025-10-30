@@ -3,7 +3,7 @@ import logging
 import traceback
 from datetime import datetime
 from celery import shared_task
-from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+from tenacity import retry, stop_after_attempt, wait_exponential
 import requests
 
 # ✅ Eigen utils
@@ -15,7 +15,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ✅ Config
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 BINANCE_BASE_URL = "https://api.binance.com"
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
@@ -34,14 +33,11 @@ def safe_request(url, method="GET", payload=None, headers=None):
         response.raise_for_status()
         logger.info(f"✅ API-call succesvol: {url}")
         return response.json()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ RequestException bij {url}: {e}")
-        raise
     except Exception as e:
-        logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
+        logger.error(f"❌ API-fout bij {url}: {e}")
         raise
 
-# ✅ RSI berekenen
+# ✅ RSI berekening
 def calculate_rsi(closes, period=14):
     if len(closes) < period + 1:
         return None
@@ -57,11 +53,11 @@ def calculate_rsi(closes, period=14):
     rs = avg_gain / avg_loss
     return round(100 - (100 / (1 + rs)), 2)
 
-# ✅ Directe DB opslag
-def store_technical_score_db(symbol, indicator, value, score, timestamp, uitleg="", advies=""):
+# ✅ Opslaan score in DB
+def store_technical_score_db(symbol, indicator, value, score, trend, interpretation, action, timestamp):
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen databaseverbinding bij opslaan technische score.")
+        logger.error("❌ Geen DB-verbinding")
         return
 
     try:
@@ -69,32 +65,30 @@ def store_technical_score_db(symbol, indicator, value, score, timestamp, uitleg=
             cur.execute("""
                 INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (symbol, indicator, value, score, advies, uitleg, timestamp))
+            """, (symbol, indicator, value, score, action, interpretation, timestamp))
         conn.commit()
-        logger.info(f"🗃️ Technische score opgeslagen in DB voor {indicator} ({symbol})")
+        logger.info(f"✅ Score opgeslagen voor {indicator}")
     except Exception as e:
-        logger.error(f"❌ Fout bij opslaan technische score ({indicator}): {e}")
+        logger.error(f"❌ Fout bij DB-opslag {indicator}: {e}")
         logger.error(traceback.format_exc())
     finally:
         conn.close()
 
-# ✅ Dagdata ophalen, scoren, opslaan
+# ✅ Hoofd-functie: data ophalen en scoren
 def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300):
     try:
-        logger.info(f"🚀 Start ophalen technische dagdata ({symbol})...")
+        logger.info("🚀 Ophalen technische data...")
         url = f"{BINANCE_BASE_URL}/api/v3/klines"
         params = {"symbol": symbol, "interval": interval, "limit": limit}
         data = safe_request(url, payload=params)
-        logger.info("✅ Binance candles ontvangen")
 
         closes = [float(item[4]) for item in data]
         volumes = [float(item[5]) for item in data]
 
         if len(closes) < 200:
-            logger.warning("⚠️ Niet genoeg candles voor 200MA (dagdata)")
+            logger.warning("⚠️ Onvoldoende candles voor 200MA")
             return
 
-        # Berekeningen
         rsi = calculate_rsi(closes)
         volume = round(sum(volumes), 2)
         ma_200 = round(sum(closes[-200:]) / 200, 2)
@@ -107,13 +101,9 @@ def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limi
             "ma_200": ma_200_ratio
         }
 
-        logger.info(f"📊 Berekende waarden: {raw_data}")
-
-        # ✅ Config en scoring
         config = load_config("config/technical_indicators_config.json")
         indicator_config = config.get("indicators", {})
         scores = generate_scores(raw_data, indicator_config)
-
         utc_now = datetime.utcnow().replace(microsecond=0)
 
         for indicator, details in scores["scores"].items():
@@ -122,16 +112,17 @@ def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limi
                 indicator=indicator,
                 value=details["value"],
                 score=details["score"],
-                advies=indicator_config[indicator].get("action", ""),
-                uitleg=indicator_config[indicator].get("explanation", ""),
+                trend=details.get("trend", ""),
+                interpretation=details.get("interpretation", ""),
+                action=details.get("action", ""),
                 timestamp=utc_now,
             )
 
     except Exception as e:
-        logger.error("❌ Fout bij ophalen/verwerken technische data")
+        logger.error("❌ Verwerkingsfout:")
         logger.error(traceback.format_exc())
 
-# ✅ Dagelijkse Celery taak
+# ✅ Celery-taak
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
 def fetch_technical_data_day():
     fetch_and_post_daily()
