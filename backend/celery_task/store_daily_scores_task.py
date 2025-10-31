@@ -22,10 +22,10 @@ def store_daily_scores_task():
     today = datetime.utcnow().date()
 
     try:
-        symbol = "BTC"
-        scores = get_scores_for_symbol(symbol)
+        # ✅ Nieuw: haal scores direct op inclusief metadata
+        scores = get_scores_for_symbol(include_metadata=True)
 
-        logger.info(f"📊 Berekening scores voor {symbol}: {scores}")
+        logger.info(f"📊 Berekende scores: {scores}")
 
         with conn.cursor() as cur:
             cur.execute("""
@@ -66,9 +66,9 @@ def store_daily_scores_task():
             ))
 
         conn.commit()
-        logger.info(f"✅ Dagelijkse scores opgeslagen voor {today}: {scores}")
+        logger.info(f"✅ Dagelijkse scores opgeslagen voor {today}")
 
     except Exception as e:
-        logger.error(f"❌ Fout bij opslaan dagelijkse scores: {e}")
+        logger.error(f"❌ Fout bij opslaan dagelijkse scores: {e}", exc_info=True)
     finally:
         conn.close()
