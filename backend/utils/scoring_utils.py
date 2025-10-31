@@ -145,9 +145,6 @@ def calculate_technical_scores(data: Dict[str, float], config: Dict[str, Any]) -
 def calculate_market_scores(data: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
     return generate_scores(data, config)
 
-def calculate_sentiment_scores(data: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
-    return generate_scores(data, config)
-
 
 # =========================================================
 # ✅ Setup Matching (ongewijzigd)
@@ -173,7 +170,7 @@ def find_best_matching_setup(setups: list, total_score: float) -> Optional[dict]
 # =========================================================
 # ✅ Scores ophalen uit database + totaal berekenen
 # =========================================================
-def get_scores_for_symbol() -> Dict[str, Any]:
+def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding voor get_scores_for_symbol")
@@ -229,32 +226,50 @@ def get_scores_for_symbol() -> Dict[str, Any]:
             market_conf = market_conf_full.get("indicators", {})
 
             macro_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "macro"}
-            sentiment_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "sentiment"}
+            
 
-            sentiment_data = {k: v for k, v in macro_data.items() if k in sentiment_indicators}
+            
             macro_data_cleaned = {k: v for k, v in macro_data.items() if k not in sentiment_data}
 
             # === Scores berekenen ===
             macro_scores = calculate_macro_scores(macro_data_cleaned, macro_indicators)
             tech_scores = calculate_technical_scores(tech_data, tech_conf.get("indicators", {}))
             market_scores = calculate_market_scores(market_data, market_conf)
-            sentiment_scores = calculate_sentiment_scores(sentiment_data, sentiment_indicators)
+            
 
             macro_avg = round(macro_scores["total_score"])
             tech_avg = round(tech_scores["total_score"])
             market_avg = round(market_scores["total_score"])
-            sentiment_avg = round(sentiment_scores["total_score"])
             setup_score = round((macro_avg + tech_avg) / 2)
 
-            logger.info(f"✅ Scores berekend: macro={macro_avg}, tech={tech_avg}, market={market_avg}, sentiment={sentiment_avg}, setup={setup_score}")
-
-            return {
+            result = {
                 "macro_score": macro_avg,
                 "technical_score": tech_avg,
                 "market_score": market_avg,
-                "sentiment_score": sentiment_avg,
                 "setup_score": setup_score
             }
+
+            # ➕ Voeg uitleg en top_contributors toe als include_metadata=True
+            if include_metadata:
+                def extract_top_contributors(scores_dict):
+                    return sorted(
+                        scores_dict["scores"].items(),
+                        key=lambda x: x[1]["score"],
+                        reverse=True
+                    )[:3]
+
+                result.update({
+                    "macro_interpretation": macro_conf_full.get("interpretation", "–"),
+                    "technical_interpretation": tech_conf.get("interpretation", "–"),
+                    "setup_interpretation": "Gebaseerd op macro + technische score gemiddelde",
+
+                    "macro_top_contributors": [i[0] for i in extract_top_contributors(macro_scores)],
+                    "technical_top_contributors": [i[0] for i in extract_top_contributors(tech_scores)],
+                    "setup_top_contributors": [],  # eventueel later dynamisch invullen
+                })
+
+            logger.info(f"✅ Scores berekend: {result}")
+            return result
 
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen en berekenen van scores: {e}", exc_info=True)
