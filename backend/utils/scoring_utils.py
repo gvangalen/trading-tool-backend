@@ -225,17 +225,10 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             macro_conf = macro_conf_full.get("indicators", {})
             market_conf = market_conf_full.get("indicators", {})
 
-            macro_indicators = {k: v for k, v in macro_conf.items() if v.get("category") == "macro"}
-            
-
-            
-            macro_data_cleaned = {k: v for k, v in macro_data.items() if k not in sentiment_data}
-
             # === Scores berekenen ===
-            macro_scores = calculate_macro_scores(macro_data_cleaned, macro_indicators)
+            macro_scores = calculate_macro_scores(macro_data, macro_conf)
             tech_scores = calculate_technical_scores(tech_data, tech_conf.get("indicators", {}))
             market_scores = calculate_market_scores(market_data, market_conf)
-            
 
             macro_avg = round(macro_scores["total_score"])
             tech_avg = round(tech_scores["total_score"])
@@ -265,7 +258,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
 
                     "macro_top_contributors": [i[0] for i in extract_top_contributors(macro_scores)],
                     "technical_top_contributors": [i[0] for i in extract_top_contributors(tech_scores)],
-                    "setup_top_contributors": [],  # eventueel later dynamisch invullen
+                    "setup_top_contributors": [],
                 })
 
             logger.info(f"✅ Scores berekend: {result}")
