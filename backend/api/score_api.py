@@ -2,14 +2,20 @@ import logging
 import json
 from fastapi.responses import JSONResponse
 from fastapi import APIRouter, HTTPException
-from backend.utils.scoring_utils import load_config, generate_scores
-from backend.utils.scoring_utils import get_scores_for_symbol
+
+from backend.utils.scoring_utils import (
+    load_config,
+    generate_scores,
+    get_scores_for_symbol,
+    get_active_setups_with_info,
+)
+from backend.utils.db import get_db_connection
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# ✅ Tijdelijke dummydata (wordt later vervangen door live data via DB/API)
+# ✅ Tijdelijke dummydata (fallback)
 dummy_data = {
     "fear_greed_index": 72,
     "btc_dominance": 52.4,
@@ -21,7 +27,10 @@ dummy_data = {
     "change_24h": 2.4
 }
 
-# ✅ Macro score ophalen
+
+# =========================================================
+# ✅ Macro score
+# =========================================================
 @router.get("/score/macro")
 async def macro_score():
     """
@@ -36,7 +45,10 @@ async def macro_score():
         logger.error(f"❌ Macro-score fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ Technische score ophalen
+
+# =========================================================
+# ✅ Technische score
+# =========================================================
 @router.get("/score/technical")
 async def technical_score():
     """
@@ -51,7 +63,10 @@ async def technical_score():
         logger.error(f"❌ Technische score fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ Markt score ophalen
+
+# =========================================================
+# ✅ Markt score
+# =========================================================
 @router.get("/score/market")
 async def market_score():
     """
@@ -66,15 +81,19 @@ async def market_score():
         logger.error(f"❌ Market-score fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# ✅ Dagelijkse gecombineerde score ophalen
+
+# =========================================================
+# ✅ Dagelijkse gecombineerde score (voor dashboard)
+# =========================================================
 @router.get("/scores/daily")
 async def get_daily_scores():
     """
     ➤ Haalt de meest actuele scores + interpretaties + top contributors op uit de database.
-    Wordt gebruikt in dashboard en rapport. Gebaseerd op de 'daily_scores' tabel.
+    Inclusief actieve setups met uitleg en actie.
+    Wordt gebruikt in dashboard en rapport.
     """
     try:
-        scores = get_scores_for_symbol()  # Haalt laatste entry op (meestal BTC)
+        scores = get_scores_for_symbol(include_metadata=True)
         if not scores:
             logger.warning("⚠️ Geen scores gevonden in database")
             return JSONResponse(
@@ -82,30 +101,39 @@ async def get_daily_scores():
                 content={"detail": "Geen scores gevonden in database"}
             )
 
-        # ✅ Maak een nette response met expliciete velden
+        # 🔍 Haal actieve setups op uit DB
+        conn = get_db_connection()
+        active_setups = get_active_setups_with_info(conn)
+        conn.close()
+
+        logger.info(f"📦 Actieve setups gevonden: {len(active_setups)}")
+
+        # ✅ Response structureren
         response = {
             "macro": {
                 "score": scores.get("macro_score"),
                 "interpretation": scores.get("macro_interpretation"),
-                "top_contributors": json.loads(scores.get("macro_top_contributors", "[]"))
+                "top_contributors": scores.get("macro_top_contributors", []),
             },
             "technical": {
                 "score": scores.get("technical_score"),
                 "interpretation": scores.get("technical_interpretation"),
-                "top_contributors": json.loads(scores.get("technical_top_contributors", "[]"))
+                "top_contributors": scores.get("technical_top_contributors", []),
             },
             "setup": {
                 "score": scores.get("setup_score"),
                 "interpretation": scores.get("setup_interpretation"),
-                "top_contributors": json.loads(scores.get("setup_top_contributors", "[]"))
+                "top_contributors": [s["name"] for s in active_setups],
+                "active_setups": active_setups,
             },
             "market": {
                 "score": scores.get("market_score"),
-                "interpretation": None,  # Marktdata heeft (voor nu) geen uitleg
-                "top_contributors": []
-            }
+                "interpretation": None,  # Marktdata heeft geen vaste uitleg
+                "top_contributors": [],
+            },
         }
 
+        logger.info("✅ Dagelijkse scores + actieve setups succesvol opgehaald")
         return response
 
     except Exception as e:
