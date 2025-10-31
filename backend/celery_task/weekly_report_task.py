@@ -59,7 +59,7 @@ def fetch_daily_reports_for_week():
                        macro_score,
                        technical_score,
                        setup_score,
-                       sentiment_score
+                       market_score
                 FROM daily_reports
                 WHERE report_date >= %s
                 ORDER BY report_date ASC
@@ -98,7 +98,7 @@ def save_weekly_report_to_db(date, report_data):
                     macro_score,
                     technical_score,
                     setup_score,
-                    sentiment_score
+                    market_score
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (report_date) DO UPDATE SET
                     summary = EXCLUDED.summary,
@@ -109,7 +109,7 @@ def save_weekly_report_to_db(date, report_data):
                     macro_score = EXCLUDED.macro_score,
                     technical_score = EXCLUDED.technical_score,
                     setup_score = EXCLUDED.setup_score,
-                    sentiment_score = EXCLUDED.sentiment_score
+                    market_score = EXCLUDED.market_score
             """, (
                 date,
                 report_data.get("summary"),
@@ -120,7 +120,7 @@ def save_weekly_report_to_db(date, report_data):
                 report_data.get("macro_score"),
                 report_data.get("technical_score"),
                 report_data.get("setup_score"),
-                report_data.get("sentiment_score"),
+                report_data.get("market_score"),
             ))
             conn.commit()
             logger.info(f"✅ Weekrapport succesvol opgeslagen of bijgewerkt ({date})")
@@ -157,7 +157,7 @@ def generate_weekly_report():
     macro_scores = [r[9] for r in daily_reports]
     technical_scores = [r[10] for r in daily_reports]
     setup_scores = [r[11] for r in daily_reports]
-    sentiment_scores = [r[12] for r in daily_reports]
+    market_scores = [r[12] for r in daily_reports]
 
     report_data = {
         "summary": sanitize_field(week_summary),
@@ -165,7 +165,7 @@ def generate_weekly_report():
         "missed_opportunity": "Setup C werd niet geactiveerd door lage volatiliteit, maar had potentieel.",
         "ai_reflection": (
             "Deze week was de RSI vaak oversold terwijl volume achterbleef. "
-            "De breakout-strategieën werkten goed in combinatie met macro-bullish sentiment. "
+            "De breakout-strategieën werkten goed in combinatie met macro-bullish momentum. "
             "Een fout was het onderschatten van DXY op woensdag. "
             "In de toekomst zouden we dat kunnen koppelen aan alertverhoging voor risico."
         ),
@@ -173,7 +173,7 @@ def generate_weekly_report():
         "macro_score": avg(macro_scores),
         "technical_score": avg(technical_scores),
         "setup_score": avg(setup_scores),
-        "sentiment_score": avg(sentiment_scores),
+        "market_score": avg(market_scores),
     }
 
     # 3️⃣ Backup maken
