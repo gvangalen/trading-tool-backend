@@ -1,5 +1,3 @@
-# ✅ backend/celery_task/setup_scores_task.py
-
 import logging
 from datetime import datetime
 from celery import shared_task
@@ -32,17 +30,15 @@ def store_setup_scores_task():
                     INSERT INTO setup_scores (
                         setup_id, symbol,
                         macro_score, technical_score,
-                        market_score, sentiment_score,
-                        setup_score,
+                        market_score, setup_score,
                         report_date
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """, (
                     setup_id, symbol,
                     scores.get("macro_score", 0),
                     scores.get("technical_score", 0),
                     scores.get("market_score", 0),
-                    scores.get("sentiment_score", 0),
                     scores.get("setup_score", 0),
                     today  # ✅ rapportdatum
                 ))
