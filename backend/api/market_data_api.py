@@ -619,3 +619,41 @@ def get_year_returns():
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen jaar returns: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen jaar returns.")
+
+@router.post("/market_data/indicator")
+async def save_market_indicator(request: Request):
+    """
+    Ontvangt en slaat individuele market indicator (zoals price, volume, change_24h) op.
+    """
+    try:
+        data = await request.json()
+        symbol = data.get("symbol", "BTC")
+        indicator = data.get("indicator")
+        value = data.get("value")
+        score = data.get("score")
+        trend = data.get("trend", "–")
+        advies = data.get("advies", "")
+        uitleg = data.get("uitleg", "")
+        source = data.get("source", "coingecko")
+        timestamp = data.get("timestamp", datetime.utcnow().isoformat())
+
+        if not indicator or value is None:
+            raise HTTPException(status_code=400, detail="Indicator en waarde zijn verplicht.")
+
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO market_data_indicators (symbol, indicator, value, score, trend, advies, uitleg, source, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                symbol, indicator, value, score, trend, advies, uitleg, source, timestamp
+            ))
+            conn.commit()
+
+        logger.info(f"✅ Indicator '{indicator}' opgeslagen voor {symbol} ({value})")
+        return {"status": "success", "indicator": indicator}
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij opslaan market indicator: {e}")
+        logger.debug(traceback.format_exc())
+        raise HTTPException(status_code=500, detail="Fout bij opslaan indicator.")
