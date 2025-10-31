@@ -27,7 +27,7 @@ def get_scores_from_db():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT macro_score, technical_score, setup_score, sentiment_score, market_score
+                SELECT macro_score, technical_score, setup_score, market_score
                 FROM daily_scores
                 ORDER BY report_date DESC
                 LIMIT 1
@@ -41,7 +41,6 @@ def get_scores_from_db():
                 "macro_score": float(row[0]) if row[0] is not None else 0,
                 "technical_score": float(row[1]) if row[1] is not None else 0,
                 "setup_score": float(row[2]) if row[2] is not None else 0,
-                "sentiment_score": float(row[3]) if row[3] is not None else 0,
                 "market_score": float(row[4]) if row[4] is not None else 0,
             }
     except Exception as e:
@@ -74,7 +73,6 @@ def generate_daily_report():
         macro_score = scores.get("macro_score", 0)
         technical_score = scores.get("technical_score", 0)
         setup_score = scores.get("setup_score", 0)
-        sentiment_score = scores.get("sentiment_score", 0)
         market_score = scores.get("market_score", 0)
 
         # 2️⃣ AI-rapport genereren (gebruikt o.a. scores en marktdata)
@@ -93,7 +91,7 @@ def generate_daily_report():
                 report_date, btc_summary, macro_summary,
                 setup_checklist, priorities, wyckoff_analysis,
                 recommendations, conclusion, outlook,
-                macro_score, technical_score, setup_score, sentiment_score, market_score
+                macro_score, technical_score, setup_score, market_score
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (report_date) DO UPDATE
             SET btc_summary = EXCLUDED.btc_summary,
@@ -120,7 +118,7 @@ def generate_daily_report():
                 full_report.get("recommendations", ""),
                 full_report.get("conclusion", ""),
                 full_report.get("outlook", ""),
-                macro_score, technical_score, setup_score, sentiment_score, market_score
+                macro_score, technical_score, setup_score, market_score
             )
         )
         conn.commit()
