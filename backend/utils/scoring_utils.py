@@ -112,7 +112,7 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
 
         score = result["score"]
         if isinstance(score, (int, float)):
-            score = round(score)  # ✅ afronden op hele getallen
+            score = round(score)
 
         scores[name] = {
             "value": value,
@@ -128,7 +128,7 @@ def generate_scores(data: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, A
             total += score
             count += 1
 
-    avg_score = round(total / count) if count else 10  # ✅ afronden op hele getallen
+    avg_score = round(total / count) if count else 10
     logger.info(f"✅ {count} geldige indicatoren gescoord (gemiddelde: {avg_score})")
     return {"scores": scores, "total_score": avg_score}
 
@@ -289,3 +289,37 @@ def get_dashboard_scores(macro_data, technical_data, setups):
         "technical": technical_score,
         "setup": setup_score
     }
+
+
+# =========================================================
+# ✅ Actieve setups ophalen met uitleg en actie
+# =========================================================
+def get_active_setups_with_info(conn):
+    """
+    Haalt actieve setups op uit daily_setup_scores met hun uitleg en actie.
+    Retourneert lijst van dicts met volledige setup-info.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT s.name, s.explanation, s.action, s.dynamic_investment, ds.score
+                FROM daily_setup_scores ds
+                JOIN setups s ON s.id = ds.setup_id
+                WHERE ds.is_active = true
+                ORDER BY ds.score DESC;
+            """)
+            rows = cur.fetchall()
+
+            return [
+                {
+                    "name": row[0],
+                    "explanation": row[1],
+                    "action": row[2],
+                    "dynamic_investment": row[3],
+                    "score": row[4],
+                }
+                for row in rows
+            ]
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen actieve setups: {e}")
+        return []
