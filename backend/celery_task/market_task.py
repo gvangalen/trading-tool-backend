@@ -102,13 +102,13 @@ def fetch_market_data():
         input_values = {
             "price": price,
             "volume": volume,
-            "change_24h": change  # ✅ matched met config
+            "change_24h": change
         }
 
         scored = generate_scores(input_values, config.get("indicators", {}))
         scores = scored.get("scores", {})
 
-        # ✅ Per indicator naar backend sturen
+        # ✅ Per indicator naar backend sturen via /market_data/indicator
         for indicator_name, info in scores.items():
             payload = {
                 "symbol": "BTC",
@@ -123,8 +123,9 @@ def fetch_market_data():
             }
 
             logger.info(f"📡 Versturen market indicator: {payload}")
-            safe_request(f"{API_BASE_URL}/market_data", method="POST", payload=payload)
+            safe_request(f"{API_BASE_URL}/market_data/indicator", method="POST", payload=payload)
 
+        # ✅ Laatste fetch-tijd markeren
         Path(CACHE_FILE).touch()
         logger.info("✅ Marktdata + scores succesvol opgeslagen.")
 
