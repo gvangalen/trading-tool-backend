@@ -105,22 +105,22 @@ def fetch_market_data():
         scored = generate_scores(input_values, config.get("indicators", {}))
         scores = scored.get("scores", {})
 
-        # ✅ Per indicator naar backend sturen via /market_data/indicator
+        # ✅ Per indicator naar backend sturen
         for indicator_name, info in scores.items():
-    payload = {
-        "symbol": "BTC",
-        "indicator": indicator_name,
-        "value": input_values.get(indicator_name),
-        "score": info.get("score"),
-        "uitleg": info.get("interpretation"),
-        "advies": info.get("action"),
-        "trend": info.get("trend", ""),
-        "timestamp": datetime.utcnow().isoformat(),
-        "source": "coingecko"
-    }
+            payload = {
+                "symbol": "BTC",
+                "indicator": indicator_name,
+                "value": input_values.get(indicator_name),
+                "score": info.get("score"),
+                "uitleg": info.get("interpretation"),
+                "advies": info.get("action"),
+                "trend": info.get("trend", ""),
+                "timestamp": datetime.utcnow().isoformat(),
+                "source": "coingecko"
+            }
 
-    logger.info(f"📡 Versturen market indicator: {payload}")
-    safe_request(f"{API_BASE_URL}/market_data", method="POST", payload=payload)  # <-- ✅ hier fix
+            logger.info(f"📡 Versturen market indicator: {payload}")
+            safe_request(f"{API_BASE_URL}/market_data", method="POST", payload=payload)
 
         # ✅ Laatste fetch-tijd markeren
         Path(CACHE_FILE).touch()
