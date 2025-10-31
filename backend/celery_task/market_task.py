@@ -3,6 +3,7 @@ import json
 import logging
 import traceback
 import requests
+from backend.utils.scoring_utils import generate_scores, load_config
 from datetime import datetime, timedelta
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
@@ -34,10 +35,6 @@ TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 CACHE_FILE = "/tmp/last_market_data_fetch.txt"
 MIN_INTERVAL_MINUTES = 15
-
-# ✅ Nieuwe import voor scoring
-from backend.utils.scoring_utils import generate_scores, load_config
-
 
 def recently_fetched():
     try:
