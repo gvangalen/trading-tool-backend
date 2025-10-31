@@ -32,7 +32,7 @@ def avg(values):
 
 
 # =====================================================
-# 📅 Data ophalen (weekly reports voor de maand)
+# 📅 Weekly reports ophalen (laatste 31 dagen)
 # =====================================================
 
 def fetch_weekly_reports_for_month():
@@ -48,8 +48,11 @@ def fetch_weekly_reports_for_month():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT report_date,
-                       summary,               -- week samenvatting
-                       macro_score, technical_score, setup_score, sentiment_score
+                       summary,
+                       macro_score,
+                       technical_score,
+                       setup_score,
+                       market_score
                 FROM weekly_reports
                 WHERE report_date >= %s
                 ORDER BY report_date ASC
@@ -88,7 +91,7 @@ def save_monthly_report_to_db(date, report_data):
                     macro_score,
                     technical_score,
                     setup_score,
-                    sentiment_score
+                    market_score
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (report_date) DO UPDATE SET
                     summary = EXCLUDED.summary,
@@ -99,7 +102,7 @@ def save_monthly_report_to_db(date, report_data):
                     macro_score = EXCLUDED.macro_score,
                     technical_score = EXCLUDED.technical_score,
                     setup_score = EXCLUDED.setup_score,
-                    sentiment_score = EXCLUDED.sentiment_score
+                    market_score = EXCLUDED.market_score
             """, (
                 date,
                 report_data.get("summary"),
@@ -110,7 +113,7 @@ def save_monthly_report_to_db(date, report_data):
                 report_data.get("macro_score"),
                 report_data.get("technical_score"),
                 report_data.get("setup_score"),
-                report_data.get("sentiment_score"),
+                report_data.get("market_score"),
             ))
 
             conn.commit()
@@ -148,7 +151,7 @@ def generate_monthly_report():
     macro_scores = [r[2] for r in weekly_reports]
     technical_scores = [r[3] for r in weekly_reports]
     setup_scores = [r[4] for r in weekly_reports]
-    sentiment_scores = [r[5] for r in weekly_reports]
+    market_scores = [r[5] for r in weekly_reports]
 
     report_data = {
         "summary": sanitize_field(month_summary),
@@ -163,7 +166,7 @@ def generate_monthly_report():
         "macro_score": avg(macro_scores),
         "technical_score": avg(technical_scores),
         "setup_score": avg(setup_scores),
-        "sentiment_score": avg(sentiment_scores),
+        "market_score": avg(market_scores),
     }
 
     # 3️⃣ JSON-backup
