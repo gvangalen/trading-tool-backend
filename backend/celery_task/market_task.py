@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # ✅ Config
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002")  # <-- 🔧 /api verwijderd
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 ASSETS_JSON = os.getenv("ASSETS_JSON", '{"BTC": "bitcoin"}')
 
 try:
