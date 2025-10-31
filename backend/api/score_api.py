@@ -70,18 +70,44 @@ async def market_score():
 @router.get("/scores/daily")
 async def get_daily_scores():
     """
-    ➤ Haalt de meest actuele scores op uit de database via get_scores_for_symbol().
-    Wordt gebruikt in dashboard en rapport.
+    ➤ Haalt de meest actuele scores + interpretaties + top contributors op uit de database.
+    Wordt gebruikt in dashboard en rapport. Gebaseerd op de 'daily_scores' tabel.
     """
     try:
-        scores = get_scores_for_symbol()  # ✅ zonder symbol!
+        scores = get_scores_for_symbol()  # Haalt laatste entry op (meestal BTC)
         if not scores:
             logger.warning("⚠️ Geen scores gevonden in database")
             return JSONResponse(
                 status_code=404,
                 content={"detail": "Geen scores gevonden in database"}
             )
-        return scores
+
+        # ✅ Maak een nette response met expliciete velden
+        response = {
+            "macro": {
+                "score": scores.get("macro_score"),
+                "interpretation": scores.get("macro_interpretation"),
+                "top_contributors": json.loads(scores.get("macro_top_contributors", "[]"))
+            },
+            "technical": {
+                "score": scores.get("technical_score"),
+                "interpretation": scores.get("technical_interpretation"),
+                "top_contributors": json.loads(scores.get("technical_top_contributors", "[]"))
+            },
+            "setup": {
+                "score": scores.get("setup_score"),
+                "interpretation": scores.get("setup_interpretation"),
+                "top_contributors": json.loads(scores.get("setup_top_contributors", "[]"))
+            },
+            "market": {
+                "score": scores.get("market_score"),
+                "interpretation": None,  # Marktdata heeft (voor nu) geen uitleg
+                "top_contributors": []
+            }
+        }
+
+        return response
+
     except Exception as e:
         logger.error(f"❌ Fout in /api/scores/daily: {e}", exc_info=True)
         return JSONResponse(
