@@ -52,7 +52,7 @@ def get_scores_from_db():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT macro_score, technical_score, setup_score, sentiment_score, market_score
+                SELECT macro_score, technical_score, setup_score, market_score
                 FROM daily_scores
                 ORDER BY report_date DESC
                 LIMIT 1
@@ -63,8 +63,7 @@ def get_scores_from_db():
                     "macro_score": row[0],
                     "technical_score": row[1],
                     "setup_score": row[2],
-                    "sentiment_score": row[3],
-                    "market_score": row[4],
+                    "market_score": row[3],
                 }
                 log_and_print(f"📊 Laatste scores geladen: {scores}")
                 return scores
@@ -148,7 +147,6 @@ Setup: {safe_get(setup, 'name')}
 Timeframe: {safe_get(setup, 'timeframe')}
 Technische score: {safe_get(scores, 'technical_score', 0)}
 Setup score: {safe_get(scores, 'setup_score', 0)}
-Sentiment score: {safe_get(scores, 'sentiment_score', 0)}
 Macro score: {safe_get(scores, 'macro_score', 0)}
 Market score: {safe_get(scores, 'market_score', 0)}{prijsinfo}"""
 
@@ -182,8 +180,8 @@ Uitleg: {safe_get(strategy, 'explanation')}"""
 def prompt_for_conclusion(scores) -> str:
     return f"""Slotconclusie van de dag:
 Macro: {safe_get(scores, 'macro_score', 0)}
-Technisch: {safe_get(scores, 'technical_score', 0)}
-Sentiment: {safe_get(scores, 'sentiment_score', 0)}"""
+Technisch: {safe_get(scores, 'technical_score', 0)}"""
+
 
 def prompt_for_outlook(setup) -> str:
     return f"""Verwachting voor de komende 2–5 dagen:
@@ -233,7 +231,6 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
             "macro_score": safe_get(scores, "macro_score", 0),
             "technical_score": safe_get(scores, "technical_score", 0),
             "setup_score": safe_get(scores, "setup_score", 0),
-            "sentiment_score": safe_get(scores, "sentiment_score", 0),
             "market_score": safe_get(scores, "market_score", 0),
             "market_data": market_data,
         }
