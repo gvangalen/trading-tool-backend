@@ -6,9 +6,15 @@ from datetime import datetime
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import get_scores_for_symbol
+from backend.utils.scoring_utils import (
+    get_scores_for_symbol,
+    match_setups_to_score,
+    save_setup_score,
+)
+from backend.utils.setup_utils import get_all_setups  # Zorg dat deze functie setups ophaalt
 
 logger = logging.getLogger(__name__)
+
 
 @shared_task(name="backend.celery_task.store_daily_scores_task")
 def store_daily_scores_task():
@@ -22,11 +28,11 @@ def store_daily_scores_task():
     today = datetime.utcnow().date()
 
     try:
-        # ✅ Nieuw: haal scores direct op inclusief metadata
+        # ✅ Stap 1: Bereken alle scores inclusief metadata
         scores = get_scores_for_symbol(include_metadata=True)
-
         logger.info(f"📊 Berekende scores: {scores}")
 
+        # ✅ Stap 2: Sla scores op in daily_scores-tabel
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO daily_scores (
@@ -67,6 +73,20 @@ def store_daily_scores_task():
 
         conn.commit()
         logger.info(f"✅ Dagelijkse scores opgeslagen voor {today}")
+
+        # ✅ Stap 3: Setup-scores wegschrijven per match
+        setup_score = scores.get("setup_score", 0)
+        setups = get_all_setups()
+        matched_setups = match_setups_to_score(setups, setup_score)
+
+        for setup in matched_setups:
+            save_setup_score(
+                setup_id=setup["id"],
+                score=setup_score,
+                explanation="Automatisch gescoord op basis van macro + technical score."
+            )
+
+        logger.info(f"✅ {len(matched_setups)} setups gescoord en opgeslagen in daily_setup_scores")
 
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan dagelijkse scores: {e}", exc_info=True)
