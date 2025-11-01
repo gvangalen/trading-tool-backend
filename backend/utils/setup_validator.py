@@ -1,12 +1,11 @@
 import logging
 import json
 import numexpr as ne
-from backend.utils.db import get_db_connection  # ✅ correct pad naar db module
+from backend.utils.db import get_db_connection
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ✅ Veilige evaluatie via numexpr
 def evaluate_condition(condition, data):
     try:
         return bool(ne.evaluate(condition, local_dict=data))
@@ -14,7 +13,6 @@ def evaluate_condition(condition, data):
         logger.error(f"❌ Fout bij evaluatie conditie '{condition}': {e}")
         return False
 
-# ✅ Setup validatie-functie
 def validate_setups(asset="BTC"):
     logger.info(f"🔍 Start setup validatie voor {asset}")
 
@@ -25,7 +23,7 @@ def validate_setups(asset="BTC"):
 
     try:
         with conn.cursor() as cur:
-            # 🔄 Laatste macrodata ophalen
+            # Laatste macrodata ophalen
             cur.execute("""
                 SELECT DISTINCT ON (name) name, value
                 FROM macro_data
@@ -34,7 +32,7 @@ def validate_setups(asset="BTC"):
             macro_raw = cur.fetchall()
             macro_data = {name: float(value) for name, value in macro_raw if value is not None}
 
-            # 🔄 Laatste technische data ophalen
+            # Laatste technische data ophalen
             cur.execute("""
                 SELECT DISTINCT ON (symbol) symbol, rsi, volume, ma_200
                 FROM technical_data
@@ -48,7 +46,7 @@ def validate_setups(asset="BTC"):
                 "ma_200": float(technical[3]) if technical and technical[3] is not None else None,
             }
 
-            # 🔄 Laatste marketdata ophalen
+            # Laatste marketdata ophalen
             cur.execute("""
                 SELECT DISTINCT ON (symbol) symbol, price, change_24h
                 FROM market_data
@@ -61,7 +59,7 @@ def validate_setups(asset="BTC"):
                 "change_24h": float(market[2]) if market and market[2] is not None else None,
             }
 
-            # 🔍 Setups ophalen
+            # Setups ophalen
             cur.execute("""
                 SELECT id, name, score_logic
                 FROM setups
@@ -118,13 +116,23 @@ def validate_setups(asset="BTC"):
                 "failed_conditions": failed_conditions
             })
 
-            # ✅ Optioneel: score en active-status opslaan in database
-            # with conn.cursor() as cur:
-            #     cur.execute("""
-            #         UPDATE setups SET score = %s, active = %s WHERE id = %s
-            #     """, (overall_score, is_active, setup_id))
-            # conn.commit()
+            # ✅ Score opslaan in daily_setup_scores
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO daily_setup_scores (setup_id, date, score, is_active, explanation)
+                    VALUES (%s, CURRENT_DATE, %s, %s, %s)
+                    ON CONFLICT (setup_id, date) DO UPDATE
+                    SET score = EXCLUDED.score,
+                        is_active = EXCLUDED.is_active,
+                        explanation = EXCLUDED.explanation
+                """, (
+                    setup_id,
+                    int(overall_score),
+                    is_active,
+                    json.dumps(failed_conditions)
+                ))
 
+        conn.commit()
         logger.info(f"✅ Setup validatie voltooid voor {asset} ({len(results)} setups)")
         return results
 
