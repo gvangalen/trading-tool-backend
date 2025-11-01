@@ -64,7 +64,7 @@
       "positive": false,
       "category": "macro",
       "correlation": "negatief",
-      "explanation": "Een sterke dollarindex (DXY) drukt vaak op de prijs van Bitcoin.",
+      "explanation": "Een sterke dollarindex (DXY) drukt vaak op de prijs van Bitcoin. Een dalende DXY is gunstig voor BTC en risicovolle assets.",
       "timeframe": "1D",
       "interpretations": {
         "0": "Sterke stijging van de dollar – druk op BTC",
@@ -89,7 +89,7 @@
       "positive": false,
       "category": "sentiment",
       "correlation": "negatief",
-      "explanation": "De Fear & Greed Index meet het marktsentiment binnen crypto.",
+      "explanation": "De Fear & Greed Index meet het marktsentiment binnen crypto. Een lage waarde duidt op angst, wat historisch vaak een goed instapmoment is (contrair signaal).",
       "timeframe": "1D",
       "interpretations": {
         "0": "Extreme fear – paniekfase",
