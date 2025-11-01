@@ -39,48 +39,53 @@ async def list_market_data(since_minutes: int = Query(default=1440)):
         logger.debug(traceback.format_exc())
         raise HTTPException(status_code=500, detail="❌ Kon marktdata niet ophalen.")
 
-@router.post("/market_data")
-async def save_market_data(request: Request):
+@router.post("/api/market_data")
+def save_market_data():
+    """Haalt marktgegevens van CoinGecko op en slaat deze op in de database."""
+
+    url = "https://api.coingecko.com/api/v3/simple/price"
+    params = {
+        "ids": "bitcoin",
+        "vs_currencies": "usd",
+        "include_24hr_vol": "true",
+        "include_24hr_change": "true",
+    }
+
     try:
-        data = await request.json()
-        symbol = data.get("symbol", "BTC")
-        coingecko_id = MARKET_CONFIG["assets"].get(symbol, "bitcoin")
+        response = httpx.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()["bitcoin"]
+        logger.debug(f"📥 Ontvangen marktdata: {data}")
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            url = COINGECKO_URL.format(id=coingecko_id)
-            response = await client.get(url)
-            response.raise_for_status()
-            prices = response.json()
-            if not prices:
-                raise ValueError("⚠️ Geen prijsdata ontvangen")
-            price = float(prices[-1][4])
+        price = data.get("usd")
+        volume = data.get("usd_24h_vol")
+        change_24h = data.get("usd_24h_change")
 
-            vol_response = await client.get(VOLUME_URL.format(id=coingecko_id))
-            vol_response.raise_for_status()
-            vol_data = vol_response.json()
-            change_24h = vol_data.get("market_data", {}).get("price_change_percentage_24h", 0.0)
-            volume = vol_data.get("market_data", {}).get("total_volume", {}).get("usd", 0.0)
+        if price is None or volume is None or change_24h is None:
+            raise ValueError("Ontbrekende velden in CoinGecko response")
 
-        timestamp = datetime.utcnow()
         conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO market_data (symbol, price, change_24h, volume, timestamp)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (symbol, date) DO UPDATE SET
-                    price = EXCLUDED.price,
-                    change_24h = EXCLUDED.change_24h,
-                    volume = EXCLUDED.volume,
-                    timestamp = EXCLUDED.timestamp;
-            """, (symbol, price, change_24h, volume, timestamp))
-            conn.commit()
+        cursor = conn.cursor()
 
-        logger.info(f"✅ Marktdata opgeslagen voor {symbol}: prijs={price}, 24h={change_24h}, volume={volume}")
-        return {"status": "success", "price": price, "change_24h": change_24h, "volume": volume}
+        cursor.execute(
+            """
+            INSERT INTO market_data (symbol, price, volume, change_24h, timestamp)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            ("btc", price, volume, change_24h, datetime.utcnow())
+        )
 
-    except Exception as e:
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info("✅ Marktdata succesvol opgeslagen.")
+        return {"message": "Marktdata succesvol opgeslagen"}
+
+    except httpx.HTTPStatusError as e:
         logger.error(f"❌ Fout bij opslaan marktdata: {e}")
-        logger.debug(traceback.format_exc())
+        raise HTTPException(status_code=e.response.status_code, detail=str(e))
+    except Exception as e:
+        logger.error(f"❌ Onverwachte fout bij opslaan marktdata: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/market_data/btc/7d/fill")
