@@ -45,7 +45,6 @@ celery = Celery(
         "backend.celery_task.btc_price_history_task",
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task",
-        "backend.celery_task.setup_scores_task",
         "backend.celery_task.update_setup_scores",
         "backend.celery_task.store_daily_scores_task",  # ✅ NIEUW
     ]
