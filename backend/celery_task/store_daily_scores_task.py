@@ -1,17 +1,11 @@
-# ✅ backend/celery_task/store_daily_scores_task.py
-
 import logging
 import json
 from datetime import datetime
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import (
-    get_scores_for_symbol,
-    match_setups_to_score,
-    save_setup_score,
-)
-from backend.utils.setup_utils import get_all_setups  # Zorg dat deze functie setups ophaalt
+from backend.utils.scoring_utils import get_scores_for_symbol, match_setups_to_score
+from backend.utils.setup_utils import get_all_setups
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +22,11 @@ def store_daily_scores_task():
     today = datetime.utcnow().date()
 
     try:
-        # ✅ Stap 1: Bereken alle scores inclusief metadata
+        # ✅ Stap 1: haal scores op (inclusief metadata)
         scores = get_scores_for_symbol(include_metadata=True)
         logger.info(f"📊 Berekende scores: {scores}")
 
-        # ✅ Stap 2: Sla scores op in daily_scores-tabel
+        # ✅ Stap 2: sla dagelijkse totaalscores op in daily_scores
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO daily_scores (
@@ -59,34 +53,42 @@ def store_daily_scores_task():
                 scores.get("macro_score", 0),
                 scores.get("macro_interpretation", ""),
                 json.dumps(scores.get("macro_top_contributors", [])),
-
                 scores.get("technical_score", 0),
                 scores.get("technical_interpretation", ""),
                 json.dumps(scores.get("technical_top_contributors", [])),
-
                 scores.get("setup_score", 0),
                 scores.get("setup_interpretation", ""),
                 json.dumps(scores.get("setup_top_contributors", [])),
-
                 scores.get("market_score", 0),
             ))
 
-        conn.commit()
-        logger.info(f"✅ Dagelijkse scores opgeslagen voor {today}")
-
-        # ✅ Stap 3: Setup-scores wegschrijven per match
-        setup_score = scores.get("setup_score", 0)
+        # ✅ Stap 3: haal alle setups op en kijk welke past
         setups = get_all_setups()
-        matched_setups = match_setups_to_score(setups, setup_score)
+        matched = match_setups_to_score(setups, scores.get("setup_score", 0))
 
-        for setup in matched_setups:
-            save_setup_score(
-                setup_id=setup["id"],
-                score=setup_score,
-                explanation="Automatisch gescoord op basis van macro + technical score."
-            )
+        # ✅ Stap 4: sla best passende setup op in daily_setup_scores
+        if matched:
+            best = matched[0]  # hoogste score eerst (je kunt ook zelf kiezen met andere logica)
+            logger.info(f"🎯 Beste setup gevonden: {best['name']} (score {scores.get('setup_score')})")
 
-        logger.info(f"✅ {len(matched_setups)} setups gescoord en opgeslagen in daily_setup_scores")
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO daily_setup_scores (setup_id, date, score, explanation)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (date, setup_id) DO UPDATE SET
+                        score = EXCLUDED.score,
+                        explanation = EXCLUDED.explanation
+                """, (
+                    best["id"],
+                    today,
+                    scores.get("setup_score", 0),
+                    best.get("explanation", ""),
+                ))
+        else:
+            logger.warning("⚠️ Geen passende setup gevonden voor huidige score.")
+
+        conn.commit()
+        logger.info(f"✅ Dagelijkse scores én setup opgeslagen voor {today}")
 
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan dagelijkse scores: {e}", exc_info=True)
