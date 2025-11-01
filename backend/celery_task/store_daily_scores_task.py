@@ -62,33 +62,44 @@ def store_daily_scores_task():
                 scores.get("market_score", 0),
             ))
 
-        # ✅ Stap 3: haal alle setups op en kijk welke past
+        # ✅ Stap 3: haal alle setups op en bepaal de best matchende setup
         setups = get_all_setups()
         matched = match_setups_to_score(setups, scores.get("setup_score", 0))
 
         # ✅ Stap 4: sla best passende setup op in daily_setup_scores
         if matched:
-            best = matched[0]  # hoogste score eerst (je kunt ook zelf kiezen met andere logica)
+            best = matched[0]
             logger.info(f"🎯 Beste setup gevonden: {best['name']} (score {scores.get('setup_score')})")
 
             with conn.cursor() as cur:
+                # ⬇️ Eerst alle setups op deze datum inactief maken
                 cur.execute("""
-                    INSERT INTO daily_setup_scores (setup_id, date, score, explanation)
-                    VALUES (%s, %s, %s, %s)
+                    UPDATE daily_setup_scores
+                    SET is_active = false
+                    WHERE date = %s
+                """, (today,))
+
+                # ⬆️ Daarna de best matchende setup opslaan of activeren
+                cur.execute("""
+                    INSERT INTO daily_setup_scores (setup_id, date, score, explanation, is_active)
+                    VALUES (%s, %s, %s, %s, true)
                     ON CONFLICT (date, setup_id) DO UPDATE SET
                         score = EXCLUDED.score,
-                        explanation = EXCLUDED.explanation
+                        explanation = EXCLUDED.explanation,
+                        is_active = true
                 """, (
                     best["id"],
                     today,
                     scores.get("setup_score", 0),
                     best.get("explanation", ""),
                 ))
+
         else:
             logger.warning("⚠️ Geen passende setup gevonden voor huidige score.")
 
+        # ✅ Commit alles
         conn.commit()
-        logger.info(f"✅ Dagelijkse scores én setup opgeslagen voor {today}")
+        logger.info(f"✅ Dagelijkse scores én setup succesvol opgeslagen voor {today}")
 
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan dagelijkse scores: {e}", exc_info=True)
