@@ -41,8 +41,7 @@ async def list_market_data(since_minutes: int = Query(default=1440)):
 
 @router.post("/market_data")
 def save_market_data():
-    """Haalt marktgegevens van CoinGecko op en slaat deze op in de database."""
-
+    """Haalt marktgegevens van CoinGecko op en slaat deze op in de database (met conflict-oplossing)."""
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {
         "ids": "bitcoin",
@@ -64,25 +63,31 @@ def save_market_data():
         if price is None or volume is None or change_24h is None:
             raise ValueError("Ontbrekende velden in CoinGecko response")
 
+        now = datetime.utcnow()
+        today = now.date()
+
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        cursor.execute(
-            """
+        cursor.execute("""
             INSERT INTO market_data (symbol, price, volume, change_24h, timestamp)
             VALUES (%s, %s, %s, %s, %s)
-            """,
-            ("btc", price, volume, change_24h, datetime.utcnow())
-        )
+            ON CONFLICT (symbol, date)
+            DO UPDATE SET
+                price = EXCLUDED.price,
+                volume = EXCLUDED.volume,
+                change_24h = EXCLUDED.change_24h,
+                timestamp = EXCLUDED.timestamp
+        """, ("BTC", price, volume, change_24h, now))
 
         conn.commit()
         cursor.close()
         conn.close()
-        logger.info("✅ Marktdata succesvol opgeslagen.")
-        return {"message": "Marktdata succesvol opgeslagen"}
+        logger.info("✅ Marktdata succesvol opgeslagen of bijgewerkt.")
+        return {"message": "Marktdata succesvol opgeslagen of bijgewerkt"}
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"❌ Fout bij opslaan marktdata: {e}")
+        logger.error(f"❌ Fout bij ophalen marktdata: {e}")
         raise HTTPException(status_code=e.response.status_code, detail=str(e))
     except Exception as e:
         logger.error(f"❌ Onverwachte fout bij opslaan marktdata: {e}")
