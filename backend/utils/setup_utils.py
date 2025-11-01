@@ -1,4 +1,5 @@
 from backend.utils.db import get_db_connection
+from datetime import date
 
 def get_all_setups(symbol: str = "BTC"):
     """
@@ -36,7 +37,8 @@ def get_all_setups(symbol: str = "BTC"):
 
 def get_latest_setup_for_symbol(symbol: str = "BTC"):
     """
-    Haalt de meest recente setup op voor het opgegeven symbool.
+    Haalt de meest recente setup op voor het opgegeven symbool,
+    inclusief de score van vandaag uit daily_setup_scores (indien beschikbaar).
     """
     conn = get_db_connection()
     if not conn:
@@ -45,20 +47,22 @@ def get_latest_setup_for_symbol(symbol: str = "BTC"):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, name, description, trend, score, symbol, created_at
-                FROM setups
-                WHERE symbol = %s
-                ORDER BY created_at DESC
+                SELECT s.id, s.name, s.description, s.trend, ds.score, s.symbol, s.created_at
+                FROM setups s
+                LEFT JOIN daily_setup_scores ds ON s.id = ds.setup_id AND ds.date = %s
+                WHERE s.symbol = %s
+                ORDER BY s.created_at DESC
                 LIMIT 1
-            """, (symbol,))
+            """, (date.today(), symbol))
             row = cur.fetchone()
+
             if row:
                 return {
                     "id": row[0],
                     "name": row[1],
                     "description": row[2],
                     "trend": row[3],
-                    "score": row[4],
+                    "score": row[4],  # ✅ uit daily_setup_scores
                     "symbol": row[5],
                     "created_at": row[6]
                 }
