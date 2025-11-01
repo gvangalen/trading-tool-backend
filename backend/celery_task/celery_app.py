@@ -45,8 +45,7 @@ celery = Celery(
         "backend.celery_task.btc_price_history_task",
         "backend.ai_tasks.trading_advice_task",
         "backend.ai_tasks.validation_task",
-        "backend.celery_task.update_setup_scores",
-        "backend.celery_task.store_daily_scores_task",  # ✅ NIEUW
+        "backend.celery_task.store_daily_scores_task",  # ✅ ENIGE juiste setup-score task
     ]
 )
 
@@ -132,17 +131,9 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
         "schedule": crontab(hour=1, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
-    "generate_setup_scores_task": {
-        "task": "backend.celery_task.setup_scores_task.generate_setup_scores_task",
-        "schedule": crontab(hour=2, minute=15),
-    },
-    "store_setup_scores_daily": {
-        "task": "backend.celery_task.setup_scores_task.store_setup_scores_task",
-        "schedule": crontab(hour=1, minute=0),
-    },
     "store_daily_scores": {
         "task": "backend.celery_task.store_daily_scores_task.store_daily_scores_task",
-        "schedule": crontab(hour=0, minute=45),  # ✅ NIEUW
+        "schedule": crontab(hour=0, minute=45),  # ✅ ENIGE actieve setup-score task
     },
     "generate_daily_report_ai": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
@@ -160,15 +151,13 @@ try:
     import backend.celery_task.macro_task
     import backend.celery_task.technical_task
     import backend.celery_task.setup_task
-    import backend.celery_task.setup_scores_task
-    import backend.celery_task.update_setup_scores
-    import backend.celery_task.store_daily_scores_task  # ✅ NIEUW
     import backend.celery_task.strategy_task
     import backend.celery_task.daily_report_task
     import backend.celery_task.weekly_report_task
     import backend.celery_task.monthly_report_task
     import backend.celery_task.quarterly_report_task
     import backend.celery_task.btc_price_history_task
+    import backend.celery_task.store_daily_scores_task  # ✅ ENIGE juiste import
     import backend.ai_tasks.trading_advice_task
     import backend.ai_tasks.validation_task
     logger.info("✅ Alle Celery taken succesvol geïmporteerd.")
