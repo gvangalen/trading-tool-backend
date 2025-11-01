@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # ✅ Config
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002")  # ✅ zonder /api
 ASSETS_JSON = os.getenv("ASSETS_JSON", '{"BTC": "bitcoin"}')
 
 try:
@@ -36,7 +36,9 @@ HEADERS = {"Content-Type": "application/json"}
 CACHE_FILE = "/tmp/last_market_data_fetch.txt"
 MIN_INTERVAL_MINUTES = 15
 
+
 def recently_fetched():
+    """Controleer of marktdata minder dan X minuten geleden is opgehaald."""
     try:
         mtime = datetime.fromtimestamp(Path(CACHE_FILE).stat().st_mtime)
         if datetime.now() - mtime < timedelta(minutes=MIN_INTERVAL_MINUTES):
@@ -49,6 +51,7 @@ def recently_fetched():
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=30), reraise=True)
 def safe_request(url, method="POST", payload=None):
+    """Veilig verzoek met retries."""
     try:
         response = requests.request(method, url, json=payload, headers=HEADERS, timeout=TIMEOUT)
         if response.status_code == 429:
@@ -96,16 +99,12 @@ def fetch_market_data():
 
         # ✅ Scorelogica integreren via config
         config = load_config("config/market_indicators_config.json")
-        input_values = {
-            "price": price,
-            "volume": volume,
-            "change_24h": change
-        }
+        input_values = {"price": price, "volume": volume, "change_24h": change}
 
         scored = generate_scores(input_values, config.get("indicators", {}))
         scores = scored.get("scores", {})
 
-        # ✅ Per indicator naar backend sturen
+        # ✅ Verstuur elke indicator naar backend
         for indicator_name, info in scores.items():
             payload = {
                 "symbol": "BTC",
@@ -120,11 +119,11 @@ def fetch_market_data():
             }
 
             logger.info(f"📡 Versturen market indicator: {payload}")
-            safe_request(f"{API_BASE_URL}/market_data", method="POST", payload=payload)
+            safe_request(f"{API_BASE_URL}/market_data/indicator", method="POST", payload=payload)  # ✅ juiste endpoint
 
         # ✅ Laatste fetch-tijd markeren
         Path(CACHE_FILE).touch()
-        logger.info("✅ Marktdata + scores succesvol opgeslagen.")
+        logger.info("✅ Marktdata + indicatoren succesvol opgeslagen.")
 
     except RetryError:
         logger.error("❌ Retries mislukt voor fetch_market_data.")
@@ -155,17 +154,13 @@ def save_market_data_daily():
             logger.warning("⚠️ Onvolledige CoinGecko data.")
             return
 
-        # ✅ Scorelogica ook hier toevoegen
+        # ✅ Scorelogica
         config = load_config("config/market_indicators_config.json")
-        input_values = {
-            "price": price,
-            "volume": volume,
-            "change_24h": change
-        }
-
+        input_values = {"price": price, "volume": volume, "change_24h": change}
         scored = generate_scores(input_values, config.get("indicators", {}))
         scores = scored.get("scores", {})
 
+        # ✅ Sla alle indicatoren op als snapshot
         for indicator_name, info in scores.items():
             payload = {
                 "symbol": "BTC",
@@ -179,13 +174,12 @@ def save_market_data_daily():
                 "source": "daily_close"
             }
 
-            save_url = f"{API_BASE_URL}/market_data"
             logger.info(f"🕛 Versturen dagelijkse snapshot: {payload}")
-            safe_request(save_url, method="POST", payload=payload)
+            safe_request(f"{API_BASE_URL}/market_data/indicator", method="POST", payload=payload)
 
-        logger.info("✅ Dagelijkse market_data + scores opgeslagen.")
+        logger.info("✅ Dagelijkse market_data indicatoren opgeslagen.")
 
-    except Exception as e:
+    except Exception:
         logger.error("❌ Fout bij dagelijkse data-opslag.")
         logger.error(traceback.format_exc())
 
@@ -194,7 +188,6 @@ def save_market_data_daily():
 @shared_task(name="backend.celery_task.market_task.save_market_data_7d")
 def save_market_data_7d():
     logger.info("📊 Start genereren van 7-daagse BTC-data uit opgeslagen market_data...")
-
     try:
         save_url = f"{API_BASE_URL}/market_data/btc/7d/fill"
         response = safe_request(save_url, method="POST")
