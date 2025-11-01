@@ -25,4 +25,4 @@ def load_technical_config():
     return load_config("technical_indicators_config.json")
 
 def load_market_config():
-    return load_config("market_data_config.json")
+    return load_config("market_indicators_config.json")
