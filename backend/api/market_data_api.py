@@ -39,7 +39,7 @@ async def list_market_data(since_minutes: int = Query(default=1440)):
         logger.debug(traceback.format_exc())
         raise HTTPException(status_code=500, detail="❌ Kon marktdata niet ophalen.")
 
-@router.post("/api/market_data")
+@router.post("/market_data")
 def save_market_data():
     """Haalt marktgegevens van CoinGecko op en slaat deze op in de database."""
 
