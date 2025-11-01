@@ -99,12 +99,16 @@ def fetch_market_data():
 
         # ✅ Scorelogica integreren via config
         config = load_config("config/market_indicators_config.json")
-        input_values = {"price": price, "volume": volume, "change_24h": change}
+        input_values = {
+            "price": price,
+            "volume": volume,
+            "change_24h": change
+        }
 
         scored = generate_scores(input_values, config.get("indicators", {}))
         scores = scored.get("scores", {})
 
-        # ✅ Verstuur elke indicator naar backend
+        # ✅ Per indicator naar backend sturen via bestaande /market_data route
         for indicator_name, info in scores.items():
             payload = {
                 "symbol": "BTC",
@@ -119,11 +123,11 @@ def fetch_market_data():
             }
 
             logger.info(f"📡 Versturen market indicator: {payload}")
-            safe_request(f"{API_BASE_URL}/market_data/indicator", method="POST", payload=payload)  # ✅ juiste endpoint
+            safe_request(f"{API_BASE_URL}/market_data", method="POST", payload=payload)
 
         # ✅ Laatste fetch-tijd markeren
         Path(CACHE_FILE).touch()
-        logger.info("✅ Marktdata + indicatoren succesvol opgeslagen.")
+        logger.info("✅ Marktdata + scores succesvol opgeslagen.")
 
     except RetryError:
         logger.error("❌ Retries mislukt voor fetch_market_data.")
