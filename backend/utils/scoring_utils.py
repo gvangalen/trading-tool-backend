@@ -323,3 +323,23 @@ def get_active_setups_with_info(conn):
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen actieve setups: {e}")
         return []
+
+def save_setup_score(setup_id: int, score: int, explanation: str = ""):
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen databaseverbinding in save_setup_score")
+        return
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO daily_setup_scores (setup_id, date, score, explanation)
+                VALUES (%s, CURRENT_DATE, %s, %s)
+                ON CONFLICT (setup_id, date) DO NOTHING;
+            """, (setup_id, score, explanation))
+            conn.commit()
+            logger.info(f"✅ Setup-score opgeslagen voor setup_id={setup_id}")
+    except Exception as e:
+        logger.error(f"❌ Fout bij opslaan van setup-score: {e}", exc_info=True)
+    finally:
+        conn.close()
