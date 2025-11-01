@@ -67,12 +67,15 @@ async def add_macro_indicator(request: Request):
         raise HTTPException(status_code=500, detail=f"❌ [INT01] Ophalen indicator mislukt: {e}")
 
     try:
+        # ✅ CORRECTE interpretatie uit generate_scores()
         score_data = generate_scores({name: value}, {name: indicator_config})
         score_info = score_data["scores"].get(name, {})
-        score = score_info.get("score", 0)
-        trend = score_info.get("trend", "")
-        interpretation = indicator_config.get("explanation", "")
-        action = indicator_config.get("action", "")
+
+        score = score_info.get("score", 10)
+        trend = score_info.get("trend", "–")
+        interpretation = score_info.get("interpretation", "–")
+        action = score_info.get("action", "–")
+
     except Exception as e:
         logger.error(f"❌ [SCORE01] Fout bij berekenen score voor {name}: {e}")
         raise HTTPException(status_code=500, detail="❌ [SCORE01] Scoreberekening mislukt.")
@@ -93,7 +96,14 @@ async def add_macro_indicator(request: Request):
         ))
         conn.commit()
         logger.info(f"✅ [add] '{name}' opgeslagen met value={value}, score={score}, trend={trend}")
-        return {"message": f"Indicator '{name}' succesvol opgeslagen."}
+        return {
+            "message": f"Indicator '{name}' succesvol opgeslagen.",
+            "value": value,
+            "score": score,
+            "trend": trend,
+            "interpretation": interpretation,
+            "action": action
+        }
     except Exception as e:
         logger.error(f"❌ [DB02] Fout bij opslaan macro data: {e}")
         raise HTTPException(status_code=500, detail="❌ [DB02] Databasefout bij opslaan.")
