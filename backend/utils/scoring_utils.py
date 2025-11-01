@@ -220,7 +220,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             # === Configs laden ===
             macro_conf_full = load_config("config/macro_indicators_config.json")
             tech_conf = load_config("config/technical_indicators_config.json")
-            market_conf_full = load_config("config/market_data_config.json")
+            market_conf_full = load_config("config/market_indicators_config.json")
 
             macro_conf = macro_conf_full.get("indicators", {})
             market_conf = market_conf_full.get("indicators", {})
