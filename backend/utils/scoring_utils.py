@@ -66,7 +66,6 @@ def calculate_score(value: Optional[float], thresholds: list, positive: bool = T
 # =========================================================
 def calculate_score_from_config(value: float, config: dict) -> dict:
     scoring = config.get("scoring", {})
-    positive = config.get("positive", True)
     fallback = {
         "score": 10,
         "trend": "Onbekend",
@@ -97,14 +96,7 @@ def calculate_score_from_config(value: float, config: dict) -> dict:
         if not matched_score:
             return fallback
 
-        # ➖ Keer score om als 'positive' False is
-        if not positive and "score" in matched_score:
-            score = matched_score["score"]
-            if isinstance(score, (int, float)):
-                matched_score = matched_score.copy()
-                matched_score["score"] = 100 - score + 10  # spiegeling met minimum van 10
-                matched_score["score"] = max(10, min(100, matched_score["score"]))  # clamp 10–100
-
+        # ✅ Geen automatische spiegeling – scoring komt direct uit config
         return matched_score
 
     except Exception as e:
