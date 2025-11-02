@@ -287,3 +287,27 @@ async def generate_explanation(setup_id: int):
 def trigger_setup_task():
     validate_setups_task.delay()
     return {"message": "Setup-validatie gestart via Celery"}
+
+# ✅ 9. Top setups
+@router.get("/setups/top")
+async def get_top_setups(limit: int = 3):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, name, symbol, timeframe, account_type, strategy_type,
+                       min_investment, dynamic_investment, tags, trend, score_logic,
+                       favorite, explanation, description, action, category,
+                       min_macro_score, max_macro_score,
+                       min_technical_score, max_technical_score,
+                       min_market_score, max_market_score, created_at
+                FROM setups
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (limit,))
+            rows = cur.fetchall()
+            return format_setup_rows(rows)
+    finally:
+        conn.close()
