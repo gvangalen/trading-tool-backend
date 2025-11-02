@@ -377,3 +377,86 @@ async def trigger_technical_task():
     except Exception as e:
         logger.error(f"❌ Trigger-fout: {e}")
         raise HTTPException(status_code=500, detail="Triggeren van Celery mislukt.")
+
+# ✅ 1. Alle beschikbare indicatornamen ophalen (voor dropdown)
+@router.get("/indicators")
+async def get_all_indicators():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT name, display_name
+                FROM technical_indicators_config
+                ORDER BY name;
+            """)
+            rows = cur.fetchall()
+        return [{"name": r[0], "display_name": r[1]} for r in rows]
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen indicatornamen: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen indicatornamen.")
+    finally:
+        conn.close()
+
+# ✅ 2. Alle scoreregels ophalen
+@router.get("/technical_indicator_rules")
+async def get_all_indicator_rules():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, indicator, range_min, range_max, score, trend, interpretation, action
+                FROM technical_indicator_rules
+                ORDER BY indicator, score DESC;
+            """)
+            rows = cur.fetchall()
+        return [
+            {
+                "id": r[0],
+                "indicator": r[1],
+                "range_min": r[2],
+                "range_max": r[3],
+                "score": r[4],
+                "trend": r[5],
+                "interpretation": r[6],
+                "action": r[7]
+            } for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen regels: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen regels.")
+    finally:
+        conn.close()
+
+# ✅ 3. Nieuwe scoreregel toevoegen
+@router.post("/technical_indicator_rules")
+async def add_indicator_rule(data: dict):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO technical_indicator_rules (
+                    indicator, range_min, range_max, score, trend, interpretation, action
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s);
+            """, (
+                data.get("indicator"),
+                data.get("range_min"),
+                data.get("range_max"),
+                data.get("score"),
+                data.get("trend"),
+                data.get("interpretation"),
+                data.get("action")
+            ))
+            conn.commit()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"❌ Fout bij opslaan regel: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij opslaan regel.")
+    finally:
+        conn.close()
+
