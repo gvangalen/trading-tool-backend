@@ -387,8 +387,9 @@ async def get_all_indicators():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT DISTINCT name, display_name
-                FROM technical_indicators_config
+                SELECT name, display_name
+                FROM indicators
+                WHERE active = TRUE
                 ORDER BY name;
             """)
             rows = cur.fetchall()
@@ -398,7 +399,6 @@ async def get_all_indicators():
         raise HTTPException(status_code=500, detail="Fout bij ophalen indicatornamen.")
     finally:
         conn.close()
-
 # ✅ 2. Alle scoreregels ophalen
 @router.get("/technical_indicator_rules")
 async def get_all_indicator_rules():
