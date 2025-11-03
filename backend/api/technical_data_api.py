@@ -379,7 +379,7 @@ async def trigger_technical_task():
         raise HTTPException(status_code=500, detail="Triggeren van Celery mislukt.")
 
 # ✅ 1. Alle beschikbare indicatornamen ophalen (voor dropdown)
-@router.get("/indicators")
+@router.get("/technical/indicators")
 async def get_all_indicators():
     conn = get_db_connection()
     if not conn:
