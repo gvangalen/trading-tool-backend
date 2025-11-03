@@ -400,9 +400,9 @@ async def get_all_indicators():
     finally:
         conn.close()
         
-# ✅ 2. Alle scoreregels ophalen
-@router.get("/technical_indicator_rules")
-async def get_all_indicator_rules():
+# ✅ 2. Alle scoreregels ophalen per indicator
+@router.get("/technical_indicator_rules/{indicator_name}")
+async def get_rules_for_indicator(indicator_name: str):
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
@@ -411,8 +411,9 @@ async def get_all_indicator_rules():
             cur.execute("""
                 SELECT id, indicator, range_min, range_max, score, trend, interpretation, action
                 FROM technical_indicator_rules
-                ORDER BY indicator, score DESC;
-            """)
+                WHERE indicator = %s
+                ORDER BY score DESC;
+            """, (indicator_name,))
             rows = cur.fetchall()
         return [
             {
@@ -427,9 +428,8 @@ async def get_all_indicator_rules():
             } for r in rows
         ]
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen regels: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen regels.")
+        logger.error(f"❌ Fout bij ophalen scoreregels voor {indicator_name}: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen scoreregels.")
     finally:
         conn.close()
-
 
