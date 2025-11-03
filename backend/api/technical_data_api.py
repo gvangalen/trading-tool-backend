@@ -431,32 +431,4 @@ async def get_all_indicator_rules():
     finally:
         conn.close()
 
-# ✅ 3. Nieuwe scoreregel toevoegen
-@router.post("/technical_indicator_rules")
-async def add_indicator_rule(data: dict):
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO technical_indicator_rules (
-                    indicator, range_min, range_max, score, trend, interpretation, action
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s);
-            """, (
-                data.get("indicator"),
-                data.get("range_min"),
-                data.get("range_max"),
-                data.get("score"),
-                data.get("trend"),
-                data.get("interpretation"),
-                data.get("action")
-            ))
-            conn.commit()
-        return {"status": "success"}
-    except Exception as e:
-        logger.error(f"❌ Fout bij opslaan regel: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij opslaan regel.")
-    finally:
-        conn.close()
 
