@@ -399,6 +399,7 @@ async def get_all_indicators():
         raise HTTPException(status_code=500, detail="Fout bij ophalen indicatornamen.")
     finally:
         conn.close()
+        
 # ✅ 2. Alle scoreregels ophalen
 @router.get("/technical_indicator_rules")
 async def get_all_indicator_rules():
