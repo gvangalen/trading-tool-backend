@@ -55,45 +55,61 @@ async def get_technical_data():
         conn.close()
 
 @router.post("/technical_data")
-async def save_technical_data(item: TechnicalIndicator):
-    conn = None
+async def save_or_activate_technical_data(payload: dict):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
+
+    indicator = payload.get("indicator")
+    value = payload.get("value")
+    score = payload.get("score")
+    advies = payload.get("advies")
+    uitleg = payload.get("uitleg")
+    timestamp = payload.get("timestamp")
+    symbol = payload.get("symbol", "BTC")  # Altijd BTC voor nu
+
     try:
-        conn = get_db_connection()
-        if not conn:
-            logger.error("❌ TECH_POST: Geen databaseverbinding.")
-            raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
-
-        logger.info(f"📥 TECH_POST: Ontvangen data: {item.dict()}")
-
         with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO technical_indicators (
-                    symbol, indicator, value, score, advies, uitleg, timestamp
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s);
-            """, (
-                item.symbol,
-                item.indicator,
-                item.value,
-                item.score,
-                item.advies,
-                item.uitleg,
-                item.timestamp,
-            ))
-            conn.commit()
+            if value is None:
+                # ➕ Alleen indicator toevoegen aan dashboard
+                logger.info(f"➕ Indicator toevoegen: {indicator} voor BTC")
 
-        logger.info(f"✅ TECH_POST: Succesvol opgeslagen: {item.symbol} - {item.indicator}")
-        return {"status": "success"}
+                cur.execute("""
+                    SELECT 1 FROM technical_indicators
+                    WHERE indicator = %s AND symbol = %s;
+                """, (indicator, symbol))
+                if cur.fetchone():
+                    return {"message": f"🔁 Indicator {indicator} is al actief voor {symbol}."}
+
+                cur.execute("""
+                    INSERT INTO technical_indicators (
+                        symbol, indicator, value, score, advies, uitleg, timestamp
+                    )
+                    VALUES (%s, %s, NULL, NULL, NULL, NULL, NOW());
+                """, (symbol, indicator))
+                conn.commit()
+                return {"message": f"✅ Indicator {indicator} toegevoegd aan dashboard."}
+
+            else:
+                # 📝 Technische data opslaan
+                logger.info(f"📥 Technische data opslaan: {indicator} - waarde: {value}")
+                cur.execute("""
+                    INSERT INTO technical_indicators (
+                        symbol, indicator, value, score, advies, uitleg, timestamp
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s);
+                """, (
+                    symbol, indicator, value, score, advies, uitleg,
+                    timestamp or datetime.utcnow()
+                ))
+                conn.commit()
+                return {"message": "✅ Technische data opgeslagen."}
 
     except Exception as e:
-        import traceback
-        logger.error(f"❌ TECH_POST: Fout bij opslaan technische data: {e}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"❌ Fout bij opslaan: {e}")
-
+        logger.error(f"❌ TECH_POST: Fout bij verwerken: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij verwerken.")
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
 # ✅ Dagdata per indicator
 @router.get("/technical_data/day")
