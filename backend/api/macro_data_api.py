@@ -359,7 +359,7 @@ async def get_rules_for_macro_indicator(indicator_name: str):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, indicator_name, range_min, range_max, score, trend, interpretation, action
+                SELECT id, indicator, range_min, range_max, score, trend, interpretation, action
                 FROM macro_indicator_rules
                 WHERE indicator_name = %s
                 ORDER BY score DESC;
@@ -368,7 +368,7 @@ async def get_rules_for_macro_indicator(indicator_name: str):
         return [
             {
                 "id": r[0],
-                "indicator_name": r[1],
+                "indicator": r[1],
                 "range_min": r[2],
                 "range_max": r[3],
                 "score": r[4],
