@@ -326,3 +326,59 @@ async def get_macro_quarter_data():
         raise HTTPException(status_code=500, detail="❌ [DB09] Ophalen kwartaaldata mislukt.")
     finally:
         conn.close()
+
+# ✅ 1. Alle beschikbare macro-indicatornamen ophalen (voor dropdown)
+@router.get("/macro/indicators")
+async def get_all_macro_indicators():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT name, display_name
+                FROM indicators
+                WHERE active = TRUE AND category = 'macro'
+                ORDER BY name;
+            """)
+            rows = cur.fetchall()
+        return [{"name": r[0], "display_name": r[1]} for r in rows]
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen macro-indicatornamen: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen macro-indicatornamen.")
+    finally:
+        conn.close()
+
+
+# ✅ 2. Alle scoreregels ophalen per macro-indicator
+@router.get("/macro_indicator_rules/{indicator_name}")
+async def get_rules_for_macro_indicator(indicator_name: str):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, indicator_name, range_min, range_max, score, trend, interpretation, action
+                FROM macro_indicator_rules
+                WHERE indicator_name = %s
+                ORDER BY score DESC;
+            """, (indicator_name,))
+            rows = cur.fetchall()
+        return [
+            {
+                "id": r[0],
+                "indicator_name": r[1],
+                "range_min": r[2],
+                "range_max": r[3],
+                "score": r[4],
+                "trend": r[5],
+                "interpretation": r[6],
+                "action": r[7]
+            } for r in rows
+        ]
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen scoreregels voor macro-indicator {indicator_name}: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen macro-scoreregels.")
+    finally:
+        conn.close()
