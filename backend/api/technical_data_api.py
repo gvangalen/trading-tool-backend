@@ -8,7 +8,10 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# ✅ Veilige conversies
+# ============================================
+# 🧩  Hulp-functies
+# ============================================
+
 def safe_float(value):
     try:
         return float(value) if value is not None else None
@@ -21,7 +24,20 @@ def safe_int(value):
     except (TypeError, ValueError):
         return None
 
-# ✅ GET all
+def safe_fetchall(cur):
+    """Zorgt dat fetchall() nooit None teruggeeft."""
+    try:
+        rows = cur.fetchall()
+        return rows or []
+    except Exception as e:
+        logger.warning(f"⚠️ safe_fetchall mislukt: {e}")
+        return []
+
+
+# ============================================
+# 📊  Routes
+# ============================================
+
 @router.get("/technical_data")
 async def get_technical_data():
     conn = get_db_connection()
@@ -35,18 +51,22 @@ async def get_technical_data():
                 ORDER BY timestamp DESC
                 LIMIT 50;
             """)
-            rows = cur.fetchall()
+            rows = safe_fetchall(cur)
+
+        if not rows:
+            logger.info("⚠️ Geen technische data gevonden.")
+            return []
 
         return [
             {
-                "symbol": row[0],
-                "indicator": row[1],
-                "waarde": safe_float(row[2]),
-                "score": safe_int(row[3]),
-                "advies": row[4],
-                "uitleg": row[5],
-                "timestamp": row[6].isoformat(),
-            } for row in rows
+                "symbol": r[0],
+                "indicator": r[1],
+                "waarde": safe_float(r[2]),
+                "score": safe_int(r[3]),
+                "advies": r[4],
+                "uitleg": r[5],
+                "timestamp": r[6].isoformat() if r[6] else None,
+            } for r in rows
         ]
     except Exception as e:
         logger.error(f"❌ TECH05: Ophalen mislukt: {e}")
@@ -66,51 +86,44 @@ async def save_or_activate_technical_data(payload: dict):
     advies = payload.get("advies")
     uitleg = payload.get("uitleg")
     timestamp = payload.get("timestamp")
-    symbol = payload.get("symbol", "BTC")  # Altijd BTC voor nu
+    symbol = payload.get("symbol", "BTC")
 
     try:
         with conn.cursor() as cur:
             if value is None:
-                # ➕ Alleen indicator toevoegen aan dashboard
-                logger.info(f"➕ Indicator toevoegen: {indicator} voor BTC")
-
+                # Alleen indicator activeren
+                logger.info(f"➕ Indicator toevoegen: {indicator} ({symbol})")
                 cur.execute("""
-                    SELECT 1 FROM technical_indicators
-                    WHERE indicator = %s AND symbol = %s;
+                    SELECT 1 FROM technical_indicators WHERE indicator = %s AND symbol = %s;
                 """, (indicator, symbol))
                 if cur.fetchone():
                     return {"message": f"🔁 Indicator {indicator} is al actief voor {symbol}."}
 
                 cur.execute("""
-                    INSERT INTO technical_indicators (
-                        symbol, indicator, value, score, advies, uitleg, timestamp
-                    )
-                    VALUES (%s, %s, NULL, NULL, NULL, NULL, NOW());
+                    INSERT INTO technical_indicators (symbol, indicator, timestamp)
+                    VALUES (%s, %s, NOW());
                 """, (symbol, indicator))
                 conn.commit()
-                return {"message": f"✅ Indicator {indicator} toegevoegd aan dashboard."}
+                return {"message": f"✅ Indicator {indicator} toegevoegd."}
 
-            else:
-                # 📝 Technische data opslaan
-                logger.info(f"📥 Technische data opslaan: {indicator} - waarde: {value}")
-                cur.execute("""
-                    INSERT INTO technical_indicators (
-                        symbol, indicator, value, score, advies, uitleg, timestamp
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s);
-                """, (
-                    symbol, indicator, value, score, advies, uitleg,
-                    timestamp or datetime.utcnow()
-                ))
-                conn.commit()
-                return {"message": "✅ Technische data opgeslagen."}
+            # Volledige record opslaan
+            logger.info(f"📥 Technische data opslaan: {indicator} ({value})")
+            cur.execute("""
+                INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s);
+            """, (
+                symbol, indicator, value, score, advies, uitleg,
+                timestamp or datetime.utcnow()
+            ))
+            conn.commit()
+            return {"message": "✅ Technische data opgeslagen."}
 
     except Exception as e:
         logger.error(f"❌ TECH_POST: Fout bij verwerken: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij verwerken.")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
-
+        
 # ✅ Dagdata per indicator
 @router.get("/technical_data/day")
 async def get_latest_day_data():
@@ -119,45 +132,49 @@ async def get_latest_day_data():
         raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
     try:
         with conn.cursor() as cur:
-            # ✅ Eerst: probeer data van vandaag
             cur.execute("""
                 SELECT symbol, indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
                 WHERE symbol = 'BTC' AND DATE(timestamp) = CURRENT_DATE
                 ORDER BY timestamp DESC;
             """)
-            rows = cur.fetchall()
+            rows = safe_fetchall(cur)
 
-            # ⚠️ Fallback: als geen data van vandaag, pak laatste beschikbare dag
             if not rows:
                 cur.execute("""
-                    SELECT symbol, indicator, value, score, advies, uitleg, timestamp
-                    FROM technical_indicators
+                    SELECT timestamp FROM technical_indicators
                     WHERE symbol = 'BTC'
                     ORDER BY timestamp DESC
-                    LIMIT 3;
+                    LIMIT 1;
                 """)
-                fallback_ts = cur.fetchone()[6]  # Pak timestamp van nieuwste
-                # Zoek dan alles van diezelfde dag
+                fallback = cur.fetchone()
+                if not fallback:
+                    logger.info("⚠️ Geen fallback-data beschikbaar.")
+                    return []
+                fallback_date = fallback[0].date()
                 cur.execute("""
                     SELECT symbol, indicator, value, score, advies, uitleg, timestamp
                     FROM technical_indicators
                     WHERE symbol = 'BTC' AND DATE(timestamp) = %s
                     ORDER BY timestamp DESC;
-                """, (fallback_ts.date(),))
-                rows = cur.fetchall()
+                """, (fallback_date,))
+                rows = safe_fetchall(cur)
+
+        if not rows:
+            return []
 
         return [
             {
-                "symbol": row[0],
-                "indicator": row[1],
-                "waarde": safe_float(row[2]),
-                "score": safe_int(row[3]),
-                "advies": row[4],
-                "uitleg": row[5],
-                "timestamp": row[6].isoformat(),
-            } for row in rows
+                "symbol": r[0],
+                "indicator": r[1],
+                "waarde": safe_float(r[2]),
+                "score": safe_int(r[3]),
+                "advies": r[4],
+                "uitleg": r[5],
+                "timestamp": r[6].isoformat() if r[6] else None,
+            } for r in rows
         ]
+
     except Exception as e:
         logger.error(f"❌ [day] Fout bij ophalen: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -366,12 +383,13 @@ async def get_technical_for_symbol(symbol: str):
     finally:
         conn.close()
 
-# ✅ Verwijderen van één specifieke technische indicator
+# ✅ Verwijderen van één specifieke technische indicator (case-insensitive)
 @router.delete("/technical_data/{indicator}")
 async def delete_technical_indicator(indicator: str):
     """
-    Verwijdert één specifieke technische indicator.
-    Wordt gebruikt bij het klikken op het rode kruisje in de frontend.
+    Verwijdert alle rijen voor één specifieke technische indicator
+    (ongeacht hoofd-/kleine letters).
+    Gebruikt door het rode kruisje in de frontend.
     """
     conn = get_db_connection()
     if not conn:
@@ -379,37 +397,46 @@ async def delete_technical_indicator(indicator: str):
 
     try:
         with conn.cursor() as cur:
-            # ✅ Controleer of de indicator bestaat
+            # ▶ Eerst controleren of er iets te verwijderen is
             cur.execute("""
-                SELECT COUNT(*) FROM technical_indicators
-                WHERE indicator = %s;
+                SELECT COUNT(*) 
+                FROM technical_indicators
+                WHERE LOWER(indicator) = LOWER(%s);
             """, (indicator,))
-            count = cur.fetchone()[0]
+            count = cur.fetchone()[0] if cur.fetchone is not None else 0
 
             if count == 0:
+                logger.warning(f"⚠️ Indicator '{indicator}' niet gevonden voor verwijdering.")
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Indicator '{indicator}' niet gevonden in database."
+                    detail=f"Indicator '{indicator}' niet gevonden."
                 )
 
-            # 🗑️ Verwijder enkel deze indicator
+            # 🗑 Verwijder alle entries voor deze indicator (volledige opschoning)
             cur.execute("""
                 DELETE FROM technical_indicators
-                WHERE indicator = %s;
+                WHERE LOWER(indicator) = LOWER(%s);
             """, (indicator,))
+            deleted = cur.rowcount or 0
             conn.commit()
 
-            logger.info(f"🗑️ Indicator '{indicator}' succesvol verwijderd.")
-            return {"message": f"✅ Indicator '{indicator}' succesvol verwijderd."}
+            logger.info(f"🗑️ Indicator '{indicator}' verwijderd ({deleted} rijen).")
+            return {
+                "message": f"✅ Indicator '{indicator}' succesvol verwijderd.",
+                "deleted_rows": deleted
+            }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ TECH_DELETE: Fout bij verwijderen van indicator '{indicator}': {e}")
-        raise HTTPException(status_code=500, detail=f"Fout bij verwijderen van indicator '{indicator}'.")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fout bij verwijderen van indicator '{indicator}'."
+        )
     finally:
         conn.close()
-
+        
 # ✅ Handmatig triggeren van Celery-task (test)
 @router.post("/technical_data/trigger")
 async def trigger_technical_task():
