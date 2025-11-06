@@ -366,20 +366,47 @@ async def get_technical_for_symbol(symbol: str):
     finally:
         conn.close()
 
-# ✅ Verwijderen
-@router.delete("/technical_data/{symbol}")
-async def delete_technical_data(symbol: str):
+# ✅ Verwijderen van één specifieke technische indicator
+@router.delete("/technical_data/{indicator}")
+async def delete_technical_indicator(indicator: str):
+    """
+    Verwijdert één specifieke technische indicator.
+    Wordt gebruikt bij het klikken op het rode kruisje in de frontend.
+    """
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
+
     try:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM technical_indicators WHERE symbol = %s", (symbol,))
+            # ✅ Controleer of de indicator bestaat
+            cur.execute("""
+                SELECT COUNT(*) FROM technical_indicators
+                WHERE indicator = %s;
+            """, (indicator,))
+            count = cur.fetchone()[0]
+
+            if count == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Indicator '{indicator}' niet gevonden in database."
+                )
+
+            # 🗑️ Verwijder enkel deze indicator
+            cur.execute("""
+                DELETE FROM technical_indicators
+                WHERE indicator = %s;
+            """, (indicator,))
             conn.commit()
-        return {"message": f"Technische data voor {symbol} verwijderd."}
+
+            logger.info(f"🗑️ Indicator '{indicator}' succesvol verwijderd.")
+            return {"message": f"✅ Indicator '{indicator}' succesvol verwijderd."}
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ TECH06: Verwijderen mislukt: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ TECH_DELETE: Fout bij verwijderen van indicator '{indicator}': {e}")
+        raise HTTPException(status_code=500, detail=f"Fout bij verwijderen van indicator '{indicator}'.")
     finally:
         conn.close()
 
