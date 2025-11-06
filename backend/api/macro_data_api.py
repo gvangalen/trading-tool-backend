@@ -382,3 +382,33 @@ async def get_rules_for_macro_indicator(indicator_name: str):
         raise HTTPException(status_code=500, detail="Fout bij ophalen macro-scoreregels.")
     finally:
         conn.close()
+
+# ✅ Verwijder één macro-indicator op basis van naam
+@router.delete("/macro_data/{name}")
+async def delete_macro_indicator(name: str):
+    logger.info(f"🗑️ [delete] Verwijderen van macro-indicator: {name}")
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ [DB10] Geen databaseverbinding.")
+    try:
+        with conn.cursor() as cur:
+            # Check of de indicator bestaat
+            cur.execute("SELECT COUNT(*) FROM macro_data WHERE name = %s;", (name,))
+            count = cur.fetchone()[0]
+            if count == 0:
+                raise HTTPException(status_code=404, detail=f"❌ Indicator '{name}' niet gevonden.")
+
+            # Verwijder alle entries van deze indicator (of voeg LIMIT 1 toe als je alleen laatste wilt)
+            cur.execute("DELETE FROM macro_data WHERE name = %s;", (name,))
+            conn.commit()
+
+            logger.info(f"✅ [delete] Indicator '{name}' succesvol verwijderd ({count} rijen).")
+            return {"message": f"Indicator '{name}' verwijderd.", "rows_deleted": count}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [DB11] Fout bij verwijderen macro-indicator: {e}")
+        raise HTTPException(status_code=500, detail="❌ [DB11] Verwijderen mislukt.")
+    finally:
+        conn.close()
