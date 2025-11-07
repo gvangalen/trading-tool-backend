@@ -8,6 +8,7 @@ from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
+from backend.utils.scoring_utils import get_scores_for_symbol  # ✅ Nieuwe versie gebruikt DB direct
 
 # === ✅ Logging naar bestand + console
 LOG_FILE = "/tmp/daily_report_debug.log"
@@ -27,6 +28,7 @@ def log_and_print(msg: str):
         pass
     print(msg)
 
+
 # === ✅ OpenAI client initialiseren
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
@@ -35,18 +37,34 @@ if not api_key:
 client = OpenAI(api_key=api_key)
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+
 def safe_get(obj, key, fallback="–"):
     if isinstance(obj, dict):
         return obj.get(key, fallback)
     return fallback
 
+
 # =====================================================
-# 📊 Scores ophalen uit daily_scores
+# 📊 Scores ophalen (direct uit database)
 # =====================================================
 def get_scores_from_db():
+    """
+    ⚙️ Nieuwe versie: haalt eerst de live berekende scores op
+    uit scoring_utils.get_scores_for_symbol() (DB-driven),
+    en gebruikt daily_scores alleen als fallback.
+    """
+    try:
+        scores = get_scores_for_symbol(include_metadata=True)
+        if scores:
+            log_and_print(f"📊 Live scores geladen uit DB: {scores}")
+            return scores
+    except Exception as e:
+        log_and_print(f"⚠️ Live scoreberekening mislukt: {e}")
+
+    # Fallback: oude daily_scores-tabel
     conn = get_db_connection()
     if not conn:
-        log_and_print("❌ Kan geen DB-verbinding maken voor scores.")
+        log_and_print("❌ Geen DB-verbinding voor fallback-scores.")
         return {}
 
     try:
@@ -65,16 +83,14 @@ def get_scores_from_db():
                     "setup_score": row[2],
                     "market_score": row[3],
                 }
-                log_and_print(f"📊 Laatste scores geladen: {scores}")
+                log_and_print(f"📊 Fallback scores geladen: {scores}")
                 return scores
-            else:
-                log_and_print("⚠️ Geen scores gevonden in daily_scores.")
-                return {}
     except Exception as e:
-        log_and_print(f"❌ Fout bij ophalen van scores uit DB: {e}")
-        return {}
+        log_and_print(f"❌ Fout bij ophalen fallback-scores: {e}")
     finally:
         conn.close()
+    return {}
+
 
 # =====================================================
 # 📈 Laatste prijs, volume, change ophalen uit market_data
@@ -99,10 +115,11 @@ def get_latest_market_data():
                     "change_24h": row[2],
                 }
     except Exception as e:
-        log_and_print(f"❌ Fout bij ophalen van market_data: {e}")
+        log_and_print(f"❌ Fout bij ophalen market_data: {e}")
         return {}
     finally:
         conn.close()
+
 
 # =====================================================
 # 🧠 AI-sectie genereren
@@ -123,15 +140,14 @@ def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) 
             if content:
                 log_and_print(f"✅ [AI Response] Lengte: {len(content)} Tekst: {content[:150]}...")
                 return content
-            else:
-                log_and_print("⚠️ Lege AI-response, opnieuw proberen...")
         except Exception as e:
             log_and_print(f"⚠️ Fout bij OpenAI poging {attempt}: {e}")
     log_and_print("❌ Alle AI-pogingen mislukt.")
     return "Fout: AI-generatie mislukt."
 
+
 # =====================================================
-# 🧩 Prompts per sectie
+# 🧩 Prompts per sectie (ongewijzigd)
 # =====================================================
 def prompt_for_btc_summary(setup, scores, market_data=None) -> str:
     prijsinfo = ""
@@ -141,7 +157,6 @@ def prompt_for_btc_summary(setup, scores, market_data=None) -> str:
             f"Volume: ${market_data.get('volume', '?')}, "
             f"24u verandering: {market_data.get('change_24h', '?')}%"
         )
-
     return f"""Geef een korte samenvatting van de huidige situatie voor Bitcoin:
 Setup: {safe_get(setup, 'name')}
 Timeframe: {safe_get(setup, 'timeframe')}
@@ -155,7 +170,7 @@ def prompt_for_macro_summary(scores) -> str:
 Macro-score: {safe_get(scores, 'macro_score', 0)}"""
 
 def prompt_for_setup_checklist(setup) -> str:
-    return f"""Controleer A+ criteria voor de setup.
+    return f"""Controleer A+ criteria voor de setup:
 Setup: {safe_get(setup, 'name')}
 Timeframe: {safe_get(setup, 'timeframe')}
 Indicatoren: {safe_get(setup, 'indicators', [])}"""
@@ -182,11 +197,11 @@ def prompt_for_conclusion(scores) -> str:
 Macro: {safe_get(scores, 'macro_score', 0)}
 Technisch: {safe_get(scores, 'technical_score', 0)}"""
 
-
 def prompt_for_outlook(setup) -> str:
     return f"""Verwachting voor de komende 2–5 dagen:
 Setup: {safe_get(setup, 'name')}
 Timeframe: {safe_get(setup, 'timeframe')}"""
+
 
 # =====================================================
 # 🚀 Hoofdfunctie: Dagrapport genereren
@@ -197,11 +212,6 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     setup_raw = get_latest_setup_for_symbol(symbol)
     scores_raw = get_scores_from_db()
     market_data = get_latest_market_data()
-
-    if not scores_raw:
-        log_and_print("🧪 Geen scores in daily_scores – fallback naar live scoreberekening")
-        from backend.utils.scoring_utils import get_scores_for_symbol
-        scores_raw = get_scores_for_symbol(symbol)
 
     log_and_print(f"📦 setup_raw: {repr(setup_raw)[:180]}")
     log_and_print(f"📦 scores_raw: {repr(scores_raw)[:180]}")
@@ -240,6 +250,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     except Exception as e:
         log_and_print(f"❌ Exception tijdens rapportgeneratie: {e}")
         return {"error": str(e)}
+
 
 if __name__ == "__main__":
     result = generate_daily_report_sections("BTC")
