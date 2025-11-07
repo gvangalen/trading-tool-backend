@@ -14,45 +14,8 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 load_dotenv()
 
-
 # =====================================================
-# 🧠 Hulpfunctie: scores ophalen uit daily_scores
-# =====================================================
-def get_scores_from_db():
-    """Haalt de meest recente dag-scores op uit daily_scores."""
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Geen databaseverbinding voor get_scores_from_db()")
-        return {}
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT macro_score, technical_score, setup_score, market_score
-                FROM daily_scores
-                ORDER BY report_date DESC
-                LIMIT 1
-            """)
-            row = cur.fetchone()
-            if not row:
-                logger.warning("⚠️ Geen scores gevonden in daily_scores.")
-                return {}
-
-            return {
-                "macro_score": float(row[0]) if row[0] is not None else 0,
-                "technical_score": float(row[1]) if row[1] is not None else 0,
-                "setup_score": float(row[2]) if row[2] is not None else 0,
-                "market_score": float(row[3]) if row[3] is not None else 0,
-            }
-    except Exception as e:
-        logger.error(f"❌ Fout bij ophalen van scores: {e}", exc_info=True)
-        return {}
-    finally:
-        conn.close()
-
-
-# =====================================================
-# 🧾 Dagrapport genereren
+# 🧾 Dagrapport genereren (DB-gedreven scores)
 # =====================================================
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report():
@@ -67,25 +30,20 @@ def generate_daily_report():
     try:
         cursor = conn.cursor()
 
-        # 1️⃣ Scores ophalen uit daily_scores
-        scores = get_scores_from_db()
-        if not scores:
-            logger.warning("⚠️ Geen scores beschikbaar — rapport wordt wel aangemaakt, maar scores = 0")
-
-        macro_score = scores.get("macro_score", 0)
-        technical_score = scores.get("technical_score", 0)
-        setup_score = scores.get("setup_score", 0)
-        market_score = scores.get("market_score", 0)
-
-        # 2️⃣ AI-rapport genereren
+        # 1️⃣ AI-rapport genereren (haalt zelf live scores uit DB via scoring_utils)
         logger.info("🧠 Rapportgeneratie gestart...")
         full_report = generate_daily_report_sections("BTC")
-
         if not isinstance(full_report, dict):
             logger.error("❌ Ongeldige rapportstructuur (geen dict). Afgebroken.")
             return
 
-        # 3️⃣ Rapport opslaan in daily_reports
+        # ✅ Scores direct uit het gegenereerde rapport
+        macro_score     = float(full_report.get("macro_score", 0) or 0)
+        technical_score = float(full_report.get("technical_score", 0) or 0)
+        setup_score     = float(full_report.get("setup_score", 0) or 0)
+        market_score    = float(full_report.get("market_score", 0) or 0)
+
+        # 2️⃣ Rapport opslaan in daily_reports (upsert op report_date)
         logger.info(f"💾 Dagrapport opslaan in daily_reports voor {today}")
         cursor.execute(
             """
@@ -97,18 +55,18 @@ def generate_daily_report():
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (report_date) DO UPDATE
-            SET btc_summary = EXCLUDED.btc_summary,
-                macro_summary = EXCLUDED.macro_summary,
-                setup_checklist = EXCLUDED.setup_checklist,
-                priorities = EXCLUDED.priorities,
+            SET btc_summary      = EXCLUDED.btc_summary,
+                macro_summary    = EXCLUDED.macro_summary,
+                setup_checklist  = EXCLUDED.setup_checklist,
+                priorities       = EXCLUDED.priorities,
                 wyckoff_analysis = EXCLUDED.wyckoff_analysis,
-                recommendations = EXCLUDED.recommendations,
-                conclusion = EXCLUDED.conclusion,
-                outlook = EXCLUDED.outlook,
-                macro_score = EXCLUDED.macro_score,
-                technical_score = EXCLUDED.technical_score,
-                setup_score = EXCLUDED.setup_score,
-                market_score = EXCLUDED.market_score
+                recommendations  = EXCLUDED.recommendations,
+                conclusion       = EXCLUDED.conclusion,
+                outlook          = EXCLUDED.outlook,
+                macro_score      = EXCLUDED.macro_score,
+                technical_score  = EXCLUDED.technical_score,
+                setup_score      = EXCLUDED.setup_score,
+                market_score     = EXCLUDED.market_score
             """,
             (
                 today,
@@ -125,7 +83,7 @@ def generate_daily_report():
         )
         conn.commit()
 
-        # 4️⃣ PDF genereren
+        # 3️⃣ PDF genereren op basis van actuele rij
         cursor.execute("SELECT * FROM daily_reports WHERE report_date = %s LIMIT 1;", (today,))
         row = cursor.fetchone()
         if not row:
@@ -134,11 +92,14 @@ def generate_daily_report():
 
         cols = [desc[0] for desc in cursor.description]
         report_dict = dict(zip(cols, row))
+
         pdf_buffer = generate_pdf_report(report_dict, report_type="daily")
         logger.info(f"🖨️ PDF gegenereerd voor {today}")
 
-        # 5️⃣ E-mail versturen
-        pdf_path = os.path.join("static", "pdf", "daily", f"daily_{today}.pdf")
+        # 4️⃣ E-mail versturen
+        pdf_dir = os.path.join("static", "pdf", "daily")
+        os.makedirs(pdf_dir, exist_ok=True)  # ✅ zorg dat het pad bestaat
+        pdf_path = os.path.join(pdf_dir, f"daily_{today}.pdf")
 
         market_data = full_report.get("market_data", {})
         price = market_data.get("price", "–")
