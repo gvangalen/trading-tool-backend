@@ -2,44 +2,70 @@ import os
 import logging
 import traceback
 import requests
-import asyncio
 from datetime import datetime
-from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
 
-from backend.config.config_loader import load_macro_config
-from backend.utils.macro_interpreter import process_macro_indicator
+# ✅ Utils
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import generate_scores, load_config  # ✅ Centrale scoringlogica
+from backend.utils.scoring_utils import generate_scores_db  # nieuwe centrale DB-scorefunctie
+from backend.utils.macro_interpreter import fetch_macro_value  # aangepaste async/HTTP helper
 
 # === ✅ Logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# === ✅ Basisconfig
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
+# === ✅ Config
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
 
-# === ✅ Retry wrapper voor POST
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=3, max=20), reraise=True)
-def safe_post(url, payload=None):
+# =====================================================
+# 🔁 Helper functies
+# =====================================================
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
+def safe_request(url, method="GET", payload=None, headers=None):
+    """Veilige HTTP request met retries."""
     try:
-        response = requests.post(url, json=payload, headers=HEADERS, timeout=TIMEOUT)
+        response = requests.request(
+            method, url,
+            json=payload if method.upper() == "POST" else None,
+            params=payload if method.upper() == "GET" else None,
+            headers=headers or HEADERS,
+            timeout=TIMEOUT
+        )
         response.raise_for_status()
-        logger.info(f"✅ API-call succesvol: {url}")
         return response.json()
-    except requests.exceptions.RequestException as e:
-        logger.error(f"❌ RequestError naar {url}: {e}")
-        raise
     except Exception as e:
-        logger.error(f"⚠️ Onverwachte fout bij {url}: {e}")
+        logger.error(f"❌ API-fout bij {url}: {e}")
         raise
 
 
-# === ✅ Check of macro-indicator vandaag al in database zit
+def get_active_macro_indicators():
+    """Haalt alle actieve macro-indicatoren op uit de database."""
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen DB-verbinding.")
+        return []
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, name, source, symbol, link
+                FROM indicators
+                WHERE category = 'macro'
+            """)
+            rows = cur.fetchall()
+            return [{"id": r[0], "name": r[1], "source": r[2], "symbol": r[3], "link": r[4]} for r in rows]
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen macro-indicatoren: {e}")
+        return []
+    finally:
+        conn.close()
+
+
 def already_fetched_today(indicator_name: str) -> bool:
+    """Controleert of indicator vandaag al is opgeslagen in de database."""
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
@@ -49,22 +75,24 @@ def already_fetched_today(indicator_name: str) -> bool:
             """, (indicator_name,))
             return cur.fetchone() is not None
     except Exception as e:
-        logger.error(f"⚠️ Fout bij controleren op bestaande macro-data: {e}")
+        logger.error(f"⚠️ Fout bij controleren bestaande macro-data: {e}")
         return False
+    finally:
+        conn.close()
 
 
-# === ✅ Directe opslag in macro_data tabel
 def store_macro_score_db(payload: dict):
+    """Slaat de macro-score direct op in de database."""
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding bij macro-data opslaan.")
+        logger.error("❌ Geen DB-verbinding bij macro-data opslag.")
         return
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO macro_data 
-                (name, value, score, trend, interpretation, action, symbol, source, category, correlation, link, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (name, value, score, trend, interpretation, action, symbol, source, link, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 payload.get("name"),
                 payload.get("value"),
@@ -74,104 +102,80 @@ def store_macro_score_db(payload: dict):
                 payload.get("action"),
                 payload.get("symbol", "BTC"),
                 payload.get("source"),
-                payload.get("category"),
-                payload.get("correlation"),
                 payload.get("link"),
                 datetime.utcnow().replace(microsecond=0)
             ))
         conn.commit()
-        logger.info(f"🗃️ Macro-score opgeslagen in DB voor {payload.get('name')}")
+        logger.info(f"💾 Macro-score opgeslagen voor {payload.get('name')}")
     except Exception as e:
-        logger.error(f"❌ Fout bij DB-opslag macro-score: {e}")
+        logger.error(f"❌ Fout bij opslaan macro-score: {e}")
         logger.error(traceback.format_exc())
     finally:
         conn.close()
 
 
-# === ✅ Celery-task: macrodata ophalen en verwerken
+# =====================================================
+# 🧠 Hoofdfunctie: dynamische macroverwerking
+# =====================================================
+def fetch_and_process_macro():
+    """Haal alle macro-indicatoren op en sla scores op via DB-config."""
+    logger.info("🚀 Start dynamische macro-verwerking...")
+
+    indicators = get_active_macro_indicators()
+    if not indicators:
+        logger.warning("⚠️ Geen macro-indicatoren gevonden in DB.")
+        return
+
+    for item in indicators:
+        name = item["name"]
+        source = item["source"]
+        symbol = item.get("symbol", "BTC")
+        link = item.get("link", "")
+
+        if already_fetched_today(name):
+            logger.info(f"⏩ {name} is vandaag al opgehaald, overslaan.")
+            continue
+
+        logger.info(f"➡️ Verwerk macro-indicator: {name} (bron: {source})")
+
+        try:
+            # 🔄 Ophalen actuele waarde
+            value = fetch_macro_value(name, source, link)
+            if value is None:
+                logger.warning(f"⚠️ Geen waarde opgehaald voor {name}")
+                continue
+
+            # 🧮 Score berekenen via scoreregels uit DB
+            score_info = generate_scores_db(name, value)
+            if not score_info:
+                logger.warning(f"⚠️ Geen scoreregels gevonden voor {name}")
+                continue
+
+            # 💾 Opslaan
+            payload = {
+                "name": name,
+                "value": value,
+                "score": score_info.get("score", 10),
+                "trend": score_info.get("trend", "–"),
+                "interpretation": score_info.get("interpretation", "–"),
+                "action": score_info.get("action", "–"),
+                "symbol": symbol,
+                "source": source,
+                "link": link,
+            }
+            store_macro_score_db(payload)
+
+        except Exception as e:
+            logger.error(f"❌ Fout bij verwerken van {name}: {e}")
+            logger.error(traceback.format_exc())
+
+    logger.info("✅ Alle macro-indicatoren succesvol verwerkt.")
+
+
+# =====================================================
+# 🚀 Celery taak
+# =====================================================
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
-    logger.info("🚀 Start ophalen + verwerken van macro-indicatoren...")
-
-    try:
-        config = load_macro_config()
-        indicators = config.get("indicators", {})
-        if not indicators:
-            logger.warning("⚠️ Geen indicatoren gevonden in config.")
-            return
-
-        whitelist = ["fear_greed", "dxy"]  # ✅ Pas aan indien gewenst
-
-        for name, indicator_config in indicators.items():
-            if name not in whitelist:
-                logger.info(f"⏩ Skip {name} (niet in whitelist)")
-                continue
-
-            if already_fetched_today(name):
-                logger.info(f"⏩ {name} is vandaag al opgehaald. Skip.")
-                continue
-
-            logger.info(f"➡️ Verwerk: {name}...")
-
-            try:
-                # 🔄 Ophalen van actuele waarde
-                try:
-                    result = asyncio.run(process_macro_indicator(name, indicator_config))
-                except Exception as async_error:
-                    logger.error(f"❌ [ASYNC] Fout in asyncio.run() voor {name}: {async_error}")
-                    logger.error(traceback.format_exc())
-                    continue
-
-                if not result or "value" not in result:
-                    logger.warning(f"⚠️ Geen geldige data voor {name} → result={result}")
-                    continue
-
-                try:
-                    float(result["value"])
-                except Exception:
-                    logger.warning(f"⚠️ Ongeldige waarde voor {name}: {result.get('value')}")
-                    continue
-
-                # ✅ Bereken score + uitleg via scoring_utils
-                all_scores = generate_scores(
-                    {name: result["value"]},
-                    {name: indicator_config}
-                )
-                score_info = all_scores["scores"].get(name, {})
-
-                # ✅ Payload op basis van dynamische score-info
-                payload = {
-                    "name": name,
-                    "value": result["value"],
-                    "score": score_info.get("score", 10),
-                    "trend": score_info.get("trend", "–"),
-                    "interpretation": score_info.get("interpretation", "–"),
-                    "action": score_info.get("action", "–"),
-                    "symbol": result.get("symbol", "BTC"),
-                    "source": result.get("source", ""),
-                    "category": indicator_config.get("category", ""),
-                    "correlation": indicator_config.get("correlation", ""),
-                    "link": result.get("link", ""),
-                }
-
-                logger.info(
-                    f"📤 POST {name} | value={result['value']} | score={payload['score']} | trend={payload['trend']}"
-                )
-
-                # 🔁 API sync
-                safe_post(f"{API_BASE_URL}/macro_data", payload=payload)
-
-                # 💾 DB opslag
-                store_macro_score_db(payload)
-
-            except RetryError:
-                logger.error(f"❌ Alle retries mislukt voor {name}")
-            except Exception as e:
-                logger.error(f"❌ Verwerking mislukt voor {name}: {e}")
-                logger.error(traceback.format_exc())
-
-        logger.info("✅ Alle macro-indicatoren verwerkt.")
-
-    except Exception as e:
-        logger.error(f"❌ Fout in fetch_macro_data(): {e}")
-        logger.error(traceback.format_exc())
+    """Dagelijkse taak: haalt macrodata op uit DB en verwerkt via scoreregels."""
+    fetch_and_process_macro()
