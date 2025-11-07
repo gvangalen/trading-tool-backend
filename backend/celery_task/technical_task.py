@@ -11,7 +11,7 @@ from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import generate_scores_db  # nieuwe versie die uit DB leest
 
 # ✅ Logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # ✅ Config
@@ -21,9 +21,28 @@ HEADERS = {"Content-Type": "application/json"}
 
 
 # ============================================
+# 🔢 Berekening RSI
+# ============================================
+def calculate_rsi(closes, period=14):
+    """Bereken RSI op basis van slotkoersen."""
+    if len(closes) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(1, period + 1):
+        delta = closes[-i] - closes[-i - 1]
+        gains.append(max(delta, 0))
+        losses.append(max(-delta, 0))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+
+# ============================================
 # 🔁 Helper functies
 # ============================================
-
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="GET", payload=None, headers=None):
     """Veilige HTTP request met retries."""
@@ -66,7 +85,7 @@ def get_active_indicators():
 
 
 def store_technical_score_db(symbol, indicator, value, score, trend, interpretation, action, timestamp):
-    """Slaat of updatet technische indicator-score per dag."""
+    """Slaat technische indicator-score op in de database."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding")
@@ -78,15 +97,9 @@ def store_technical_score_db(symbol, indicator, value, score, trend, interpretat
                 INSERT INTO technical_indicators
                     (symbol, indicator, value, score, advies, uitleg, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (indicator, date_ts) DO UPDATE
-                SET value = EXCLUDED.value,
-                    score = EXCLUDED.score,
-                    advies = EXCLUDED.advies,
-                    uitleg = EXCLUDED.uitleg,
-                    timestamp = EXCLUDED.timestamp
             """, (symbol, indicator, value, score, action, interpretation, timestamp))
         conn.commit()
-        logger.info(f"✅ Dagrecord opgeslagen voor {indicator}")
+        logger.info(f"✅ Score opgeslagen voor {indicator}")
     except Exception as e:
         logger.error(f"❌ Fout bij DB-opslag {indicator}: {e}")
         logger.error(traceback.format_exc())
@@ -97,7 +110,6 @@ def store_technical_score_db(symbol, indicator, value, score, trend, interpretat
 # ============================================
 # 🧠 Hoofdfunctie: dynamische verwerking
 # ============================================
-
 def fetch_and_post_dynamic(symbol="BTCUSDT", interval="1d", limit=300):
     """
     Dynamisch ophalen en scoren van alle technische indicatoren
@@ -121,7 +133,7 @@ def fetch_and_post_dynamic(symbol="BTCUSDT", interval="1d", limit=300):
 
             logger.info(f"📊 Verwerk indicator: {name} (bron: {source})")
 
-            # 🔗 Bouw API-call (nu standaard Binance, later uitbreidbaar)
+            # 🔗 Bouw API-call (nu standaard Binance)
             if source == "binance":
                 url = f"{BINANCE_BASE_URL}/api/v3/klines"
                 params = {"symbol": symbol, "interval": interval, "limit": limit}
@@ -131,10 +143,10 @@ def fetch_and_post_dynamic(symbol="BTCUSDT", interval="1d", limit=300):
                 volumes = [float(k[5]) for k in data]
                 value = None
 
-                # 🧮 Bereken waarde per indicator dynamisch
+                # 🧮 Bereken indicatorwaarde
                 if name.lower() == "rsi":
                     value = calculate_rsi(closes)
-                elif name.lower() == "ma200":
+                elif name.lower() in ["ma200", "movingaverage200"]:
                     value = round(sum(closes[-200:]) / 200, 2)
                 elif name.lower() == "volume":
                     value = round(sum(volumes[-10:]), 2)
@@ -142,7 +154,11 @@ def fetch_and_post_dynamic(symbol="BTCUSDT", interval="1d", limit=300):
                     logger.info(f"⏭️ Geen berekeningslogica gedefinieerd voor {name}, overslaan.")
                     continue
 
-                # 📈 Genereer score vanuit scoreregels in DB
+                if value is None:
+                    logger.warning(f"⚠️ Geen geldige waarde berekend voor {name}.")
+                    continue
+
+                # 📈 Score genereren vanuit scoreregels in DB
                 score_obj = generate_scores_db(name, value)
                 if not score_obj:
                     logger.warning(f"⚠️ Geen scoreregels gevonden voor {name}")
@@ -170,7 +186,6 @@ def fetch_and_post_dynamic(symbol="BTCUSDT", interval="1d", limit=300):
 # ============================================
 # 🚀 Celery taak
 # ============================================
-
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
 def fetch_technical_data_day():
     """Dagelijkse taak: haalt technische data dynamisch op uit DB-config."""
