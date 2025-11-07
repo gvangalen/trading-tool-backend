@@ -76,6 +76,12 @@ async def get_technical_data():
 
 @router.post("/technical_data")
 async def save_or_activate_technical_data(payload: dict):
+    """
+    ➕ Voeg een bestaande technische indicator toe of sla data op.
+    - Controleert eerst of de indicator bestaat in de `indicators`-tabel.
+    - Als er geen 'value' wordt meegestuurd, wordt alleen een placeholder toegevoegd.
+    - Bij onbekende indicator: 404.
+    """
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
@@ -88,38 +94,68 @@ async def save_or_activate_technical_data(payload: dict):
     timestamp = payload.get("timestamp")
     symbol = payload.get("symbol", "BTC")
 
+    if not indicator:
+        raise HTTPException(status_code=400, detail="❌ 'indicator' is verplicht in de payload.")
+
     try:
         with conn.cursor() as cur:
+            # ✅ Controleer of indicator bestaat in configuratietabel
+            cur.execute("""
+                SELECT 1 FROM indicators
+                WHERE LOWER(name) = LOWER(%s)
+                AND category = 'technical'
+                AND active = TRUE;
+            """, (indicator,))
+            if not cur.fetchone():
+                logger.warning(f"⚠️ Indicator '{indicator}' niet gevonden in configuratie.")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Indicator '{indicator}' bestaat niet in de database-configuratie."
+                )
+
+            # ================================
+            # 🟦 Alleen activeren (zonder waarde)
+            # ================================
             if value is None:
-                # Alleen indicator activeren
-                logger.info(f"➕ Indicator toevoegen: {indicator} ({symbol})")
+                logger.info(f"➕ Indicator activeren: {indicator} ({symbol})")
+
+                # check of al bestaat
                 cur.execute("""
                     SELECT 1 FROM technical_indicators WHERE indicator = %s AND symbol = %s;
                 """, (indicator, symbol))
                 if cur.fetchone():
-                    return {"message": f"🔁 Indicator {indicator} is al actief voor {symbol}."}
+                    return {"message": f"🔁 Indicator '{indicator}' is al actief voor {symbol}."}
 
                 cur.execute("""
                     INSERT INTO technical_indicators (symbol, indicator, timestamp)
                     VALUES (%s, %s, NOW());
                 """, (symbol, indicator))
                 conn.commit()
-                return {"message": f"✅ Indicator {indicator} toegevoegd."}
+                return {"message": f"✅ Indicator '{indicator}' toegevoegd en geactiveerd."}
 
-            # Volledige record opslaan
+            # ================================
+            # 🟩 Volledige data-insert
+            # ================================
             logger.info(f"📥 Technische data opslaan: {indicator} ({value})")
             cur.execute("""
                 INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s);
             """, (
-                symbol, indicator, value, score, advies, uitleg,
-                timestamp or datetime.utcnow()
+                symbol,
+                indicator,
+                value,
+                score,
+                advies,
+                uitleg,
+                timestamp or datetime.utcnow(),
             ))
             conn.commit()
-            return {"message": "✅ Technische data opgeslagen."}
+            return {"message": f"✅ Technische data voor '{indicator}' opgeslagen."}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"❌ TECH_POST: Fout bij verwerken: {e}")
+        logger.error(f"❌ TECH_POST: Fout bij verwerken indicator '{indicator}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
