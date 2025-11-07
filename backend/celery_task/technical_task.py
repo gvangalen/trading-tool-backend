@@ -8,7 +8,7 @@ import requests
 
 # ✅ Eigen utils
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import load_config, generate_scores
+from backend.utils.scoring_utils import generate_scores_db  # nieuwe versie die uit DB leest
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO)
@@ -19,9 +19,14 @@ BINANCE_BASE_URL = "https://api.binance.com"
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
-# ✅ Safe API-call
+
+# ============================================
+# 🔁 Helper functies
+# ============================================
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, method="GET", payload=None, headers=None):
+    """Veilige HTTP request met retries."""
     try:
         response = requests.request(
             method, url,
@@ -31,30 +36,37 @@ def safe_request(url, method="GET", payload=None, headers=None):
             timeout=TIMEOUT
         )
         response.raise_for_status()
-        logger.info(f"✅ API-call succesvol: {url}")
         return response.json()
     except Exception as e:
         logger.error(f"❌ API-fout bij {url}: {e}")
         raise
 
-# ✅ RSI berekening
-def calculate_rsi(closes, period=14):
-    if len(closes) < period + 1:
-        return None
-    gains, losses = [], []
-    for i in range(1, period + 1):
-        delta = closes[-i] - closes[-i - 1]
-        gains.append(max(delta, 0))
-        losses.append(max(-delta, 0))
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
 
-# ✅ Opslaan score in DB
+def get_active_indicators():
+    """Haal alle actieve technische indicatoren op uit de database."""
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen DB-verbinding.")
+        return []
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, name, source, symbol
+                FROM indicators
+                WHERE category = 'technical'
+            """)
+            rows = cur.fetchall()
+            return [{"id": r[0], "name": r[1], "source": r[2], "symbol": r[3]} for r in rows]
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen actieve indicatoren: {e}")
+        return []
+    finally:
+        conn.close()
+
+
 def store_technical_score_db(symbol, indicator, value, score, trend, interpretation, action, timestamp):
+    """Slaat of updatet technische indicator-score per dag."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding")
@@ -63,66 +75,103 @@ def store_technical_score_db(symbol, indicator, value, score, trend, interpretat
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
+                INSERT INTO technical_indicators
+                    (symbol, indicator, value, score, advies, uitleg, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (indicator, date_ts) DO UPDATE
+                SET value = EXCLUDED.value,
+                    score = EXCLUDED.score,
+                    advies = EXCLUDED.advies,
+                    uitleg = EXCLUDED.uitleg,
+                    timestamp = EXCLUDED.timestamp
             """, (symbol, indicator, value, score, action, interpretation, timestamp))
         conn.commit()
-        logger.info(f"✅ Score opgeslagen voor {indicator}")
+        logger.info(f"✅ Dagrecord opgeslagen voor {indicator}")
     except Exception as e:
         logger.error(f"❌ Fout bij DB-opslag {indicator}: {e}")
         logger.error(traceback.format_exc())
     finally:
         conn.close()
 
-# ✅ Hoofd-functie: data ophalen en scoren
-def fetch_and_post_daily(symbol="BTCUSDT", our_symbol="BTC", interval="1d", limit=300):
+
+# ============================================
+# 🧠 Hoofdfunctie: dynamische verwerking
+# ============================================
+
+def fetch_and_post_dynamic(symbol="BTCUSDT", interval="1d", limit=300):
+    """
+    Dynamisch ophalen en scoren van alle technische indicatoren
+    op basis van de databaseconfiguratie.
+    """
     try:
-        logger.info("🚀 Ophalen technische data...")
-        url = f"{BINANCE_BASE_URL}/api/v3/klines"
-        params = {"symbol": symbol, "interval": interval, "limit": limit}
-        data = safe_request(url, payload=params)
+        logger.info("🚀 Start dynamische technische dataverwerking...")
 
-        closes = [float(item[4]) for item in data]
-        volumes = [float(item[5]) for item in data]
-
-        if len(closes) < 200:
-            logger.warning("⚠️ Onvoldoende candles voor 200MA")
+        # 🔍 Haal actieve indicatoren op uit de database
+        active_indicators = get_active_indicators()
+        if not active_indicators:
+            logger.warning("⚠️ Geen actieve indicatoren gevonden in DB.")
             return
 
-        rsi = calculate_rsi(closes)
-        volume = round(sum(volumes), 2)
-        ma_200 = round(sum(closes[-200:]) / 200, 2)
-        current_price = closes[-1]
-        ma_200_ratio = round(current_price / ma_200, 3)
-
-        raw_data = {
-            "rsi": rsi,
-            "volume": volume,
-            "ma_200": ma_200_ratio
-        }
-
-        config = load_config("config/technical_indicators_config.json")
-        indicator_config = config.get("indicators", {})
-        scores = generate_scores(raw_data, indicator_config)
         utc_now = datetime.utcnow().replace(microsecond=0)
 
-        for indicator, details in scores["scores"].items():
-            store_technical_score_db(
-                symbol=our_symbol,
-                indicator=indicator,
-                value=details["value"],
-                score=details["score"],
-                trend=details.get("trend", ""),
-                interpretation=details.get("interpretation", ""),
-                action=details.get("action", ""),
-                timestamp=utc_now,
-            )
+        for item in active_indicators:
+            name = item["name"]
+            source = item["source"]
+            our_symbol = item["symbol"] or "BTC"
+
+            logger.info(f"📊 Verwerk indicator: {name} (bron: {source})")
+
+            # 🔗 Bouw API-call (nu standaard Binance, later uitbreidbaar)
+            if source == "binance":
+                url = f"{BINANCE_BASE_URL}/api/v3/klines"
+                params = {"symbol": symbol, "interval": interval, "limit": limit}
+                data = safe_request(url, payload=params)
+
+                closes = [float(k[4]) for k in data]
+                volumes = [float(k[5]) for k in data]
+                value = None
+
+                # 🧮 Bereken waarde per indicator dynamisch
+                if name.lower() == "rsi":
+                    value = calculate_rsi(closes)
+                elif name.lower() == "ma200":
+                    value = round(sum(closes[-200:]) / 200, 2)
+                elif name.lower() == "volume":
+                    value = round(sum(volumes[-10:]), 2)
+                else:
+                    logger.info(f"⏭️ Geen berekeningslogica gedefinieerd voor {name}, overslaan.")
+                    continue
+
+                # 📈 Genereer score vanuit scoreregels in DB
+                score_obj = generate_scores_db(name, value)
+                if not score_obj:
+                    logger.warning(f"⚠️ Geen scoreregels gevonden voor {name}")
+                    continue
+
+                store_technical_score_db(
+                    symbol=our_symbol,
+                    indicator=name,
+                    value=value,
+                    score=score_obj.get("score"),
+                    trend=score_obj.get("trend"),
+                    interpretation=score_obj.get("interpretation"),
+                    action=score_obj.get("action"),
+                    timestamp=utc_now
+                )
+
+            else:
+                logger.warning(f"⚠️ Onbekende source '{source}' voor indicator {name}")
 
     except Exception as e:
-        logger.error("❌ Verwerkingsfout:")
+        logger.error("❌ Fout in fetch_and_post_dynamic()")
         logger.error(traceback.format_exc())
 
-# ✅ Celery-taak
+
+# ============================================
+# 🚀 Celery taak
+# ============================================
+
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
 def fetch_technical_data_day():
-    fetch_and_post_daily()
+    """Dagelijkse taak: haalt technische data dynamisch op uit DB-config."""
+    fetch_and_post_dynamic()
