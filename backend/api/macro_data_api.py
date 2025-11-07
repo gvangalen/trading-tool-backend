@@ -32,81 +32,87 @@ def get_db_cursor():
     
 @router.post("/macro_data")
 async def add_macro_indicator(request: Request):
-    logger.info("📅 [add] Nieuwe macro-indicator toevoegen...")
+    """
+    ➕ Voeg een bestaande macro-indicator toe of sla nieuwe waarde op.
+    - Controleert eerst of de indicator bestaat in de `indicators`-tabel.
+    - Bij onbekende indicator: 404.
+    - Geen aanmaak van nieuwe indicatoren meer.
+    """
+    logger.info("📅 [add] Macro-indicator toevoegen of bijwerken...")
     data = await request.json()
     name = data.get("name")
+
     if not name:
-        raise HTTPException(status_code=400, detail="❌ [REQ01] Naam van indicator is verplicht.")
+        raise HTTPException(status_code=400, detail="❌ 'name' is verplicht in de payload.")
 
-    config_data = MACRO_CONFIG
-    if name not in config_data.get("indicators", {}):
-        raise HTTPException(status_code=400, detail=f"❌ [CFG02] Indicator '{name}' niet gevonden in config.")
-
-    indicator_config = config_data["indicators"][name]
-
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
     try:
+        with conn.cursor() as cur:
+            # ✅ Controleer of de indicator bestaat in de configuratie
+            cur.execute("""
+                SELECT source, symbol, link
+                FROM indicators
+                WHERE LOWER(name) = LOWER(%s)
+                AND category = 'macro'
+                AND active = TRUE;
+            """, (name,))
+            indicator_info = cur.fetchone()
+
+            if not indicator_info:
+                logger.warning(f"⚠️ Indicator '{name}' niet gevonden in configuratie.")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Indicator '{name}' bestaat niet in de database-configuratie."
+                )
+
+            source, symbol, link = indicator_info
+
+        # ✅ Ophalen of directe waarde gebruiken
         if "value" in data:
-            logger.info(f"📅 [add] Externe waarde ontvangen voor '{name}' → {data['value']}")
-            result = {
-                "name": name,
-                "value": data["value"],
-                "symbol": indicator_config.get("symbol", ""),
-                "source": indicator_config.get("source", ""),
-            }
+            value = float(data["value"])
+            logger.info(f"📊 [add] Handmatige waarde ontvangen voor '{name}': {value}")
         else:
-            logger.info(f"⚙️ [add] Ophalen via interpreter voor '{name}'")
-            result = await process_macro_indicator(name, indicator_config)
+            # 🔄 Gebruik interpreter om actuele waarde op te halen (via DB-config)
+            logger.info(f"⚙️ [add] Ophalen via interpreter voor '{name}' (source={source})")
+            from backend.utils.macro_interpreter import fetch_macro_value
+            result = await fetch_macro_value(name, source=source, link=link)
+            if not result or "value" not in result:
+                raise HTTPException(status_code=500, detail=f"❌ Geen geldige waarde ontvangen voor '{name}'")
+            value = float(result["value"])
 
-        if not result or "value" not in result:
-            raise ValueError(f"❌ Geen geldige waarde ontvangen voor {name}")
+        # ✅ Score berekenen via scoreregels uit DB
+        from backend.utils.scoring_utils import generate_scores_db
+        score_obj = generate_scores_db(name, value)
+        score = score_obj.get("score", 10)
+        trend = score_obj.get("trend", "–")
+        interpretation = score_obj.get("interpretation", "–")
+        action = score_obj.get("action", "–")
 
-        value = float(result["value"])
+        # ✅ Opslaan in macro_data
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO macro_data (name, value, trend, interpretation, action, score, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (name, value, trend, interpretation, action, score, datetime.utcnow()))
+            conn.commit()
 
-    except Exception as e:
-        logger.error(f"❌ [INT01] Interpreterfout: {e}")
-        raise HTTPException(status_code=500, detail=f"❌ [INT01] Ophalen indicator mislukt: {e}")
-
-    try:
-        # ✅ CORRECTE interpretatie uit generate_scores()
-        score_data = generate_scores({name: value}, {name: indicator_config})
-        score_info = score_data["scores"].get(name, {})
-
-        score = score_info.get("score", 10)
-        trend = score_info.get("trend", "–")
-        interpretation = score_info.get("interpretation", "–")
-        action = score_info.get("action", "–")
-
-    except Exception as e:
-        logger.error(f"❌ [SCORE01] Fout bij berekenen score voor {name}: {e}")
-        raise HTTPException(status_code=500, detail="❌ [SCORE01] Scoreberekening mislukt.")
-
-    conn, cur = get_db_cursor()
-    try:
-        cur.execute("""
-            INSERT INTO macro_data (name, value, trend, interpretation, action, score, timestamp)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (
-            name,
-            value,
-            trend,
-            interpretation,
-            action,
-            score,
-            datetime.utcnow()
-        ))
-        conn.commit()
-        logger.info(f"✅ [add] '{name}' opgeslagen met value={value}, score={score}, trend={trend}")
+        logger.info(f"✅ [add] '{name}' opgeslagen | value={value} | score={score} | trend={trend}")
         return {
             "message": f"Indicator '{name}' succesvol opgeslagen.",
             "value": value,
             "score": score,
             "trend": trend,
             "interpretation": interpretation,
-            "action": action
+            "action": action,
         }
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"❌ [DB02] Fout bij opslaan macro data: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB02] Databasefout bij opslaan.")
+        raise HTTPException(status_code=500, detail="❌ Fout bij opslaan macro data.")
     finally:
         conn.close()
 
