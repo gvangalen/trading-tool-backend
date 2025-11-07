@@ -6,41 +6,36 @@ from datetime import datetime
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
 
-# ✅ Utils
+# ✅ Eigen utils
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import generate_scores_db  # nieuwe centrale DB-scorefunctie
-from backend.utils.macro_interpreter import fetch_macro_value  # aangepaste async/HTTP helper
+from backend.utils.scoring_utils import generate_scores_db  # nieuwe DB-versie
 
 # === ✅ Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# === ✅ Config
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
 
 # =====================================================
-# 🔁 Helper functies
+# 🔁 Retry wrapper
 # =====================================================
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
-def safe_request(url, method="GET", payload=None, headers=None):
-    """Veilige HTTP request met retries."""
+def safe_request(url, params=None):
+    """Veilige HTTP-aanroep met retries."""
     try:
-        response = requests.request(
-            method, url,
-            json=payload if method.upper() == "POST" else None,
-            params=payload if method.upper() == "GET" else None,
-            headers=headers or HEADERS,
-            timeout=TIMEOUT
-        )
-        response.raise_for_status()
-        return response.json()
+        resp = requests.get(url, headers=HEADERS, params=params, timeout=TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
     except Exception as e:
         logger.error(f"❌ API-fout bij {url}: {e}")
         raise
 
 
+# =====================================================
+# 📡 Indicatoren ophalen uit database
+# =====================================================
 def get_active_macro_indicators():
     """Haalt alle actieve macro-indicatoren op uit de database."""
     conn = get_db_connection()
@@ -51,12 +46,12 @@ def get_active_macro_indicators():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, name, source, symbol, link
+                SELECT id, name, source, link, symbol
                 FROM indicators
                 WHERE category = 'macro'
             """)
             rows = cur.fetchall()
-            return [{"id": r[0], "name": r[1], "source": r[2], "symbol": r[3], "link": r[4]} for r in rows]
+            return [{"id": r[0], "name": r[1], "source": r[2], "link": r[3], "symbol": r[4]} for r in rows]
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen macro-indicatoren: {e}")
         return []
@@ -64,13 +59,18 @@ def get_active_macro_indicators():
         conn.close()
 
 
+# =====================================================
+# 📅 Dubbele invoer voorkomen
+# =====================================================
 def already_fetched_today(indicator_name: str) -> bool:
     """Controleert of indicator vandaag al is opgeslagen in de database."""
+    conn = get_db_connection()
+    if not conn:
+        return False
     try:
-        conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id FROM macro_data
+                SELECT 1 FROM macro_data
                 WHERE name = %s AND DATE(timestamp) = CURRENT_DATE
             """, (indicator_name,))
             return cur.fetchone() is not None
@@ -81,11 +81,60 @@ def already_fetched_today(indicator_name: str) -> bool:
         conn.close()
 
 
+# =====================================================
+# 🧠 Generieke waarde-fetcher
+# =====================================================
+def fetch_value_from_source(indicator: dict):
+    """
+    Haalt de actuele waarde van een indicator op op basis van de DB-velden 'source' en 'link'.
+    Elk bron-type kan een eigen extractielogica hebben.
+    """
+    name = indicator["name"]
+    source = indicator.get("source", "").lower()
+    link = indicator.get("link")
+
+    if not link:
+        logger.warning(f"⚠️ Geen API-link opgegeven voor {name}")
+        return None
+
+    try:
+        data = safe_request(link)
+
+        # 🧩 Per-bron extractielogica
+        if "alternative.me" in source or "feargreed" in link:
+            # CNN Fear & Greed Index
+            return float(data["data"][0]["value"])
+
+        elif "exchangerate" in source or "dxy" in name.lower():
+            # DXY-achtige index (proxy via USD-exchange rate)
+            return float(data["rates"].get("EUR", 0))
+
+        elif "coingecko" in source:
+            # BTC-dominantie via CoinGecko
+            return float(data["data"]["market_cap_percentage"]["btc"])
+
+        elif "fred" in source:
+            # FRED API (macro-data uit VS)
+            val = data.get("observations", [{}])[-1].get("value")
+            return float(val) if val not in (None, ".") else None
+
+        else:
+            logger.warning(f"⚠️ Geen extractielogica gedefinieerd voor bron '{source}' ({name})")
+            return None
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen waarde voor {name}: {e}")
+        return None
+
+
+# =====================================================
+# 💾 Opslaan in macro_data
+# =====================================================
 def store_macro_score_db(payload: dict):
-    """Slaat de macro-score direct op in de database."""
+    """Slaat de macro-score op in de database."""
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding bij macro-data opslag.")
+        logger.error("❌ Geen DB-verbinding bij macro-opslag.")
         return
     try:
         with conn.cursor() as cur:
@@ -128,30 +177,27 @@ def fetch_and_process_macro():
 
     for item in indicators:
         name = item["name"]
-        source = item["source"]
-        symbol = item.get("symbol", "BTC")
-        link = item.get("link", "")
 
         if already_fetched_today(name):
             logger.info(f"⏩ {name} is vandaag al opgehaald, overslaan.")
             continue
 
-        logger.info(f"➡️ Verwerk macro-indicator: {name} (bron: {source})")
+        logger.info(f"➡️ Verwerk macro-indicator: {name}")
 
         try:
-            # 🔄 Ophalen actuele waarde
-            value = fetch_macro_value(name, source, link)
+            # 1️⃣ Waarde ophalen
+            value = fetch_value_from_source(item)
             if value is None:
                 logger.warning(f"⚠️ Geen waarde opgehaald voor {name}")
                 continue
 
-            # 🧮 Score berekenen via scoreregels uit DB
+            # 2️⃣ Score berekenen via scoreregels in DB
             score_info = generate_scores_db(name, value)
             if not score_info:
                 logger.warning(f"⚠️ Geen scoreregels gevonden voor {name}")
                 continue
 
-            # 💾 Opslaan
+            # 3️⃣ Opslaan in DB
             payload = {
                 "name": name,
                 "value": value,
@@ -159,9 +205,9 @@ def fetch_and_process_macro():
                 "trend": score_info.get("trend", "–"),
                 "interpretation": score_info.get("interpretation", "–"),
                 "action": score_info.get("action", "–"),
-                "symbol": symbol,
-                "source": source,
-                "link": link,
+                "symbol": item.get("symbol", "BTC"),
+                "source": item.get("source"),
+                "link": item.get("link"),
             }
             store_macro_score_db(payload)
 
@@ -173,7 +219,7 @@ def fetch_and_process_macro():
 
 
 # =====================================================
-# 🚀 Celery taak
+# 🚀 Celery-taak
 # =====================================================
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data():
