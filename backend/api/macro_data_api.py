@@ -1,30 +1,27 @@
 import os
-from dotenv import load_dotenv
-
-# ✅ Forceren van laden van .env bestand
-dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-load_dotenv(dotenv_path=dotenv_path)
-
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
+from dotenv import load_dotenv
 from backend.utils.db import get_db_connection
-from backend.utils.macro_interpreter import process_macro_indicator
-from backend.config.config_loader import load_macro_config
-from backend.utils.scoring_utils import generate_scores
 
-router = APIRouter()
+# ✅ .env laden
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path=dotenv_path)
+
+# ✅ Logging instellen
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-try:
-    MACRO_CONFIG = load_macro_config()
-    logger.info("🚀 macro_data_api.py geladen – alle macro-routes zijn actief.")
-except Exception as e:
-    MACRO_CONFIG = {}
-    logger.error(f"❌ [INIT] Config niet geladen bij opstarten: {e}")
+# ✅ Router aanmaken
+router = APIRouter()
+logger.info("🚀 macro_data_api.py geladen – nieuwe DB-gestuurde versie actief (zonder JSON-config).")
 
+# =====================================
+# 🔧 Helperfunctie
+# =====================================
 def get_db_cursor():
+    """Maak een veilige databasecursor aan."""
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
