@@ -192,19 +192,24 @@ def fetch_and_process_macro():
                 continue
 
             # 2️⃣ Score berekenen via scoreregels in DB
-            score_info = generate_scores_db(name, value)
-            if not score_info:
+            score_info = generate_scores_db("macro", {name: value})
+            if not score_info or "scores" not in score_info:
                 logger.warning(f"⚠️ Geen scoreregels gevonden voor {name}")
+                continue
+
+            result = score_info["scores"].get(name)
+            if not result:
+                logger.warning(f"⚠️ Geen resultaat voor {name} binnen scoreregels.")
                 continue
 
             # 3️⃣ Opslaan in DB
             payload = {
                 "name": name,
                 "value": value,
-                "score": score_info.get("score", 10),
-                "trend": score_info.get("trend", "–"),
-                "interpretation": score_info.get("interpretation", "–"),
-                "action": score_info.get("action", "–"),
+                "score": result.get("score", 10),
+                "trend": result.get("trend", "–"),
+                "interpretation": result.get("interpretation", "–"),
+                "action": result.get("action", "–"),
                 "symbol": item.get("symbol", "BTC"),
                 "source": item.get("source"),
                 "link": item.get("link"),
