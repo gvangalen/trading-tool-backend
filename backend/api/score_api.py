@@ -1,85 +1,57 @@
 import logging
-import json
-from fastapi.responses import JSONResponse
 from fastapi import APIRouter, HTTPException
-
+from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import (
-    load_config,
-    generate_scores,
+    generate_scores_db,
     get_scores_for_symbol,
     get_active_setups_with_info,
 )
-from backend.utils.db import get_db_connection
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
-
-# ✅ Tijdelijke dummydata (fallback)
-dummy_data = {
-    "fear_greed_index": 72,
-    "btc_dominance": 52.4,
-    "dxy": 103.8,
-    "rsi": 61,
-    "volume": 7900000000,
-    "ma_200": 69000,
-    "price": 71000,
-    "change_24h": 2.4
-}
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 # =========================================================
-# ✅ Macro score
+# ✅ Macro score (uit DB-regels)
 # =========================================================
 @router.get("/score/macro")
-async def macro_score():
-    """
-    Retourneert de macro-economische score en interpretatie op basis van dummydata.
-    Configuratie wordt geladen uit `macro_indicators_config.json`.
-    """
+async def get_macro_score():
+    """Haalt macro-score direct uit database via scoreregels."""
     try:
-        config = load_config("config/macro_indicators_config.json")
-        result = generate_scores(dummy_data, config)
+        result = generate_scores_db("macro")
         return result
     except Exception as e:
-        logger.error(f"❌ Macro-score fout: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Fout in /score/macro: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Fout bij ophalen macro-score")
 
 
 # =========================================================
-# ✅ Technische score
+# ✅ Technische score (uit DB-regels)
 # =========================================================
 @router.get("/score/technical")
-async def technical_score():
-    """
-    Retourneert de technische analyse score en interpretatie op basis van dummydata.
-    Configuratie wordt geladen uit `technical_indicators_config.json`.
-    """
+async def get_technical_score():
+    """Haalt technische score direct uit database via scoreregels."""
     try:
-        config = load_config("config/technical_indicators_config.json")
-        result = generate_scores(dummy_data, config)
+        result = generate_scores_db("technical")
         return result
     except Exception as e:
-        logger.error(f"❌ Technische score fout: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Fout in /score/technical: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Fout bij ophalen technische score")
 
 
 # =========================================================
-# ✅ Markt score
+# ✅ Markt score (uit DB-regels)
 # =========================================================
 @router.get("/score/market")
-async def market_score():
-    """
-    Retourneert de marktscore en interpretatie op basis van dummydata.
-    Configuratie wordt geladen uit `market_data_config.json`.
-    """
+async def get_market_score():
+    """Haalt markt-score direct uit database via scoreregels."""
     try:
-        config = load_config("config/market_data_config.json")
-        result = generate_scores(dummy_data, config)
+        result = generate_scores_db("market")
         return result
     except Exception as e:
-        logger.error(f"❌ Market-score fout: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"❌ Fout in /score/market: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Fout bij ophalen market score")
 
 
 # =========================================================
@@ -88,16 +60,13 @@ async def market_score():
 @router.get("/scores/daily")
 async def get_daily_scores():
     """
-    ➤ Haalt de meest actuele scores + interpretaties + top contributors op uit de database.
-    Inclusief actieve setups met uitleg en actie.
-    Wordt gebruikt in dashboard en rapport.
+    ➤ Haalt actuele gecombineerde macro-, technische-, setup- en marktscores op uit de database.
+    Inclusief actieve setups voor het dashboard en dagrapport.
     """
     try:
         scores = get_scores_for_symbol(include_metadata=True)
-
-        # ✅ Fallback als er geen scores gevonden zijn
         if not scores:
-            logger.warning("⚠️ Geen scores gevonden in database – gebruik fallback.")
+            logger.warning("⚠️ Geen scores gevonden in database – fallback naar nulwaarden.")
             scores = {
                 "macro_score": 0,
                 "technical_score": 0,
@@ -111,14 +80,13 @@ async def get_daily_scores():
                 "setup_top_contributors": [],
             }
 
-        # 🔍 Haal actieve setups op uit DB (optioneel)
+        # 🔍 Actieve setups ophalen
         conn = get_db_connection()
         active_setups = get_active_setups_with_info(conn)
         conn.close()
-
         logger.info(f"📦 Actieve setups gevonden: {len(active_setups)}")
 
-        # ✅ Response structureren
+        # ✅ Structureren voor dashboard
         response = {
             "macro": {
                 "score": float(scores.get("macro_score", 0)),
@@ -138,17 +106,16 @@ async def get_daily_scores():
             },
             "market": {
                 "score": float(scores.get("market_score", 0)),
-                "interpretation": None,
-                "top_contributors": [],
+                "interpretation": scores.get("market_interpretation", "Geen uitleg beschikbaar"),
+                "top_contributors": scores.get("market_top_contributors", []),
             },
         }
 
-        logger.info("✅ Dagelijkse scores + actieve setups succesvol opgehaald")
+        logger.info("✅ Dagelijkse scores succesvol opgehaald uit database")
         return response
 
     except Exception as e:
         logger.error(f"❌ Fout in /api/scores/daily: {e}", exc_info=True)
-        # ⛔️ In plaats van error → ook hier een fallback
         return {
             "macro": {"score": 0, "interpretation": "Geen data"},
             "technical": {"score": 0, "interpretation": "Geen data"},
