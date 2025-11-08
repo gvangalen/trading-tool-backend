@@ -2,7 +2,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from backend.utils.db import get_db_connection
 import psycopg2.extras
-from backend.utils.scoring_utils import get_dashboard_scores
+from backend.utils.scoring_utils import get_scores_for_symbol  # ✅ Nieuwe import
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -11,6 +11,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 @router.get("/dashboard")
 async def get_dashboard_data():
+    """
+    Dashboard-endpoint dat macro-, technische en marktdata combineert met setups en totale scores.
+    """
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="DASH00: Databaseverbinding mislukt.")
@@ -18,7 +21,7 @@ async def get_dashboard_data():
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
 
-            # ✅ Market data
+            # ✅ Market data (laatste BTC snapshot)
             try:
                 cur.execute("""
                     SELECT DISTINCT ON (symbol) symbol, price, volume, change_24h, timestamp
@@ -32,7 +35,7 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH01: Market data fout: {e}")
                 market_data = []
 
-            # ✅ Technical data (dynamisch laden, lowercase keys)
+            # ✅ Technical data (laatste waarden)
             try:
                 cur.execute("""
                     SELECT symbol, LOWER(indicator) AS indicator, value, score, timestamp
@@ -54,7 +57,7 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH02: Technical data fout: {e}")
                 technical_data = {}
 
-            # ✅ Macro data
+            # ✅ Macro data (laatste per naam)
             try:
                 cur.execute("""
                     SELECT DISTINCT ON (name) name, value, trend, interpretation, action, score, timestamp
@@ -67,7 +70,7 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH03: Macro data fout: {e}")
                 macro_data = []
 
-            # ✅ Setup status
+            # ✅ Setup-status (laatste per setup)
             try:
                 cur.execute("""
                     SELECT DISTINCT ON (name) name, created_at AS timestamp
@@ -80,14 +83,16 @@ async def get_dashboard_data():
                 logger.warning(f"⚠️ DASH04: Setups fout: {e}")
                 setups = []
 
-        scores = get_dashboard_scores(macro_data, technical_data, setups)
-        macro_score = scores["macro"]
-        technical_score = scores["technical"]
-        setup_score = scores["setup"]
+        # ✅ Nieuwe manier: haal gecombineerde scores uit scoring_utils
+        scores = get_scores_for_symbol(include_metadata=True)
+        macro_score = scores.get("macro_score", 0)
+        technical_score = scores.get("technical_score", 0)
+        market_score = scores.get("market_score", 0)
+        setup_score = scores.get("setup_score", 0)
 
-        # ✅ Uitleg per score
+        # ✅ Uitleg per categorie
         macro_explanation = (
-            "📊 Gebaseerd op " + ", ".join(d['name'] for d in macro_data)
+            "📊 Gebaseerd op " + ", ".join(d["name"] for d in macro_data)
             if macro_data else "❌ Geen macrodata"
         )
 
@@ -113,6 +118,7 @@ async def get_dashboard_data():
             "scores": {
                 "macro": macro_score,
                 "technical": technical_score,
+                "market": market_score,
                 "setup": setup_score
             },
             "explanation": {
@@ -123,7 +129,7 @@ async def get_dashboard_data():
         }
 
     except Exception as e:
-        logger.error(f"❌ DASH05: Dashboard error: {e}")
+        logger.error(f"❌ DASH05: Dashboard error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="DASH05: Dashboard data ophalen mislukt.")
     finally:
         conn.close()
@@ -131,6 +137,7 @@ async def get_dashboard_data():
 
 @router.get("/dashboard/health")
 async def health_check():
+    """Simpele healthcheck voor dashboard."""
     try:
         conn = get_db_connection()
         if not conn:
@@ -144,13 +151,14 @@ async def health_check():
 
 @router.get("/dashboard/trading_advice")
 async def get_trading_advice(symbol: str = "BTC"):
+    """Laatste tradingadvies ophalen uit de trading_advice-tabel."""
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT asset, advice, explanation, timestamp
+                SELECT symbol, advice, explanation, timestamp
                 FROM trading_advice
-                WHERE asset = %s
+                WHERE symbol = %s
                 ORDER BY timestamp DESC
                 LIMIT 1
             """, (symbol,))
@@ -167,11 +175,12 @@ async def get_trading_advice(symbol: str = "BTC"):
 
 @router.get("/dashboard/top_setups")
 async def get_top_setups():
+    """Top 5 strategieën op basis van hoogste score."""
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT name, score, timeframe, asset, explanation, timestamp
+                SELECT name, score, timeframe, symbol, explanation, timestamp
                 FROM strategies
                 WHERE data->>'score' IS NOT NULL
                 ORDER BY CAST(data->>'score' AS FLOAT) DESC
@@ -188,6 +197,7 @@ async def get_top_setups():
 
 @router.get("/dashboard/setup_summary")
 async def get_setup_summary():
+    """Beknopte lijst van de laatste setups per naam."""
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
