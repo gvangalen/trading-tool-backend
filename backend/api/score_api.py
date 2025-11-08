@@ -27,10 +27,9 @@ def fetch_active_setups():
             cur.execute("""
                 SELECT DISTINCT ON (name)
                        name,
-                       COALESCE(symbol, 'BTC') AS symbol,   -- ✅ vervangen
+                       COALESCE(symbol, 'BTC') AS symbol,
                        COALESCE(timeframe, '1D') AS timeframe,
                        COALESCE(explanation, '') AS explanation,
-                       COALESCE(score, 0) AS score,
                        created_at AS timestamp
                 FROM setups
                 ORDER BY name, created_at DESC
@@ -50,6 +49,7 @@ def fetch_active_setups():
 # =========================================================
 @router.get("/score/macro")
 async def get_macro_score():
+    """Haalt macro-score direct uit database via scoreregels."""
     try:
         result = generate_scores_db("macro")
         return result
@@ -63,6 +63,7 @@ async def get_macro_score():
 # =========================================================
 @router.get("/score/technical")
 async def get_technical_score():
+    """Haalt technische score direct uit database via scoreregels."""
     try:
         result = generate_scores_db("technical")
         return result
@@ -76,6 +77,7 @@ async def get_technical_score():
 # =========================================================
 @router.get("/score/market")
 async def get_market_score():
+    """Haalt markt-score direct uit database via scoreregels."""
     try:
         result = generate_scores_db("market")
         return result
@@ -101,6 +103,7 @@ async def get_daily_scores():
         active_setups = fetch_active_setups()
         logger.info(f"📦 Actieve setups: {len(active_setups)}")
 
+        # Structuur voor frontend/dashboard
         response = {
             "macro": {
                 "score": float(scores.get("macro_score", 0)),
