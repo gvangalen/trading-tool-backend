@@ -4,12 +4,42 @@ from datetime import datetime
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import get_scores_for_symbol, match_setups_to_score
+from backend.utils.scoring_utils import get_scores_for_symbol  # ✅ oude match-functie verwijderd
 from backend.utils.setup_utils import get_all_setups
 
 logger = logging.getLogger(__name__)
 
 
+# =========================================================
+# ✅ Vervanging van oude match_setups_to_score()
+# =========================================================
+def match_setups_to_score(setups, setup_score):
+    """
+    Bepaalt welke setups het best overeenkomen met de huidige setup_score.
+    De score wordt vergeleken met het min/max-bereik van elke setup.
+    Geeft een gesorteerde lijst van best passende setups terug.
+    """
+    if not setups:
+        return []
+
+    matched = []
+    for s in setups:
+        try:
+            min_score = float(s.get("min_macro_score") or s.get("min_score") or 0)
+            max_score = float(s.get("max_macro_score") or s.get("max_score") or 100)
+            if min_score <= setup_score <= max_score:
+                matched.append(s)
+        except Exception as e:
+            logger.warning(f"⚠️ Setup match fout ({s.get('name')}): {e}")
+
+    # Sorteer: dichtst bij de actuele score eerst
+    matched.sort(key=lambda x: abs(setup_score - ((float(x.get("min_macro_score") or 0) + float(x.get("max_macro_score") or 100)) / 2)))
+    return matched
+
+
+# =========================================================
+# ✅ Dagelijkse Celery-task
+# =========================================================
 @shared_task(name="backend.celery_task.store_daily_scores_task")
 def store_daily_scores_task():
     """
@@ -112,7 +142,7 @@ def store_daily_scores_task():
         else:
             logger.warning("⚠️ Geen passende setup gevonden voor huidige score of lege setup-lijst.")
 
-        # ✅ Alles opslaan
+        # ✅ Commit alles
         conn.commit()
         logger.info(f"✅ Dagelijkse scores én setup succesvol opgeslagen voor {today}")
 
