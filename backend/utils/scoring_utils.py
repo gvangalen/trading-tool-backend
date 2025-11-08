@@ -5,11 +5,15 @@ from backend.utils.db import get_db_connection
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+
 # =========================================================
 # ✅ Universele database-functie voor scoreregels
 # =========================================================
 def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> Optional[dict]:
-    """Zoekt passende scoreregel in DB op basis van indicatorwaarde."""
+    """
+    Zoekt passende scoreregel in DB op basis van indicatorwaarde.
+    Werkt case-insensitive en retourneert score, trend, interpretatie, actie.
+    """
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding in get_score_rule_from_db()")
@@ -18,7 +22,7 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
     table_map = {
         "technical": "technical_indicator_rules",
         "macro": "macro_indicator_rules",
-        "market": "technical_indicator_rules",  # market hergebruikt technical-regels
+        "market": "technical_indicator_rules",  # market hergebruikt technische scoreregels
     }
     table = table_map.get(category)
     if not table:
@@ -30,7 +34,7 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
             cur.execute(f"""
                 SELECT range_min, range_max, score, trend, interpretation, action
                 FROM {table}
-                WHERE indicator = %s
+                WHERE LOWER(indicator) = LOWER(%s)
                 ORDER BY range_min ASC
             """, (indicator_name,))
             rules = cur.fetchall()
@@ -69,7 +73,6 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
     Als 'data' niet meegegeven is, haalt de functie automatisch de meest recente
     indicatorwaarden op uit de database.
     """
-    # 🔹 Data automatisch ophalen uit database indien niet meegegeven
     if data is None:
         data = {}
         conn = get_db_connection()
@@ -86,6 +89,48 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                     """)
                     rows = cur.fetchall()
                     data = {r[0]: float(r[1]) for r in rows if r[1] is not None}
+
+                elif category == "market":
+                    # ✅ Gebruik de market_data-tabel i.p.v. technical_indicators
+                    cur.execute("""
+                        SELECT DISTINCT ON (symbol)
+                            'price' AS indicator,
+                            price AS value,
+                            timestamp
+                        FROM market_data
+                        WHERE symbol = 'BTC'
+                        ORDER BY symbol, timestamp DESC
+                    """)
+                    price_row = cur.fetchone()
+
+                    cur.execute("""
+                        SELECT DISTINCT ON (symbol)
+                            'volume' AS indicator,
+                            volume AS value,
+                            timestamp
+                        FROM market_data
+                        WHERE symbol = 'BTC'
+                        ORDER BY symbol, timestamp DESC
+                    """)
+                    volume_row = cur.fetchone()
+
+                    cur.execute("""
+                        SELECT DISTINCT ON (symbol)
+                            'change_24h' AS indicator,
+                            change_24h AS value,
+                            timestamp
+                        FROM market_data
+                        WHERE symbol = 'BTC'
+                        ORDER BY symbol, timestamp DESC
+                    """)
+                    change_row = cur.fetchone()
+
+                    data = {
+                        "price": float(price_row[1]) if price_row and price_row[1] else None,
+                        "volume": float(volume_row[1]) if volume_row and volume_row[1] else None,
+                        "change_24h": float(change_row[1]) if change_row and change_row[1] else None,
+                    }
+
                 else:
                     cur.execute("""
                         SELECT DISTINCT ON (indicator) indicator, value
@@ -94,6 +139,7 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                     """)
                     rows = cur.fetchall()
                     data = {r[0]: float(r[1]) for r in rows if r[1] is not None}
+
         except Exception as e:
             logger.error(f"❌ Fout bij automatisch ophalen data ({category}): {e}", exc_info=True)
         finally:
@@ -109,6 +155,9 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
     count = 0
 
     for indicator, value in data.items():
+        if value is None:
+            continue
+
         result = get_score_rule_from_db(category, indicator, float(value))
         if not result:
             continue
@@ -134,7 +183,9 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
 # ✅ Samengestelde scoreberekening voor dashboard/rapport
 # =========================================================
 def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
-    """Combineert macro-, technical- en market-scores uit DB tot één geheel."""
+    """
+    Combineert macro-, technical- en market-scores uit DB tot één geheel.
+    """
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding in get_scores_for_symbol()")
@@ -158,13 +209,12 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             """)
             technical_data = {r[0]: float(r[1]) for r in cur.fetchall() if r[1] is not None}
 
-        # Market gebruikt subset van technische data
-        market_data = {k: v for k, v in technical_data.items() if k.lower() in ["price", "volume", "change_24h"]}
+        # ✅ Market-data ophalen uit de market_data-tabel
+        market_scores = generate_scores_db("market")
 
         # Scores berekenen
         macro_scores = generate_scores_db("macro", macro_data)
         tech_scores = generate_scores_db("technical", technical_data)
-        market_scores = generate_scores_db("market", market_data)
 
         macro_avg = macro_scores["total_score"]
         tech_avg = tech_scores["total_score"]
@@ -191,7 +241,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
                 "market_top_contributors": [i[0] for i in extract_top(market_scores)],
                 "macro_interpretation": "Macro-data uit database",
                 "technical_interpretation": "Technische data uit database",
-                "market_interpretation": "Marktdata berekend op basis van prijs, volume en change_24h",
+                "market_interpretation": "Marktdata uit market_data-tabel (prijs, volume, change_24h)",
             })
 
         logger.info(f"✅ DB-scores berekend: {result}")
@@ -214,4 +264,4 @@ def calculate_technical_scores(data: Dict[str, float]) -> Dict[str, Any]:
     return generate_scores_db("technical", data)
 
 def calculate_market_scores(data: Dict[str, float]) -> Dict[str, Any]:
-    return generate_scores_db("technical", data)
+    return generate_scores_db("market", data)
