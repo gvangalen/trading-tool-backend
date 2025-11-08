@@ -27,21 +27,28 @@ def generate_daily_report():
         logger.error("❌ Geen databaseverbinding bij rapportgeneratie")
         return
 
+    cursor = None
     try:
         cursor = conn.cursor()
 
-        # 1️⃣ AI-rapport genereren (haalt zelf live scores uit DB via scoring_utils)
+        # 1️⃣ AI-rapport genereren (haalt zelf actuele data/scores uit DB via scoring_utils)
         logger.info("🧠 Rapportgeneratie gestart...")
         full_report = generate_daily_report_sections("BTC")
         if not isinstance(full_report, dict):
             logger.error("❌ Ongeldige rapportstructuur (geen dict). Afgebroken.")
             return
 
-        # ✅ Scores direct uit het gegenereerde rapport
-        macro_score     = float(full_report.get("macro_score", 0) or 0)
-        technical_score = float(full_report.get("technical_score", 0) or 0)
-        setup_score     = float(full_report.get("setup_score", 0) or 0)
-        market_score    = float(full_report.get("market_score", 0) or 0)
+        # ✅ Scores uit gegenereerde rapport-secties (met veilige fallback)
+        def _to_float(x, default=0.0):
+            try:
+                return float(x)
+            except Exception:
+                return default
+
+        macro_score     = _to_float(full_report.get("macro_score", 0))
+        technical_score = _to_float(full_report.get("technical_score", 0))
+        setup_score     = _to_float(full_report.get("setup_score", 0))
+        market_score    = _to_float(full_report.get("market_score", 0))
 
         # 2️⃣ Rapport opslaan in daily_reports (upsert op report_date)
         logger.info(f"💾 Dagrapport opslaan in daily_reports voor {today}")
@@ -70,14 +77,14 @@ def generate_daily_report():
             """,
             (
                 today,
-                full_report.get("btc_summary", ""),
-                full_report.get("macro_summary", ""),
-                full_report.get("setup_checklist", ""),
-                full_report.get("priorities", ""),
-                full_report.get("wyckoff_analysis", ""),
-                full_report.get("recommendations", ""),
-                full_report.get("conclusion", ""),
-                full_report.get("outlook", ""),
+                full_report.get("btc_summary", "") or "",
+                full_report.get("macro_summary", "") or "",
+                full_report.get("setup_checklist", "") or "",
+                full_report.get("priorities", "") or "",
+                full_report.get("wyckoff_analysis", "") or "",
+                full_report.get("recommendations", "") or "",
+                full_report.get("conclusion", "") or "",
+                full_report.get("outlook", "") or "",
                 macro_score, technical_score, setup_score, market_score
             )
         )
@@ -93,15 +100,31 @@ def generate_daily_report():
         cols = [desc[0] for desc in cursor.description]
         report_dict = dict(zip(cols, row))
 
-        pdf_buffer = generate_pdf_report(report_dict, report_type="daily")
-        logger.info(f"🖨️ PDF gegenereerd voor {today}")
+        # 🖨️ Genereer PDF (verwacht bytes/BytesIO) en schrijf ‘m weg
+        pdf_bytes = generate_pdf_report(report_dict, report_type="daily")
+        if not pdf_bytes:
+            logger.error("❌ generate_pdf_report gaf geen inhoud terug.")
+            return
 
-        # 4️⃣ E-mail versturen
         pdf_dir = os.path.join("static", "pdf", "daily")
-        os.makedirs(pdf_dir, exist_ok=True)  # ✅ zorg dat het pad bestaat
+        os.makedirs(pdf_dir, exist_ok=True)
         pdf_path = os.path.join(pdf_dir, f"daily_{today}.pdf")
 
-        market_data = full_report.get("market_data", {})
+        # Schrijf naar bestand (ondersteunt bytes of BytesIO)
+        try:
+            if hasattr(pdf_bytes, "getbuffer"):
+                with open(pdf_path, "wb") as f:
+                    f.write(pdf_bytes.getbuffer())
+            else:
+                with open(pdf_path, "wb") as f:
+                    f.write(pdf_bytes)
+            logger.info(f"🖨️ PDF opgeslagen: {pdf_path}")
+        except Exception as e:
+            logger.error(f"❌ Kon PDF niet wegschrijven naar {pdf_path}: {e}", exc_info=True)
+            return
+
+        # 4️⃣ E-mail versturen
+        market_data = full_report.get("market_data", {}) or {}
         price = market_data.get("price", "–")
         volume = market_data.get("volume", "–")
         change_24h = market_data.get("change_24h", "–")
@@ -120,6 +143,13 @@ def generate_daily_report():
 
     except Exception as e:
         logger.error(f"❌ Fout tijdens rapportgeneratie: {e}", exc_info=True)
+        if conn:
+            conn.rollback()
     finally:
+        try:
+            if cursor:
+                cursor.close()
+        except Exception:
+            pass
         conn.close()
         logger.info(f"✅ Dagrapport voltooid voor {today}")
