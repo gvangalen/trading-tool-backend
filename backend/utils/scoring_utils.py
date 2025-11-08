@@ -26,7 +26,8 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
     table_map = {
         "technical": "technical_indicator_rules",
         "macro": "macro_indicator_rules",
-        "market": "market_indicator_rules",
+        # Market gebruikt dezelfde scoreregels als technical
+        "market": "technical_indicator_rules",
     }
 
     table = table_map.get(category)
@@ -39,7 +40,7 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
             cur.execute(f"""
                 SELECT range_min, range_max, score, trend, interpretation, action
                 FROM {table}
-                WHERE indicator_name = %s
+                WHERE indicator = %s
                 ORDER BY range_min ASC
             """, (indicator_name,))
             rules = cur.fetchall()
@@ -114,6 +115,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
     """
     Berekent gecombineerde macro-, technical- en market-scores
     volledig op basis van databasewaarden.
+    Market gebruikt een subset van technical-indicatoren (price, volume, change_24h).
     """
     conn = get_db_connection()
     if not conn:
@@ -138,22 +140,11 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             """)
             technical_data = {r[0]: float(r[1]) for r in cur.fetchall() if r[1] is not None}
 
-            # === Marktdata ===
-            cur.execute("""
-                SELECT price, volume, change_24h
-                FROM market_data
-                ORDER BY timestamp DESC LIMIT 1
-            """)
-            row = cur.fetchone()
-            market_data = {}
-            if row:
-                market_data = {
-                    "price": float(row[0] or 0),
-                    "volume": float(row[1] or 0),
-                    "change_24h": float(row[2] or 0),
-                }
+        # ✅ Subset voor market score
+        market_indicators = ["price", "volume", "change_24h"]
+        market_data = {k: v for k, v in technical_data.items() if k.lower() in market_indicators}
 
-        # ✅ Scores berekenen uit DB (ipv configs)
+        # ✅ Scores berekenen uit DB (zonder configs)
         macro_scores = generate_scores_db("macro", macro_data)
         tech_scores = generate_scores_db("technical", technical_data)
         market_scores = generate_scores_db("market", market_data)
@@ -170,9 +161,11 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             "setup_score": setup_score
         }
 
-        # Optionele meta-info
+        # 🧩 Extra metadata
         if include_metadata:
             def extract_top(scores_dict):
+                if not scores_dict.get("scores"):
+                    return []
                 return sorted(
                     scores_dict["scores"].items(),
                     key=lambda x: x[1]["score"],
@@ -185,7 +178,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
                 "market_top_contributors": [i[0] for i in extract_top(market_scores)],
                 "macro_interpretation": "Macro-data uit database",
                 "technical_interpretation": "Technische data uit database",
-                "market_interpretation": "Marktdata uit database",
+                "market_interpretation": "Marktdata berekend op basis van prijs, volume en change_24h",
             })
 
         logger.info(f"✅ DB-scores berekend: {result}")
@@ -208,4 +201,5 @@ def calculate_technical_scores(data: Dict[str, float]) -> Dict[str, Any]:
     return generate_scores_db("technical", data)
 
 def calculate_market_scores(data: Dict[str, float]) -> Dict[str, Any]:
-    return generate_scores_db("market", data)
+    # Market gebruikt technical scoreregels
+    return generate_scores_db("technical", data)
