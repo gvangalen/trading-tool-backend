@@ -180,19 +180,24 @@ def fetch_and_process_technical():
                 continue
 
             # 📈 Score berekenen vanuit DB-scoreregels
-            score_obj = generate_scores_db(name, value)
-            if not score_obj:
+            score_data = generate_scores_db("technical", {name: value})
+            if not score_data or "scores" not in score_data:
                 logger.warning(f"⚠️ Geen scoreregels gevonden voor {name}")
+                continue
+
+            result = score_data["scores"].get(name)
+            if not result:
+                logger.warning(f"⚠️ Geen resultaat gevonden voor {name}")
                 continue
 
             store_technical_score_db(
                 symbol=ind.get("symbol", "BTC"),
                 indicator=name,
                 value=value,
-                score=score_obj.get("score"),
-                trend=score_obj.get("trend"),
-                interpretation=score_obj.get("interpretation"),
-                action=score_obj.get("action"),
+                score=result.get("score", 10),
+                trend=result.get("trend", "–"),
+                interpretation=result.get("interpretation", "–"),
+                action=result.get("action", "–"),
                 timestamp=utc_now
             )
 
