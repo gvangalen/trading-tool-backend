@@ -27,7 +27,7 @@ def fetch_active_setups():
             cur.execute("""
                 SELECT DISTINCT ON (name)
                        name,
-                       COALESCE(asset, 'BTC') AS asset,
+                       COALESCE(symbol, 'BTC') AS symbol,   -- ✅ vervangen
                        COALESCE(timeframe, '1D') AS timeframe,
                        COALESCE(explanation, '') AS explanation,
                        COALESCE(score, 0) AS score,
@@ -51,7 +51,6 @@ def fetch_active_setups():
 @router.get("/score/macro")
 async def get_macro_score():
     try:
-        # Auto-mode: haalt zelf laatste macro waarden uit DB
         result = generate_scores_db("macro")
         return result
     except Exception as e:
