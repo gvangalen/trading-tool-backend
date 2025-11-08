@@ -1,10 +1,11 @@
 import logging
 from fastapi import APIRouter, HTTPException
+import psycopg2.extras
+
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import (
     generate_scores_db,
     get_scores_for_symbol,
-    get_active_setups_with_info,
 )
 
 router = APIRouter()
@@ -12,81 +13,95 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
+# ---------------------------
+# Helpers
+# ---------------------------
+def fetch_active_setups():
+    """Haalt actieve setups + minimale info op (fallback als je geen aparte util wilt)."""
+    conn = get_db_connection()
+    if not conn:
+        logger.warning("⚠️ fetch_active_setups: geen DB-verbinding.")
+        return []
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (name)
+                       name,
+                       COALESCE(asset, 'BTC') AS asset,
+                       COALESCE(timeframe, '1D') AS timeframe,
+                       COALESCE(explanation, '') AS explanation,
+                       COALESCE(score, 0) AS score,
+                       created_at AS timestamp
+                FROM setups
+                ORDER BY name, created_at DESC
+                LIMIT 50
+            """)
+            rows = cur.fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"⚠️ fetch_active_setups error: {e}")
+        return []
+    finally:
+        conn.close()
+
+
 # =========================================================
-# ✅ Macro score (uit DB-regels)
+# ✅ Macro score (DB-regels)
 # =========================================================
 @router.get("/score/macro")
 async def get_macro_score():
-    """Haalt macro-score direct uit database via scoreregels."""
     try:
+        # Auto-mode: haalt zelf laatste macro waarden uit DB
         result = generate_scores_db("macro")
         return result
     except Exception as e:
-        logger.error(f"❌ Fout in /score/macro: {e}", exc_info=True)
+        logger.error(f"❌ /score/macro: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Fout bij ophalen macro-score")
 
 
 # =========================================================
-# ✅ Technische score (uit DB-regels)
+# ✅ Technische score (DB-regels)
 # =========================================================
 @router.get("/score/technical")
 async def get_technical_score():
-    """Haalt technische score direct uit database via scoreregels."""
     try:
         result = generate_scores_db("technical")
         return result
     except Exception as e:
-        logger.error(f"❌ Fout in /score/technical: {e}", exc_info=True)
+        logger.error(f"❌ /score/technical: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Fout bij ophalen technische score")
 
 
 # =========================================================
-# ✅ Markt score (uit DB-regels)
+# ✅ Markt score (DB-regels; gebruikt technical rules)
 # =========================================================
 @router.get("/score/market")
 async def get_market_score():
-    """Haalt markt-score direct uit database via scoreregels."""
     try:
         result = generate_scores_db("market")
         return result
     except Exception as e:
-        logger.error(f"❌ Fout in /score/market: {e}", exc_info=True)
+        logger.error(f"❌ /score/market: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Fout bij ophalen market score")
 
 
 # =========================================================
-# ✅ Dagelijkse gecombineerde score (voor dashboard)
+# ✅ Dagelijkse gecombineerde score (dashboard)
 # =========================================================
 @router.get("/scores/daily")
 async def get_daily_scores():
     """
     ➤ Haalt actuele gecombineerde macro-, technische-, setup- en marktscores op uit de database.
-    Inclusief actieve setups voor het dashboard en dagrapport.
+    Inclusief actieve setups voor het dashboard/rapport.
     """
     try:
-        scores = get_scores_for_symbol(include_metadata=True)
-        if not scores:
-            logger.warning("⚠️ Geen scores gevonden in database – fallback naar nulwaarden.")
-            scores = {
-                "macro_score": 0,
-                "technical_score": 0,
-                "setup_score": 0,
-                "market_score": 0,
-                "macro_interpretation": "Geen data beschikbaar",
-                "technical_interpretation": "Geen data beschikbaar",
-                "setup_interpretation": "Geen data beschikbaar",
-                "macro_top_contributors": [],
-                "technical_top_contributors": [],
-                "setup_top_contributors": [],
-            }
+        # Combineert macro/technical/market en levert top_contributors + interpretations
+        scores = get_scores_for_symbol(include_metadata=True) or {}
 
-        # 🔍 Actieve setups ophalen
-        conn = get_db_connection()
-        active_setups = get_active_setups_with_info(conn)
-        conn.close()
-        logger.info(f"📦 Actieve setups gevonden: {len(active_setups)}")
+        # Actieve setups (lokaal opgehaald)
+        active_setups = fetch_active_setups()
+        logger.info(f"📦 Actieve setups: {len(active_setups)}")
 
-        # ✅ Structureren voor dashboard
         response = {
             "macro": {
                 "score": float(scores.get("macro_score", 0)),
@@ -111,14 +126,15 @@ async def get_daily_scores():
             },
         }
 
-        logger.info("✅ Dagelijkse scores succesvol opgehaald uit database")
+        logger.info("✅ /scores/daily OK")
         return response
 
     except Exception as e:
-        logger.error(f"❌ Fout in /api/scores/daily: {e}", exc_info=True)
+        logger.error(f"❌ /scores/daily: {e}", exc_info=True)
+        # Fallback met shape die je frontend verwacht
         return {
-            "macro": {"score": 0, "interpretation": "Geen data"},
-            "technical": {"score": 0, "interpretation": "Geen data"},
-            "setup": {"score": 0, "interpretation": "Geen data", "active_setups": []},
-            "market": {"score": 0, "interpretation": "Geen data"},
+            "macro": {"score": 0, "interpretation": "Geen data", "top_contributors": []},
+            "technical": {"score": 0, "interpretation": "Geen data", "top_contributors": []},
+            "setup": {"score": 0, "interpretation": "Geen data", "top_contributors": [], "active_setups": []},
+            "market": {"score": 0, "interpretation": "Geen data", "top_contributors": []},
         }
