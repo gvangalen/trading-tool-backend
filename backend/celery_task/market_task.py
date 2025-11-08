@@ -226,3 +226,43 @@ def calculate_and_save_forward_returns():
     finally:
         if 'conn' in locals() and conn:
             conn.close()
+
+
+# 5️⃣ 7-daags aggregaat vullen uit eigen DB
+@shared_task(name="backend.celery_task.market_task.save_market_data_7d")
+def save_market_data_7d():
+    """
+    Bouw eenvoudig 7d aggregaat op uit market_data (laatste 7 unieke dagen).
+    Past aan als je al een aparte API/route hebt — dit is de DB-native variant.
+    """
+    logger.info("📊 Opbouwen 7-daagse marktdata (DB-native)...")
+    try:
+        conn = get_db_connection()
+        if not conn:
+            logger.error("❌ Geen DB-verbinding.")
+            return
+
+        with conn.cursor() as cur:
+            # Haal per dag de laatste waarde per indicator op (price/volume/change_24h)
+            cur.execute("""
+                WITH per_day AS (
+                    SELECT
+                        DATE(timestamp) AS dag,
+                        indicator,
+                        value,
+                        ROW_NUMBER() OVER (PARTITION BY DATE(timestamp), indicator ORDER BY timestamp DESC) AS rn
+                    FROM market_data
+                    WHERE symbol = 'BTC'
+                )
+                SELECT dag, indicator, value
+                FROM per_day
+                WHERE rn = 1
+                ORDER BY dag DESC
+                LIMIT 21;
+            """)
+            rows = cur.fetchall()
+
+        logger.info(f"ℹ️ 7d helper fetched {len(rows)} rijen (pas aggregaatlogica aan naar wens).")
+    except Exception:
+        logger.error("❌ Fout in save_market_data_7d()")
+        logger.error(traceback.format_exc())
