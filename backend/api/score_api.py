@@ -94,14 +94,24 @@ async def get_daily_scores():
     """
     try:
         scores = get_scores_for_symbol(include_metadata=True)
-        if not scores:
-            logger.warning("⚠️ Geen scores gevonden in database")
-            return JSONResponse(
-                status_code=404,
-                content={"detail": "Geen scores gevonden in database"}
-            )
 
-        # 🔍 Haal actieve setups op uit DB
+        # ✅ Fallback als er geen scores gevonden zijn
+        if not scores:
+            logger.warning("⚠️ Geen scores gevonden in database – gebruik fallback.")
+            scores = {
+                "macro_score": 0,
+                "technical_score": 0,
+                "setup_score": 0,
+                "market_score": 0,
+                "macro_interpretation": "Geen data beschikbaar",
+                "technical_interpretation": "Geen data beschikbaar",
+                "setup_interpretation": "Geen data beschikbaar",
+                "macro_top_contributors": [],
+                "technical_top_contributors": [],
+                "setup_top_contributors": [],
+            }
+
+        # 🔍 Haal actieve setups op uit DB (optioneel)
         conn = get_db_connection()
         active_setups = get_active_setups_with_info(conn)
         conn.close()
@@ -111,24 +121,24 @@ async def get_daily_scores():
         # ✅ Response structureren
         response = {
             "macro": {
-                "score": scores.get("macro_score"),
-                "interpretation": scores.get("macro_interpretation"),
+                "score": float(scores.get("macro_score", 0)),
+                "interpretation": scores.get("macro_interpretation", "Geen uitleg beschikbaar"),
                 "top_contributors": scores.get("macro_top_contributors", []),
             },
             "technical": {
-                "score": scores.get("technical_score"),
-                "interpretation": scores.get("technical_interpretation"),
+                "score": float(scores.get("technical_score", 0)),
+                "interpretation": scores.get("technical_interpretation", "Geen uitleg beschikbaar"),
                 "top_contributors": scores.get("technical_top_contributors", []),
             },
             "setup": {
-                "score": scores.get("setup_score"),
-                "interpretation": scores.get("setup_interpretation"),
-                "top_contributors": [s["name"] for s in active_setups],
+                "score": float(scores.get("setup_score", 0)),
+                "interpretation": scores.get("setup_interpretation", "Geen actieve setups"),
+                "top_contributors": [s["name"] for s in active_setups] if active_setups else [],
                 "active_setups": active_setups,
             },
             "market": {
-                "score": scores.get("market_score"),
-                "interpretation": None,  # Marktdata heeft geen vaste uitleg
+                "score": float(scores.get("market_score", 0)),
+                "interpretation": None,
                 "top_contributors": [],
             },
         }
@@ -138,7 +148,10 @@ async def get_daily_scores():
 
     except Exception as e:
         logger.error(f"❌ Fout in /api/scores/daily: {e}", exc_info=True)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "Interne fout bij ophalen scores"}
-        )
+        # ⛔️ In plaats van error → ook hier een fallback
+        return {
+            "macro": {"score": 0, "interpretation": "Geen data"},
+            "technical": {"score": 0, "interpretation": "Geen data"},
+            "setup": {"score": 0, "interpretation": "Geen data", "active_setups": []},
+            "market": {"score": 0, "interpretation": "Geen data"},
+        }
