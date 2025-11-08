@@ -12,6 +12,12 @@ logger = logging.getLogger(__name__)
 
 @shared_task(name="backend.celery_task.store_daily_scores_task")
 def store_daily_scores_task():
+    """
+    Dagelijkse Celery-task:
+    - Berekent macro/technical/market/setup scores via DB
+    - Slaat totaalscores op in daily_scores
+    - Matcht best passende setup en activeert die in daily_setup_scores
+    """
     logger.info("🧠 Dagelijkse scoreberekening gestart...")
 
     conn = get_db_connection()
@@ -23,7 +29,18 @@ def store_daily_scores_task():
 
     try:
         # ✅ Stap 1: haal scores op (inclusief metadata)
-        scores = get_scores_for_symbol(include_metadata=True)
+        scores = get_scores_for_symbol(include_metadata=True) or {}
+        if not scores:
+            logger.warning("⚠️ Geen scores berekend – gebruik fallbackwaarden.")
+            scores = {
+                "macro_score": 0, "technical_score": 0, "market_score": 0, "setup_score": 0,
+                "macro_interpretation": "Geen data",
+                "technical_interpretation": "Geen data",
+                "macro_top_contributors": [],
+                "technical_top_contributors": [],
+                "setup_top_contributors": [],
+            }
+
         logger.info(f"📊 Berekende scores: {scores}")
 
         # ✅ Stap 2: sla dagelijkse totaalscores op in daily_scores
@@ -50,36 +67,35 @@ def store_daily_scores_task():
                     market_score = EXCLUDED.market_score
             """, (
                 today,
-                scores.get("macro_score", 0),
-                scores.get("macro_interpretation", ""),
+                float(scores.get("macro_score", 0)),
+                scores.get("macro_interpretation", "Geen data"),
                 json.dumps(scores.get("macro_top_contributors", [])),
-                scores.get("technical_score", 0),
-                scores.get("technical_interpretation", ""),
+                float(scores.get("technical_score", 0)),
+                scores.get("technical_interpretation", "Geen data"),
                 json.dumps(scores.get("technical_top_contributors", [])),
-                scores.get("setup_score", 0),
-                scores.get("setup_interpretation", ""),
+                float(scores.get("setup_score", 0)),
+                scores.get("setup_interpretation", "Geen data"),
                 json.dumps(scores.get("setup_top_contributors", [])),
-                scores.get("market_score", 0),
+                float(scores.get("market_score", 0)),
             ))
 
-        # ✅ Stap 3: haal alle setups op en bepaal de best matchende setup
-        setups = get_all_setups()
+        # ✅ Stap 3: haal setups op en match met setup_score
+        setups = get_all_setups() or []
         matched = match_setups_to_score(setups, scores.get("setup_score", 0))
 
-        # ✅ Stap 4: sla best passende setup op in daily_setup_scores
         if matched:
             best = matched[0]
-            logger.info(f"🎯 Beste setup gevonden: {best['name']} (score {scores.get('setup_score')})")
+            logger.info(f"🎯 Beste setup: {best['name']} (score {scores.get('setup_score', 0)})")
 
             with conn.cursor() as cur:
-                # ⬇️ Eerst alle setups op deze datum inactief maken
+                # ⬇️ Eerst alle setups van vandaag inactief maken
                 cur.execute("""
                     UPDATE daily_setup_scores
                     SET is_active = false
                     WHERE date = %s
                 """, (today,))
 
-                # ⬆️ Daarna de best matchende setup opslaan of activeren
+                # ⬆️ Beste match activeren
                 cur.execute("""
                     INSERT INTO daily_setup_scores (setup_id, date, score, explanation, is_active)
                     VALUES (%s, %s, %s, %s, true)
@@ -90,18 +106,19 @@ def store_daily_scores_task():
                 """, (
                     best["id"],
                     today,
-                    scores.get("setup_score", 0),
+                    float(scores.get("setup_score", 0)),
                     best.get("explanation", ""),
                 ))
-
         else:
-            logger.warning("⚠️ Geen passende setup gevonden voor huidige score.")
+            logger.warning("⚠️ Geen passende setup gevonden voor huidige score of lege setup-lijst.")
 
-        # ✅ Commit alles
+        # ✅ Alles opslaan
         conn.commit()
         logger.info(f"✅ Dagelijkse scores én setup succesvol opgeslagen voor {today}")
 
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan dagelijkse scores: {e}", exc_info=True)
+        conn.rollback()
     finally:
         conn.close()
+        logger.info("🔒 Databaseverbinding gesloten.")
