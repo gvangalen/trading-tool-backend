@@ -1,55 +1,113 @@
 import logging
-from backend.config.config_loader import load_config_file
-from backend.utils.scoring_utils import calculate_score, generate_label  # ✅ Externe scoringlogica gebruiken
+from backend.utils.db import get_db_connection
+from backend.utils.scoring_utils import calculate_score_from_rules  # ✅ centrale scorefunctie
 
 # ✅ Logging instellen
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = "config/market_data_config.json"
 
-def interpret_market_data(data, config_path=CONFIG_PATH):
+# =========================================================
+# 🎯 Scoreregels ophalen
+# =========================================================
+def get_rules_from_db(indicator_name: str) -> list[dict]:
     """
-    ➤ Interpreteert marktdata zoals prijs, 24h verandering en volume op basis van thresholds uit config.
-    ➤ Retourneert: waarde, score (0–100), en interpretatielabel ('Laag', 'Gemiddeld', etc.)
+    Haalt ALLE scoreregels voor een indicator op uit de DB.
+    Wordt daarna door scoring_utils gebruikt om de juiste te vinden.
+    """
+    conn = get_db_connection()
+    rules = []
+    if not conn:
+        logger.error("❌ Geen DB-verbinding bij ophalen scoreregels.")
+        return rules
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT range_min, range_max, score, trend, interpretation, action
+                FROM technical_indicator_rules
+                WHERE indicator = %s
+                ORDER BY range_min ASC
+            """, (indicator_name,))
+            rows = cur.fetchall()
+
+        for r in rows:
+            rules.append({
+                "range_min": r[0],
+                "range_max": r[1],
+                "score": r[2],
+                "trend": r[3],
+                "interpretation": r[4],
+                "action": r[5],
+            })
+
+        if not rules:
+            logger.warning(f"⚠️ Geen scoreregels gevonden voor '{indicator_name}'")
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen scoreregels ({indicator_name}): {e}", exc_info=True)
+    finally:
+        conn.close()
+
+    return rules
+
+
+# =========================================================
+# 💹 Verwerking van één market indicator
+# =========================================================
+def process_market_indicator(name: str, value: float) -> dict | None:
+    """
+    Verwerkt één market indicator (zoals prijs, volume, change_24h)
+    via scoreregels uit de database + centrale scorefunctie.
     """
     try:
-        config = load_config_file(config_path)
-        indicators = config.get("indicators", {})
+        if value is None:
+            raise ValueError("Waarde is None")
+
+        rules = get_rules_from_db(name)
+        if not rules:
+            return None
+
+        score_data = calculate_score_from_rules(value, rules)
+        if not score_data:
+            logger.warning(f"⚠️ Geen score berekend voor '{name}' (waarde={value})")
+            return None
+
+        result = {
+            "name": name,
+            "value": value,
+            "score": score_data["score"],
+            "trend": score_data["trend"],
+            "interpretation": score_data["interpretation"],
+            "action": score_data["action"],
+        }
+
+        logger.info(f"✅ {name}: {value} → {result['trend']} (score {result['score']})")
+        return result
+
     except Exception as e:
-        logger.error(f"❌ Fout bij laden market config: {e}")
+        logger.error(f"❌ Fout bij verwerken market indicator '{name}': {e}", exc_info=True)
+        return None
+
+
+# =========================================================
+# 📊 Verwerking van alle market data
+# =========================================================
+def process_all_market(data: dict) -> dict:
+    """
+    ➤ Verwerkt alle market indicatoren via scoreregels + scoring_utils.
+      Voorbeeld input:
+      {"price": 102345.2, "volume": 91000000000, "change_24h": 0.35}
+    """
+    if not data:
+        logger.warning("⚠️ Geen inputdata voor market verwerking.")
         return {}
 
     results = {}
+    for name, value in data.items():
+        result = process_market_indicator(name, value)
+        if result:
+            results[name] = result
 
-    for key, raw_value in data.items():
-        if key not in indicators:
-            logger.warning(f"⚠️ Geen interpretatieconfig gevonden voor: {key}")
-            continue
-
-        try:
-            value = float(raw_value)
-        except (ValueError, TypeError):
-            logger.warning(f"⚠️ Ongeldige numerieke waarde voor '{key}': {raw_value}")
-            results[key] = {
-                "value": raw_value,
-                "score": 0,
-                "label": "Ongeldig"
-            }
-            continue
-
-        indicator_cfg = indicators[key]
-        thresholds = indicator_cfg.get("thresholds", [])
-        is_positive = indicator_cfg.get("positive", True)
-
-        score = calculate_score(value, thresholds, is_positive)
-        label = generate_label(value, thresholds, is_positive)
-
-        results[key] = {
-            "value": value,
-            "score": score,
-            "label": label
-        }
-
-    logger.info(f"✅ Geïnterpreteerde market data: {results}")
+    logger.info(f"✅ {len(results)} market indicatoren verwerkt.")
     return results
