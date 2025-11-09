@@ -240,13 +240,12 @@ async def delete_market_asset(id: int):
         logger.error(f"❌ [delete] Fout bij verwijderen: {e}")
         raise HTTPException(status_code=500, detail="❌ Kon asset niet verwijderen.")
 
-
-@router.get("/market_data/7d")
 @router.get("/market_data/7d")
 async def get_market_data_7d():
     """
-    Laatste 7 dagen BTC OHLC(+volume) uit market_data_7d.
-    GEEN afhankelijkheid meer van 'vandaag'; pakt simpelweg de laatste 7 datums.
+    Haalt de laatste 7 dagen BTC-marktdata op uit market_data_7d.
+    Fallback naar meest recente beschikbare datum als vandaag geen data bevat.
+    Alleen voor symbol 'BTC'.
     """
     conn = get_db_connection()
     if not conn:
@@ -254,6 +253,28 @@ async def get_market_data_7d():
 
     try:
         with conn.cursor() as cur:
+            # ✅ Stap 1: check of er data van vandaag is
+            cur.execute("""
+                SELECT 1 FROM market_data_7d
+                WHERE symbol = 'BTC' AND DATE(date) = CURRENT_DATE
+                LIMIT 1;
+            """)
+            today_exists = cur.fetchone() is not None
+
+            # 🔁 Stap 2: fallback naar laatste datum met data
+            if not today_exists:
+                cur.execute("""
+                    SELECT MAX(date) FROM market_data_7d
+                    WHERE symbol = 'BTC';
+                """)
+                fallback_date = cur.fetchone()[0]
+                if not fallback_date:
+                    logger.warning("⚠️ Geen data beschikbaar in market_data_7d.")
+                    return []
+
+                logger.info(f"🔁 Geen data van vandaag — fallback naar {fallback_date}")
+
+            # 📦 Stap 3: laatste 7 dagen ophalen vanaf fallback/latest
             cur.execute("""
                 SELECT id, symbol, date, open, high, low, close, change, volume, created_at
                 FROM market_data_7d
@@ -263,25 +284,26 @@ async def get_market_data_7d():
             """)
             rows = cur.fetchall()
 
-        # Chronologisch (oud -> nieuw)
+        # ✅ Omkeren zodat oudste eerst komt (chronologisch)
         rows.reverse()
 
         return [{
             "id": r[0],
             "symbol": r[1],
             "date": r[2].isoformat(),
-            "open": float(r[3]) if r[3] is not None else None,
-            "high": float(r[4]) if r[4] is not None else None,
-            "low": float(r[5]) if r[5] is not None else None,
-            "close": float(r[6]) if r[6] is not None else None,
-            "change": float(r[7]) if r[7] is not None else None,
-            "volume": float(r[8]) if r[8] is not None else None,
+            "open": float(r[3]) if r[3] else None,
+            "high": float(r[4]) if r[4] else None,
+            "low": float(r[5]) if r[5] else None,
+            "close": float(r[6]) if r[6] else None,
+            "change": float(r[7]) if r[7] else None,
+            "volume": float(r[8]) if r[8] is not None else None,  # ✅ volume
             "created_at": r[9].isoformat() if r[9] else None
         } for r in rows]
 
     except Exception as e:
         logger.error(f"❌ [7d] Fout bij ophalen market_data_7d: {e}")
         raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van 7-daagse data.")
+
     finally:
         conn.close()
 
