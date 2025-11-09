@@ -244,9 +244,9 @@ async def delete_market_asset(id: int):
 @router.get("/market_data/7d")
 async def get_market_data_7d():
     """
-    Haalt de laatste 7 dagen BTC-marktdata op uit market_data_7d.
-    Fallback naar meest recente beschikbare datum als vandaag geen data bevat.
-    Alleen voor symbol 'BTC'.
+    ✅ Nieuwe versie:
+    Haalt de laatste 7 dagen BTC OHLC-data op uit btc_price_history.
+    Berekent automatisch dagelijkse % verandering en geeft netjes geformatteerde data terug.
     """
     conn = get_db_connection()
     if not conn:
@@ -254,57 +254,48 @@ async def get_market_data_7d():
 
     try:
         with conn.cursor() as cur:
-            # ✅ Stap 1: check of er data van vandaag is
             cur.execute("""
-                SELECT 1 FROM market_data_7d
-                WHERE symbol = 'BTC' AND DATE(date) = CURRENT_DATE
-                LIMIT 1;
-            """)
-            today_exists = cur.fetchone() is not None
-
-            # 🔁 Stap 2: fallback naar laatste datum met data
-            if not today_exists:
-                cur.execute("""
-                    SELECT MAX(date) FROM market_data_7d
-                    WHERE symbol = 'BTC';
-                """)
-                fallback_date = cur.fetchone()[0]
-                if not fallback_date:
-                    logger.warning("⚠️ Geen data beschikbaar in market_data_7d.")
-                    return []
-
-                logger.info(f"🔁 Geen data van vandaag — fallback naar {fallback_date}")
-
-            # 📦 Stap 3: laatste 7 dagen ophalen vanaf fallback/latest
-            cur.execute("""
-                SELECT id, symbol, date, open, high, low, close, change, volume, created_at
-                FROM market_data_7d
-                WHERE symbol = 'BTC'
+                SELECT
+                    date,
+                    open,
+                    high,
+                    low,
+                    close,
+                    ((close - open) / NULLIF(open, 0)) * 100 AS pct_change,
+                    volume
+                FROM btc_price_history
+                WHERE open IS NOT NULL
                 ORDER BY date DESC
                 LIMIT 7;
             """)
             rows = cur.fetchall()
 
-        # ✅ Omkeren zodat oudste eerst komt (chronologisch)
+        if not rows:
+            logger.warning("⚠️ Geen data in btc_price_history gevonden.")
+            return []
+
+        # Oudste eerst tonen
         rows.reverse()
 
-        return [{
-            "id": r[0],
-            "symbol": r[1],
-            "date": r[2].isoformat(),
-            "open": float(r[3]) if r[3] else None,
-            "high": float(r[4]) if r[4] else None,
-            "low": float(r[5]) if r[5] else None,
-            "close": float(r[6]) if r[6] else None,
-            "change": float(r[7]) if r[7] else None,
-            "volume": float(r[8]) if r[8] is not None else None,  # ✅ volume
-            "created_at": r[9].isoformat() if r[9] else None
-        } for r in rows]
+        result = []
+        for r in rows:
+            date, open_p, high_p, low_p, close_p, pct, volume = r
+            result.append({
+                "date": date.isoformat(),
+                "open": round(float(open_p), 2) if open_p else None,
+                "high": round(float(high_p), 2) if high_p else None,
+                "low": round(float(low_p), 2) if low_p else None,
+                "close": round(float(close_p), 2) if close_p else None,
+                "pct_change": round(float(pct), 2) if pct else None,
+                "volume": round(float(volume), 0) if volume else None,
+            })
+
+        logger.info(f"✅ {len(result)} dagen BTC OHLC-data opgehaald uit btc_price_history.")
+        return result
 
     except Exception as e:
-        logger.error(f"❌ [7d] Fout bij ophalen market_data_7d: {e}")
-        raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van 7-daagse data.")
-
+        logger.error(f"❌ [7d] Fout bij ophalen btc_price_history: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Fout bij ophalen 7-daagse marktdata.")
     finally:
         conn.close()
 
