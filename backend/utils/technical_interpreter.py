@@ -1,5 +1,6 @@
 import logging
 from backend.utils.db import get_db_connection
+from backend.utils.scoring_utils import calculate_score_from_rules  # ✅ zelfde logica voor technische & market
 
 # ✅ Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -7,16 +8,16 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# 🎯 Helper: scoreregel ophalen uit database
+# 🎯 Haal scoreregels op uit database
 # =========================================================
-def get_score_rule_from_db(indicator_name: str, value: float) -> dict | None:
+def get_rules_from_db(indicator_name: str) -> list[dict]:
     """
-    Haalt passende scoreregel op uit de DB voor een technische indicator.
+    Haalt ALLE scoreregels voor een technische indicator op uit de database.
     """
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding bij ophalen scoreregel.")
-        return None
+        logger.error("❌ Geen DB-verbinding bij ophalen scoreregels.")
+        return []
 
     try:
         with conn.cursor() as cur:
@@ -29,51 +30,55 @@ def get_score_rule_from_db(indicator_name: str, value: float) -> dict | None:
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning(f"⚠️ Geen scoreregels gevonden voor {indicator_name}")
-            return None
+            logger.warning(f"⚠️ Geen scoreregels gevonden voor indicator '{indicator_name}'")
+            return []
 
-        for r in rows:
-            if r[0] <= value <= r[1]:
-                return {
-                    "score": r[2],
-                    "trend": r[3],
-                    "interpretation": r[4],
-                    "action": r[5],
-                }
-
-        logger.info(f"ℹ️ Waarde {value} valt buiten alle ranges voor {indicator_name}")
-        return None
+        return [
+            {
+                "range_min": r[0],
+                "range_max": r[1],
+                "score": r[2],
+                "trend": r[3],
+                "interpretation": r[4],
+                "action": r[5],
+            }
+            for r in rows
+        ]
 
     except Exception as e:
-        logger.error(f"❌ Fout in get_score_rule_from_db({indicator_name}): {e}", exc_info=True)
-        return None
+        logger.error(f"❌ Fout bij ophalen scoreregels voor '{indicator_name}': {e}", exc_info=True)
+        return []
     finally:
         conn.close()
 
 
 # =========================================================
-# 🔢 Verwerking van één indicator
+# ⚙️ Verwerk één technische indicator
 # =========================================================
 def process_technical_indicator(name: str, value: float) -> dict | None:
     """
-    Verwerkt één technische indicator via database-scoreregels.
+    Verwerkt één technische indicator door scoreregels + scoring_utils toe te passen.
     """
     try:
         if value is None:
             raise ValueError("Waarde is None")
 
-        rule = get_score_rule_from_db(name, value)
-        if not rule:
-            logger.warning(f"⚠️ Geen passende scoreregel gevonden voor {name}")
+        rules = get_rules_from_db(name)
+        if not rules:
+            return None
+
+        score_data = calculate_score_from_rules(value, rules)
+        if not score_data:
+            logger.warning(f"⚠️ Geen score berekend voor '{name}' (waarde={value})")
             return None
 
         result = {
             "name": name,
             "value": value,
-            "score": round(rule.get("score", 10)),
-            "trend": rule.get("trend", "Onbekend"),
-            "interpretation": rule.get("interpretation", ""),
-            "action": rule.get("action", ""),
+            "score": score_data["score"],
+            "trend": score_data["trend"],
+            "interpretation": score_data["interpretation"],
+            "action": score_data["action"],
         }
 
         logger.info(f"✅ {name}: {value} → {result['trend']} (score {result['score']})")
@@ -85,11 +90,11 @@ def process_technical_indicator(name: str, value: float) -> dict | None:
 
 
 # =========================================================
-# ⚙️ Verwerking van alle indicatoren
+# 📊 Verwerk alle technische indicatoren
 # =========================================================
 def process_all_technical(data: dict) -> dict:
     """
-    ➤ Verwerkt alle technische indicatoren via scoreregels uit DB.
+    ➤ Verwerkt alle technische indicatoren via scoreregels uit DB + scoring_utils.
       Voorbeeld input:
       {"rsi": 44.1, "volume": 380000000, "ma_200": 0.94}
     """
