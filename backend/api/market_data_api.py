@@ -242,11 +242,11 @@ async def delete_market_asset(id: int):
 
 
 @router.get("/market_data/7d")
+@router.get("/market_data/7d")
 async def get_market_data_7d():
     """
-    ✅ Nieuwe versie:
-    Haalt de laatste 7 dagen BTC OHLC-data op uit btc_price_history.
-    Berekent automatisch dagelijkse % verandering en geeft netjes geformatteerde data terug.
+    Laatste 7 dagen BTC OHLC(+volume) uit market_data_7d.
+    GEEN afhankelijkheid meer van 'vandaag'; pakt simpelweg de laatste 7 datums.
     """
     conn = get_db_connection()
     if not conn:
@@ -255,116 +255,34 @@ async def get_market_data_7d():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT
-                    date,
-                    open,
-                    high,
-                    low,
-                    close,
-                    ((close - open) / NULLIF(open, 0)) * 100 AS pct_change,
-                    volume
-                FROM btc_price_history
-                WHERE open IS NOT NULL
+                SELECT id, symbol, date, open, high, low, close, change, volume, created_at
+                FROM market_data_7d
+                WHERE symbol = 'BTC'
                 ORDER BY date DESC
                 LIMIT 7;
             """)
             rows = cur.fetchall()
 
-        if not rows:
-            logger.warning("⚠️ Geen data in btc_price_history gevonden.")
-            return []
-
-        # Oudste eerst tonen
+        # Chronologisch (oud -> nieuw)
         rows.reverse()
 
-        result = []
-        for r in rows:
-            date, open_p, high_p, low_p, close_p, pct, volume = r
-            result.append({
-                "date": date.isoformat(),
-                "open": round(float(open_p), 2) if open_p else None,
-                "high": round(float(high_p), 2) if high_p else None,
-                "low": round(float(low_p), 2) if low_p else None,
-                "close": round(float(close_p), 2) if close_p else None,
-                "pct_change": round(float(pct), 2) if pct else None,
-                "volume": round(float(volume), 0) if volume else None,
-            })
-
-        logger.info(f"✅ {len(result)} dagen BTC OHLC-data opgehaald uit btc_price_history.")
-        return result
+        return [{
+            "id": r[0],
+            "symbol": r[1],
+            "date": r[2].isoformat(),
+            "open": float(r[3]) if r[3] is not None else None,
+            "high": float(r[4]) if r[4] is not None else None,
+            "low": float(r[5]) if r[5] is not None else None,
+            "close": float(r[6]) if r[6] is not None else None,
+            "change": float(r[7]) if r[7] is not None else None,
+            "volume": float(r[8]) if r[8] is not None else None,
+            "created_at": r[9].isoformat() if r[9] else None
+        } for r in rows]
 
     except Exception as e:
-        logger.error(f"❌ [7d] Fout bij ophalen btc_price_history: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Fout bij ophalen 7-daagse marktdata.")
+        logger.error(f"❌ [7d] Fout bij ophalen market_data_7d: {e}")
+        raise HTTPException(status_code=500, detail="❌ Fout bij ophalen van 7-daagse data.")
     finally:
-        conn.close()
-
-# 📈 Automatisch forward returns genereren op basis van historische data
-@router.post("/market_data/forward/generate")
-def generate_forward_returns():
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    try:
-        logger.info("📈 Start genereren van forward returns...")
-
-        periods = {
-            "week": 7,
-            "month": 30,
-            "quarter": 90,
-        }
-
-        # Haal alle historische prijzen op
-        cur.execute("SELECT date, price FROM btc_price_history ORDER BY date ASC")
-        rows = cur.fetchall()
-        prices = {row[0]: float(row[1]) for row in rows}
-        dates = list(prices.keys())
-
-        inserted_count = 0
-
-        for i, start_date in enumerate(dates):
-            start_price = prices[start_date]
-            for period, delta_days in periods.items():
-                end_date = start_date + timedelta(days=delta_days)
-
-                # Zoek dichtstbijzijnde end_date
-                end_price = None
-                for j in range(i + 1, len(dates)):
-                    if dates[j] >= end_date:
-                        end_price = prices[dates[j]]
-                        actual_end_date = dates[j]
-                        break
-
-                if not end_price:
-                    continue  # Niet genoeg data vooruit
-
-                change = round((end_price - start_price) / start_price * 100, 2)
-                avg_daily = round(change / delta_days, 2)
-
-                # Check of deze al bestaat
-                cur.execute("""
-                    SELECT 1 FROM market_forward_returns
-                    WHERE symbol = %s AND period = %s AND start_date = %s
-                """, ("BTC", period, start_date))
-                if cur.fetchone():
-                    continue  # Skip dubbele invoer
-
-                # Insert nieuwe return
-                cur.execute("""
-                    INSERT INTO market_forward_returns (symbol, period, start_date, end_date, change, avg_daily)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, ("BTC", period, start_date, actual_end_date, change, avg_daily))
-                inserted_count += 1
-
-        conn.commit()
-        logger.info(f"✅ {inserted_count} forward returns toegevoegd.")
-        return {"inserted": inserted_count}
-
-    except Exception as e:
-        logger.error(f"❌ Fout bij forward return generatie: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij forward return generatie")
-    finally:
-        cur.close()
         conn.close()
 
 @router.get("/market_data/forward")
