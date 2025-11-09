@@ -1,6 +1,7 @@
 import logging
 from fastapi import APIRouter, HTTPException
 import psycopg2.extras
+from datetime import date
 
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import (
@@ -17,26 +18,36 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # Helpers
 # ---------------------------
 def fetch_active_setups():
-    """Haalt actieve setups + minimale info op (fallback als je geen aparte util wilt)."""
+    """
+    Haalt actieve setups op, inclusief hun laatste score van vandaag uit daily_setup_scores.
+    """
     conn = get_db_connection()
     if not conn:
         logger.warning("⚠️ fetch_active_setups: geen DB-verbinding.")
         return []
+
+    today = date.today()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT DISTINCT ON (name)
-                       name,
-                       COALESCE(symbol, 'BTC') AS symbol,
-                       COALESCE(timeframe, '1D') AS timeframe,
-                       COALESCE(explanation, '') AS explanation,
-                       created_at AS timestamp
-                FROM setups
-                ORDER BY name, created_at DESC
+                SELECT DISTINCT ON (s.name)
+                       s.id,
+                       s.name,
+                       COALESCE(s.symbol, 'BTC') AS symbol,
+                       COALESCE(s.timeframe, '1D') AS timeframe,
+                       COALESCE(s.explanation, '') AS explanation,
+                       s.created_at AS timestamp,
+                       COALESCE(ds.score, 0) AS score,          -- ✅ score uit daily_setup_scores
+                       COALESCE(ds.is_active, false) AS is_active
+                FROM setups s
+                LEFT JOIN daily_setup_scores ds
+                       ON s.id = ds.setup_id AND ds.date = %s
+                ORDER BY s.name, s.created_at DESC
                 LIMIT 50
-            """)
+            """, (today,))
             rows = cur.fetchall()
             return [dict(r) for r in rows]
+
     except Exception as e:
         logger.warning(f"⚠️ fetch_active_setups error: {e}")
         return []
@@ -93,13 +104,13 @@ async def get_market_score():
 async def get_daily_scores():
     """
     ➤ Haalt actuele gecombineerde macro-, technische-, setup- en marktscores op uit de database.
-    Inclusief actieve setups voor het dashboard/rapport.
+    Inclusief actieve setups en hun actuele score (uit daily_setup_scores).
     """
     try:
         # Combineert macro/technical/market en levert top_contributors + interpretations
         scores = get_scores_for_symbol(include_metadata=True) or {}
 
-        # Actieve setups (lokaal opgehaald)
+        # Actieve setups inclusief score
         active_setups = fetch_active_setups()
         logger.info(f"📦 Actieve setups: {len(active_setups)}")
 
@@ -118,7 +129,7 @@ async def get_daily_scores():
             "setup": {
                 "score": float(scores.get("setup_score", 0)),
                 "interpretation": scores.get("setup_interpretation", "Geen actieve setups"),
-                "top_contributors": [s["name"] for s in active_setups] if active_setups else [],
+                "top_contributors": [s["name"] for s in active_setups if s.get("is_active")] if active_setups else [],
                 "active_setups": active_setups,
             },
             "market": {
