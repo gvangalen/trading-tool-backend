@@ -18,7 +18,7 @@ MARKET_INDICATOR_MAP = {
 }
 
 # =========================================================
-# 🧩 Bekende naam-aliases (voor consistentie tussen data en DB)
+# 🧩 Bekende naam-aliases
 # =========================================================
 NAME_ALIASES = {
     "fear_and_greed_index": "fear_greed_index",
@@ -30,13 +30,9 @@ NAME_ALIASES = {
 }
 
 # =========================================================
-# 🧠 Normalisatie functie voor indicatornamen
+# 🧠 Normalisatie functie
 # =========================================================
 def normalize_indicator_name(name: str) -> str:
-    """
-    Maakt indicatornamen consistent zodat spaties, hoofdletters, ampersands en streepjes
-    geen problemen meer veroorzaken bij vergelijking.
-    """
     normalized = (
         name.lower()
         .replace("&", "and")
@@ -45,7 +41,6 @@ def normalize_indicator_name(name: str) -> str:
         .replace("-", "_")
         .strip()
     )
-    # ✅ Aliases oplossen
     if normalized in NAME_ALIASES:
         normalized = NAME_ALIASES[normalized]
     return normalized
@@ -55,10 +50,6 @@ def normalize_indicator_name(name: str) -> str:
 # ✅ Universele database-functie voor scoreregels
 # =========================================================
 def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> Optional[dict]:
-    """
-    Zoekt passende scoreregel in DB op basis van indicatorwaarde.
-    Werkt case-insensitive en retourneert score, trend, interpretatie, actie.
-    """
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding in get_score_rule_from_db()")
@@ -67,14 +58,13 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
     table_map = {
         "technical": "technical_indicator_rules",
         "macro": "macro_indicator_rules",
-        "market": "technical_indicator_rules",  # ✅ market gebruikt dezelfde regels
+        "market": "technical_indicator_rules",  # market gebruikt dezelfde structuur
     }
     table = table_map.get(category)
     if not table:
         logger.error(f"⚠️ Ongeldige categorie: {category}")
         return None
 
-    # 🔁 Mapping voor market + naamnormalisatie
     normalized = normalize_indicator_name(indicator_name)
     mapped_name = normalized
     if category == "market":
@@ -117,16 +107,9 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
 
 
 # =========================================================
-# ✅ Dynamische scoregenerator op basis van DB
+# ✅ Dynamische scoregenerator (macro, technical, market)
 # =========================================================
 def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
-    """
-    Genereert scores voor alle indicatoren in een categorie ('technical', 'macro', 'market')
-    op basis van database-scoreregels.
-
-    Als 'data' niet meegegeven is, haalt de functie automatisch de meest recente
-    indicatorwaarden op uit de database.
-    """
     if data is None:
         data = {}
         conn = get_db_connection()
@@ -139,19 +122,18 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                     cur.execute("""
                         SELECT DISTINCT ON (name) name, value
                         FROM macro_data
-                        ORDER BY name, timestamp DESC
+                        ORDER BY name, timestamp DESC;
                     """)
                     rows = cur.fetchall()
                     data = {normalize_indicator_name(r[0]): float(r[1]) for r in rows if r[1] is not None}
 
                 elif category == "market":
-                    # ✅ Gebruik de market_data-tabel (BTC)
                     cur.execute("""
                         SELECT DISTINCT ON (symbol)
                             price, volume, change_24h
                         FROM market_data
                         WHERE symbol = 'BTC'
-                        ORDER BY symbol, timestamp DESC
+                        ORDER BY symbol, timestamp DESC;
                     """)
                     row = cur.fetchone()
                     if row:
@@ -165,7 +147,7 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                     cur.execute("""
                         SELECT DISTINCT ON (indicator) indicator, value
                         FROM technical_indicators
-                        ORDER BY indicator, timestamp DESC
+                        ORDER BY indicator, timestamp DESC;
                     """)
                     rows = cur.fetchall()
                     data = {normalize_indicator_name(r[0]): float(r[1]) for r in rows if r[1] is not None}
@@ -179,7 +161,6 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
         logger.warning(f"⚠️ Geen inputdata gevonden voor categorie {category}")
         return {"scores": {}, "total_score": 0}
 
-    # 🔹 Scores berekenen
     scores = {}
     total_score = 0
     count = 0
@@ -196,7 +177,7 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
         scores[indicator] = {
             "value": value,
             "score": score,
-            "trend": result.get("trend", "Onbekend"),
+            "trend": result.get("trend", "–"),
             "interpretation": result.get("interpretation", ""),
             "action": result.get("action", ""),
         }
@@ -210,12 +191,9 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
 
 
 # =========================================================
-# ✅ Samengestelde scoreberekening voor dashboard/rapport
+# ✅ Samengestelde scoreberekening (voor dashboard/rapport)
 # =========================================================
 def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
-    """
-    Combineert macro-, technical- en market-scores uit DB tot één geheel.
-    """
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding in get_scores_for_symbol()")
@@ -223,23 +201,20 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
-            # Macro data
             cur.execute("""
                 SELECT DISTINCT ON (name) name, value
                 FROM macro_data
-                ORDER BY name, timestamp DESC
+                ORDER BY name, timestamp DESC;
             """)
             macro_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall() if r[1] is not None}
 
-            # Technische data
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
-                ORDER BY indicator, timestamp DESC
+                ORDER BY indicator, timestamp DESC;
             """)
             technical_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall() if r[1] is not None}
 
-        # ✅ Market-data ophalen
         market_scores = generate_scores_db("market")
         macro_scores = generate_scores_db("macro", macro_data)
         tech_scores = generate_scores_db("technical", technical_data)
@@ -256,7 +231,6 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             "setup_score": setup_score,
         }
 
-        # Extra metadata voor frontend/dashboard
         if include_metadata:
             def extract_top(scores_dict):
                 if not scores_dict.get("scores"):
@@ -283,7 +257,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
 
 
 # =========================================================
-# ✅ Compatibiliteit (oude functies blijven bestaan)
+# ✅ Compatibiliteit
 # =========================================================
 def calculate_macro_scores(data: Dict[str, float]) -> Dict[str, Any]:
     return generate_scores_db("macro", data)
@@ -294,13 +268,13 @@ def calculate_technical_scores(data: Dict[str, float]) -> Dict[str, Any]:
 def calculate_market_scores(data: Dict[str, float]) -> Dict[str, Any]:
     return generate_scores_db("market", data)
 
+
 # =========================================================
-# ✅ Backwards compat: calculate_score_from_rules (voor macro_interpreter)
+# ✅ Backwards compatibiliteit voor macro_interpreter
 # =========================================================
 def calculate_score_from_rules(value: float, rules: list[dict]) -> dict:
     """
-    Vindt de juiste scoreregel op basis van 'value' en een lijst met regels
-    (zoals gebruikt in macro_interpreter of technical_interpreter).
+    Vindt de juiste scoreregel op basis van 'value' en een lijst met regels.
     Retourneert score, trend, interpretatie, actie.
     """
     try:
