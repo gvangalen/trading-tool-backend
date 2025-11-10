@@ -4,12 +4,17 @@ from fastapi import APIRouter, HTTPException, Request, Query
 from datetime import datetime, timedelta
 import httpx
 from collections import defaultdict
+
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_scores_for_symbol
 
+# =========================================================
+# ⚙️ Router setup
+# =========================================================
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logger.info("🚀 market_data_api.py geladen – alle market-data routes actief.")
+
 
 # =========================================================
 # 🔄 Dynamisch laden van API endpoints uit database
@@ -32,10 +37,15 @@ def get_market_endpoints():
         logger.error(f"❌ Fout bij ophalen market endpoints: {e}")
         return {}
 
+
 MARKET_ENDPOINTS = get_market_endpoints()
+if not MARKET_ENDPOINTS:
+    logger.warning("⚠️ Geen actieve market endpoints in DB – gebruik standaard CoinGecko URLs.")
+
 COINGECKO_URL = MARKET_ENDPOINTS.get("btc_price", "https://api.coingecko.com/api/v3/coins/bitcoin")
 VOLUME_URL = MARKET_ENDPOINTS.get("btc_volume", "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=7")
 CHANGE_URL = MARKET_ENDPOINTS.get("btc_change_24h", "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true")
+
 
 # =========================================================
 # ✅ /market_data/list — recente marketdata ophalen
@@ -64,6 +74,7 @@ async def list_market_data(since_minutes: int = Query(default=1440)):
     except Exception as e:
         logger.error(f"❌ [list] DB-fout: {e}")
         raise HTTPException(status_code=500, detail="❌ Kon marktdata niet ophalen.")
+
 
 # =========================================================
 # ✅ /market_data — actuele data ophalen via Coingecko
@@ -113,6 +124,7 @@ def save_market_data():
         logger.error(f"❌ Fout bij opslaan marktdata: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 # =========================================================
 # ✅ /market_data/btc/7d/fill — 7-daagse BTC data ophalen en opslaan
 # =========================================================
@@ -159,6 +171,7 @@ async def fill_btc_7day_data():
     finally:
         conn.close()
 
+
 # =========================================================
 # ✅ /market_data/btc/latest — laatste BTC prijs
 # =========================================================
@@ -178,6 +191,7 @@ def get_latest_btc_price():
             raise HTTPException(status_code=404, detail="Geen BTC data gevonden")
         keys = ['id', 'symbol', 'price', 'change_24h', 'volume', 'timestamp']
         return dict(zip(keys, row))
+
 
 # =========================================================
 # ✅ /market_data/interpreted — marketdata met score/advies
@@ -201,9 +215,12 @@ async def fetch_interpreted_data():
             raise HTTPException(status_code=404, detail="Geen BTC data gevonden")
 
         symbol, price, change, volume, timestamp = row
-        scores = get_scores_for_symbol(symbol)
-        market_details = scores.get("scores", {}).get("market", {})
+        scores = get_scores_for_symbol(include_metadata=True)
+
         market_score = scores.get("market_score", 0)
+        market_trend = "–"
+        market_interpretation = scores.get("market_interpretation", "")
+        market_action = "Geen actie"
 
         return {
             "symbol": symbol,
@@ -212,13 +229,14 @@ async def fetch_interpreted_data():
             "change_24h": float(change),
             "volume": float(volume),
             "score": market_score,
-            "trend": market_details.get("trend", "Onbekend"),
-            "interpretation": market_details.get("interpretation", "Geen interpretatie beschikbaar"),
-            "action": market_details.get("action", "Geen actie"),
+            "trend": market_trend,
+            "interpretation": market_interpretation,
+            "action": market_action,
         }
     except Exception as e:
         logger.error(f"❌ [interpreted] Fout bij interpretatie: {e}")
         raise HTTPException(status_code=500, detail="❌ Interpretatiefout via scoring_util.")
+
 
 # =========================================================
 # ✅ /market_data/7d — laatste 7 dagen uit DB
@@ -251,6 +269,7 @@ async def get_market_data_7d():
     finally:
         conn.close()
 
+
 # =========================================================
 # ✅ /market_data/forward — alle forward returns ophalen
 # =========================================================
@@ -279,6 +298,7 @@ async def get_market_forward_returns():
         logger.error(f"❌ [forward] Fout bij ophalen returns: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen forward returns.")
 
+
 # =========================================================
 # ✅ Forward returns per periode (week / maand / kwartaal / jaar)
 # =========================================================
@@ -303,6 +323,7 @@ def get_week_returns():
         logger.error(f"❌ Week returns error: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen week returns.")
 
+
 @router.get("/market_data/forward/maand")
 def get_month_returns():
     try:
@@ -323,6 +344,7 @@ def get_month_returns():
     except Exception as e:
         logger.error(f"❌ Month returns error: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen maand returns.")
+
 
 @router.get("/market_data/forward/kwartaal")
 def get_quarter_returns():
@@ -345,6 +367,7 @@ def get_quarter_returns():
         logger.error(f"❌ Quarter returns error: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen kwartaal returns.")
 
+
 @router.get("/market_data/forward/jaar")
 def get_year_returns():
     try:
@@ -365,6 +388,7 @@ def get_year_returns():
     except Exception as e:
         logger.error(f"❌ Year returns error: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen jaar returns.")
+
 
 # =========================================================
 # ✅ Save routes
@@ -389,6 +413,7 @@ async def save_market_data_7d(data: list[dict]):
         logger.error(f"❌ [7d/save] {e}")
         raise HTTPException(status_code=500, detail="Fout bij opslaan 7d data.")
 
+
 @router.post("/market_data/forward/save")
 async def save_forward_returns(data: list[dict]):
     if not data:
@@ -406,9 +431,12 @@ async def save_forward_returns(data: list[dict]):
         conn.close()
         return {"status": "✅ Forward returns opgeslagen."}
     except Exception as e:
-        logger.error(f"❌ [forward/save] {e}")
-        raise HTTPException(status_code=500, detail="Fout bij opslaan forward returns.")
+        logger.error(f
+                     
 
+# =========================================================
+# ✅ Delete indicator
+# =========================================================                     
 @router.delete("/market_data/{id}")
 async def delete_market_asset(id: int):
     try:
@@ -422,3 +450,5 @@ async def delete_market_asset(id: int):
     except Exception as e:
         logger.error(f"❌ [delete] Fout bij verwijderen: {e}")
         raise HTTPException(status_code=500, detail="❌ Kon asset niet verwijderen.")
+
+                     
