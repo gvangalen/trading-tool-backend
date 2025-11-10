@@ -435,6 +435,26 @@ async def save_forward_returns(data: list[dict]):
         raise HTTPException(status_code=400, detail="❌ Geen data ontvangen.")
     try:
         conn = get_db_connection()
+        cur = conn.cursor()
+        for row in data:
+            cur.execute("""
+                INSERT INTO market_forward_returns (symbol, period, start_date, end_date, change, avg_daily, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT DO NOTHING
+            """, (
+                row["symbol"],
+                row["period"],
+                row["start_date"],
+                row["end_date"],
+                row["change"],
+                row["avg_daily"]
+            ))
+        conn.commit()
+        conn.close()
+        return {"status": "✅ Forward returns opgeslagen."}
+    except Exception as e:
+        logger.error(f"❌ [forward/save] Fout bij opslaan forward returns: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij opslaan forward returns.")
 
 # =========================================================
 # ✅ Delete indicator
