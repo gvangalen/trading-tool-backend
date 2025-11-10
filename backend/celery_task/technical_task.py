@@ -37,7 +37,7 @@ def safe_request(url, params=None):
 # =====================================================
 # 📅 Check of al verwerkt vandaag
 # =====================================================
-def already_fetched_today(symbol: str, indicator: str) -> bool:
+def already_fetched_today(indicator: str) -> bool:
     """Controleert of deze indicator vandaag al is opgeslagen."""
     conn = get_db_connection()
     if not conn:
@@ -46,8 +46,8 @@ def already_fetched_today(symbol: str, indicator: str) -> bool:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT 1 FROM technical_indicators
-                WHERE symbol = %s AND indicator = %s AND DATE(timestamp) = CURRENT_DATE
-            """, (symbol, indicator))
+                WHERE indicator = %s AND DATE(timestamp) = CURRENT_DATE
+            """, (indicator,))
             return cur.fetchone() is not None
     except Exception as e:
         logger.error(f"⚠️ Fout bij controleren bestaande technische data: {e}")
@@ -69,10 +69,9 @@ def store_technical_score_db(payload: dict):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW());
+                INSERT INTO technical_indicators (indicator, value, score, advies, uitleg, timestamp)
+                VALUES (%s, %s, %s, %s, %s, NOW());
             """, (
-                payload.get("symbol"),
                 payload.get("indicator"),
                 payload.get("value"),
                 payload.get("score"),
@@ -82,7 +81,7 @@ def store_technical_score_db(payload: dict):
         conn.commit()
 
         logger.info(
-            f"💾 Opgeslagen {payload.get('indicator').upper()} ({payload.get('symbol')}) — "
+            f"💾 Opgeslagen {payload.get('indicator').upper()} — "
             f"waarde={payload.get('value')} | score={payload.get('score')} | advies={payload.get('advies')} | "
             f"tijd={datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
         )
@@ -106,14 +105,13 @@ def get_active_technical_indicators():
 
     try:
         with conn.cursor() as cur:
-            # 🔄 Gebruik 'link' i.p.v. 'data_url'
             cur.execute("""
-                SELECT name, source, link, symbol
+                SELECT name, source, link
                 FROM indicators
                 WHERE category = 'technical' AND active = TRUE;
             """)
             rows = cur.fetchall()
-            return [{"name": r[0], "source": r[1], "link": r[2], "symbol": r[3]} for r in rows]
+            return [{"name": r[0], "source": r[1], "link": r[2]} for r in rows]
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen technische indicatoren: {e}")
         return []
@@ -139,12 +137,11 @@ def fetch_and_process_technical():
         name = ind["name"]
         source = ind.get("source")
         link = ind.get("link")
-        symbol = ind.get("symbol", "BTC")
 
-        logger.info(f"➡️ Verwerk indicator: {name} ({symbol})")
+        logger.info(f"➡️ Verwerk indicator: {name}")
 
         # ⏩ Vermijd dubbele opslag
-        if already_fetched_today(symbol, name):
+        if already_fetched_today(name):
             logger.info(f"⏩ {name} is vandaag al verwerkt, overslaan.")
             continue
 
@@ -169,7 +166,6 @@ def fetch_and_process_technical():
             continue
 
         payload = {
-            "symbol": symbol,
             "indicator": name,
             "value": value,
             "score": interpretation.get("score", 50),
