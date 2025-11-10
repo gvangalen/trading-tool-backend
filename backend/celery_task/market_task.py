@@ -8,7 +8,6 @@ from celery import shared_task
 
 # Eigen imports
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import generate_scores_db
 from backend.celery_task.btc_price_history_task import update_btc_history
 
 # === Config ===
@@ -85,7 +84,7 @@ def store_market_data_db(symbol, price, volume, change_24h):
         conn.commit()
         logger.info(f"✅ Upsert market_data: {symbol} prijs={price}, volume={volume}, 24h={change_24h}")
     except Exception:
-        logger.error("❌ Fout bij opslaan market_data (upsert zonder date):")
+        logger.error("❌ Fout bij opslaan market_data:")
         logger.error(traceback.format_exc())
     finally:
         conn.close()
@@ -126,7 +125,7 @@ def fetch_market_data_task():
 # 2️⃣ Dagelijkse snapshot (voor rapporten)
 @shared_task(name="backend.celery_task.market_task.save_market_data_daily")
 def save_market_data_daily():
-    """Dagelijkse snapshot van de BTC-marktdata (zelfde als fetch_market_data_task)."""
+    """Dagelijkse snapshot van de BTC-marktdata."""
     logger.info("🕛 Dagelijkse market snapshot...")
     try:
         process_market_now()
@@ -136,21 +135,70 @@ def save_market_data_daily():
         logger.error(traceback.format_exc())
 
 
-# 3️⃣ BTC-prijs bijwerken (range-based update)
-@shared_task(name="backend.celery_task.market_task.sync_price_history_and_returns")
-def sync_price_history_and_returns():
-    """Update de BTC-prijsdata en berekent daarna forward returns."""
-    logger.info("🔄 Start synchronisatie BTC-historie + forward returns...")
+# 3️⃣ 7-daagse OHLC data ophalen via DB-config
+@shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
+def fetch_market_data_7d():
+    """Haalt 7-daagse BTC OHLC-data op via de URL uit de indicators-tabel en slaat op in market_data_7d."""
+    logger.info("📆 Start fetch_market_data_7d via DB-config...")
+
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen DB-verbinding.")
+        return
+
     try:
-        update_btc_history()
-        calculate_and_save_forward_returns.apply_async(countdown=5)
-        logger.info("✅ Forward returns berekening ingepland.")
+        # URL ophalen uit DB
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT data_url
+                FROM indicators
+                WHERE name = 'btc_ohlc' AND category = 'market' AND active = TRUE
+                LIMIT 1;
+            """)
+            row = cur.fetchone()
+
+        if not row:
+            logger.warning("⚠️ Geen actieve 'btc_ohlc' indicator gevonden in de database.")
+            return
+
+        data_url = row[0]
+        logger.info(f"🌐 URL uit DB: {data_url}")
+
+        # Ophalen van de data
+        resp = requests.get(data_url, timeout=15)
+        resp.raise_for_status()
+        ohlc = resp.json() or []
+
+        inserted = 0
+        with conn.cursor() as cur:
+            for ts, open_p, high_p, low_p, close_p in ohlc:
+                date = datetime.utcfromtimestamp(ts / 1000).date()
+                change = round(((close_p - open_p) / open_p) * 100, 2) if open_p else None
+
+                cur.execute("""
+                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, created_at)
+                    VALUES ('BTC', %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (symbol, date) DO UPDATE SET
+                        open = EXCLUDED.open,
+                        high = EXCLUDED.high,
+                        low  = EXCLUDED.low,
+                        close= EXCLUDED.close,
+                        change = EXCLUDED.change,
+                        created_at = NOW();
+                """, (date, open_p, high_p, low_p, close_p, change))
+                inserted += 1
+
+        conn.commit()
+        logger.info(f"✅ market_data_7d succesvol bijgewerkt ({inserted} rijen).")
+
     except Exception:
-        logger.error("❌ Fout in sync_price_history_and_returns()")
+        logger.error("❌ Fout bij fetch_market_data_7d:")
         logger.error(traceback.format_exc())
+    finally:
+        conn.close()
 
 
-# 4️⃣ Forward returns berekenen en opslaan
+# 4️⃣ Forward returns berekenen (zoals eerder)
 @shared_task(name="backend.celery_task.market_task.calculate_and_save_forward_returns")
 def calculate_and_save_forward_returns():
     """Bereken en sla forward returns op uit btc_price_history."""
@@ -164,6 +212,7 @@ def calculate_and_save_forward_returns():
         with conn.cursor() as cur:
             cur.execute("SELECT date, price FROM btc_price_history ORDER BY date ASC")
             rows = cur.fetchall()
+
         if not rows:
             logger.warning("⚠️ Geen data in btc_price_history.")
             return
@@ -182,99 +231,23 @@ def calculate_and_save_forward_returns():
                 avg_daily = change / d
                 results.append((start["date"], end["date"], d, change, avg_daily))
 
-        if not results:
-            logger.warning("⚠️ Geen returns berekend.")
-            return
-
-        with conn:
-            with conn.cursor() as cur:
-                for s_date, e_date, days, change, avg_daily in results:
-                    cur.execute("""
-                        INSERT INTO market_forward_returns
-                            (symbol, period, start_date, end_date, change, avg_daily)
-                        VALUES ('BTC', %s, %s, %s, %s, %s)
-                        ON CONFLICT (symbol, period, start_date)
-                        DO UPDATE SET
-                            end_date = EXCLUDED.end_date,
-                            change = EXCLUDED.change,
-                            avg_daily = EXCLUDED.avg_daily
-                    """, (f"{days}d", s_date, e_date, round(change, 2), round(avg_daily, 3)))
+        with conn.cursor() as cur:
+            for s_date, e_date, days, change, avg_daily in results:
+                cur.execute("""
+                    INSERT INTO market_forward_returns
+                        (symbol, period, start_date, end_date, change, avg_daily)
+                    VALUES ('BTC', %s, %s, %s, %s, %s)
+                    ON CONFLICT (symbol, period, start_date)
+                    DO UPDATE SET
+                        end_date = EXCLUDED.end_date,
+                        change = EXCLUDED.change,
+                        avg_daily = EXCLUDED.avg_daily
+                """, (f"{days}d", s_date, e_date, round(change, 2), round(avg_daily, 3)))
         conn.commit()
         logger.info(f"✅ Forward returns opgeslagen ({len(results)} rijen).")
 
     except Exception:
         logger.error("❌ Fout in calculate_and_save_forward_returns()")
-        logger.error(traceback.format_exc())
-    finally:
-        if 'conn' in locals() and conn:
-            conn.close()
-
-
-# 5️⃣ 7-daags aggregaat vullen uit eigen DB
-@shared_task(name="backend.celery_task.market_task.save_market_data_7d")
-def save_market_data_7d():
-    """
-    Bouw 7-daagse aggregaten op uit market_data en sla deze netjes op
-    in de bestaande tabel market_data_7d (kolommen: symbol, date, open, high, low, close, change, volume).
-    """
-    logger.info("📊 Opbouwen 7-daagse marktdata (DB-native, verbeterde query)...")
-    try:
-        conn = get_db_connection()
-        if not conn:
-            logger.error("❌ Geen DB-verbinding.")
-            return
-
-        with conn.cursor() as cur:
-            # ✅ Eerste stap: bereken open/high/low/close/volume/change per dag
-            cur.execute("""
-                WITH ordered AS (
-                    SELECT
-                        symbol,
-                        DATE(timestamp) AS date,
-                        price,
-                        volume,
-                        change_24h,
-                        ROW_NUMBER() OVER (PARTITION BY DATE(timestamp) ORDER BY timestamp ASC) AS rn_open,
-                        ROW_NUMBER() OVER (PARTITION BY DATE(timestamp) ORDER BY timestamp DESC) AS rn_close
-                    FROM market_data
-                    WHERE symbol = 'BTC'
-                ),
-                daily AS (
-                    SELECT
-                        date,
-                        MAX(price) AS high,
-                        MIN(price) AS low,
-                        AVG(volume) AS volume,
-                        AVG(change_24h) AS avg_change,
-                        (SELECT price FROM ordered o2 WHERE o2.date = o1.date AND o2.rn_open = 1 LIMIT 1) AS open,
-                        (SELECT price FROM ordered o3 WHERE o3.date = o1.date AND o3.rn_close = 1 LIMIT 1) AS close
-                    FROM ordered o1
-                    GROUP BY date
-                )
-                SELECT date, open, high, low, close, avg_change, volume
-                FROM daily
-                ORDER BY date DESC
-                LIMIT 7;
-            """)
-            rows = cur.fetchall()
-
-        if not rows:
-            logger.warning("⚠️ Geen 7-daagse marktdata gevonden om op te slaan.")
-            return
-
-        with conn.cursor() as cur2:
-            cur2.execute("TRUNCATE TABLE market_data_7d;")
-            for date, open_, high, low, close, change, volume in rows:
-                cur2.execute("""
-                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume)
-                    VALUES ('BTC', %s, %s, %s, %s, %s, %s, %s)
-                """, (date, open_, high, low, close, change, volume))
-
-        conn.commit()
-        logger.info(f"✅ market_data_7d bijgewerkt met {len(rows)} rijen.")
-
-    except Exception:
-        logger.error("❌ Fout in save_market_data_7d()")
         logger.error(traceback.format_exc())
     finally:
         if 'conn' in locals() and conn:
