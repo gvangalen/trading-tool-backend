@@ -12,6 +12,7 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
     """
     🔍 Haalt de actuele waarde op van een macro-indicator via de data_url in de DB.
     Geeft altijd {"value": float(...)} terug.
+
     Ondersteunt o.a.:
       - Fear & Greed Index (alternative.me)
       - BTC Dominance (coingecko)
@@ -34,18 +35,20 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
             try:
                 v = data.get("data", [{}])[0].get("value")
                 if v is not None:
+                    logger.info(f"📊 Fear & Greed waarde: {v}")
                     return {"value": float(v)}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"⚠️ Alternative.me parsing mislukt: {e}")
 
         # === 2️⃣ BTC Dominance (CoinGecko)
         if "coingecko" in (source or "").lower():
             try:
                 v = data.get("data", {}).get("market_cap_percentage", {}).get("btc")
                 if v is not None:
+                    logger.info(f"📊 BTC Dominance waarde: {v}")
                     return {"value": float(v)}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"⚠️ CoinGecko parsing mislukt: {e}")
 
         # === 3️⃣ Yahoo Finance (S&P500, VIX, Oil, eventueel DXY fallback)
         if "yahoo" in (source or "").lower():
@@ -54,9 +57,10 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
                 meta = result.get("meta", {})
                 v = meta.get("regularMarketPrice")
                 if v is not None:
+                    logger.info(f"📊 Yahoo Finance waarde: {v}")
                     return {"value": float(v)}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"⚠️ Yahoo parsing mislukt: {e}")
 
         # === 4️⃣ FRED API (Interest rate / Inflation)
         if "fred" in (source or "").lower():
@@ -64,14 +68,15 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
                 obs = data.get("observations", [])
                 if obs:
                     v = obs[-1].get("value")
-                    if v is not None:
+                    if v not in (None, "."):
+                        logger.info(f"📊 FRED waarde: {v}")
                         return {"value": float(v)}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"⚠️ FRED parsing mislukt: {e}")
 
-        # === 5️⃣ TradingView – niet publiek beschikbaar
+        # === 5️⃣ TradingView – niet publiek beschikbaar (alleen fallback)
         if "tradingview" in (source or "").lower():
-            logger.warning(f"⚠️ TradingView API is niet publiek – geen waarde opgehaald voor '{name}'")
+            logger.warning(f"⚠️ TradingView API is niet publiek – geen directe waarde opgehaald voor '{name}'")
             return None
 
         # === 6️⃣ Fallback – universele extracties
@@ -94,7 +99,7 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
                 if v:
                     return {"value": float(v)}
 
-        logger.warning(f"⚠️ Geen waarde gevonden voor '{name}' in response: {str(data)[:200]}")
+        logger.warning(f"⚠️ Geen waarde gevonden voor '{name}' in response: {str(data)[:250]}")
         return None
 
     except Exception as e:
@@ -127,10 +132,17 @@ def interpret_macro_indicator(name: str, value: float) -> dict | None:
             return None
 
         rules = [
-            {"range_min": r[0], "range_max": r[1], "score": r[2],
-             "trend": r[3], "interpretation": r[4], "action": r[5]}
+            {
+                "range_min": r[0],
+                "range_max": r[1],
+                "score": r[2],
+                "trend": r[3],
+                "interpretation": r[4],
+                "action": r[5]
+            }
             for r in rows
         ]
+
         return calculate_score_from_rules(value, rules)
 
     except Exception as e:
