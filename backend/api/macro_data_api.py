@@ -79,9 +79,26 @@ async def add_macro_indicator(request: Request):
             logger.info(f"⚙️ [add] Ophalen actuele waarde voor '{name}' via source={source}")
             from backend.utils.macro_interpreter import fetch_macro_value
             result = await fetch_macro_value(name, source=source, link=data_url)
-            if not result or "value" not in result:
-                raise HTTPException(status_code=500, detail=f"❌ Geen geldige waarde ontvangen voor '{name}'")
-            value = float(result["value"])
+
+            if not result:
+                raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'")
+
+            # ✅ Slimmere detectie van de waarde (ondersteunt meerdere formaten)
+            if isinstance(result, dict):
+                if "value" in result:
+                    value = float(result["value"])
+                elif "data" in result and isinstance(result["data"], dict) and "value" in result["data"]:
+                    value = float(result["data"]["value"])
+                elif "result" in result:
+                    value = float(result["result"])
+                else:
+                    raise HTTPException(status_code=500, detail=f"❌ Ongeldig resultaatformaat voor '{name}': {result}")
+            else:
+                # Fallback als de functie direct een getal retourneert
+                try:
+                    value = float(result)
+                except Exception:
+                    raise HTTPException(status_code=500, detail=f"❌ Kan waarde niet converteren voor '{name}': {result}")
 
         # ✅ Score berekenen via scoreregels in DB
         from backend.utils.scoring_utils import generate_scores_db
@@ -116,7 +133,6 @@ async def add_macro_indicator(request: Request):
         raise HTTPException(status_code=500, detail=f"❌ [DB02] Fout bij opslaan macro data: {str(e)}")
     finally:
         conn.close()
-
 
 # =====================================
 # 📄 Ophalen macro-data
