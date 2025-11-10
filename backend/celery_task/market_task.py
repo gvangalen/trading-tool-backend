@@ -215,9 +215,9 @@ def calculate_and_save_forward_returns():
 def save_market_data_7d():
     """
     Bouw 7-daagse aggregaten op uit market_data en sla deze netjes op
-    in de bestaande tabel market_data_7d (met kolommen: symbol, date, open, high, low, close, change, volume).
+    in de bestaande tabel market_data_7d (kolommen: symbol, date, open, high, low, close, change, volume).
     """
-    logger.info("📊 Opbouwen 7-daagse marktdata (DB-native, matching tabelstructuur)...")
+    logger.info("📊 Opbouwen 7-daagse marktdata (DB-native, verbeterde query)...")
     try:
         conn = get_db_connection()
         if not conn:
@@ -225,23 +225,34 @@ def save_market_data_7d():
             return
 
         with conn.cursor() as cur:
-            # Haal per dag de eerste en laatste prijs om open/close te bepalen
+            # ✅ Eerste stap: bereken open/high/low/close/volume/change per dag
             cur.execute("""
-                WITH per_day AS (
+                WITH ordered AS (
                     SELECT
+                        symbol,
                         DATE(timestamp) AS date,
-                        FIRST_VALUE(price) OVER (PARTITION BY DATE(timestamp) ORDER BY timestamp ASC) AS open,
-                        MAX(price) AS high,
-                        MIN(price) AS low,
-                        LAST_VALUE(price) OVER (PARTITION BY DATE(timestamp) ORDER BY timestamp ASC RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS close,
-                        AVG(volume) AS volume,
-                        AVG(change_24h) AS avg_change
+                        price,
+                        volume,
+                        change_24h,
+                        ROW_NUMBER() OVER (PARTITION BY DATE(timestamp) ORDER BY timestamp ASC) AS rn_open,
+                        ROW_NUMBER() OVER (PARTITION BY DATE(timestamp) ORDER BY timestamp DESC) AS rn_close
                     FROM market_data
                     WHERE symbol = 'BTC'
-                    GROUP BY DATE(timestamp)
+                ),
+                daily AS (
+                    SELECT
+                        date,
+                        MAX(price) AS high,
+                        MIN(price) AS low,
+                        AVG(volume) AS volume,
+                        AVG(change_24h) AS avg_change,
+                        (SELECT price FROM ordered o2 WHERE o2.date = o1.date AND o2.rn_open = 1 LIMIT 1) AS open,
+                        (SELECT price FROM ordered o3 WHERE o3.date = o1.date AND o3.rn_close = 1 LIMIT 1) AS close
+                    FROM ordered o1
+                    GROUP BY date
                 )
                 SELECT date, open, high, low, close, avg_change, volume
-                FROM per_day
+                FROM daily
                 ORDER BY date DESC
                 LIMIT 7;
             """)
@@ -252,12 +263,8 @@ def save_market_data_7d():
             return
 
         with conn.cursor() as cur2:
-            # Leeg de tabel (zodat alleen de laatste 7 dagen zichtbaar blijven)
             cur2.execute("TRUNCATE TABLE market_data_7d;")
-
-            # Voeg nieuwe rijen in
-            for row in rows:
-                date, open_, high, low, close, change, volume = row
+            for date, open_, high, low, close, change, volume in rows:
                 cur2.execute("""
                     INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume)
                     VALUES ('BTC', %s, %s, %s, %s, %s, %s, %s)
