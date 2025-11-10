@@ -83,7 +83,8 @@ def store_technical_score_db(payload: dict):
 
         logger.info(
             f"💾 Opgeslagen {payload.get('indicator').upper()} ({payload.get('symbol')}) — "
-            f"waarde={payload.get('value')} | score={payload.get('score')} | advies={payload.get('advies')} | tijd={datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"waarde={payload.get('value')} | score={payload.get('score')} | advies={payload.get('advies')} | "
+            f"tijd={datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
     except Exception as e:
@@ -105,8 +106,9 @@ def get_active_technical_indicators():
 
     try:
         with conn.cursor() as cur:
+            # 🔄 Gebruik 'link' i.p.v. 'data_url'
             cur.execute("""
-                SELECT name, source, data_url, symbol
+                SELECT name, source, link, symbol
                 FROM indicators
                 WHERE category = 'technical' AND active = TRUE;
             """)
@@ -141,6 +143,7 @@ def fetch_and_process_technical():
 
         logger.info(f"➡️ Verwerk indicator: {name} ({symbol})")
 
+        # ⏩ Vermijd dubbele opslag
         if already_fetched_today(symbol, name):
             logger.info(f"⏩ {name} is vandaag al verwerkt, overslaan.")
             continue
