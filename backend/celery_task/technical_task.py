@@ -9,6 +9,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 # ✅ Eigen utils
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import generate_scores_db  # leest scoreregels uit DB
+from backend.utils.technical_interpreter import fetch_technical_value, interpret_technical_indicator
 
 # === ✅ Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -213,5 +214,73 @@ def fetch_and_process_technical():
 # ============================================
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
 def fetch_technical_data_day():
-    """Dagelijkse taak: haalt technische data dynamisch op via DB."""
-    fetch_and_process_technical()
+    """
+    🔁 Dagelijkse taak: haalt technische indicatoren (RSI, MA200, Volume, etc.) op via DB-config
+    en slaat actuele waarden + scores op in 'technical_data'.
+    """
+    logger.info("🚀 Start fetch_technical_data_day (DB-driven)...")
+
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen databaseverbinding.")
+        return
+
+    try:
+        with conn.cursor() as cur:
+            # ✅ Alle actieve technische indicatoren ophalen
+            cur.execute("""
+                SELECT name, source, data_url, symbol
+                FROM indicators
+                WHERE category = 'technical' AND active = TRUE;
+            """)
+            indicators = cur.fetchall()
+
+        if not indicators:
+            logger.warning("⚠️ Geen actieve technische indicatoren gevonden in DB.")
+            return
+
+        inserted = 0
+        for name, source, data_url, symbol in indicators:
+            logger.info(f"📊 Verwerk technische indicator: {name}")
+
+            # ✅ Waarde ophalen via util
+            result = None
+            try:
+                result = __import__("asyncio").run(fetch_technical_value(name, source, data_url))
+            except Exception as e:
+                logger.error(f"❌ Fout bij ophalen waarde voor '{name}': {e}")
+                continue
+
+            if not result or "value" not in result:
+                logger.warning(f"⚠️ Geen waarde opgehaald voor '{name}'.")
+                continue
+
+            value = result["value"]
+
+            # ✅ Scoren via database-scoreregels
+            interpretation = interpret_technical_indicator(name, value)
+            if not interpretation:
+                logger.warning(f"⚠️ Geen scoreregels gevonden voor '{name}'")
+                continue
+
+            score = interpretation.get("score", 10)
+            trend = interpretation.get("trend", "–")
+            interpretation_txt = interpretation.get("interpretation", "–")
+            action = interpretation.get("action", "–")
+
+            # ✅ Opslaan in DB
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO technical_data (symbol, indicator, value, score, trend, interpretation, action, timestamp)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                """, (symbol or "BTC", name, value, score, trend, interpretation_txt, action))
+            conn.commit()
+            inserted += 1
+
+        logger.info(f"✅ {inserted} technische indicatoren succesvol bijgewerkt.")
+
+    except Exception as e:
+        logger.error(f"❌ Fout in fetch_technical_data_day(): {e}")
+        logger.error(traceback.format_exc())
+    finally:
+        conn.close()
