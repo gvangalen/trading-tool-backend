@@ -17,6 +17,17 @@ MARKET_INDICATOR_MAP = {
     "volume": "btc_volume",
 }
 
+# =========================================================
+# 🧩 Bekende naam-aliases (voor consistentie tussen data en DB)
+# =========================================================
+NAME_ALIASES = {
+    "fear_and_greed_index": "fear_greed_index",
+    "fear_greed": "fear_greed_index",
+    "sandp500": "sp500",
+    "s&p500": "sp500",
+    "s&p_500": "sp500",
+    "sp_500": "sp500",
+}
 
 # =========================================================
 # 🧠 Normalisatie functie voor indicatornamen
@@ -26,7 +37,7 @@ def normalize_indicator_name(name: str) -> str:
     Maakt indicatornamen consistent zodat spaties, hoofdletters, ampersands en streepjes
     geen problemen meer veroorzaken bij vergelijking.
     """
-    return (
+    normalized = (
         name.lower()
         .replace("&", "and")
         .replace("s&p", "sp")
@@ -34,6 +45,10 @@ def normalize_indicator_name(name: str) -> str:
         .replace("-", "_")
         .strip()
     )
+    # ✅ Aliases oplossen
+    if normalized in NAME_ALIASES:
+        normalized = NAME_ALIASES[normalized]
+    return normalized
 
 
 # =========================================================
