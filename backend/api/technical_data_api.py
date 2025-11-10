@@ -8,21 +8,23 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+
 # ============================================
 # 🧩  Hulp-functies
 # ============================================
-
 def safe_float(value):
     try:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
 
+
 def safe_int(value):
     try:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
 
 def safe_fetchall(cur):
     """Zorgt dat fetchall() nooit None teruggeeft."""
@@ -46,7 +48,7 @@ async def get_technical_data():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                SELECT indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
                 ORDER BY timestamp DESC
                 LIMIT 50;
@@ -59,13 +61,12 @@ async def get_technical_data():
 
         return [
             {
-                "symbol": r[0],
-                "indicator": r[1],
-                "waarde": safe_float(r[2]),
-                "score": safe_int(r[3]),
-                "advies": r[4],
-                "uitleg": r[5],
-                "timestamp": r[6].isoformat() if r[6] else None,
+                "indicator": r[0],
+                "waarde": safe_float(r[1]),
+                "score": safe_int(r[2]),
+                "advies": r[3],
+                "uitleg": r[4],
+                "timestamp": r[5].isoformat() if r[5] else None,
             } for r in rows
         ]
     except Exception as e:
@@ -74,13 +75,12 @@ async def get_technical_data():
     finally:
         conn.close()
 
+
 @router.post("/technical_data")
 async def save_or_activate_technical_data(payload: dict):
     """
     ➕ Voeg een bestaande technische indicator toe of sla data op.
     - Controleert eerst of de indicator bestaat in de `indicators`-tabel.
-    - Als er geen 'value' wordt meegestuurd, wordt alleen een placeholder toegevoegd.
-    - Bij onbekende indicator: 404.
     """
     conn = get_db_connection()
     if not conn:
@@ -92,14 +92,13 @@ async def save_or_activate_technical_data(payload: dict):
     advies = payload.get("advies")
     uitleg = payload.get("uitleg")
     timestamp = payload.get("timestamp")
-    symbol = payload.get("symbol", "BTC")
 
     if not indicator:
         raise HTTPException(status_code=400, detail="❌ 'indicator' is verplicht in de payload.")
 
     try:
         with conn.cursor() as cur:
-            # ✅ Controleer of indicator bestaat in configuratietabel
+            # ✅ Controleer of indicator bestaat
             cur.execute("""
                 SELECT 1 FROM indicators
                 WHERE LOWER(name) = LOWER(%s)
@@ -107,41 +106,17 @@ async def save_or_activate_technical_data(payload: dict):
                 AND active = TRUE;
             """, (indicator,))
             if not cur.fetchone():
-                logger.warning(f"⚠️ Indicator '{indicator}' niet gevonden in configuratie.")
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Indicator '{indicator}' bestaat niet in de database-configuratie."
+                    detail=f"Indicator '{indicator}' bestaat niet in de configuratie."
                 )
 
-            # ================================
-            # 🟦 Alleen activeren (zonder waarde)
-            # ================================
-            if value is None:
-                logger.info(f"➕ Indicator activeren: {indicator} ({symbol})")
-
-                # check of al bestaat
-                cur.execute("""
-                    SELECT 1 FROM technical_indicators WHERE indicator = %s AND symbol = %s;
-                """, (indicator, symbol))
-                if cur.fetchone():
-                    return {"message": f"🔁 Indicator '{indicator}' is al actief voor {symbol}."}
-
-                cur.execute("""
-                    INSERT INTO technical_indicators (symbol, indicator, timestamp)
-                    VALUES (%s, %s, NOW());
-                """, (symbol, indicator))
-                conn.commit()
-                return {"message": f"✅ Indicator '{indicator}' toegevoegd en geactiveerd."}
-
-            # ================================
             # 🟩 Volledige data-insert
-            # ================================
             logger.info(f"📥 Technische data opslaan: {indicator} ({value})")
             cur.execute("""
-                INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s);
+                INSERT INTO technical_indicators (indicator, value, score, advies, uitleg, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s);
             """, (
-                symbol,
                 indicator,
                 value,
                 score,
@@ -159,7 +134,8 @@ async def save_or_activate_technical_data(payload: dict):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
-        
+
+
 # ✅ Dagdata per indicator
 @router.get("/technical_data/day")
 async def get_latest_day_data():
@@ -169,9 +145,9 @@ async def get_latest_day_data():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                SELECT indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
-                WHERE symbol = 'BTC' AND DATE(timestamp) = CURRENT_DATE
+                WHERE DATE(timestamp) = CURRENT_DATE
                 ORDER BY timestamp DESC;
             """)
             rows = safe_fetchall(cur)
@@ -179,35 +155,29 @@ async def get_latest_day_data():
             if not rows:
                 cur.execute("""
                     SELECT timestamp FROM technical_indicators
-                    WHERE symbol = 'BTC'
                     ORDER BY timestamp DESC
                     LIMIT 1;
                 """)
                 fallback = cur.fetchone()
                 if not fallback:
-                    logger.info("⚠️ Geen fallback-data beschikbaar.")
                     return []
                 fallback_date = fallback[0].date()
                 cur.execute("""
-                    SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                    SELECT indicator, value, score, advies, uitleg, timestamp
                     FROM technical_indicators
-                    WHERE symbol = 'BTC' AND DATE(timestamp) = %s
+                    WHERE DATE(timestamp) = %s
                     ORDER BY timestamp DESC;
                 """, (fallback_date,))
                 rows = safe_fetchall(cur)
 
-        if not rows:
-            return []
-
         return [
             {
-                "symbol": r[0],
-                "indicator": r[1],
-                "waarde": safe_float(r[2]),
-                "score": safe_int(r[3]),
-                "advies": r[4],
-                "uitleg": r[5],
-                "timestamp": r[6].isoformat() if r[6] else None,
+                "indicator": r[0],
+                "waarde": safe_float(r[1]),
+                "score": safe_int(r[2]),
+                "advies": r[3],
+                "uitleg": r[4],
+                "timestamp": r[5].isoformat() if r[5] else None,
             } for r in rows
         ]
 
@@ -217,64 +187,53 @@ async def get_latest_day_data():
     finally:
         conn.close()
 
-# ✅ WEEK (laatste 7 unieke dagen met data)
+
+# ✅ WEEK
 @router.get("/technical_data/week")
 async def get_technical_week_data():
-    logger.info("📤 [get/week] Ophalen technical-indicators (laatste 7 unieke dagen)...")
+    logger.info("📤 [get/week] Ophalen technical-indicators (laatste 7 dagen)...")
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
-
-            # 🗓️ Stap 1: haal de laatste 7 unieke datums op waarop data is opgeslagen
             cur.execute("""
                 SELECT DISTINCT DATE(timestamp) AS dag
                 FROM technical_indicators
-                WHERE symbol = 'BTC'
                 ORDER BY dag DESC
                 LIMIT 7;
             """)
-            date_rows = cur.fetchall()
-            dagen = [r[0] for r in date_rows]
+            dagen = [r[0] for r in cur.fetchall()]
 
             if not dagen:
-                logger.warning("⚠️ Geen dagen gevonden in de laatste week.")
                 return []
 
-            logger.info(f"📅 Geselecteerde dagen voor weekdata: {dagen}")
-
-            # 🧮 Stap 2: haal alle technische data op voor die dagen
             cur.execute("""
-                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                SELECT indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
-                WHERE symbol = 'BTC'
-                AND DATE(timestamp) = ANY(%s)
+                WHERE DATE(timestamp) = ANY(%s)
                 ORDER BY timestamp DESC;
             """, (dagen,))
             rows = cur.fetchall()
 
-        logger.info(f"✅ Weekdata opgehaald: {len(rows)} rijen gevonden.")
-
         return [
             {
-                "symbol": row[0],
-                "indicator": row[1],
-                "waarde": safe_float(row[2]),
-                "score": safe_int(row[3]),
-                "advies": row[4],
-                "uitleg": row[5],
-                "timestamp": row[6].isoformat(),
-            } for row in rows
+                "indicator": r[0],
+                "waarde": safe_float(r[1]),
+                "score": safe_int(r[2]),
+                "advies": r[3],
+                "uitleg": r[4],
+                "timestamp": r[5].isoformat(),
+            } for r in rows
         ]
-
     except Exception as e:
         logger.error(f"❌ [get/week] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail=f"❌ [DB02] Ophalen weekdata mislukt: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
-# ✅ MONTH (4 recente weken)
+
+# ✅ MONTH
 @router.get("/technical_data/month")
 async def get_technical_month_data():
     logger.info("📤 [get/month] Ophalen technical-indicators (4 recente weken)...")
@@ -283,54 +242,43 @@ async def get_technical_month_data():
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
-            # 🗓️ Stap 1: haal de 4 meest recente unieke weken op (op basis van eerste dag van de week)
             cur.execute("""
                 SELECT DISTINCT DATE_TRUNC('week', timestamp)::date AS week_start
                 FROM technical_indicators
-                WHERE symbol = 'BTC'
                 ORDER BY week_start DESC
                 LIMIT 4;
             """)
-            week_rows = cur.fetchall()
-            weken = [r[0] for r in week_rows]
+            weken = [r[0] for r in cur.fetchall()]
 
             if not weken:
-                logger.warning("⚠️ Geen weken gevonden in de maanddata.")
                 return []
 
-            logger.info(f"📅 Geselecteerde weken: {weken}")
-
-            # 🧮 Stap 2: haal alle technische data op die in die weken valt
             cur.execute("""
-                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                SELECT indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
-                WHERE symbol = 'BTC'
-                AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
+                WHERE DATE_TRUNC('week', timestamp)::date = ANY(%s)
                 ORDER BY timestamp DESC;
             """, (weken,))
             rows = cur.fetchall()
 
-        logger.info(f"✅ Maanddata opgehaald: {len(rows)} rijen gevonden.")
-
         return [
             {
-                "symbol": row[0],
-                "indicator": row[1],
-                "waarde": safe_float(row[2]),
-                "score": safe_int(row[3]),
-                "advies": row[4],
-                "uitleg": row[5],
-                "timestamp": row[6].isoformat(),
-            } for row in rows
+                "indicator": r[0],
+                "waarde": safe_float(r[1]),
+                "score": safe_int(r[2]),
+                "advies": r[3],
+                "uitleg": r[4],
+                "timestamp": r[5].isoformat(),
+            } for r in rows
         ]
-
     except Exception as e:
         logger.error(f"❌ [get/month] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB03] Ophalen maanddata mislukt.")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
-# ✅ QUARTER (12 recente weken)
+
+# ✅ QUARTER
 @router.get("/technical_data/quarter")
 async def get_technical_quarter_data():
     logger.info("📤 [get/quarter] Ophalen technical-indicators (12 recente weken)...")
@@ -339,50 +287,38 @@ async def get_technical_quarter_data():
         raise HTTPException(status_code=500, detail="Databaseverbinding mislukt.")
     try:
         with conn.cursor() as cur:
-            # 🗓️ Stap 1: haal de 12 meest recente unieke weken op
             cur.execute("""
                 SELECT DISTINCT DATE_TRUNC('week', timestamp)::date AS week_start
                 FROM technical_indicators
-                WHERE symbol = 'BTC'
                 ORDER BY week_start DESC
                 LIMIT 12;
             """)
-            week_rows = cur.fetchall()
-            weken = [r[0] for r in week_rows]
+            weken = [r[0] for r in cur.fetchall()]
 
             if not weken:
-                logger.warning("⚠️ Geen weken gevonden voor kwartaaldata.")
                 return []
 
-            logger.info(f"📅 Geselecteerde weken (quarter): {weken}")
-
-            # 🧮 Stap 2: haal alle technische data op voor die weken
             cur.execute("""
-                SELECT symbol, indicator, value, score, advies, uitleg, timestamp
+                SELECT indicator, value, score, advies, uitleg, timestamp
                 FROM technical_indicators
-                WHERE symbol = 'BTC'
-                AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
+                WHERE DATE_TRUNC('week', timestamp)::date = ANY(%s)
                 ORDER BY timestamp DESC;
             """, (weken,))
             rows = cur.fetchall()
 
-        logger.info(f"✅ Kwartaaldata opgehaald: {len(rows)} rijen gevonden.")
-
         return [
             {
-                "symbol": row[0],
-                "indicator": row[1],
-                "waarde": safe_float(row[2]),
-                "score": safe_int(row[3]),
-                "advies": row[4],
-                "uitleg": row[5],
-                "timestamp": row[6].isoformat(),
-            } for row in rows
+                "indicator": r[0],
+                "waarde": safe_float(r[1]),
+                "score": safe_int(r[2]),
+                "advies": r[3],
+                "uitleg": r[4],
+                "timestamp": r[5].isoformat(),
+            } for r in rows
         ]
-
     except Exception as e:
         logger.error(f"❌ [get/quarter] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail="❌ [DB04] Ophalen kwartaaldata mislukt.")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
