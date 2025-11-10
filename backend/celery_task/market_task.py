@@ -1,21 +1,20 @@
 import logging
 import traceback
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
 
-# ✅ Eigen utils
+# Eigen imports
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import generate_scores_db
-from backend.celery_task.btc_price_history_task import update_btc_history  # nieuwe versie gebruiken
+from backend.celery_task.btc_price_history_task import update_btc_history
 
-# === Config
+# === Config ===
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 CACHE_FILE = "/tmp/last_market_data_fetch.txt"
-MIN_INTERVAL_MINUTES = 15
 ASSETS = {"BTC": "bitcoin"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 # =====================================================
-# 🔁 Safe request met retry
+# 🔁 Safe HTTP-get met retry
 # =====================================================
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_get(url, params=None):
@@ -36,21 +35,22 @@ def safe_get(url, params=None):
 # 🌐 CoinGecko fetch helper
 # =====================================================
 def fetch_coingecko_market(symbol_id="bitcoin"):
+    """Haalt marktdata op van CoinGecko."""
     try:
         url = f"https://api.coingecko.com/api/v3/coins/{symbol_id}"
         resp = requests.get(url, params={"localization": "false"}, timeout=TIMEOUT)
-        if resp.status_code != 200:
-            logger.error(f"❌ CoinGecko foutstatus {resp.status_code}: {resp.text}")
-            return None
+        resp.raise_for_status()
 
         data = resp.json()
         md = data.get("market_data", {}) or {}
 
-        return {
-            "price": float(md.get("current_price", {}).get("usd")),
-            "volume": float(md.get("total_volume", {}).get("usd")),
-            "change_24h": float(md.get("price_change_percentage_24h", 0) or 0),
-        }
+        price = float(md.get("current_price", {}).get("usd", 0))
+        volume = float(md.get("total_volume", {}).get("usd", 0))
+        change_24h = float(md.get("price_change_percentage_24h", 0) or 0)
+
+        logger.info(f"📊 Fetched market data: price={price}, vol={volume}, 24h={change_24h}")
+        return {"price": price, "volume": volume, "change_24h": change_24h}
+
     except Exception:
         logger.error("❌ Fout bij ophalen CoinGecko market:")
         logger.error(traceback.format_exc())
@@ -58,31 +58,29 @@ def fetch_coingecko_market(symbol_id="bitcoin"):
 
 
 # =====================================================
-# 💾 Opslaan in market_data
+# 💾 Opslaan in market_data (correcte kolommen)
 # =====================================================
-def store_market_indicator_db(symbol, indicator, value, score, trend, interpretation, action, source, ts):
+def store_market_data_db(symbol, price, volume, change_24h):
+    """Slaat de live marktdata op in de juiste tabelkolommen."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding bij market-opslag.")
         return
+
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO market_data
-                    (symbol, indicator, value, score, trend, interpretation, action, source, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO market_data (symbol, price, volume, change_24h, timestamp)
+                VALUES (%s, %s, %s, %s, %s)
             """, (
                 symbol,
-                indicator,
-                value,
-                score,
-                trend or "–",
-                interpretation or "–",
-                action or "–",
-                source,
-                ts or datetime.utcnow().replace(microsecond=0)
+                price,
+                volume,
+                change_24h,
+                datetime.utcnow().replace(microsecond=0)
             ))
         conn.commit()
+        logger.info(f"✅ Marktdata opgeslagen: {symbol} prijs={price}, volume={volume}, 24h={change_24h}")
     except Exception:
         logger.error("❌ Fout bij opslaan market_data:")
         logger.error(traceback.format_exc())
@@ -91,37 +89,17 @@ def store_market_indicator_db(symbol, indicator, value, score, trend, interpreta
 
 
 # =====================================================
-# 📊 Marktdata ophalen en scoren (via DB-regels)
+# 📊 Marktdata ophalen en opslaan
 # =====================================================
 def process_market_now():
+    """Haalt huidige BTC-marketdata op en slaat op."""
     cg_id = ASSETS.get("BTC", "bitcoin")
     live = fetch_coingecko_market(cg_id)
     if not live:
         logger.warning("⚠️ Geen live marketdata ontvangen.")
         return
 
-    input_values = {
-        "price": live["price"],
-        "volume": live["volume"],
-        "change_24h": live["change_24h"],
-    }
-
-    scored = generate_scores_db("technical", input_values)
-    scores = (scored or {}).get("scores", {})
-    ts = datetime.utcnow().replace(microsecond=0)
-
-    for ind, result in scores.items():
-        store_market_indicator_db(
-            "BTC",
-            ind,
-            input_values.get(ind, 0),
-            int(result.get("score", 10)),
-            result.get("trend", "–"),
-            result.get("interpretation", "–"),
-            result.get("action", "–"),
-            "coingecko",
-            ts
-        )
+    store_market_data_db("BTC", live["price"], live["volume"], live["change_24h"])
 
 
 # =====================================================
@@ -131,6 +109,7 @@ def process_market_now():
 # 1️⃣ Live marketdata (elke ±15 min)
 @shared_task(name="backend.celery_task.market_task.fetch_market_data")
 def fetch_market_data_task():
+    """Haalt live BTC-marktdata op en slaat deze op."""
     logger.info("📈 Start live marktdata taak...")
     try:
         process_market_now()
@@ -144,6 +123,7 @@ def fetch_market_data_task():
 # 2️⃣ Dagelijkse snapshot (voor rapporten)
 @shared_task(name="backend.celery_task.market_task.save_market_data_daily")
 def save_market_data_daily():
+    """Dagelijkse snapshot van de BTC-marktdata (zelfde als fetch_market_data_task)."""
     logger.info("🕛 Dagelijkse market snapshot...")
     try:
         process_market_now()
@@ -156,12 +136,10 @@ def save_market_data_daily():
 # 3️⃣ BTC-prijs bijwerken (range-based update)
 @shared_task(name="backend.celery_task.market_task.sync_price_history_and_returns")
 def sync_price_history_and_returns():
-    """
-    Update de BTC-prijsdata en berekent daarna forward returns.
-    """
+    """Update de BTC-prijsdata en berekent daarna forward returns."""
     logger.info("🔄 Start synchronisatie BTC-historie + forward returns...")
     try:
-        update_btc_history()  # haalt alleen ontbrekende dagen op
+        update_btc_history()
         calculate_and_save_forward_returns.apply_async(countdown=5)
         logger.info("✅ Forward returns berekening ingepland.")
     except Exception:
@@ -172,6 +150,7 @@ def sync_price_history_and_returns():
 # 4️⃣ Forward returns berekenen en opslaan
 @shared_task(name="backend.celery_task.market_task.calculate_and_save_forward_returns")
 def calculate_and_save_forward_returns():
+    """Bereken en sla forward returns op uit btc_price_history."""
     logger.info("📈 Forward returns berekenen...")
     try:
         conn = get_db_connection()
@@ -231,10 +210,7 @@ def calculate_and_save_forward_returns():
 # 5️⃣ 7-daags aggregaat vullen uit eigen DB
 @shared_task(name="backend.celery_task.market_task.save_market_data_7d")
 def save_market_data_7d():
-    """
-    Bouw eenvoudig 7d aggregaat op uit market_data (laatste 7 unieke dagen).
-    Past aan als je al een aparte API/route hebt — dit is de DB-native variant.
-    """
+    """Bouw 7-daagse aggregaten op uit market_data."""
     logger.info("📊 Opbouwen 7-daagse marktdata (DB-native)...")
     try:
         conn = get_db_connection()
@@ -243,26 +219,25 @@ def save_market_data_7d():
             return
 
         with conn.cursor() as cur:
-            # Haal per dag de laatste waarde per indicator op (price/volume/change_24h)
             cur.execute("""
                 WITH per_day AS (
                     SELECT
                         DATE(timestamp) AS dag,
-                        indicator,
-                        value,
-                        ROW_NUMBER() OVER (PARTITION BY DATE(timestamp), indicator ORDER BY timestamp DESC) AS rn
+                        AVG(price) AS avg_price,
+                        AVG(volume) AS avg_volume,
+                        AVG(change_24h) AS avg_change
                     FROM market_data
                     WHERE symbol = 'BTC'
+                    GROUP BY DATE(timestamp)
                 )
-                SELECT dag, indicator, value
+                SELECT dag, avg_price, avg_volume, avg_change
                 FROM per_day
-                WHERE rn = 1
                 ORDER BY dag DESC
-                LIMIT 21;
+                LIMIT 7;
             """)
             rows = cur.fetchall()
 
-        logger.info(f"ℹ️ 7d helper fetched {len(rows)} rijen (pas aggregaatlogica aan naar wens).")
+        logger.info(f"ℹ️ Laatste 7 dagen samengevoegd ({len(rows)} rijen).")
     except Exception:
         logger.error("❌ Fout in save_market_data_7d()")
         logger.error(traceback.format_exc())
