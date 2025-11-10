@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime, timedelta
 import httpx
 from collections import defaultdict
+
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_scores_for_symbol
 
@@ -41,6 +42,7 @@ MARKET_ENDPOINTS = get_market_endpoints()
 if not MARKET_ENDPOINTS:
     logger.warning("⚠️ Geen actieve market endpoints in DB – gebruik standaard CoinGecko URLs.")
 
+
 # =========================================================
 # ✅ /market_data — actuele data ophalen via DB-config
 # =========================================================
@@ -48,22 +50,23 @@ if not MARKET_ENDPOINTS:
 def save_market_data():
     """Haalt BTC-marktgegevens op via de URLs uit de database en slaat ze op."""
     try:
+        # URLs uit DB of fallback
         price_url = MARKET_ENDPOINTS.get(
             "btc_price", "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-        )
-        volume_url = MARKET_ENDPOINTS.get(
-            "btc_volume", "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=7"
         )
         change_url = MARKET_ENDPOINTS.get(
             "btc_change_24h", "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
         )
+        volume_url = MARKET_ENDPOINTS.get(
+            "btc_volume", "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=7"
+        )
 
         with httpx.Client(timeout=10.0) as client:
-            price_resp = client.get(price_url)
+            # Haal prijs & 24h change op
+            price_resp = client.get(change_url)
             price_resp.raise_for_status()
             price_data = price_resp.json()
 
-            # CoinGecko JSON structuur kan verschillen per endpoint
             if "bitcoin" in price_data:
                 price = price_data["bitcoin"].get("usd")
                 change_24h = price_data["bitcoin"].get("usd_24h_change")
@@ -74,7 +77,15 @@ def save_market_data():
                 change_24h = md.get("price_change_percentage_24h")
                 volume = md.get("total_volume", {}).get("usd")
             else:
-                raise ValueError("Onverwacht JSON-formaat van CoinGecko")
+                raise ValueError("Onverwacht JSON-formaat voor prijs/24h change")
+
+            # Als volume nog niet opgehaald is, probeer apart endpoint
+            if not volume:
+                vol_resp = client.get(volume_url)
+                vol_resp.raise_for_status()
+                vol_json = vol_resp.json()
+                if "total_volumes" in vol_json and vol_json["total_volumes"]:
+                    volume = float(vol_json["total_volumes"][-1][1])
 
         if price is None or volume is None or change_24h is None:
             raise ValueError("Ontbrekende velden in CoinGecko response")
@@ -90,7 +101,12 @@ def save_market_data():
         conn.close()
 
         logger.info(f"✅ Marktdata opgeslagen: prijs={price}, volume={volume}, change={change_24h}")
-        return {"message": "✅ Marktdata succesvol opgeslagen.", "price": price, "volume": volume, "change": change_24h}
+        return {
+            "message": "✅ Marktdata succesvol opgeslagen.",
+            "price": price,
+            "volume": volume,
+            "change_24h": change_24h
+        }
 
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan marktdata: {e}\n{traceback.format_exc()}")
@@ -139,8 +155,10 @@ async def fill_btc_7day_data():
 
     try:
         coingecko_id = "bitcoin"
-        url_ohlc = MARKET_ENDPOINTS.get("btc_ohlc", f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc?vs_currency=usd&days=7")
-        url_volume = MARKET_ENDPOINTS.get("btc_volume", f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart?vs_currency=usd&days=7")
+        url_ohlc = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc?vs_currency=usd&days=7"
+        url_volume = MARKET_ENDPOINTS.get(
+            "btc_volume", f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart?vs_currency=usd&days=7"
+        )
 
         with httpx.Client(timeout=10.0) as client:
             ohlc_data = client.get(url_ohlc).json()
@@ -172,6 +190,7 @@ async def fill_btc_7day_data():
         return {"error": f"❌ {str(e)}"}
     finally:
         conn.close()
+
 
 # =========================================================
 # ✅ /market_data/btc/latest — laatste BTC prijs
@@ -218,21 +237,16 @@ async def fetch_interpreted_data():
         symbol, price, change, volume, timestamp = row
         scores = get_scores_for_symbol(include_metadata=True)
 
-        market_score = scores.get("market_score", 0)
-        market_trend = "–"
-        market_interpretation = scores.get("market_interpretation", "")
-        market_action = "Geen actie"
-
         return {
             "symbol": symbol,
             "timestamp": timestamp.isoformat(),
             "price": float(price),
             "change_24h": float(change),
             "volume": float(volume),
-            "score": market_score,
-            "trend": market_trend,
-            "interpretation": market_interpretation,
-            "action": market_action,
+            "score": scores.get("market_score", 0),
+            "trend": "–",
+            "interpretation": scores.get("market_interpretation", ""),
+            "action": "Geen actie",
         }
     except Exception as e:
         logger.error(f"❌ [interpreted] Fout bij interpretatie: {e}")
@@ -272,7 +286,7 @@ async def get_market_data_7d():
 
 
 # =========================================================
-# ✅ /market_data/forward — alle forward returns ophalen
+# ✅ /market_data/forward — forward returns ophalen
 # =========================================================
 @router.get("/market_data/forward")
 async def get_market_forward_returns():
@@ -421,20 +435,6 @@ async def save_forward_returns(data: list[dict]):
         raise HTTPException(status_code=400, detail="❌ Geen data ontvangen.")
     try:
         conn = get_db_connection()
-        cur = conn.cursor()
-        for row in data:
-            cur.execute("""
-                INSERT INTO market_forward_returns (symbol, period, start_date, end_date, change, avg_daily, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT DO NOTHING
-            """, (row["symbol"], row["period"], row["start_date"], row["end_date"], row["change"], row["avg_daily"]))
-        conn.commit()
-        conn.close()
-        return {"status": "✅ Forward returns opgeslagen."}
-    except Exception as e:
-        logger.error(f"❌ [forward/save] Fout bij opslaan forward returns: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij opslaan forward returns.")
-
 
 # =========================================================
 # ✅ Delete indicator
