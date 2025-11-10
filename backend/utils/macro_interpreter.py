@@ -12,37 +12,79 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
     """
     🔍 Haalt de actuele waarde op van een macro-indicator via de data_url in de DB.
     Geeft altijd {"value": float(...)} terug.
-    Ondersteunt o.a. DXY, S&P500, Fear & Greed Index.
+    Ondersteunt o.a.:
+      - Fear & Greed Index (alternative.me)
+      - BTC Dominance (coingecko)
+      - S&P500, VIX, Oil (yahoo_finance)
+      - Interest / Inflation (fred_api)
+      - DXY (tradingview of fallback)
     """
     try:
         if not link:
             logger.warning(f"⚠️ Geen link opgegeven voor '{name}'")
             return None
 
-        logger.info(f"🌐 Ophalen macro indicator '{name}' vanaf {link}")
+        logger.info(f"🌐 Ophalen macro indicator '{name}' via {source} -> {link}")
         resp = requests.get(link, timeout=15)
         resp.raise_for_status()
         data = resp.json()
 
         # === 1️⃣ Fear & Greed Index (Alternative.me)
-        if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
-            v = data["data"][0].get("value")
-            if v is not None:
-                return {"value": float(v)}
+        if "alternative" in (source or "").lower():
+            try:
+                v = data.get("data", [{}])[0].get("value")
+                if v is not None:
+                    return {"value": float(v)}
+            except Exception:
+                pass
 
-        # === 2️⃣ DXY of S&P500 via API
+        # === 2️⃣ BTC Dominance (CoinGecko)
+        if "coingecko" in (source or "").lower():
+            try:
+                v = data.get("data", {}).get("market_cap_percentage", {}).get("btc")
+                if v is not None:
+                    return {"value": float(v)}
+            except Exception:
+                pass
+
+        # === 3️⃣ Yahoo Finance (S&P500, VIX, Oil, eventueel DXY fallback)
+        if "yahoo" in (source or "").lower():
+            try:
+                result = data.get("chart", {}).get("result", [{}])[0]
+                meta = result.get("meta", {})
+                v = meta.get("regularMarketPrice")
+                if v is not None:
+                    return {"value": float(v)}
+            except Exception:
+                pass
+
+        # === 4️⃣ FRED API (Interest rate / Inflation)
+        if "fred" in (source or "").lower():
+            try:
+                obs = data.get("observations", [])
+                if obs:
+                    v = obs[-1].get("value")
+                    if v is not None:
+                        return {"value": float(v)}
+            except Exception:
+                pass
+
+        # === 5️⃣ TradingView – niet publiek beschikbaar
+        if "tradingview" in (source or "").lower():
+            logger.warning(f"⚠️ TradingView API is niet publiek – geen waarde opgehaald voor '{name}'")
+            return None
+
+        # === 6️⃣ Fallback – universele extracties
         if isinstance(data, dict):
             if "price" in data:
                 return {"value": float(data["price"])}
             if "value" in data:
                 return {"value": float(data["value"])}
             if "data" in data and isinstance(data["data"], dict):
-                if "value" in data["data"]:
-                    return {"value": float(data["data"]["value"])}
-                if "price" in data["data"]:
-                    return {"value": float(data["data"]["price"])}
+                v = data["data"].get("value") or data["data"].get("price")
+                if v:
+                    return {"value": float(v)}
 
-        # === 3️⃣ Indien lijst
         if isinstance(data, list) and len(data) > 0:
             first = data[0]
             if isinstance(first, (int, float)):
@@ -52,11 +94,11 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
                 if v:
                     return {"value": float(v)}
 
-        logger.warning(f"⚠️ Geen waarde gevonden voor '{name}' in respons: {data}")
+        logger.warning(f"⚠️ Geen waarde gevonden voor '{name}' in response: {str(data)[:200]}")
         return None
 
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen macro-waarde voor '{name}': {e}")
+        logger.error(f"❌ Fout bij ophalen macro-waarde voor '{name}': {e}", exc_info=True)
         return None
 
 
