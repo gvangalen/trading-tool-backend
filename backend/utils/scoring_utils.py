@@ -2,8 +2,20 @@ import logging
 from typing import Dict, Any, Optional
 from backend.utils.db import get_db_connection
 
+# =========================================================
+# ⚙️ Logging setup
+# =========================================================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# =========================================================
+# 🔁 Mapping voor market-indicatornamen
+# =========================================================
+MARKET_INDICATOR_MAP = {
+    "price": "btc_price",
+    "change_24h": "btc_change_24h",
+    "volume": "btc_volume",
+}
 
 
 # =========================================================
@@ -22,12 +34,19 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
     table_map = {
         "technical": "technical_indicator_rules",
         "macro": "macro_indicator_rules",
-        "market": "technical_indicator_rules",  # market hergebruikt technische scoreregels
+        "market": "technical_indicator_rules",  # ✅ market gebruikt dezelfde regels
     }
     table = table_map.get(category)
     if not table:
         logger.error(f"⚠️ Ongeldige categorie: {category}")
         return None
+
+    # 🔁 Mapping voor market
+    mapped_name = indicator_name
+    if category == "market":
+        mapped_name = MARKET_INDICATOR_MAP.get(indicator_name, indicator_name)
+        if mapped_name != indicator_name:
+            logger.debug(f"🔁 Indicator '{indicator_name}' gemapt naar '{mapped_name}'")
 
     try:
         with conn.cursor() as cur:
@@ -36,11 +55,11 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
                 FROM {table}
                 WHERE LOWER(indicator) = LOWER(%s)
                 ORDER BY range_min ASC
-            """, (indicator_name,))
+            """, (mapped_name,))
             rules = cur.fetchall()
 
         if not rules:
-            logger.warning(f"⚠️ Geen scoreregels gevonden voor {indicator_name} ({category})")
+            logger.warning(f"⚠️ Geen scoreregels gevonden voor {mapped_name} ({category})")
             return None
 
         for r in rules:
@@ -52,7 +71,7 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
                     "action": r[5],
                 }
 
-        logger.info(f"ℹ️ Waarde {value} valt buiten alle ranges voor {indicator_name}")
+        logger.info(f"ℹ️ Waarde {value} valt buiten alle ranges voor {mapped_name}")
         return None
 
     except Exception as e:
@@ -91,45 +110,21 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                     data = {r[0]: float(r[1]) for r in rows if r[1] is not None}
 
                 elif category == "market":
-                    # ✅ Gebruik de market_data-tabel i.p.v. technical_indicators
+                    # ✅ Gebruik de market_data-tabel (BTC)
                     cur.execute("""
                         SELECT DISTINCT ON (symbol)
-                            'price' AS indicator,
-                            price AS value,
-                            timestamp
+                            price, volume, change_24h
                         FROM market_data
                         WHERE symbol = 'BTC'
                         ORDER BY symbol, timestamp DESC
                     """)
-                    price_row = cur.fetchone()
-
-                    cur.execute("""
-                        SELECT DISTINCT ON (symbol)
-                            'volume' AS indicator,
-                            volume AS value,
-                            timestamp
-                        FROM market_data
-                        WHERE symbol = 'BTC'
-                        ORDER BY symbol, timestamp DESC
-                    """)
-                    volume_row = cur.fetchone()
-
-                    cur.execute("""
-                        SELECT DISTINCT ON (symbol)
-                            'change_24h' AS indicator,
-                            change_24h AS value,
-                            timestamp
-                        FROM market_data
-                        WHERE symbol = 'BTC'
-                        ORDER BY symbol, timestamp DESC
-                    """)
-                    change_row = cur.fetchone()
-
-                    data = {
-                        "price": float(price_row[1]) if price_row and price_row[1] else None,
-                        "volume": float(volume_row[1]) if volume_row and volume_row[1] else None,
-                        "change_24h": float(change_row[1]) if change_row and change_row[1] else None,
-                    }
+                    row = cur.fetchone()
+                    if row:
+                        data = {
+                            "price": float(row[0]) if row[0] else None,
+                            "volume": float(row[1]) if row[1] else None,
+                            "change_24h": float(row[2]) if row[2] else None,
+                        }
 
                 else:
                     cur.execute("""
@@ -209,10 +204,8 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             """)
             technical_data = {r[0]: float(r[1]) for r in cur.fetchall() if r[1] is not None}
 
-        # ✅ Market-data ophalen uit de market_data-tabel
+        # ✅ Market-data ophalen
         market_scores = generate_scores_db("market")
-
-        # Scores berekenen
         macro_scores = generate_scores_db("macro", macro_data)
         tech_scores = generate_scores_db("technical", technical_data)
 
@@ -228,7 +221,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             "setup_score": setup_score,
         }
 
-        # Extra metadata
+        # Extra metadata voor frontend/dashboard
         if include_metadata:
             def extract_top(scores_dict):
                 if not scores_dict.get("scores"):
