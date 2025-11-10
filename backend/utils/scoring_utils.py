@@ -19,6 +19,24 @@ MARKET_INDICATOR_MAP = {
 
 
 # =========================================================
+# 🧠 Normalisatie functie voor indicatornamen
+# =========================================================
+def normalize_indicator_name(name: str) -> str:
+    """
+    Maakt indicatornamen consistent zodat spaties, hoofdletters, ampersands en streepjes
+    geen problemen meer veroorzaken bij vergelijking.
+    """
+    return (
+        name.lower()
+        .replace("&", "and")
+        .replace("s&p", "sp")
+        .replace(" ", "_")
+        .replace("-", "_")
+        .strip()
+    )
+
+
+# =========================================================
 # ✅ Universele database-functie voor scoreregels
 # =========================================================
 def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> Optional[dict]:
@@ -41,10 +59,12 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
         logger.error(f"⚠️ Ongeldige categorie: {category}")
         return None
 
-    # 🔁 Mapping voor market
-    mapped_name = indicator_name
+    # 🔁 Mapping voor market + naamnormalisatie
+    normalized = normalize_indicator_name(indicator_name)
+    mapped_name = normalized
     if category == "market":
         mapped_name = MARKET_INDICATOR_MAP.get(indicator_name, indicator_name)
+        mapped_name = normalize_indicator_name(mapped_name)
         if mapped_name != indicator_name:
             logger.debug(f"🔁 Indicator '{indicator_name}' gemapt naar '{mapped_name}'")
 
@@ -53,7 +73,7 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
             cur.execute(f"""
                 SELECT range_min, range_max, score, trend, interpretation, action
                 FROM {table}
-                WHERE LOWER(indicator) = LOWER(%s)
+                WHERE LOWER(REPLACE(REPLACE(REPLACE(indicator, '&', 'and'), ' ', '_'), '-', '_')) = %s
                 ORDER BY range_min ASC
             """, (mapped_name,))
             rules = cur.fetchall()
@@ -107,7 +127,7 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                         ORDER BY name, timestamp DESC
                     """)
                     rows = cur.fetchall()
-                    data = {r[0]: float(r[1]) for r in rows if r[1] is not None}
+                    data = {normalize_indicator_name(r[0]): float(r[1]) for r in rows if r[1] is not None}
 
                 elif category == "market":
                     # ✅ Gebruik de market_data-tabel (BTC)
@@ -133,7 +153,7 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                         ORDER BY indicator, timestamp DESC
                     """)
                     rows = cur.fetchall()
-                    data = {r[0]: float(r[1]) for r in rows if r[1] is not None}
+                    data = {normalize_indicator_name(r[0]): float(r[1]) for r in rows if r[1] is not None}
 
         except Exception as e:
             logger.error(f"❌ Fout bij automatisch ophalen data ({category}): {e}", exc_info=True)
@@ -194,7 +214,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
                 FROM macro_data
                 ORDER BY name, timestamp DESC
             """)
-            macro_data = {r[0]: float(r[1]) for r in cur.fetchall() if r[1] is not None}
+            macro_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall() if r[1] is not None}
 
             # Technische data
             cur.execute("""
@@ -202,7 +222,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
                 FROM technical_indicators
                 ORDER BY indicator, timestamp DESC
             """)
-            technical_data = {r[0]: float(r[1]) for r in cur.fetchall() if r[1] is not None}
+            technical_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall() if r[1] is not None}
 
         # ✅ Market-data ophalen
         market_scores = generate_scores_db("market")
