@@ -213,8 +213,11 @@ def calculate_and_save_forward_returns():
 # 5️⃣ 7-daags aggregaat vullen uit eigen DB
 @shared_task(name="backend.celery_task.market_task.save_market_data_7d")
 def save_market_data_7d():
-    """Bouw 7-daagse aggregaten op uit market_data en sla op in market_data_7d."""
-    logger.info("📊 Opbouwen 7-daagse marktdata (DB-native)...")
+    """
+    Bouw 7-daagse aggregaten op uit market_data en sla deze netjes op
+    in de bestaande tabel market_data_7d (met kolommen: symbol, date, open, high, low, close, change, volume).
+    """
+    logger.info("📊 Opbouwen 7-daagse marktdata (DB-native, matching tabelstructuur)...")
     try:
         conn = get_db_connection()
         if not conn:
@@ -222,55 +225,43 @@ def save_market_data_7d():
             return
 
         with conn.cursor() as cur:
-            # Bereken gemiddelden per dag (laatste 7 dagen)
+            # Haal per dag de eerste en laatste prijs om open/close te bepalen
             cur.execute("""
                 WITH per_day AS (
                     SELECT
-                        DATE(timestamp) AS dag,
-                        AVG(price) AS avg_price,
-                        AVG(volume) AS avg_volume,
+                        DATE(timestamp) AS date,
+                        FIRST_VALUE(price) OVER (PARTITION BY DATE(timestamp) ORDER BY timestamp ASC) AS open,
+                        MAX(price) AS high,
+                        MIN(price) AS low,
+                        LAST_VALUE(price) OVER (PARTITION BY DATE(timestamp) ORDER BY timestamp ASC RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS close,
+                        AVG(volume) AS volume,
                         AVG(change_24h) AS avg_change
                     FROM market_data
                     WHERE symbol = 'BTC'
                     GROUP BY DATE(timestamp)
                 )
-                SELECT dag, avg_price, avg_volume, avg_change
+                SELECT date, open, high, low, close, avg_change, volume
                 FROM per_day
-                ORDER BY dag DESC
+                ORDER BY date DESC
                 LIMIT 7;
             """)
             rows = cur.fetchall()
 
-        logger.info(f"ℹ️ Laatste 7 dagen samengevoegd ({len(rows)} rijen).")
-
         if not rows:
-            logger.warning("⚠️ Geen data om op te slaan in market_data_7d.")
+            logger.warning("⚠️ Geen 7-daagse marktdata gevonden om op te slaan.")
             return
 
         with conn.cursor() as cur2:
-            # Maak de tabel aan als die nog niet bestaat
-            cur2.execute("""
-                CREATE TABLE IF NOT EXISTS market_data_7d (
-                    dag date PRIMARY KEY,
-                    avg_price numeric,
-                    avg_volume numeric,
-                    avg_change numeric
-                );
-            """)
-
-            # Leeg de tabel om enkel de laatste 7 dagen te tonen
+            # Leeg de tabel (zodat alleen de laatste 7 dagen zichtbaar blijven)
             cur2.execute("TRUNCATE TABLE market_data_7d;")
 
-            # Voeg alle nieuwe data in
-            for dag, avg_price, avg_volume, avg_change in rows:
+            # Voeg nieuwe rijen in
+            for row in rows:
+                date, open_, high, low, close, change, volume = row
                 cur2.execute("""
-                    INSERT INTO market_data_7d (dag, avg_price, avg_volume, avg_change)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (dag) DO UPDATE SET
-                        avg_price = EXCLUDED.avg_price,
-                        avg_volume = EXCLUDED.avg_volume,
-                        avg_change = EXCLUDED.avg_change;
-                """, (dag, avg_price, avg_volume, avg_change))
+                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume)
+                    VALUES ('BTC', %s, %s, %s, %s, %s, %s, %s)
+                """, (date, open_, high, low, close, change, volume))
 
         conn.commit()
         logger.info(f"✅ market_data_7d bijgewerkt met {len(rows)} rijen.")
