@@ -293,3 +293,39 @@ def calculate_technical_scores(data: Dict[str, float]) -> Dict[str, Any]:
 
 def calculate_market_scores(data: Dict[str, float]) -> Dict[str, Any]:
     return generate_scores_db("market", data)
+
+# =========================================================
+# ✅ Backwards compat: calculate_score_from_rules (voor macro_interpreter)
+# =========================================================
+def calculate_score_from_rules(value: float, rules: list[dict]) -> dict:
+    """
+    Vindt de juiste scoreregel op basis van 'value' en een lijst met regels
+    (zoals gebruikt in macro_interpreter of technical_interpreter).
+    Retourneert score, trend, interpretatie, actie.
+    """
+    try:
+        for r in rules:
+            if r["range_min"] <= value <= r["range_max"]:
+                return {
+                    "score": r["score"],
+                    "trend": r["trend"],
+                    "interpretation": r["interpretation"],
+                    "action": r["action"],
+                }
+
+        # 🟡 Fallback als waarde niet in een bereik valt
+        return {
+            "score": 50,
+            "trend": "Neutraal",
+            "interpretation": f"Waarde {value} valt buiten alle gedefinieerde ranges.",
+            "action": "Geen directe actie vereist.",
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Fout in calculate_score_from_rules(): {e}", exc_info=True)
+        return {
+            "score": 50,
+            "trend": "Onbekend",
+            "interpretation": "Fout tijdens scoreberekening.",
+            "action": "Controleer regels of waarden.",
+        }
