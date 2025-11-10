@@ -6,13 +6,32 @@ from backend.utils.scoring_utils import calculate_score_from_rules
 logger = logging.getLogger(__name__)
 
 # =====================================================
+# 📈 RSI Berekening (lokale fallback)
+# =====================================================
+def calculate_rsi(closes, period=14):
+    """Bereken RSI op basis van slotkoersen (standaard 14 candles)."""
+    if len(closes) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(1, period + 1):
+        delta = closes[-i] - closes[-i - 1]
+        gains.append(max(delta, 0))
+        losses.append(max(-delta, 0))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+
+# =====================================================
 # 🌐 Nieuwe functie: fetch_technical_value
 # =====================================================
 async def fetch_technical_value(name: str, source: str = None, link: str = None):
     """
     🔍 Haalt actuele waarde op van een technische indicator via data_url in DB.
-    Ondersteunt basisindicatoren zoals RSI, MA200, Volume, etc.
-    Geeft altijd {"value": float(...)} terug.
+    Ondersteunt RSI, MA, Volume (en berekent RSI zelf bij Binance-klines).
     """
     try:
         if not link:
@@ -24,36 +43,57 @@ async def fetch_technical_value(name: str, source: str = None, link: str = None)
         resp.raise_for_status()
         data = resp.json()
 
-        # === 1️⃣ RSI (TradingView of API met 'value')
+        # === 1️⃣ Binance-klines: bereken RSI / MA / Volume zelf
+        if "binance" in link.lower() and isinstance(data, list):
+            closes = [float(k[4]) for k in data if isinstance(k, list) and len(k) >= 5]
+            volumes = [float(k[5]) for k in data if isinstance(k, list) and len(k) >= 6]
+
+            if "rsi" in name.lower():
+                value = calculate_rsi(closes)
+                if value:
+                    logger.info(f"📊 RSI berekend uit Binance candles: {value}")
+                    return {"value": value}
+
+            if "ma" in name.lower():
+                period = int(''.join(filter(str.isdigit, name))) or 200
+                if len(closes) >= period:
+                    value = round(sum(closes[-period:]) / period, 2)
+                    logger.info(f"📊 MA{period} berekend: {value}")
+                    return {"value": value}
+
+            if "volume" in name.lower():
+                value = round(sum(volumes[-10:]), 2)
+                logger.info(f"📊 Gemiddelde volume berekend: {value}")
+                return {"value": value}
+
+        # === 2️⃣ Directe API met RSI / MA waarde
         if "rsi" in name.lower():
             if isinstance(data, dict):
                 v = data.get("value") or data.get("rsi")
                 if v:
                     return {"value": float(v)}
             if isinstance(data, list) and len(data) > 0:
-                first = data[-1] if isinstance(data[-1], dict) else data[0]
-                if isinstance(first, dict):
-                    v = first.get("rsi") or first.get("value")
+                last = data[-1]
+                if isinstance(last, dict):
+                    v = last.get("rsi") or last.get("value")
                     if v:
                         return {"value": float(v)}
 
-        # === 2️⃣ MA (Moving Average)
-        if "ma" in name.lower() or "moving_average" in name.lower():
+        if "ma" in name.lower():
             if isinstance(data, dict):
-                v = data.get("value") or data.get("ma") or data.get("ma200")
+                v = data.get("ma") or data.get("value")
                 if v:
                     return {"value": float(v)}
 
-        # === 3️⃣ Volume
         if "volume" in name.lower():
             if isinstance(data, dict):
                 v = data.get("volume") or data.get("value")
                 if v:
                     return {"value": float(v)}
 
-        # === 4️⃣ Fallback – algemene extractie
+        # === 3️⃣ Fallback – probeer iets bruikbaars te vinden
         if isinstance(data, dict):
-            for key in ["value", "score", "price", "close"]:
+            for key in ["value", "price", "close"]:
                 if key in data and isinstance(data[key], (int, float)):
                     return {"value": float(data[key])}
 
@@ -75,10 +115,10 @@ async def fetch_technical_value(name: str, source: str = None, link: str = None)
 
 
 # =====================================================
-# 📊 Bestaande functie: interpret_technical_indicator
+# 📊 Interpretatie van technische waarden
 # =====================================================
 def interpret_technical_indicator(name: str, value: float) -> dict | None:
-    """Vertaal technische indicatorwaarde (RSI, MA200, volume, etc.) via scoreregels in DB."""
+    """Vertaal technische indicatorwaarde (RSI, MA200, Volume, etc.) via scoreregels in DB."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding bij interpretatie technische indicator.")
