@@ -38,10 +38,13 @@ def fetch_active_setups():
                        COALESCE(s.explanation, '') AS explanation,
                        s.created_at AS timestamp,
                        COALESCE(ds.score, 0) AS score,          -- ✅ score uit daily_setup_scores
-                       COALESCE(ds.is_active, false) AS is_active
+                       COALESCE(ds.active, false) AS is_active,  -- ✅ juiste kolomnaam uit DB
+                       ds.report_date,
+                       ds.created_at AS updated_at
                 FROM setups s
                 LEFT JOIN daily_setup_scores ds
-                       ON s.id = ds.setup_id AND ds.date = %s
+                       ON s.id = ds.setup_id AND ds.report_date = %s
+                WHERE s.active = TRUE
                 ORDER BY s.name, s.created_at DESC
                 LIMIT 50
             """, (today,))
