@@ -61,28 +61,31 @@ def fetch_coingecko_market(symbol_id="bitcoin"):
 # 💾 Opslaan in market_data (correcte kolommen)
 # =====================================================
 def store_market_data_db(symbol, price, volume, change_24h):
-    """Slaat de live marktdata op in de juiste tabelkolommen."""
+    """Slaat live marktdata op met upsert per (symbol, date) — laat date door DB genereren."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding bij market-opslag.")
         return
 
     try:
+        ts = datetime.utcnow().replace(microsecond=0)
+
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO market_data (symbol, price, volume, change_24h, timestamp)
                 VALUES (%s, %s, %s, %s, %s)
-            """, (
-                symbol,
-                price,
-                volume,
-                change_24h,
-                datetime.utcnow().replace(microsecond=0)
-            ))
+                ON CONFLICT (symbol, date)
+                DO UPDATE SET
+                    price = EXCLUDED.price,
+                    volume = EXCLUDED.volume,
+                    change_24h = EXCLUDED.change_24h,
+                    timestamp = EXCLUDED.timestamp
+            """, (symbol, price, volume, change_24h, ts))
+
         conn.commit()
-        logger.info(f"✅ Marktdata opgeslagen: {symbol} prijs={price}, volume={volume}, 24h={change_24h}")
+        logger.info(f"✅ Upsert market_data: {symbol} prijs={price}, volume={volume}, 24h={change_24h}")
     except Exception:
-        logger.error("❌ Fout bij opslaan market_data:")
+        logger.error("❌ Fout bij opslaan market_data (upsert zonder date):")
         logger.error(traceback.format_exc())
     finally:
         conn.close()
