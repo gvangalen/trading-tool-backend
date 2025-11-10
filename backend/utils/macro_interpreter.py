@@ -1,9 +1,68 @@
+import requests
 import logging
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import calculate_score_from_rules
 
 logger = logging.getLogger(__name__)
 
+# =====================================================
+# 🌐 Nieuwe functie: fetch_macro_value
+# =====================================================
+async def fetch_macro_value(name: str, source: str = None, link: str = None):
+    """
+    🔍 Haalt de actuele waarde op van een macro-indicator via de data_url in de DB.
+    Geeft altijd {"value": float(...)} terug.
+    Ondersteunt o.a. DXY, S&P500, Fear & Greed Index.
+    """
+    try:
+        if not link:
+            logger.warning(f"⚠️ Geen link opgegeven voor '{name}'")
+            return None
+
+        logger.info(f"🌐 Ophalen macro indicator '{name}' vanaf {link}")
+        resp = requests.get(link, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+
+        # === 1️⃣ Fear & Greed Index (Alternative.me)
+        if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
+            v = data["data"][0].get("value")
+            if v is not None:
+                return {"value": float(v)}
+
+        # === 2️⃣ DXY of S&P500 via API
+        if isinstance(data, dict):
+            if "price" in data:
+                return {"value": float(data["price"])}
+            if "value" in data:
+                return {"value": float(data["value"])}
+            if "data" in data and isinstance(data["data"], dict):
+                if "value" in data["data"]:
+                    return {"value": float(data["data"]["value"])}
+                if "price" in data["data"]:
+                    return {"value": float(data["data"]["price"])}
+
+        # === 3️⃣ Indien lijst
+        if isinstance(data, list) and len(data) > 0:
+            first = data[0]
+            if isinstance(first, (int, float)):
+                return {"value": float(first)}
+            if isinstance(first, dict):
+                v = first.get("value") or first.get("price")
+                if v:
+                    return {"value": float(v)}
+
+        logger.warning(f"⚠️ Geen waarde gevonden voor '{name}' in respons: {data}")
+        return None
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen macro-waarde voor '{name}': {e}")
+        return None
+
+
+# =====================================================
+# 📊 Bestaande functie: interpret_macro_indicator
+# =====================================================
 def interpret_macro_indicator(name: str, value: float) -> dict | None:
     """Vertaal macro-indicatorwaarde naar score, trend, interpretatie en actie via DB-regels."""
     conn = get_db_connection()
