@@ -80,7 +80,12 @@ def store_technical_score_db(payload: dict):
                 payload.get("uitleg"),
             ))
         conn.commit()
-        logger.info(f"💾 Nieuw record toegevoegd voor {payload.get('indicator')}")
+
+        logger.info(
+            f"💾 Opgeslagen {payload.get('indicator').upper()} ({payload.get('symbol')}) — "
+            f"waarde={payload.get('value')} | score={payload.get('score')} | advies={payload.get('advies')} | tijd={datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan technische indicator: {e}")
         logger.error(traceback.format_exc())
@@ -134,6 +139,8 @@ def fetch_and_process_technical():
         link = ind.get("link")
         symbol = ind.get("symbol", "BTC")
 
+        logger.info(f"➡️ Verwerk indicator: {name} ({symbol})")
+
         if already_fetched_today(symbol, name):
             logger.info(f"⏩ {name} is vandaag al verwerkt, overslaan.")
             continue
@@ -150,6 +157,7 @@ def fetch_and_process_technical():
             continue
 
         value = result["value"]
+        logger.info(f"📊 {name.upper()} actuele waarde: {value}")
 
         # ✅ Scoren via scoreregels
         interpretation = interpret_technical_indicator(name, value)
@@ -168,7 +176,7 @@ def fetch_and_process_technical():
 
         store_technical_score_db(payload)
 
-    logger.info("✅ Alle technische indicatoren succesvol verwerkt.")
+    logger.info("✅ Alle technische indicatoren succesvol verwerkt en opgeslagen.")
 
 
 # =====================================================
