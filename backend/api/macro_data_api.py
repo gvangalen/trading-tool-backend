@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 # ✅ Router aanmaken
 router = APIRouter()
-logger.info("🚀 macro_data_api.py geladen – nieuwe DB-gestuurde versie actief (zonder JSON-config).")
+logger.info("🚀 macro_data_api.py geladen – verbeterde DB-versie actief.")
 
 # =====================================
 # 🔧 Helperfunctie
@@ -26,14 +26,18 @@ def get_db_cursor():
     if not conn:
         raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
     return conn, conn.cursor()
-    
+
+
+# =====================================
+# ➕ Macro-indicator toevoegen of updaten
+# =====================================
 @router.post("/macro_data")
 async def add_macro_indicator(request: Request):
     """
     ➕ Voeg een bestaande macro-indicator toe of sla nieuwe waarde op.
-    - Controleert eerst of de indicator bestaat in de `indicators`-tabel.
-    - Bij onbekende indicator: 404.
-    - Geen aanmaak van nieuwe indicatoren meer.
+    - Controleert of de indicator bestaat in `indicators`.
+    - Haalt automatische waarde op via `macro_interpreter` of gebruikt handmatige waarde.
+    - Berekent score via `scoring_utils`.
     """
     logger.info("📅 [add] Macro-indicator toevoegen of bijwerken...")
     data = await request.json()
@@ -45,11 +49,12 @@ async def add_macro_indicator(request: Request):
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
+
     try:
+        # ✅ Controleer of de indicator in de configuratie staat
         with conn.cursor() as cur:
-            # ✅ Controleer of de indicator bestaat in de configuratie
             cur.execute("""
-                SELECT source, symbol, link
+                SELECT source, data_url
                 FROM indicators
                 WHERE LOWER(name) = LOWER(%s)
                 AND category = 'macro'
@@ -64,22 +69,21 @@ async def add_macro_indicator(request: Request):
                     detail=f"Indicator '{name}' bestaat niet in de database-configuratie."
                 )
 
-            source, symbol, link = indicator_info
+            source, data_url = indicator_info
 
-        # ✅ Ophalen of directe waarde gebruiken
+        # ✅ Ophalen van waarde
         if "value" in data:
             value = float(data["value"])
             logger.info(f"📊 [add] Handmatige waarde ontvangen voor '{name}': {value}")
         else:
-            # 🔄 Gebruik interpreter om actuele waarde op te halen (via DB-config)
-            logger.info(f"⚙️ [add] Ophalen via interpreter voor '{name}' (source={source})")
+            logger.info(f"⚙️ [add] Ophalen actuele waarde voor '{name}' via source={source}")
             from backend.utils.macro_interpreter import fetch_macro_value
-            result = await fetch_macro_value(name, source=source, link=link)
+            result = await fetch_macro_value(name, source=source, link=data_url)
             if not result or "value" not in result:
                 raise HTTPException(status_code=500, detail=f"❌ Geen geldige waarde ontvangen voor '{name}'")
             value = float(result["value"])
 
-        # ✅ Score berekenen via scoreregels uit DB
+        # ✅ Score berekenen via scoreregels in DB
         from backend.utils.scoring_utils import generate_scores_db
         score_obj = generate_scores_db(name, value)
         score = score_obj.get("score", 10)
@@ -109,10 +113,14 @@ async def add_macro_indicator(request: Request):
         raise
     except Exception as e:
         logger.error(f"❌ [DB02] Fout bij opslaan macro data: {e}")
-        raise HTTPException(status_code=500, detail="❌ Fout bij opslaan macro data.")
+        raise HTTPException(status_code=500, detail=f"❌ [DB02] Fout bij opslaan macro data: {str(e)}")
     finally:
         conn.close()
 
+
+# =====================================
+# 📄 Ophalen macro-data
+# =====================================
 @router.get("/macro_data")
 async def get_macro_indicators():
     logger.info("📄 [get] Ophalen macro-indicatoren...")
@@ -122,21 +130,21 @@ async def get_macro_indicators():
             SELECT id, name, value, trend, interpretation, action, score, timestamp
             FROM macro_data
             ORDER BY timestamp DESC
-            LIMIT 100
+            LIMIT 100;
         """)
         rows = cur.fetchall()
         return [
             {
-                "id": row[0],
-                "name": row[1],
-                "value": row[2],
-                "trend": row[3],
-                "interpretation": row[4],
-                "action": row[5],
-                "score": row[6],
-                "timestamp": row[7].isoformat() if row[7] else None
+                "id": r[0],
+                "name": r[1],
+                "value": r[2],
+                "trend": r[3],
+                "interpretation": r[4],
+                "action": r[5],
+                "score": r[6],
+                "timestamp": r[7].isoformat() if r[7] else None
             }
-            for row in rows
+            for r in rows
         ]
     except Exception as e:
         logger.error(f"❌ [get] Databasefout: {e}")
