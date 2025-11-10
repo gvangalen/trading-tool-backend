@@ -19,7 +19,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 # ---------------------------
 def fetch_active_setups():
     """
-    Haalt actieve setups op, inclusief hun laatste score van vandaag uit daily_setup_scores.
+    Haalt alle setups op met hun score uit daily_setup_scores van vandaag.
+    Gebruikt daily_setup_scores.active om te bepalen of een setup actief is.
     """
     conn = get_db_connection()
     if not conn:
@@ -30,23 +31,21 @@ def fetch_active_setups():
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT DISTINCT ON (s.name)
+                SELECT DISTINCT ON (s.id)
                        s.id,
                        s.name,
                        COALESCE(s.symbol, 'BTC') AS symbol,
                        COALESCE(s.timeframe, '1D') AS timeframe,
                        COALESCE(s.explanation, '') AS explanation,
                        s.created_at AS timestamp,
-                       COALESCE(ds.score, 0) AS score,          -- ✅ score uit daily_setup_scores
-                       COALESCE(ds.active, false) AS is_active,  -- ✅ juiste kolomnaam uit DB
-                       ds.report_date,
-                       ds.created_at AS updated_at
+                       COALESCE(ds.score, 0) AS score,
+                       COALESCE(ds.active, false) AS is_active,
+                       COALESCE(ds.breakdown, '{}'::jsonb) AS breakdown
                 FROM setups s
                 LEFT JOIN daily_setup_scores ds
                        ON s.id = ds.setup_id AND ds.report_date = %s
-                WHERE s.active = TRUE
-                ORDER BY s.name, s.created_at DESC
-                LIMIT 50
+                ORDER BY s.id, ds.report_date DESC
+                LIMIT 100
             """, (today,))
             rows = cur.fetchall()
             return [dict(r) for r in rows]
