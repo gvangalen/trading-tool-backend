@@ -431,12 +431,13 @@ async def save_forward_returns(data: list[dict]):
         conn.close()
         return {"status": "✅ Forward returns opgeslagen."}
     except Exception as e:
-        logger.error(f
-                     
+        logger.error(f"❌ [forward/save] Fout bij opslaan forward returns: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij opslaan forward returns.")
+
 
 # =========================================================
 # ✅ Delete indicator
-# =========================================================                     
+# =========================================================
 @router.delete("/market_data/{id}")
 async def delete_market_asset(id: int):
     try:
@@ -450,5 +451,3 @@ async def delete_market_asset(id: int):
     except Exception as e:
         logger.error(f"❌ [delete] Fout bij verwijderen: {e}")
         raise HTTPException(status_code=500, detail="❌ Kon asset niet verwijderen.")
-
-                     
