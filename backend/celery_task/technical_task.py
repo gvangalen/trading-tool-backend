@@ -8,7 +8,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 # ✅ Eigen utils
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import generate_scores_db  # leest scoreregels uit DB
+from backend.utils.scoring_utils import generate_scores_db
 from backend.utils.technical_interpreter import fetch_technical_value, interpret_technical_indicator
 
 # === ✅ Logging
@@ -19,29 +19,9 @@ TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 
 
-# ============================================
-# 📈 RSI-berekening
-# ============================================
-def calculate_rsi(closes, period=14):
-    """Bereken RSI op basis van slotkoersen."""
-    if len(closes) < period + 1:
-        return None
-    gains, losses = [], []
-    for i in range(1, period + 1):
-        delta = closes[-i] - closes[-i - 1]
-        gains.append(max(delta, 0))
-        losses.append(max(-delta, 0))
-    avg_gain = sum(gains) / period
-    avg_loss = sum(losses) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
-
-
-# ============================================
+# =====================================================
 # 🔁 Retry wrapper
-# ============================================
+# =====================================================
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
 def safe_request(url, params=None):
     """Veilige HTTP request met retries."""
@@ -54,9 +34,63 @@ def safe_request(url, params=None):
         raise
 
 
-# ============================================
-# 📊 Indicatoren ophalen
-# ============================================
+# =====================================================
+# 📅 Check of al verwerkt vandaag
+# =====================================================
+def already_fetched_today(symbol: str, indicator: str) -> bool:
+    """Controleert of deze indicator vandaag al is opgeslagen."""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 1 FROM technical_indicators
+                WHERE symbol = %s AND indicator = %s AND DATE(timestamp) = CURRENT_DATE
+            """, (symbol, indicator))
+            return cur.fetchone() is not None
+    except Exception as e:
+        logger.error(f"⚠️ Fout bij controleren bestaande technische data: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+# =====================================================
+# 💾 Opslaan score
+# =====================================================
+def store_technical_score_db(payload: dict):
+    """Slaat technische indicator-score op in de database (altijd nieuwe rij per dag)."""
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen DB-verbinding bij technische opslag.")
+        return
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO technical_indicators (symbol, indicator, value, score, advies, uitleg, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW());
+            """, (
+                payload.get("symbol"),
+                payload.get("indicator"),
+                payload.get("value"),
+                payload.get("score"),
+                payload.get("advies"),
+                payload.get("uitleg"),
+            ))
+        conn.commit()
+        logger.info(f"💾 Nieuw record toegevoegd voor {payload.get('indicator')}")
+    except Exception as e:
+        logger.error(f"❌ Fout bij opslaan technische indicator: {e}")
+        logger.error(traceback.format_exc())
+    finally:
+        conn.close()
+
+
+# =====================================================
+# 📊 Indicatoren ophalen uit DB
+# =====================================================
 def get_active_technical_indicators():
     """Haal alle actieve technische indicatoren op uit de database."""
     conn = get_db_connection()
@@ -67,12 +101,12 @@ def get_active_technical_indicators():
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, name, source, link, symbol
+                SELECT name, source, data_url, symbol
                 FROM indicators
-                WHERE category = 'technical'
+                WHERE category = 'technical' AND active = TRUE;
             """)
             rows = cur.fetchall()
-            return [{"id": r[0], "name": r[1], "source": r[2], "link": r[3], "symbol": r[4]} for r in rows]
+            return [{"name": r[0], "source": r[1], "link": r[2], "symbol": r[3]} for r in rows]
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen technische indicatoren: {e}")
         return []
@@ -80,207 +114,71 @@ def get_active_technical_indicators():
         conn.close()
 
 
-# ============================================
-# 💾 Opslaan score
-# ============================================
-def store_technical_score_db(symbol, indicator, value, score, trend, interpretation, action, timestamp):
-    """Slaat technische indicator-score op in de database."""
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Geen DB-verbinding")
+# =====================================================
+# 🧠 Hoofdfunctie
+# =====================================================
+def fetch_and_process_technical():
+    """Dagelijkse technische dataverwerking met DB-scoreregels."""
+    logger.info("🚀 Start technische dataverwerking...")
+
+    indicators = get_active_technical_indicators()
+    if not indicators:
+        logger.warning("⚠️ Geen technische indicatoren gevonden in DB.")
         return
 
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO technical_indicators
-                    (symbol, indicator, value, score, advies, uitleg, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (symbol, indicator, value, score, action, interpretation, timestamp))
-        conn.commit()
-        logger.info(f"✅ Score opgeslagen voor {indicator}")
-    except Exception as e:
-        logger.error(f"❌ Fout bij DB-opslag {indicator}: {e}")
-        logger.error(traceback.format_exc())
-    finally:
-        conn.close()
+    utc_now = datetime.utcnow().replace(microsecond=0)
+
+    for ind in indicators:
+        name = ind["name"]
+        source = ind.get("source")
+        link = ind.get("link")
+        symbol = ind.get("symbol", "BTC")
+
+        if already_fetched_today(symbol, name):
+            logger.info(f"⏩ {name} is vandaag al verwerkt, overslaan.")
+            continue
+
+        # ✅ Waarde ophalen via utility
+        try:
+            result = __import__("asyncio").run(fetch_technical_value(name, source, link))
+        except Exception as e:
+            logger.error(f"❌ Fout bij ophalen waarde voor '{name}': {e}")
+            continue
+
+        if not result or "value" not in result:
+            logger.warning(f"⚠️ Geen waarde opgehaald voor '{name}'.")
+            continue
+
+        value = result["value"]
+
+        # ✅ Scoren via scoreregels
+        interpretation = interpret_technical_indicator(name, value)
+        if not interpretation:
+            logger.warning(f"⚠️ Geen scoreregels gevonden voor '{name}'")
+            continue
+
+        payload = {
+            "symbol": symbol,
+            "indicator": name,
+            "value": value,
+            "score": interpretation.get("score", 50),
+            "advies": interpretation.get("action", "–"),
+            "uitleg": interpretation.get("interpretation", "–"),
+        }
+
+        store_technical_score_db(payload)
+
+    logger.info("✅ Alle technische indicatoren succesvol verwerkt.")
 
 
-# ============================================
-# ⚙️ Waarde ophalen per indicator (DB-driven)
-# ============================================
-def fetch_value_from_source(indicator):
-    """
-    Haalt ruwe data op via de 'link' en 'source' velden uit de DB.
-    Ondersteunt verschillende bronnen zoals Binance, CoinGecko, etc.
-    """
-    name = indicator["name"]
-    source = indicator.get("source", "").lower()
-    link = indicator.get("link")
-    symbol = indicator.get("symbol", "BTC")
-
-    if not link:
-        logger.warning(f"⚠️ Geen API-link voor indicator {name}")
-        return None
-
-    try:
-        data = safe_request(link)
-
-        # === Binance (candlestick data)
-        if "binance" in source:
-            closes = [float(k[4]) for k in data]
-            volumes = [float(k[5]) for k in data]
-            if name.lower() == "rsi":
-                return calculate_rsi(closes)
-            elif "ma" in name.lower():
-                period = int(''.join(filter(str.isdigit, name))) or 200
-                return round(sum(closes[-period:]) / period, 2)
-            elif "volume" in name.lower():
-                return round(sum(volumes[-10:]), 2)
-            else:
-                logger.warning(f"⚠️ Geen berekening gedefinieerd voor Binance indicator '{name}'")
-                return None
-
-        # === CoinGecko (directe prijs- of dominantie-data)
-        elif "coingecko" in source:
-            if "market_cap_percentage" in data.get("data", {}):
-                return float(data["data"]["market_cap_percentage"].get("btc", 0))
-            return float(data.get("market_data", {}).get("current_price", {}).get("usd", 0))
-
-        else:
-            logger.warning(f"⚠️ Geen fetch-logica voor bron '{source}'")
-            return None
-
-    except Exception as e:
-        logger.error(f"❌ Fout bij ophalen waarde voor {name}: {e}")
-        return None
-
-
-# ============================================
-# 🧠 Hoofdfunctie
-# ============================================
-def fetch_and_process_technical():
-    """Dynamisch ophalen en scoren van technische indicatoren via DB-config."""
-    try:
-        logger.info("🚀 Start dynamische technische dataverwerking...")
-
-        indicators = get_active_technical_indicators()
-        if not indicators:
-            logger.warning("⚠️ Geen technische indicatoren gevonden in DB.")
-            return
-
-        utc_now = datetime.utcnow().replace(microsecond=0)
-
-        for ind in indicators:
-            name = ind["name"]
-            logger.info(f"📊 Verwerk indicator: {name}")
-
-            value = fetch_value_from_source(ind)
-            if value is None:
-                logger.warning(f"⚠️ Geen waarde opgehaald voor {name}")
-                continue
-
-            # 📈 Score berekenen vanuit DB-scoreregels
-            score_data = generate_scores_db("technical", {name: value})
-            if not score_data or "scores" not in score_data:
-                logger.warning(f"⚠️ Geen scoreregels gevonden voor {name}")
-                continue
-
-            result = score_data["scores"].get(name)
-            if not result:
-                logger.warning(f"⚠️ Geen resultaat gevonden voor {name}")
-                continue
-
-            store_technical_score_db(
-                symbol=ind.get("symbol", "BTC"),
-                indicator=name,
-                value=value,
-                score=result.get("score", 10),
-                trend=result.get("trend", "–"),
-                interpretation=result.get("interpretation", "–"),
-                action=result.get("action", "–"),
-                timestamp=utc_now
-            )
-
-        logger.info("✅ Alle technische indicatoren succesvol verwerkt.")
-
-    except Exception as e:
-        logger.error("❌ Fout in fetch_and_process_technical()")
-        logger.error(traceback.format_exc())
-
-
-# ============================================
+# =====================================================
 # 🚀 Celery-taak
-# ============================================
+# =====================================================
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
 def fetch_technical_data_day():
-    """
-    🔁 Dagelijkse taak: haalt technische indicatoren (RSI, MA200, Volume, etc.) op via DB-config
-    en slaat actuele waarden + scores op in 'technical_data'.
-    """
-    logger.info("🚀 Start fetch_technical_data_day (DB-driven)...")
-
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Geen databaseverbinding.")
-        return
-
+    """Dagelijkse Celery-taak voor technische indicatoren."""
     try:
-        with conn.cursor() as cur:
-            # ✅ Alle actieve technische indicatoren ophalen
-            cur.execute("""
-                SELECT name, source, data_url, symbol
-                FROM indicators
-                WHERE category = 'technical' AND active = TRUE;
-            """)
-            indicators = cur.fetchall()
-
-        if not indicators:
-            logger.warning("⚠️ Geen actieve technische indicatoren gevonden in DB.")
-            return
-
-        inserted = 0
-        for name, source, data_url, symbol in indicators:
-            logger.info(f"📊 Verwerk technische indicator: {name}")
-
-            # ✅ Waarde ophalen via util
-            result = None
-            try:
-                result = __import__("asyncio").run(fetch_technical_value(name, source, data_url))
-            except Exception as e:
-                logger.error(f"❌ Fout bij ophalen waarde voor '{name}': {e}")
-                continue
-
-            if not result or "value" not in result:
-                logger.warning(f"⚠️ Geen waarde opgehaald voor '{name}'.")
-                continue
-
-            value = result["value"]
-
-            # ✅ Scoren via database-scoreregels
-            interpretation = interpret_technical_indicator(name, value)
-            if not interpretation:
-                logger.warning(f"⚠️ Geen scoreregels gevonden voor '{name}'")
-                continue
-
-            score = interpretation.get("score", 10)
-            trend = interpretation.get("trend", "–")
-            interpretation_txt = interpretation.get("interpretation", "–")
-            action = interpretation.get("action", "–")
-
-            # ✅ Opslaan in DB
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO technical_data (symbol, indicator, value, score, trend, interpretation, action, timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                """, (symbol or "BTC", name, value, score, trend, interpretation_txt, action))
-            conn.commit()
-            inserted += 1
-
-        logger.info(f"✅ {inserted} technische indicatoren succesvol bijgewerkt.")
-
+        fetch_and_process_technical()
     except Exception as e:
         logger.error(f"❌ Fout in fetch_technical_data_day(): {e}")
         logger.error(traceback.format_exc())
-    finally:
-        conn.close()
