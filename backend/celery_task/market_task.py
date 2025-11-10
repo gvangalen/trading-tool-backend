@@ -213,7 +213,7 @@ def calculate_and_save_forward_returns():
 # 5️⃣ 7-daags aggregaat vullen uit eigen DB
 @shared_task(name="backend.celery_task.market_task.save_market_data_7d")
 def save_market_data_7d():
-    """Bouw 7-daagse aggregaten op uit market_data."""
+    """Bouw 7-daagse aggregaten op uit market_data en sla op in market_data_7d."""
     logger.info("📊 Opbouwen 7-daagse marktdata (DB-native)...")
     try:
         conn = get_db_connection()
@@ -222,6 +222,7 @@ def save_market_data_7d():
             return
 
         with conn.cursor() as cur:
+            # Bereken gemiddelden per dag (laatste 7 dagen)
             cur.execute("""
                 WITH per_day AS (
                     SELECT
@@ -241,6 +242,42 @@ def save_market_data_7d():
             rows = cur.fetchall()
 
         logger.info(f"ℹ️ Laatste 7 dagen samengevoegd ({len(rows)} rijen).")
+
+        if not rows:
+            logger.warning("⚠️ Geen data om op te slaan in market_data_7d.")
+            return
+
+        with conn.cursor() as cur2:
+            # Maak de tabel aan als die nog niet bestaat
+            cur2.execute("""
+                CREATE TABLE IF NOT EXISTS market_data_7d (
+                    dag date PRIMARY KEY,
+                    avg_price numeric,
+                    avg_volume numeric,
+                    avg_change numeric
+                );
+            """)
+
+            # Leeg de tabel om enkel de laatste 7 dagen te tonen
+            cur2.execute("TRUNCATE TABLE market_data_7d;")
+
+            # Voeg alle nieuwe data in
+            for dag, avg_price, avg_volume, avg_change in rows:
+                cur2.execute("""
+                    INSERT INTO market_data_7d (dag, avg_price, avg_volume, avg_change)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (dag) DO UPDATE SET
+                        avg_price = EXCLUDED.avg_price,
+                        avg_volume = EXCLUDED.avg_volume,
+                        avg_change = EXCLUDED.avg_change;
+                """, (dag, avg_price, avg_volume, avg_change))
+
+        conn.commit()
+        logger.info(f"✅ market_data_7d bijgewerkt met {len(rows)} rijen.")
+
     except Exception:
         logger.error("❌ Fout in save_market_data_7d()")
         logger.error(traceback.format_exc())
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
