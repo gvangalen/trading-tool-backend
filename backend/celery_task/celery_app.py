@@ -71,9 +71,9 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.market_task.sync_price_history_and_returns",
         "schedule": crontab(hour=1, minute=0),
     },
-    "save_market_data_7d": {
-        "task": "backend.celery_task.market_task.save_market_data_7d",
-        "schedule": crontab(hour=1, minute=30),
+    "fetch_market_data_7d": {
+        "task": "backend.celery_task.market_task.fetch_market_data_7d",
+        "schedule": crontab(hour=1, minute=30),  # draait elke dag om 01:30 UTC
     },
 
     # 🔹 MACRO
