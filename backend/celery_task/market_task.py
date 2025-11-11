@@ -60,7 +60,7 @@ def fetch_coingecko_market(symbol_id="bitcoin"):
 # 💾 Opslaan in market_data (correcte kolommen)
 # =====================================================
 def store_market_data_db(symbol, price, volume, change_24h):
-    """Slaat live marktdata op met upsert per (symbol, date) — laat date door DB genereren."""
+    """Slaat live marktdata op met upsert per (symbol, date)."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding bij market-opslag.")
@@ -68,7 +68,6 @@ def store_market_data_db(symbol, price, volume, change_24h):
 
     try:
         ts = datetime.utcnow().replace(microsecond=0)
-
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO market_data (symbol, price, volume, change_24h, timestamp)
@@ -78,9 +77,8 @@ def store_market_data_db(symbol, price, volume, change_24h):
                     price = EXCLUDED.price,
                     volume = EXCLUDED.volume,
                     change_24h = EXCLUDED.change_24h,
-                    timestamp = EXCLUDED.timestamp
+                    timestamp = EXCLUDED.timestamp;
             """, (symbol, price, volume, change_24h, ts))
-
         conn.commit()
         logger.info(f"✅ Upsert market_data: {symbol} prijs={price}, volume={volume}, 24h={change_24h}")
     except Exception:
@@ -100,7 +98,6 @@ def process_market_now():
     if not live:
         logger.warning("⚠️ Geen live marketdata ontvangen.")
         return
-
     store_market_data_db("BTC", live["price"], live["volume"], live["change_24h"])
 
 
@@ -122,14 +119,54 @@ def fetch_market_data_task():
         logger.error(traceback.format_exc())
 
 
-# 2️⃣ Dagelijkse snapshot (voor rapporten)
+# 2️⃣ Dagelijkse snapshot (voor rapporten + 7d fallback)
 @shared_task(name="backend.celery_task.market_task.save_market_data_daily")
 def save_market_data_daily():
-    """Dagelijkse snapshot van de BTC-marktdata."""
+    """Dagelijkse snapshot van de BTC-marktdata + OHLC naar market_data_7d."""
     logger.info("🕛 Dagelijkse market snapshot...")
     try:
+        # 🔹 Normale snapshot
         process_market_now()
-        logger.info("✅ Dagelijkse snapshot opgeslagen.")
+
+        # 🔹 Fallback: Binance 1d candles ophalen voor market_data_7d
+        logger.info("📊 Ophalen Binance OHLC candle (1d) voor market_data_7d...")
+        url = "https://api.binance.com/api/v3/klines"
+        params = {"symbol": "BTCUSDT", "interval": "1d", "limit": 1}
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        candles = resp.json()
+
+        if candles:
+            c = candles[-1]
+            open_p = float(c[1])
+            high_p = float(c[2])
+            low_p = float(c[3])
+            close_p = float(c[4])
+            volume = float(c[5])
+            change = round(((close_p - open_p) / open_p) * 100, 2) if open_p else None
+
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume, created_at)
+                    VALUES ('BTC', CURRENT_DATE, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (symbol, date) DO UPDATE SET
+                        open = EXCLUDED.open,
+                        high = EXCLUDED.high,
+                        low = EXCLUDED.low,
+                        close = EXCLUDED.close,
+                        change = EXCLUDED.change,
+                        volume = EXCLUDED.volume,
+                        created_at = NOW();
+                """, (open_p, high_p, low_p, close_p, change, volume))
+            conn.commit()
+            conn.close()
+            logger.info(f"✅ OHLC bijgewerkt voor {datetime.utcnow().date()} | O:{open_p}, H:{high_p}, L:{low_p}, C:{close_p}, V:{volume}")
+        else:
+            logger.warning("⚠️ Geen Binance candles ontvangen.")
+
+        logger.info("✅ Dagelijkse snapshot opgeslagen (inclusief 7d OHLC).")
+
     except Exception:
         logger.error("❌ Fout in save_market_data_daily()")
         logger.error(traceback.format_exc())
@@ -138,7 +175,7 @@ def save_market_data_daily():
 # 3️⃣ 7-daagse OHLC + Volume data ophalen via DB-config
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
-    """Haalt 7-daagse BTC OHLC + Volume-data op via de URL's uit de indicators-tabel en slaat op in market_data_7d."""
+    """Haalt 7-daagse BTC OHLC + Volume-data op via de URL's uit de indicators-tabel."""
     logger.info("📆 Start fetch_market_data_7d via DB-config...")
 
     conn = get_db_connection()
@@ -148,7 +185,6 @@ def fetch_market_data_7d():
 
     try:
         with conn.cursor() as cur:
-            # ✅ URLs ophalen uit DB
             cur.execute("""
                 SELECT name, data_url
                 FROM indicators
@@ -159,32 +195,22 @@ def fetch_market_data_7d():
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning("⚠️ Geen actieve btc_ohlc of btc_volume indicator gevonden in de database.")
+            logger.warning("⚠️ Geen actieve btc_ohlc of btc_volume indicator gevonden.")
             return
 
         urls = {r[0]: r[1] for r in rows}
         ohlc_url = urls.get("btc_ohlc")
         volume_url = urls.get("btc_volume")
 
-        if not ohlc_url or not volume_url:
-            logger.warning("⚠️ Vereiste URL(s) ontbreken in indicators-tabel.")
-            return
-
-        logger.info(f"🌐 OHLC URL: {ohlc_url}")
-        logger.info(f"🌐 Volume URL: {volume_url}")
-
-        # ✅ OHLC ophalen
         ohlc_resp = requests.get(ohlc_url, timeout=15)
         ohlc_resp.raise_for_status()
         ohlc_data = ohlc_resp.json() or []
 
-        # ✅ Volume ophalen
         volume_resp = requests.get(volume_url, timeout=15)
         volume_resp.raise_for_status()
         volume_json = volume_resp.json()
         volume_points = volume_json.get("total_volumes", [])
 
-        # 📊 Volume per dag middelen
         volume_by_day = {}
         for ts, vol in volume_points:
             day = datetime.utcfromtimestamp(ts / 1000).date()
@@ -222,7 +248,7 @@ def fetch_market_data_7d():
         conn.close()
 
 
-# 4️⃣ Forward returns berekenen (zoals eerder)
+# 4️⃣ Forward returns berekenen
 @shared_task(name="backend.celery_task.market_task.calculate_and_save_forward_returns")
 def calculate_and_save_forward_returns():
     """Bereken en sla forward returns op uit btc_price_history."""
@@ -265,7 +291,7 @@ def calculate_and_save_forward_returns():
                     DO UPDATE SET
                         end_date = EXCLUDED.end_date,
                         change = EXCLUDED.change,
-                        avg_daily = EXCLUDED.avg_daily
+                        avg_daily = EXCLUDED.avg_daily;
                 """, (f"{days}d", s_date, e_date, round(change, 2), round(avg_daily, 3)))
         conn.commit()
         logger.info(f"✅ Forward returns opgeslagen ({len(results)} rijen).")
