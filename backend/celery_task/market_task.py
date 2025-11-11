@@ -8,7 +8,7 @@ from celery import shared_task
 
 # Eigen imports
 from backend.utils.db import get_db_connection
-from backend.celery_task.btc_price_history_task import update_btc_history
+from backend.celery_task.btc_price_history_task import update_btc_history  # blijft beschikbaar
 
 # === Config ===
 TIMEOUT = 10
@@ -34,7 +34,7 @@ def safe_get(url, params=None):
 # 🌐 CoinGecko fetch helper
 # =====================================================
 def fetch_coingecko_market(symbol_id="bitcoin"):
-    """Haalt marktdata op van CoinGecko."""
+    """Haalt marktdata op van CoinGecko (USD)."""
     try:
         url = f"https://api.coingecko.com/api/v3/coins/{symbol_id}"
         resp = requests.get(url, params={"localization": "false"}, timeout=TIMEOUT)
@@ -47,7 +47,7 @@ def fetch_coingecko_market(symbol_id="bitcoin"):
         volume = float(md.get("total_volume", {}).get("usd", 0))
         change_24h = float(md.get("price_change_percentage_24h", 0) or 0)
 
-        logger.info(f"📊 Fetched market data: price={price}, vol={volume}, 24h={change_24h}")
+        logger.info(f"📊 Fetched market data: price={price}, volUSD={volume}, 24h={change_24h}")
         return {"price": price, "volume": volume, "change_24h": change_24h}
 
     except Exception:
@@ -80,7 +80,7 @@ def store_market_data_db(symbol, price, volume, change_24h):
                     timestamp = EXCLUDED.timestamp;
             """, (symbol, price, volume, change_24h, ts))
         conn.commit()
-        logger.info(f"✅ Upsert market_data: {symbol} prijs={price}, volume={volume}, 24h={change_24h}")
+        logger.info(f"✅ Upsert market_data: {symbol} prijs={price}, volumeUSD={volume}, 24h={change_24h}")
     except Exception:
         logger.error("❌ Fout bij opslaan market_data:")
         logger.error(traceback.format_exc())
@@ -119,30 +119,32 @@ def fetch_market_data_task():
         logger.error(traceback.format_exc())
 
 
-# 2️⃣ Dagelijkse snapshot (voor rapporten + 7d fallback)
+# 2️⃣ Dagelijkse snapshot (voor rapporten + 7d met USD-volume)
 @shared_task(name="backend.celery_task.market_task.save_market_data_daily")
 def save_market_data_daily():
-    """Dagelijkse snapshot van de BTC-marktdata + OHLC naar market_data_7d."""
+    """
+    Dagelijkse snapshot van de BTC-marktdata + OHLC naar market_data_7d.
+    ⚠️ Volume wordt als USD opgeslagen (Binance quoteAssetVolume).
+    """
     logger.info("🕛 Dagelijkse market snapshot...")
     try:
-        # 🔹 Normale snapshot
+        # 🔹 CoinGecko snapshot (prijs/24h/volumeUSD)
         process_market_now()
 
-        # 🔹 Fallback: Binance 1d candles ophalen voor market_data_7d
-        logger.info("📊 Ophalen Binance OHLC candle (1d) voor market_data_7d...")
+        # 🔹 Binance 1d kline voor OHLC + USD-volume (quoteAssetVolume = index 7)
+        logger.info("📊 Ophalen Binance OHLC candle (1d) met USD-volume voor market_data_7d...")
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": "BTCUSDT", "interval": "1d", "limit": 1}
-        resp = requests.get(url, params=params, timeout=10)
-        resp.raise_for_status()
-        candles = resp.json()
+        candles = safe_get(url, params=params)
 
         if candles:
-            c = candles[-1]
-            open_p = float(c[1])
-            high_p = float(c[2])
-            low_p = float(c[3])
-            close_p = float(c[4])
-            volume = float(c[5])
+            k = candles[-1]
+            open_p = float(k[1])
+            high_p = float(k[2])
+            low_p  = float(k[3])
+            close_p = float(k[4])
+            base_vol_btc = float(k[5])
+            quote_vol_usd = float(k[7])  # ✅ dit is al USD/USDT-volume
             change = round(((close_p - open_p) / open_p) * 100, 2) if open_p else None
 
             conn = get_db_connection()
@@ -158,24 +160,32 @@ def save_market_data_daily():
                         change = EXCLUDED.change,
                         volume = EXCLUDED.volume,
                         created_at = NOW();
-                """, (open_p, high_p, low_p, close_p, change, volume))
+                """, (open_p, high_p, low_p, close_p, change, quote_vol_usd))
             conn.commit()
             conn.close()
-            logger.info(f"✅ OHLC bijgewerkt voor {datetime.utcnow().date()} | O:{open_p}, H:{high_p}, L:{low_p}, C:{close_p}, V:{volume}")
+            logger.info(
+                f"✅ OHLC bijgewerkt voor {datetime.utcnow().date()} "
+                f"| O:{open_p}, H:{high_p}, L:{low_p}, C:{close_p}, "
+                f"Δ{change:+.2f}% | VolUSD:{quote_vol_usd:,.0f} (baseBTC:{base_vol_btc:,.2f})"
+            )
         else:
             logger.warning("⚠️ Geen Binance candles ontvangen.")
 
-        logger.info("✅ Dagelijkse snapshot opgeslagen (inclusief 7d OHLC).")
+        logger.info("✅ Dagelijkse snapshot opgeslagen (incl. 7d OHLC + USD-volume).")
 
     except Exception:
         logger.error("❌ Fout in save_market_data_daily()")
         logger.error(traceback.format_exc())
 
 
-# 3️⃣ 7-daagse OHLC + Volume data ophalen via DB-config
+# 3️⃣ 7-daagse OHLC + Volume data
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
-    """Haalt 7-daagse BTC OHLC + Volume-data op via de URL's uit de indicators-tabel en slaat op in market_data_7d."""
+    """
+    Haalt 7-daagse BTC OHLC + Volume-data op en schrijft naar market_data_7d.
+    - Als 'btc_ohlc' een Binance Klines URL is ➜ gebruik quoteAssetVolume (USD) direct.
+    - Anders: fallback met CoinGecko total_volumes (USD) gemiddeld per dag × close.
+    """
     logger.info("📆 Start fetch_market_data_7d via DB-config...")
 
     conn = get_db_connection()
@@ -184,63 +194,91 @@ def fetch_market_data_7d():
         return
 
     try:
+        # URLs uit DB ophalen
         with conn.cursor() as cur:
-            # ✅ URLs ophalen uit DB
             cur.execute("""
                 SELECT name, data_url
                 FROM indicators
                 WHERE name IN ('btc_ohlc', 'btc_volume')
-                AND category = 'market'
-                AND active = TRUE;
+                  AND category = 'market'
+                  AND active = TRUE;
             """)
             rows = cur.fetchall()
 
-        if not rows:
-            logger.warning("⚠️ Geen actieve btc_ohlc of btc_volume indicator gevonden in de database.")
-            return
+        url_map = {r[0]: r[1] for r in rows} if rows else {}
+        ohlc_url = url_map.get("btc_ohlc")
+        volume_url = url_map.get("btc_volume")
 
-        urls = {r[0]: r[1] for r in rows}
-        ohlc_url = urls.get("btc_ohlc")
-        volume_url = urls.get("btc_volume")
-
-        if not ohlc_url or not volume_url:
-            logger.warning("⚠️ Vereiste URL(s) ontbreken in indicators-tabel.")
+        if not ohlc_url:
+            logger.warning("⚠️ Geen 'btc_ohlc' URL gevonden (verwacht Binance klines of vergelijkbaar).")
             return
 
         logger.info(f"🌐 OHLC URL: {ohlc_url}")
-        logger.info(f"🌐 Volume URL: {volume_url}")
 
-        # ✅ OHLC ophalen
-        ohlc_resp = requests.get(ohlc_url, timeout=15)
-        ohlc_resp.raise_for_status()
-        ohlc_data = ohlc_resp.json() or []
+        # Proberen als Binance klines
+        try:
+            klines = safe_get(ohlc_url)
+            # herken Binance kline structuur: list van lijsten met >= 8 elementen
+            is_binance = isinstance(klines, list) and len(klines) > 0 and isinstance(klines[0], list) and len(klines[0]) >= 8
+        except Exception:
+            klines, is_binance = [], False
 
-        # ✅ Volume ophalen
-        volume_resp = requests.get(volume_url, timeout=15)
-        volume_resp.raise_for_status()
-        volume_json = volume_resp.json()
+        inserted = 0
+        if is_binance:
+            logger.info("✅ Herkend als Binance klines; gebruik quoteAssetVolume (USD).")
+            with conn.cursor() as cur:
+                for k in klines:
+                    ts = int(k[0])
+                    open_p = float(k[1]); high_p = float(k[2]); low_p = float(k[3]); close_p = float(k[4])
+                    quote_vol_usd = float(k[7])  # ✅ USD-volume (USDT)
+                    day = datetime.utcfromtimestamp(ts / 1000).date()
+                    change = round(((close_p - open_p) / open_p) * 100, 2) if open_p else None
+
+                    cur.execute("""
+                        INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume, created_at)
+                        VALUES ('BTC', %s, %s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (symbol, date) DO UPDATE SET
+                            open   = EXCLUDED.open,
+                            high   = EXCLUDED.high,
+                            low    = EXCLUDED.low,
+                            close  = EXCLUDED.close,
+                            change = EXCLUDED.change,
+                            volume = EXCLUDED.volume,
+                            created_at = NOW();
+                    """, (day, open_p, high_p, low_p, close_p, change, quote_vol_usd))
+                    inserted += 1
+                    logger.info(
+                        f"📅 {day} | O:{open_p:.0f} H:{high_p:.0f} L:{low_p:.0f} C:{close_p:.0f} "
+                        f"Δ{change:+.2f}% | VolUSD: {quote_vol_usd/1e9:.2f}B"
+                    )
+            conn.commit()
+            logger.info(f"✅ market_data_7d bijgewerkt met Binance-data ({inserted} rijen).")
+            return
+
+        # Fallback pad (CoinGecko): gebruik total_volumes (USD) per dag × close
+        if not volume_url:
+            logger.warning("⚠️ Geen 'btc_volume' URL voor fallback; sla volume over.")
+            return
+
+        logger.info("↩️ Fallback actief (CoinGecko volumes middelen per dag).")
+        ohlc_data = safe_get(ohlc_url) or []
+        volume_json = safe_get(volume_url) or {}
         volume_points = volume_json.get("total_volumes", [])
 
-        # 📊 Volume per dag middelen
+        # volume per dag middelen
         volume_by_day = {}
         for ts, vol in volume_points:
             day = datetime.utcfromtimestamp(ts / 1000).date()
-            volume_by_day.setdefault(day, []).append(vol)
+            volume_by_day.setdefault(day, []).append(float(vol))
         avg_volume = {d: sum(vs) / len(vs) for d, vs in volume_by_day.items()}
 
-        inserted = 0
         with conn.cursor() as cur:
-            for ts, open_p, high_p, low_p, close_p in ohlc_data:
-                date = datetime.utcfromtimestamp(ts / 1000).date()
+            for item in ohlc_data:
+                # verwacht CoinGecko formaat: [ts, open, high, low, close]
+                ts, open_p, high_p, low_p, close_p = item
+                day = datetime.utcfromtimestamp(ts / 1000).date()
                 change = round(((close_p - open_p) / open_p) * 100, 2) if open_p else None
-                volume_btc = avg_volume.get(date)
-
-                # ✅ Volume omrekenen naar USD
-                volume_usd = None
-                if volume_btc and close_p:
-                    volume_usd = volume_btc * close_p
-                else:
-                    volume_usd = 0
+                vol_usd = float(avg_volume.get(day, 0.0))
 
                 cur.execute("""
                     INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume, created_at)
@@ -253,16 +291,14 @@ def fetch_market_data_7d():
                         change = EXCLUDED.change,
                         volume = EXCLUDED.volume,
                         created_at = NOW();
-                """, (date, open_p, high_p, low_p, close_p, change, volume_usd))
+                """, (day, float(open_p), float(high_p), float(low_p), float(close_p), change, vol_usd))
                 inserted += 1
-
                 logger.info(
-                    f"📅 {date} | O:{open_p:.0f} H:{high_p:.0f} L:{low_p:.0f} C:{close_p:.0f} "
-                    f"Δ{change:+.2f}% | Vol: {volume_usd/1e9:.2f}B USD"
+                    f"📅 {day} | O:{open_p:.0f} H:{high_p:.0f} L:{low_p:.0f} C:{close_p:.0f} "
+                    f"Δ{change:+.2f}% | VolUSD(fb): {vol_usd/1e9:.2f}B"
                 )
-
         conn.commit()
-        logger.info(f"✅ market_data_7d succesvol bijgewerkt ({inserted} rijen met USD-volume).")
+        logger.info(f"✅ market_data_7d succesvol bijgewerkt via fallback ({inserted} rijen).")
 
     except Exception:
         logger.error("❌ Fout bij fetch_market_data_7d():")
