@@ -65,15 +65,11 @@ celery.conf.beat_schedule = {
     },
     "save_market_data_daily": {
         "task": "backend.celery_task.market_task.save_market_data_daily",
-        "schedule": crontab(hour=0, minute=5),
+        "schedule": crontab(hour=0, minute=5),  # dagelijks om 00:05 UTC (01:05 NL)
     },
     "sync_price_history_and_returns": {
         "task": "backend.celery_task.market_task.sync_price_history_and_returns",
         "schedule": crontab(hour=1, minute=0),
-    },
-    "fetch_market_data_7d": {
-        "task": "backend.celery_task.market_task.fetch_market_data_7d",
-        "schedule": crontab(hour=1, minute=30),  # draait elke dag om 01:30 UTC
     },
 
     # 🔹 MACRO
@@ -109,7 +105,7 @@ celery.conf.beat_schedule = {
     # 🔹 AI VALIDATIE & STRATEGIEËN
     "validate_setups_task": {
         "task": "backend.ai_tasks.validation_task.validate_setups_task",
-        "schedule": crontab(minute=0, hour="*/6"),
+        "schedule": crontab(minute=0, hour="*/6"),  # elke 6 uur
     },
     "generate_trading_advice": {
         "task": "backend.ai_tasks.trading_advice_task.generate_trading_advice",
