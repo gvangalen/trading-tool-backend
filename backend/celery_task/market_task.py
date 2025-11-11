@@ -124,14 +124,19 @@ def fetch_market_data_task():
 def save_market_data_daily():
     """
     Dagelijkse snapshot van de BTC-marktdata + OHLC naar market_data_7d.
-    ⚠️ Volume wordt als USD opgeslagen (Binance quoteAssetVolume).
+    ⚙️ Combineert:
+        1. CoinGecko → live prijs / volume / 24h change
+        2. Binance → laatste candle (O/H/L/C + USD-volume)
+        3. fetch_market_data_7d() → vult de laatste 7 dagen aan
     """
-    logger.info("🕛 Dagelijkse market snapshot...")
-    try:
-        # 🔹 CoinGecko snapshot (prijs/24h/volumeUSD)
-        process_market_now()
+    logger.info("🕛 Dagelijkse market snapshot gestart...")
 
-        # 🔹 Binance 1d kline voor OHLC + USD-volume (quoteAssetVolume = index 7)
+    try:
+        # 1️⃣ CoinGecko snapshot
+        process_market_now()
+        logger.info("✅ Live snapshot opgeslagen in market_data.")
+
+        # 2️⃣ Binance candle ophalen (1d)
         logger.info("📊 Ophalen Binance OHLC candle (1d) met USD-volume voor market_data_7d...")
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": "BTCUSDT", "interval": "1d", "limit": 1}
@@ -141,10 +146,10 @@ def save_market_data_daily():
             k = candles[-1]
             open_p = float(k[1])
             high_p = float(k[2])
-            low_p  = float(k[3])
+            low_p = float(k[3])
             close_p = float(k[4])
             base_vol_btc = float(k[5])
-            quote_vol_usd = float(k[7])  # ✅ dit is al USD/USDT-volume
+            quote_vol_usd = float(k[7])  # ✅ Binance geeft dit al in USDT (USD)
             change = round(((close_p - open_p) / open_p) * 100, 2) if open_p else None
 
             conn = get_db_connection()
@@ -163,20 +168,25 @@ def save_market_data_daily():
                 """, (open_p, high_p, low_p, close_p, change, quote_vol_usd))
             conn.commit()
             conn.close()
+
             logger.info(
-                f"✅ OHLC bijgewerkt voor {datetime.utcnow().date()} "
+                f"✅ Dagrecord bijgewerkt voor {datetime.utcnow().date()} "
                 f"| O:{open_p}, H:{high_p}, L:{low_p}, C:{close_p}, "
                 f"Δ{change:+.2f}% | VolUSD:{quote_vol_usd:,.0f} (baseBTC:{base_vol_btc:,.2f})"
             )
         else:
-            logger.warning("⚠️ Geen Binance candles ontvangen.")
+            logger.warning("⚠️ Geen Binance candles ontvangen voor vandaag.")
 
-        logger.info("✅ Dagelijkse snapshot opgeslagen (incl. 7d OHLC + USD-volume).")
+        # 3️⃣ Direct de 7-daagse hybride update uitvoeren
+        logger.info("🔁 Start fetch_market_data_7d() voor volledige 7-daagse update...")
+        fetch_market_data_7d()
+        logger.info("✅ 7-daagse update succesvol uitgevoerd.")
+
+        logger.info("🏁 Dagelijkse snapshot + 7d update volledig afgerond.")
 
     except Exception:
         logger.error("❌ Fout in save_market_data_daily()")
         logger.error(traceback.format_exc())
-
 
 # 3️⃣ 7-daagse OHLC + Volume data
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
