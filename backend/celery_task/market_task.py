@@ -175,7 +175,7 @@ def save_market_data_daily():
 # 3️⃣ 7-daagse OHLC + Volume data ophalen via DB-config
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
-    """Haalt 7-daagse BTC OHLC + Volume-data op via de URL's uit de indicators-tabel."""
+    """Haalt 7-daagse BTC OHLC + Volume-data op via de URL's uit de indicators-tabel en slaat op in market_data_7d."""
     logger.info("📆 Start fetch_market_data_7d via DB-config...")
 
     conn = get_db_connection()
@@ -185,6 +185,7 @@ def fetch_market_data_7d():
 
     try:
         with conn.cursor() as cur:
+            # ✅ URLs ophalen uit DB
             cur.execute("""
                 SELECT name, data_url
                 FROM indicators
@@ -195,22 +196,32 @@ def fetch_market_data_7d():
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning("⚠️ Geen actieve btc_ohlc of btc_volume indicator gevonden.")
+            logger.warning("⚠️ Geen actieve btc_ohlc of btc_volume indicator gevonden in de database.")
             return
 
         urls = {r[0]: r[1] for r in rows}
         ohlc_url = urls.get("btc_ohlc")
         volume_url = urls.get("btc_volume")
 
+        if not ohlc_url or not volume_url:
+            logger.warning("⚠️ Vereiste URL(s) ontbreken in indicators-tabel.")
+            return
+
+        logger.info(f"🌐 OHLC URL: {ohlc_url}")
+        logger.info(f"🌐 Volume URL: {volume_url}")
+
+        # ✅ OHLC ophalen
         ohlc_resp = requests.get(ohlc_url, timeout=15)
         ohlc_resp.raise_for_status()
         ohlc_data = ohlc_resp.json() or []
 
+        # ✅ Volume ophalen
         volume_resp = requests.get(volume_url, timeout=15)
         volume_resp.raise_for_status()
         volume_json = volume_resp.json()
         volume_points = volume_json.get("total_volumes", [])
 
+        # 📊 Volume per dag middelen
         volume_by_day = {}
         for ts, vol in volume_points:
             day = datetime.utcfromtimestamp(ts / 1000).date()
@@ -222,7 +233,14 @@ def fetch_market_data_7d():
             for ts, open_p, high_p, low_p, close_p in ohlc_data:
                 date = datetime.utcfromtimestamp(ts / 1000).date()
                 change = round(((close_p - open_p) / open_p) * 100, 2) if open_p else None
-                volume = avg_volume.get(date)
+                volume_btc = avg_volume.get(date)
+
+                # ✅ Volume omrekenen naar USD
+                volume_usd = None
+                if volume_btc and close_p:
+                    volume_usd = volume_btc * close_p
+                else:
+                    volume_usd = 0
 
                 cur.execute("""
                     INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume, created_at)
@@ -235,11 +253,16 @@ def fetch_market_data_7d():
                         change = EXCLUDED.change,
                         volume = EXCLUDED.volume,
                         created_at = NOW();
-                """, (date, open_p, high_p, low_p, close_p, change, volume))
+                """, (date, open_p, high_p, low_p, close_p, change, volume_usd))
                 inserted += 1
 
+                logger.info(
+                    f"📅 {date} | O:{open_p:.0f} H:{high_p:.0f} L:{low_p:.0f} C:{close_p:.0f} "
+                    f"Δ{change:+.2f}% | Vol: {volume_usd/1e9:.2f}B USD"
+                )
+
         conn.commit()
-        logger.info(f"✅ market_data_7d succesvol bijgewerkt ({inserted} rijen met volume).")
+        logger.info(f"✅ market_data_7d succesvol bijgewerkt ({inserted} rijen met USD-volume).")
 
     except Exception:
         logger.error("❌ Fout bij fetch_market_data_7d():")
