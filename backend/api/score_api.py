@@ -153,3 +153,47 @@ async def get_daily_scores():
             "setup": {"score": 0, "interpretation": "Geen data", "top_contributors": [], "active_setups": []},
             "market": {"score": 0, "interpretation": "Geen data", "top_contributors": []},
         }
+
+# ===============================
+# 🧠 AI MASTER SCORE (orchestrator)
+# ===============================
+@router.get("/ai/master_score")
+def get_ai_master_score():
+    """Haalt de laatste AI Master Score uit de view ai_master_score_view."""
+    conn = get_db_connection()
+    if not conn:
+        return {"error": "Geen DB-verbinding"}
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    master_score, 
+                    master_trend, 
+                    master_bias, 
+                    master_risk,
+                    alignment_score,
+                    outlook,
+                    weights,
+                    data_warnings,
+                    domains,
+                    summary,
+                    date
+                FROM ai_master_score_view
+                ORDER BY date DESC
+                LIMIT 1;
+            """)
+            row = cur.fetchone()
+
+            if not row:
+                return {"message": "Nog geen AI-master-score beschikbaar"}
+
+            columns = [desc[0] for desc in cur.description]
+            return dict(zip(columns, row))
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen AI Master Score: {e}")
+        return {"error": str(e)}
+
+    finally:
+        conn.close()
