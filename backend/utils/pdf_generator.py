@@ -13,37 +13,50 @@ from reportlab.lib.colors import HexColor
 
 logger = logging.getLogger(__name__)
 
+# ============================================
 # 🎨 Sectiekleuren
+# ============================================
 SECTION_COLORS = {
-    "btc_summary": "#4682B4",       # steelblue
-    "macro_summary": "#696969",     # dimgray
-    "setup_checklist": "#DAA520",   # goldenrod
-    "priorities": "#FF8C00",        # darkorange
-    "wyckoff_analysis": "#008080",  # teal
-    "recommendations": "#B22222",   # firebrick
-    "conclusion": "#006400",        # darkgreen
-    "outlook": "#708090",           # slategray,
+    "btc_summary":       "#4682B4",  # steelblue
+    "macro_summary":     "#696969",  # dimgray
+    "setup_checklist":   "#DAA520",  # goldenrod
+    "priorities":        "#FF8C00",  # darkorange
+    "wyckoff_analysis":  "#008080",  # teal
+    "recommendations":   "#B22222",  # firebrick
+    "conclusion":        "#006400",  # darkgreen
+    "outlook":           "#708090",  # slategray
+
+    # 🆕 AI-secties
+    "ai_master_score":   "#4B0082",  # indigo
+    "ai_insights":       "#191970",  # midnight blue
 }
 
-# 🧩 Sectielabels met emoji’s (worden opgeschoond)
+# ============================================
+# 🧩 Sectielabels (PDF titels)
+# ============================================
 SECTION_LABELS = {
-    "btc_summary": "📊 Bitcoin Samenvatting",
-    "macro_summary": "🌍 Macro Overzicht",
-    "setup_checklist": "✅ Setup Checklist",
-    "priorities": "🎯 Dagelijkse Prioriteiten",
+    "btc_summary":      "📊 Bitcoin Samenvatting",
+    "macro_summary":    "🌍 Macro Overzicht",
+    "setup_checklist":  "✅ Setup Checklist",
+    "priorities":       "🎯 Dagelijkse Prioriteiten",
     "wyckoff_analysis": "🌀 Wyckoff Analyse",
-    "recommendations": "💡 Aanbevelingen",
-    "conclusion": "🧠 Conclusie",
-    "outlook": "🔮 Vooruitblik",
+    "recommendations":  "💡 Aanbevelingen",
+    "conclusion":       "🧠 Conclusie",
+    "outlook":          "🔮 Vooruitblik",
+
+    # 🆕 toegevoegde AI-secties
+    "ai_master_score":  "🤖 AI Master Score",
+    "ai_insights":      "🧩 AI Factor Analyse",
 }
 
-# 🧹 Helper om emoji’s te strippen
+# ============================================
+# 🧹 Helpers
+# ============================================
 def strip_emoji(text: str) -> str:
     if not isinstance(text, str):
         return str(text)
     return re.sub(r'[\U00010000-\U0010ffff]', '', text)
 
-# 🧹 Helper om niet‑printbare tekens te verwijderen
 def clean_text(text: str) -> str:
     if not isinstance(text, str):
         return str(text)
@@ -53,7 +66,10 @@ def clean_text(text: str) -> str:
     except Exception:
         return re.sub(r"[^\x00-\x7F]+", "", text)
 
-# 🧾 PDF generator
+
+# ============================================
+# 🖨️ PDF GENERATOR
+# ============================================
 def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bool = True) -> io.BytesIO:
     buffer = io.BytesIO()
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -63,7 +79,7 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
     os.makedirs(folder, exist_ok=True)
     pdf_path = os.path.join(folder, f"{report_type}_{today_str}.pdf")
 
-    logger.info(f"⏳ Genereren van PDF gestart voor type '{report_type}' op {pdf_path}")
+    logger.info(f"⏳ PDF genereren voor '{report_type}' → {pdf_path}")
 
     doc = SimpleDocTemplate(
         buffer,
@@ -96,29 +112,36 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
 
     story = []
 
-    # === 🧾 Header
-    story.append(Paragraph(clean_text(strip_emoji("📈 Daily Trading Report (BTC)")), styles["Title"]))
+    # -----------------------------
+    # 🧾 Header
+    # -----------------------------
+    story.append(Paragraph(clean_text("Daily Trading Report (BTC)"), styles["Title"]))
     story.append(Paragraph(datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"), styles["Normal"]))
     story.append(Spacer(1, 12))
 
-    # === 💰 Marktdata blok (optioneel)
+    # -----------------------------
+    # 💰 Marktdata blok
+    # -----------------------------
     market_data = data.get("market_data")
     if isinstance(market_data, dict):
-        story.append(Paragraph(clean_text("💰 Marktgegevens"), styles["SectionHeader"]))
+        story.append(Paragraph("Marktgegevens", styles["SectionHeader"]))
+
         price = market_data.get("price", "–")
         volume = market_data.get("volume", "–")
         change = market_data.get("change_24h", "–")
 
-        # Optioneel: format volume als bijv. 1.2B
         if isinstance(volume, (int, float)):
             volume = f"{volume/1e9:.1f}B" if volume > 1e9 else f"{volume/1e6:.1f}M"
-        change_str = f"{change}%" if isinstance(change, (int, float)) else change
 
-        price_line = f"Prijs: ${price} | Volume: {volume} | 24h Verandering: {change_str}"
-        story.append(Paragraph(price_line, styles["Content"]))
+        story.append(Paragraph(
+            f"Prijs: ${price} | Volume: {volume} | 24h Verandering: {change}%",
+            styles["Content"]
+        ))
         story.append(Spacer(1, 12))
 
-    # === 🧱 Secties
+    # ============================================
+    # 📄 Alle secties renderen (inclusief AI)
+    # ============================================
     for key, label in SECTION_LABELS.items():
         value = data.get(key)
         if not value:
@@ -135,24 +158,25 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
             spaceAfter=8,
         )
 
-        # 🔤 Titel (emoji gestript)
         story.append(Paragraph(clean_text(strip_emoji(label)), header_style))
 
-        # 📄 Inhoud
+        # Indent JSON & tekst netjes
         try:
             if isinstance(value, (dict, list)):
                 body = json.dumps(value, indent=2, ensure_ascii=False)
             else:
                 body = str(value)
         except Exception as e:
-            logger.warning(f"⚠️ Fout bij converteren van sectie '{key}': {e}")
-            body = f"[Fout bij renderen van deze sectie: {e}]"
+            logger.warning(f"⚠️ Fout bij sectie '{key}': {e}")
+            body = f"[Fout bij renderen: {e}]"
 
         body = clean_text(strip_emoji(body)).replace("\n", "<br/>")
         story.append(Paragraph(body, styles["Content"]))
         story.append(Spacer(1, 6))
 
-    # === 🖨️ PDF bouwen
+    # -----------------------------
+    # 🖨️ PDF bouwen
+    # -----------------------------
     try:
         doc.build(story)
         buffer.seek(0)
@@ -160,12 +184,8 @@ def generate_pdf_report(data: dict, report_type: str = "daily", save_to_disk: bo
         if save_to_disk:
             with open(pdf_path, "wb") as f:
                 f.write(buffer.getvalue())
-            logger.info(f"✅ PDF opgeslagen op: {pdf_path}")
-            if pdf_path.startswith(os.path.abspath("static")):
-                logger.info(f"🌐 PDF beschikbaar via URL: /{os.path.relpath(pdf_path, 'static')}")
-            else:
-                logger.warning("❗ PDF buiten /static map opgeslagen – niet direct downloadbaar via frontend.")
 
+        logger.info(f"✅ PDF opgeslagen op: {pdf_path}")
         return buffer
 
     except Exception as e:
