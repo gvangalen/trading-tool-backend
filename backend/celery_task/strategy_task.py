@@ -5,7 +5,7 @@ import json
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
-from backend.utils.ai_strategy_utils import generate_strategy_from_setup
+from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
 
 # ✅ Logging setup
 logging.basicConfig(level=logging.INFO)
