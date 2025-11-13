@@ -25,18 +25,19 @@ def get_market_endpoints():
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT name, data_url
+                SELECT name, link
                 FROM indicators
                 WHERE category = 'market' AND active = true
             """)
             result = {row[0]: row[1] for row in cur.fetchall()}
         conn.close()
+
         logger.info(f"✅ Market endpoints geladen: {list(result.keys())}")
         return result
+
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen market endpoints: {e}")
         return {}
-
 
 MARKET_ENDPOINTS = get_market_endpoints()
 if not MARKET_ENDPOINTS:
