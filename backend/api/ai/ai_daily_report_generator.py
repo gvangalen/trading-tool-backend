@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Query
 from backend.utils.db import get_db_connection
-from backend.utils.ai_strategy_utils import generate_strategy_from_setup
+from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
 import logging
 import json
 
