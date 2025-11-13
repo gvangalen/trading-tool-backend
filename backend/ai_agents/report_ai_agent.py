@@ -8,9 +8,11 @@ from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.ai_strategy_utils import generate_strategy_from_setup
 from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import get_scores_for_symbol  # ✅ Nieuwe versie gebruikt DB direct
+from backend.utils.scoring_utils import get_scores_for_symbol  # DB-gedreven scores
 
-# === ✅ Logging naar bestand + console
+# =====================================================
+# 🪵 Logging
+# =====================================================
 LOG_FILE = "/tmp/daily_report_debug.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -19,22 +21,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 def log_and_print(msg: str):
     logger.info(msg)
     try:
         with open(LOG_FILE, "a") as f:
             f.write(msg + "\n")
     except Exception:
+        # Geen harde crash als logbestand faalt
         pass
     print(msg)
 
 
-# === ✅ OpenAI client initialiseren
+# =====================================================
+# 🤖 OpenAI client (Report Agent)
+# =====================================================
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
     log_and_print("❌ OPENAI_API_KEY ontbreekt in .env of omgeving.")
-client = OpenAI(api_key=api_key)
+client = OpenAI(api_key=api_key) if api_key else None
 DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
@@ -45,13 +51,19 @@ def safe_get(obj, key, fallback="–"):
 
 
 # =====================================================
-# 📊 Scores ophalen (direct uit database)
+# 📊 Scores uit DB
 # =====================================================
 def get_scores_from_db():
     """
-    ⚙️ Nieuwe versie: haalt eerst de live berekende scores op
-    uit scoring_utils.get_scores_for_symbol() (DB-driven),
-    en gebruikt daily_scores alleen als fallback.
+    ➜ 1) Probeert de live scores via scoring_utils.get_scores_for_symbol()
+    ➜ 2) Valt terug op daily_scores als dat mislukt
+
+    Verwachte keys:
+      - macro_score
+      - technical_score
+      - setup_score
+      - market_score
+      (+ eventueel *_interpretation, *_top_contributors)
     """
     try:
         scores = get_scores_for_symbol(include_metadata=True)
@@ -89,14 +101,25 @@ def get_scores_from_db():
         log_and_print(f"❌ Fout bij ophalen fallback-scores: {e}")
     finally:
         conn.close()
+
     return {}
 
 
 # =====================================================
-# 🧠 Haalt AI-agent inzichten en master-score op
+# 🧠 AI-agent inzichten + master score uit DB
 # =====================================================
 def get_ai_insights_from_db():
-    """Haalt de laatste AI interpretaties per categorie + master-score op uit ai_category_insights."""
+    """
+    Leest de laatste AI interpretaties per categorie + master-score uit ai_category_insights.
+
+    Structuur:
+      {
+        "macro":   { score, trend, bias, risk, summary },
+        "market":  { ... },
+        "technical": { ... },
+        "score":   { ... }   # = master score agent
+      }
+    """
     conn = get_db_connection()
     if not conn:
         log_and_print("❌ Geen DB-verbinding voor AI insights.")
@@ -111,13 +134,13 @@ def get_ai_insights_from_db():
                 WHERE date = CURRENT_DATE;
             """)
             rows = cur.fetchall()
-            for r in rows:
-                insights[r[0]] = {
-                    "score": float(r[1] or 0),
-                    "trend": r[2],
-                    "bias": r[3],
-                    "risk": r[4],
-                    "summary": r[5],
+            for category, avg_score, trend, bias, risk, summary in rows:
+                insights[category] = {
+                    "score": float(avg_score or 0),
+                    "trend": trend,
+                    "bias": bias,
+                    "risk": risk,
+                    "summary": summary,
                 }
             log_and_print(f"🧩 AI insights geladen: {list(insights.keys())}")
     except Exception as e:
@@ -129,7 +152,7 @@ def get_ai_insights_from_db():
 
 
 # =====================================================
-# 📈 Laatste prijs, volume, change ophalen uit market_data
+# 📈 Laatste marktdata
 # =====================================================
 def get_latest_market_data():
     conn = get_db_connection()
@@ -158,16 +181,23 @@ def get_latest_market_data():
 
 
 # =====================================================
-# 🧠 AI-sectie genereren
+# 🧠 Generieke AI-sectie
 # =====================================================
 def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) -> str:
+    if client is None:
+        log_and_print("⚠️ Geen OpenAI client beschikbaar, sla AI-sectie over.")
+        return "AI niet beschikbaar (geen API-key)."
+
     for attempt in range(1, retries + 1):
         try:
             log_and_print(f"🔍 [AI Attempt {attempt}] Prompt (eerste 180): {prompt[:180]}")
             response = client.chat.completions.create(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "Je bent een professionele crypto-analist. Schrijf in het Nederlands."},
+                    {
+                        "role": "system",
+                        "content": "Je bent een professionele crypto-analist. Schrijf in het Nederlands."
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
@@ -183,7 +213,7 @@ def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) 
 
 
 # =====================================================
-# 🧩 Prompts per sectie
+# 🧩 Prompt helpers
 # =====================================================
 def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None) -> str:
     prijsinfo = ""
@@ -195,11 +225,12 @@ def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None) ->
         )
 
     ai_part = ""
-    if ai_insights and "score" in ai_insights:
-        ai = ai_insights["score"]
+    master = ai_insights.get("score") if isinstance(ai_insights, dict) else None
+    if master:
         ai_part = (
-            f"\nAI Master Score: {ai.get('score', '–')} "
-            f"({ai.get('trend', '–')}, {ai.get('bias', '–')}, risico: {ai.get('risk', '–')})"
+            f"\nAI Master Score: {master.get('score', '–')} "
+            f"({master.get('trend', '–')}, {master.get('bias', '–')}, "
+            f"risico: {master.get('risk', '–')})"
         )
 
     return f"""Geef een korte samenvatting van de huidige situatie voor Bitcoin:
@@ -213,8 +244,9 @@ Market score: {safe_get(scores, 'market_score', 0)}{prijsinfo}{ai_part}"""
 
 def prompt_for_macro_summary(scores, ai_insights=None) -> str:
     ai_summary = ""
-    if ai_insights.get("macro"):
-        ai_summary = f"\nAI interpretatie: {ai_insights['macro'].get('summary', '')}"
+    macro = ai_insights.get("macro") if isinstance(ai_insights, dict) else None
+    if macro:
+        ai_summary = f"\nAI interpretatie: {macro.get('summary', '')}"
     return f"""Vat de macro-economische situatie samen.
 Macro-score: {safe_get(scores, 'macro_score', 0)}{ai_summary}"""
 
@@ -248,11 +280,12 @@ Uitleg: {safe_get(strategy, 'explanation')}"""
 
 def prompt_for_conclusion(scores, ai_insights=None) -> str:
     ai_part = ""
-    if ai_insights and "score" in ai_insights:
-        ai = ai_insights["score"]
+    master = ai_insights.get("score") if isinstance(ai_insights, dict) else None
+    if master:
         ai_part = (
-            f"\nAI Master Score: {ai.get('score', '–')} "
-            f"({ai.get('trend', '–')}, {ai.get('bias', '–')}, risico: {ai.get('risk', '–')})"
+            f"\nAI Master Score: {master.get('score', '–')} "
+            f"({master.get('trend', '–')}, {master.get('bias', '–')}, "
+            f"risico: {master.get('risk', '–')})"
         )
     return f"""Slotconclusie van de dag:
 Macro: {safe_get(scores, 'macro_score', 0)}
@@ -266,9 +299,17 @@ Timeframe: {safe_get(setup, 'timeframe')}"""
 
 
 # =====================================================
-# 🚀 Hoofdfunctie: Dagrapport genereren
+# 🚀 Hoofdfunctie Report Agent
 # =====================================================
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
+    """
+    Report Agent:
+      - Haalt setups, ruwe scores, AI-insights en marktdata op
+      - Bouwt prompts per sectie
+      - Vraagt OpenAI om tekst voor elke sectie
+      - Retourneert een compleet dict dat door daily_report_task
+        in de DB en PDF wordt gezet.
+    """
     log_and_print(f"🚀 Start rapportgeneratie voor: {symbol}")
 
     setup_raw = get_latest_setup_for_symbol(symbol)
@@ -294,20 +335,42 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
 
     try:
         report = {
-            "btc_summary": generate_section(prompt_for_btc_summary(setup, scores, market_data, ai_insights)),
-            "macro_summary": generate_section(prompt_for_macro_summary(scores, ai_insights)),
-            "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
-            "priorities": generate_section(prompt_for_priorities(setup, scores)),
-            "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
-            "recommendations": generate_section(prompt_for_recommendations(strategy)),
-            "conclusion": generate_section(prompt_for_conclusion(scores, ai_insights)),
-            "outlook": generate_section(prompt_for_outlook(setup)),
+            "btc_summary": generate_section(
+                prompt_for_btc_summary(setup, scores, market_data, ai_insights)
+            ),
+            "macro_summary": generate_section(
+                prompt_for_macro_summary(scores, ai_insights)
+            ),
+            "setup_checklist": generate_section(
+                prompt_for_setup_checklist(setup)
+            ),
+            "priorities": generate_section(
+                prompt_for_priorities(setup, scores)
+            ),
+            "wyckoff_analysis": generate_section(
+                prompt_for_wyckoff_analysis(setup)
+            ),
+            "recommendations": generate_section(
+                prompt_for_recommendations(strategy)
+            ),
+            "conclusion": generate_section(
+                prompt_for_conclusion(scores, ai_insights)
+            ),
+            "outlook": generate_section(
+                prompt_for_outlook(setup)
+            ),
+
+            # Ruwe scores (DB)
             "macro_score": safe_get(scores, "macro_score", 0),
             "technical_score": safe_get(scores, "technical_score", 0),
             "setup_score": safe_get(scores, "setup_score", 0),
             "market_score": safe_get(scores, "market_score", 0),
+
+            # AI-agent info
             "ai_insights": ai_insights,
             "ai_master_score": ai_insights.get("score", {}),
+
+            # Marktdata voor mail + PDF
             "market_data": market_data,
         }
         log_and_print(f"✅ Rapport succesvol gegenereerd ({len(report)} velden)")
