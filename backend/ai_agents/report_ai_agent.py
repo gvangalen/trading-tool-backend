@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from backend.utils.setup_utils import get_latest_setup_for_symbol
-from backend.utils.ai_strategy_utils import generate_strategy_from_setup
+from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
 from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_scores_for_symbol  # DB-gedreven scores
