@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 
 from backend.utils.db import get_db_connection
 from backend.utils.pdf_generator import generate_pdf_report
-from backend.ai_agents.report_ai_agent import generate_daily_report_ai
+from backend.ai_agents.report_ai_agent import generate_daily_report_sections
 from backend.celery_task.daily_report_task import generate_daily_report
 from backend.celery_task.weekly_report_task import generate_weekly_report
 from backend.celery_task.monthly_report_task import generate_monthly_report
