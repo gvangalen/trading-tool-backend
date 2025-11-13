@@ -7,10 +7,12 @@ from fastapi.responses import FileResponse
 
 from backend.utils.db import get_db_connection
 from backend.utils.pdf_generator import generate_pdf_report
+from backend.ai_agents.report_ai_agent import generate_daily_report_ai
 from backend.celery_task.daily_report_task import generate_daily_report
 from backend.celery_task.weekly_report_task import generate_weekly_report
 from backend.celery_task.monthly_report_task import generate_monthly_report
 from backend.celery_task.quarterly_report_task import generate_quarterly_report
+
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -83,7 +85,7 @@ async def get_daily_report_history():
             logger.info(f"🧪 Gevonden {len(rows)} daily reports: {rows}")
             if not rows:
                 raise HTTPException(status_code=404, detail="Geen daily reports gevonden.")
-            return [row[0] for row in rows]
+            return [r[0].isoformat() for r in rows]
     finally:
         conn.close()
 
