@@ -91,8 +91,15 @@ async def get_daily_report_history():
 
 @router.post("/report/daily/generate")
 async def generate_daily():
-    task = generate_daily_report.delay()
-    return {"message": "Dagrapport taak gestart", "task_id": task.id}
+    try:
+        report = generate_daily_report_sections()
+        return {
+            "status": "ok",
+            "generated_at": datetime.utcnow().isoformat(),
+            "report": report
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/report/daily/export/pdf")
 async def export_daily_pdf(date: str = Query(...)):
