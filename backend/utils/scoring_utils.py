@@ -58,7 +58,7 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
     table_map = {
         "technical": "technical_indicator_rules",
         "macro": "macro_indicator_rules",
-        "market": "technical_indicator_rules",  # market gebruikt dezelfde structuur
+        "market": "market_indicator_rules",
     }
     table = table_map.get(category)
     if not table:
