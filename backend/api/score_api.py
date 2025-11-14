@@ -11,16 +11,15 @@ from backend.utils.scoring_utils import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-# ---------------------------
+# =========================================================
 # Helpers
-# ---------------------------
+# =========================================================
 def fetch_active_setups():
     """
-    Haalt alle setups op met hun score uit daily_setup_scores van vandaag.
-    Gebruikt daily_setup_scores.active om te bepalen of een setup actief is.
+    Haalt alle setups op + score uit daily_setup_scores van vandaag.
+    Gebruikt daily_setup_scores.active om een setup als actief te markeren.
     """
     conn = get_db_connection()
     if not conn:
@@ -28,6 +27,7 @@ def fetch_active_setups():
         return []
 
     today = date.today()
+
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
@@ -43,80 +43,70 @@ def fetch_active_setups():
                        COALESCE(ds.breakdown, '{}'::jsonb) AS breakdown
                 FROM setups s
                 LEFT JOIN daily_setup_scores ds
-                       ON s.id = ds.setup_id AND ds.report_date = %s
+                    ON s.id = ds.setup_id AND ds.report_date = %s
                 ORDER BY s.id, ds.report_date DESC
                 LIMIT 100
             """, (today,))
-            rows = cur.fetchall()
-            return [dict(r) for r in rows]
+            return [dict(r) for r in cur.fetchall()]
 
     except Exception as e:
         logger.warning(f"⚠️ fetch_active_setups error: {e}")
         return []
+
     finally:
         conn.close()
 
 
 # =========================================================
-# ✅ Macro score (DB-regels)
+# Macro Score
 # =========================================================
 @router.get("/score/macro")
 async def get_macro_score():
-    """Haalt macro-score direct uit database via scoreregels."""
     try:
-        result = generate_scores_db("macro")
-        return result
+        return generate_scores_db("macro")
     except Exception as e:
         logger.error(f"❌ /score/macro: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Fout bij ophalen macro-score")
 
 
 # =========================================================
-# ✅ Technische score (DB-regels)
+# Technical Score
 # =========================================================
 @router.get("/score/technical")
 async def get_technical_score():
-    """Haalt technische score direct uit database via scoreregels."""
     try:
-        result = generate_scores_db("technical")
-        return result
+        return generate_scores_db("technical")
     except Exception as e:
         logger.error(f"❌ /score/technical: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Fout bij ophalen technische score")
 
 
 # =========================================================
-# ✅ Markt score (DB-regels; gebruikt technical rules)
+# Market Score
 # =========================================================
 @router.get("/score/market")
 async def get_market_score():
-    """Haalt markt-score direct uit database via scoreregels."""
+    """Haalt markt-score op via market_indicator_rules."""
     try:
-        result = generate_scores_db("market")
-        return result
+        return generate_scores_db("market")
     except Exception as e:
         logger.error(f"❌ /score/market: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Fout bij ophalen market score")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen market-score")
 
 
 # =========================================================
-# ✅ Dagelijkse gecombineerde score (dashboard)
+# Daily Combined Score (Dashboard)
 # =========================================================
 @router.get("/scores/daily")
 async def get_daily_scores():
     """
-    ➤ Haalt actuele gecombineerde macro-, technische-, setup- en marktscores op uit de database.
-    Inclusief actieve setups en hun actuele score (uit daily_setup_scores).
+    Combineert macro-, technische-, market- en setup-scores
+    en levert top-contributors + actieve setups.
     """
     try:
-        # Combineert macro/technical/market en levert top_contributors + interpretations
         scores = get_scores_for_symbol(include_metadata=True) or {}
-
-        # Actieve setups inclusief score
         active_setups = fetch_active_setups()
-        logger.info(f"📦 Actieve setups: {len(active_setups)}")
 
-        # Structuur voor frontend/dashboard
         response = {
             "macro": {
                 "score": float(scores.get("macro_score", 0)),
@@ -128,38 +118,36 @@ async def get_daily_scores():
                 "interpretation": scores.get("technical_interpretation", "Geen uitleg beschikbaar"),
                 "top_contributors": scores.get("technical_top_contributors", []),
             },
-            "setup": {
-                "score": float(scores.get("setup_score", 0)),
-                "interpretation": scores.get("setup_interpretation", "Geen actieve setups"),
-                "top_contributors": [s["name"] for s in active_setups if s.get("is_active")] if active_setups else [],
-                "active_setups": active_setups,
-            },
             "market": {
                 "score": float(scores.get("market_score", 0)),
                 "interpretation": scores.get("market_interpretation", "Geen uitleg beschikbaar"),
                 "top_contributors": scores.get("market_top_contributors", []),
             },
+            "setup": {
+                "score": float(scores.get("setup_score", 0)),
+                "interpretation": "Actieve setups" if active_setups else "Geen actieve setups",
+                "top_contributors": [s["name"] for s in active_setups if s.get("is_active")],
+                "active_setups": active_setups,
+            },
         }
 
-        logger.info("✅ /scores/daily OK")
         return response
 
     except Exception as e:
         logger.error(f"❌ /scores/daily: {e}", exc_info=True)
-        # Fallback met shape die je frontend verwacht
         return {
             "macro": {"score": 0, "interpretation": "Geen data", "top_contributors": []},
             "technical": {"score": 0, "interpretation": "Geen data", "top_contributors": []},
-            "setup": {"score": 0, "interpretation": "Geen data", "top_contributors": [], "active_setups": []},
             "market": {"score": 0, "interpretation": "Geen data", "top_contributors": []},
+            "setup": {"score": 0, "interpretation": "Geen data", "top_contributors": [], "active_setups": []},
         }
 
-# ===============================
-# 🧠 AI MASTER SCORE (orchestrator)
-# ===============================
+
+# =========================================================
+# AI Master Score
+# =========================================================
 @router.get("/ai/master_score")
 def get_ai_master_score():
-    """Haalt de laatste AI Master Score uit de view ai_master_score_view."""
     conn = get_db_connection()
     if not conn:
         return {"error": "Geen DB-verbinding"}
