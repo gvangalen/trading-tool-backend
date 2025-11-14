@@ -9,16 +9,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # =========================================================
-# 🔁 Mapping voor market-indicatornamen
-# =========================================================
-MARKET_INDICATOR_MAP = {
-    "price": "btc_price",
-    "change_24h": "btc_change_24h",
-    "volume": "btc_volume",
-}
-
-# =========================================================
-# 🧩 Bekende naam-aliases
+# 🧩 Bekende naam-aliases (optioneel)
 # =========================================================
 NAME_ALIASES = {
     "fear_and_greed_index": "fear_greed_index",
@@ -30,7 +21,7 @@ NAME_ALIASES = {
 }
 
 # =========================================================
-# 🧠 Normalisatie functie
+# 🧠 Normalisatie functie (eentje voor ALLES)
 # =========================================================
 def normalize_indicator_name(name: str) -> str:
     normalized = (
@@ -41,9 +32,7 @@ def normalize_indicator_name(name: str) -> str:
         .replace("-", "_")
         .strip()
     )
-    if normalized in NAME_ALIASES:
-        normalized = NAME_ALIASES[normalized]
-    return normalized
+    return NAME_ALIASES.get(normalized, normalized)
 
 
 # =========================================================
@@ -52,7 +41,7 @@ def normalize_indicator_name(name: str) -> str:
 def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> Optional[dict]:
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding in get_score_rule_from_db()")
+        logger.error("❌ get_score_rule_from_db(): geen DB-verbinding")
         return None
 
     table_map = {
@@ -66,12 +55,6 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
         return None
 
     normalized = normalize_indicator_name(indicator_name)
-    mapped_name = normalized
-    if category == "market":
-        mapped_name = MARKET_INDICATOR_MAP.get(indicator_name, indicator_name)
-        mapped_name = normalize_indicator_name(mapped_name)
-        if mapped_name != indicator_name:
-            logger.debug(f"🔁 Indicator '{indicator_name}' gemapt naar '{mapped_name}'")
 
     try:
         with conn.cursor() as cur:
@@ -80,14 +63,14 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
                 FROM {table}
                 WHERE LOWER(REPLACE(REPLACE(REPLACE(indicator, '&', 'and'), ' ', '_'), '-', '_')) = %s
                 ORDER BY range_min ASC
-            """, (mapped_name,))
-            rules = cur.fetchall()
+            """, (normalized,))
+            rows = cur.fetchall()
 
-        if not rules:
-            logger.warning(f"⚠️ Geen scoreregels gevonden voor {mapped_name} ({category})")
+        if not rows:
+            logger.warning(f"⚠️ Geen scoreregels gevonden voor '{normalized}' ({category})")
             return None
 
-        for r in rules:
+        for r in rows:
             if r[0] <= value <= r[1]:
                 return {
                     "score": r[2],
@@ -96,11 +79,11 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
                     "action": r[5],
                 }
 
-        logger.info(f"ℹ️ Waarde {value} valt buiten alle ranges voor {mapped_name}")
+        # Buiten bereik → geen match
         return None
 
     except Exception as e:
-        logger.error(f"❌ Fout in get_score_rule_from_db({indicator_name}): {e}", exc_info=True)
+        logger.error(f"❌ Error get_score_rule_from_db({indicator_name}): {e}", exc_info=True)
         return None
     finally:
         conn.close()
@@ -114,10 +97,12 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
         data = {}
         conn = get_db_connection()
         if not conn:
-            logger.error("❌ Geen DB-verbinding in generate_scores_db(auto-mode)")
+            logger.error("❌ generate_scores_db(auto-mode): geen DB-verbinding")
             return {"scores": {}, "total_score": 0}
+
         try:
             with conn.cursor() as cur:
+                # Macro
                 if category == "macro":
                     cur.execute("""
                         SELECT DISTINCT ON (name) name, value
@@ -125,8 +110,12 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                         ORDER BY name, timestamp DESC;
                     """)
                     rows = cur.fetchall()
-                    data = {normalize_indicator_name(r[0]): float(r[1]) for r in rows if r[1] is not None}
+                    data = {
+                        normalize_indicator_name(r[0]): float(r[1])
+                        for r in rows if r[1] is not None
+                    }
 
+                # Market (price, volume, change_24h)
                 elif category == "market":
                     cur.execute("""
                         SELECT DISTINCT ON (symbol)
@@ -138,11 +127,12 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                     row = cur.fetchone()
                     if row:
                         data = {
-                            "price": float(row[0]) if row[0] else None,
-                            "volume": float(row[1]) if row[1] else None,
-                            "change_24h": float(row[2]) if row[2] else None,
+                            "price": float(row[0]),
+                            "volume": float(row[1]),
+                            "change_24h": float(row[2]),
                         }
 
+                # Technical
                 else:
                     cur.execute("""
                         SELECT DISTINCT ON (indicator) indicator, value
@@ -150,10 +140,13 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                         ORDER BY indicator, timestamp DESC;
                     """)
                     rows = cur.fetchall()
-                    data = {normalize_indicator_name(r[0]): float(r[1]) for r in rows if r[1] is not None}
+                    data = {
+                        normalize_indicator_name(r[0]): float(r[1])
+                        for r in rows if r[1] is not None
+                    }
 
         except Exception as e:
-            logger.error(f"❌ Fout bij automatisch ophalen data ({category}): {e}", exc_info=True)
+            logger.error(f"❌ generate_scores_db(): fout bij ophalen data ({category}): {e}", exc_info=True)
         finally:
             conn.close()
 
@@ -161,6 +154,7 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
         logger.warning(f"⚠️ Geen inputdata gevonden voor categorie {category}")
         return {"scores": {}, "total_score": 0}
 
+    # Scoreberekening
     scores = {}
     total_score = 0
     count = 0
@@ -169,59 +163,68 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
         if value is None:
             continue
 
-        result = get_score_rule_from_db(category, indicator, float(value))
-        if not result:
+        rule = get_score_rule_from_db(category, indicator, value)
+        if not rule:
             continue
 
-        score = round(result.get("score", 10))
+        score = int(rule["score"])
         scores[indicator] = {
             "value": value,
             "score": score,
-            "trend": result.get("trend", "–"),
-            "interpretation": result.get("interpretation", ""),
-            "action": result.get("action", ""),
+            "trend": rule.get("trend", "–"),
+            "interpretation": rule.get("interpretation", ""),
+            "action": rule.get("action", ""),
         }
+
         total_score += score
         count += 1
 
     avg_score = round(total_score / count) if count else 10
-    logger.info(f"✅ {count} geldige {category}-indicatoren gescoord (gemiddelde: {avg_score})")
 
     return {"scores": scores, "total_score": avg_score}
 
 
 # =========================================================
-# ✅ Samengestelde scoreberekening (voor dashboard/rapport)
+# ✅ Combined scores for dashboard + report
 # =========================================================
 def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding in get_scores_for_symbol()")
+        logger.error("❌ get_scores_for_symbol: geen DB-verbinding")
         return {}
 
     try:
         with conn.cursor() as cur:
+            # Macro
             cur.execute("""
                 SELECT DISTINCT ON (name) name, value
                 FROM macro_data
                 ORDER BY name, timestamp DESC;
             """)
-            macro_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall() if r[1] is not None}
+            macro_data = {
+                normalize_indicator_name(r[0]): float(r[1])
+                for r in cur.fetchall() if r[1] is not None
+            }
 
+            # Technical
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
                 ORDER BY indicator, timestamp DESC;
             """)
-            technical_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall() if r[1] is not None}
+            technical_data = {
+                normalize_indicator_name(r[0]): float(r[1])
+                for r in cur.fetchall() if r[1] is not None
+            }
 
-        market_scores = generate_scores_db("market")
         macro_scores = generate_scores_db("macro", macro_data)
         tech_scores = generate_scores_db("technical", technical_data)
+        market_scores = generate_scores_db("market")
 
         macro_avg = macro_scores["total_score"]
         tech_avg = tech_scores["total_score"]
         market_avg = market_scores["total_score"]
+
         setup_score = round((macro_avg + tech_avg) / 2)
 
         result = {
@@ -232,33 +235,35 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
         }
 
         if include_metadata:
-            def extract_top(scores_dict):
-                if not scores_dict.get("scores"):
+            def top(scores_dict):
+                if "scores" not in scores_dict:
                     return []
-                return sorted(scores_dict["scores"].items(), key=lambda x: x[1]["score"], reverse=True)[:3]
+                return sorted(
+                    scores_dict["scores"].items(),
+                    key=lambda x: x[1]["score"],
+                    reverse=True
+                )[:3]
 
             result.update({
-                "macro_top_contributors": [i[0] for i in extract_top(macro_scores)],
-                "technical_top_contributors": [i[0] for i in extract_top(tech_scores)],
-                "market_top_contributors": [i[0] for i in extract_top(market_scores)],
-                "macro_interpretation": "Macro-data uit database",
-                "technical_interpretation": "Technische data uit database",
-                "market_interpretation": "Marktdata uit market_data-tabel (prijs, volume, change_24h)",
+                "macro_top_contributors": [i[0] for i in top(macro_scores)],
+                "technical_top_contributors": [i[0] for i in top(tech_scores)],
+                "market_top_contributors": [i[0] for i in top(market_scores)],
+                "macro_interpretation": "Macro-data via scoreregels",
+                "technical_interpretation": "Technische data via scoreregels",
+                "market_interpretation": "Marktdata via scoreregels",
             })
 
-        logger.info(f"✅ DB-scores berekend: {result}")
         return result
 
     except Exception as e:
-        logger.error(f"❌ Fout bij get_scores_for_symbol(): {e}", exc_info=True)
+        logger.error(f"❌ get_scores_for_symbol(): {e}", exc_info=True)
         return {}
+
     finally:
         conn.close()
 
 
-# =========================================================
-# ✅ Compatibiliteit
-# =========================================================
+# Backwards compatible wrappers
 def calculate_macro_scores(data: Dict[str, float]) -> Dict[str, Any]:
     return generate_scores_db("macro", data)
 
@@ -269,37 +274,18 @@ def calculate_market_scores(data: Dict[str, float]) -> Dict[str, Any]:
     return generate_scores_db("market", data)
 
 
-# =========================================================
-# ✅ Backwards compatibiliteit voor macro_interpreter
-# =========================================================
 def calculate_score_from_rules(value: float, rules: list[dict]) -> dict:
-    """
-    Vindt de juiste scoreregel op basis van 'value' en een lijst met regels.
-    Retourneert score, trend, interpretatie, actie.
-    """
-    try:
-        for r in rules:
-            if r["range_min"] <= value <= r["range_max"]:
-                return {
-                    "score": r["score"],
-                    "trend": r["trend"],
-                    "interpretation": r["interpretation"],
-                    "action": r["action"],
-                }
-
-        # 🟡 Fallback als waarde niet in een bereik valt
-        return {
-            "score": 50,
-            "trend": "Neutraal",
-            "interpretation": f"Waarde {value} valt buiten alle gedefinieerde ranges.",
-            "action": "Geen directe actie vereist.",
-        }
-
-    except Exception as e:
-        logger.error(f"❌ Fout in calculate_score_from_rules(): {e}", exc_info=True)
-        return {
-            "score": 50,
-            "trend": "Onbekend",
-            "interpretation": "Fout tijdens scoreberekening.",
-            "action": "Controleer regels of waarden.",
-        }
+    for r in rules:
+        if r["range_min"] <= value <= r["range_max"]:
+            return {
+                "score": r["score"],
+                "trend": r["trend"],
+                "interpretation": r["interpretation"],
+                "action": r["action"],
+            }
+    return {
+        "score": 50,
+        "trend": "Neutraal",
+        "interpretation": f"Waarde {value} valt buiten alle ranges.",
+        "action": "Geen actie.",
+    }
