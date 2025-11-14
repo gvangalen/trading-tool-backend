@@ -2,25 +2,32 @@ import logging
 import traceback
 import json
 from datetime import datetime
+
 from celery import shared_task
+
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
+from backend.utils.scoring_utils import generate_scores_db
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ======================================================
-# 🪙 MARKET AI AGENT – met scoreregels + reflectielaag
+# 🪙 MARKET AI AGENT – met DB-scoreregels + reflectielaag
 # ======================================================
 
 @shared_task(name="backend.ai_agents.market_ai_agent.generate_market_insight")
 def generate_market_insight():
     """
-    Analyseert marktdata (prijs, volume, momentum, volatiliteit)
-    met hun scoreregels en genereert AI-interpretatie én reflectie per indicator.
+    Analyseert marktdata (prijs, volume, change_24h, 7d OHLC)
+    in combinatie met de scoreregels in `market_indicator_rules`
+    en de gecombineerde market-score via `generate_scores_db("market")`.
 
-    ⚙️ AI krijgt zowel dagelijkse als 7-daagse data om trend en kracht te beoordelen.
+    Output:
+    - AI-samenvatting voor categorie 'market' in ai_category_insights
+    - Per-indicator reflecties in ai_reflections
     """
+
     logger.info("🪙 Start Market AI Agent...")
 
     conn = get_db_connection()
@@ -29,139 +36,245 @@ def generate_market_insight():
         return
 
     try:
-        # === 1️⃣ Scoreregels ophalen voor marktindicatoren ===
+        # =========================================================
+        # 1️⃣ Scoreregels voor market-indicatoren ophalen
+        # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT indicator, rule_range, score, interpretation, action
+                SELECT indicator, range_min, range_max, score, trend, interpretation, action
                 FROM market_indicator_rules
-                ORDER BY indicator ASC, score ASC;
+                ORDER BY indicator ASC, range_min ASC;
             """)
             rule_rows = cur.fetchall()
 
         rules_by_indicator = {}
         for r in rule_rows:
-            indicator, rule_range, score, interpretation, action = r
+            indicator, range_min, range_max, score, trend, interpretation, action = r
             rules_by_indicator.setdefault(indicator, []).append({
-                "range": rule_range,
-                "score": score,
+                "range_min": float(range_min),
+                "range_max": float(range_max),
+                "score": int(score),
+                "trend": trend,
                 "interpretation": interpretation,
-                "action": action
+                "action": action,
             })
 
-        logger.info(f"📘 Regels geladen voor {len(rules_by_indicator)} marktindicatoren.")
+        logger.info(f"📘 Regels geladen voor {len(rules_by_indicator)} market-indicatoren.")
 
-        # === 2️⃣ Laatste marktdata ophalen ===
+        # =========================================================
+        # 2️⃣ Laatste market snapshot + 7d OHLC uit DB
+        # =========================================================
         with conn.cursor() as cur:
+            # Laatste point uit market_data
             cur.execute("""
-                SELECT 'price' AS indicator, price AS value, change_24h AS score, volume, timestamp
+                SELECT price, change_24h, volume, timestamp
                 FROM market_data
+                WHERE symbol = 'BTC'
                 ORDER BY timestamp DESC
                 LIMIT 1;
             """)
             last_snapshot = cur.fetchone()
 
+            # Laatste 7 dagen OHLC
             cur.execute("""
                 SELECT date, open, high, low, close, change, volume
                 FROM market_data_7d
+                WHERE symbol = 'BTC'
                 ORDER BY date DESC
                 LIMIT 7;
             """)
             ohlc_rows = cur.fetchall()
 
-        if not last_snapshot or not ohlc_rows:
-            logger.warning("⚠️ Onvoldoende marktdata gevonden.")
+        if not last_snapshot:
+            logger.warning("⚠️ Geen entry gevonden in market_data voor BTC.")
             return
 
+        if not ohlc_rows:
+            logger.warning("⚠️ Geen data gevonden in market_data_7d voor BTC.")
+            return
+
+        price, change_24h, volume, ts = last_snapshot
         price_info = {
-            "price": float(last_snapshot[1]),
-            "change_24h": float(last_snapshot[2]),
-            "volume": float(last_snapshot[3])
+            "price": float(price) if price is not None else None,
+            "change_24h": float(change_24h) if change_24h is not None else None,
+            "volume": float(volume) if volume is not None else None,
+            "timestamp": ts.isoformat() if isinstance(ts, datetime) else str(ts),
         }
 
-        # OHLC samenvatting
+        # 7d OHLC samenvatting (recentste eerst in DB → we draaien om voor leesbaarheid)
+        ohlc_rows_sorted = list(ohlc_rows)
+        ohlc_rows_sorted.reverse()
         ohlc_summary = [
-            f"{r[0]}: O={r[1]}, H={r[2]}, L={r[3]}, C={r[4]}, Δ{r[5]}%, Vol={r[6]}"
-            for r in ohlc_rows
+            {
+                "date": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
+                "open": float(r[1]) if r[1] is not None else None,
+                "high": float(r[2]) if r[2] is not None else None,
+                "low": float(r[3]) if r[3] is not None else None,
+                "close": float(r[4]) if r[4] is not None else None,
+                "change": float(r[5]) if r[5] is not None else None,
+                "volume": float(r[6]) if r[6] is not None else None,
+            }
+            for r in ohlc_rows_sorted
         ]
-        ohlc_text = "\n".join(ohlc_summary)
 
-        # === 3️⃣ Combineer met regels ===
-        data_text = f"""
-        Actuele marktdata:
-        Prijs: {price_info['price']}, 24h: {price_info['change_24h']}%, Volume: {price_info['volume']}
-        
-        Laatste 7 dagen OHLC:
-        {ohlc_text}
+        # Compacte tekstweergave voor prompt
+        ohlc_text_lines = [
+            f"{row['date']}: O={row['open']}, H={row['high']}, L={row['low']}, "
+            f"C={row['close']}, Δ={row['change']}%, Vol={row['volume']}"
+            for row in ohlc_summary
+        ]
+        ohlc_text = "\n".join(ohlc_text_lines)
 
-        Scoreregels:
-        {json.dumps(rules_by_indicator, ensure_ascii=False)}
-        """
+        # =========================================================
+        # 3️⃣ Market-score via DB-logica (generate_scores_db("market"))
+        # =========================================================
+        market_scores = generate_scores_db("market")
+        market_avg = market_scores.get("total_score", 0)
+        market_score_items = market_scores.get("scores", {})
 
-        # === 4️⃣ Contextuele interpretatie (trend/bias/risk) ===
+        # Topcontributors voor prompt (max 3)
+        top_contributors = sorted(
+            market_score_items.items(),
+            key=lambda kv: kv[1].get("score", 0),
+            reverse=True
+        )[:3]
+
+        top_contributors_pretty = [
+            {
+                "indicator": name,
+                "value": data.get("value"),
+                "score": data.get("score"),
+                "trend": data.get("trend"),
+                "interpretation": data.get("interpretation"),
+            }
+            for name, data in top_contributors
+        ]
+
+        # =========================================================
+        # 4️⃣ Prompt: contextuele interpretatie (trend / bias / risk)
+        # =========================================================
+        data_payload = {
+            "price_snapshot": price_info,
+            "ohlc_7d": ohlc_summary,
+            "market_rules": rules_by_indicator,
+            "market_avg_score": market_avg,
+            "market_top_contributors": top_contributors_pretty,
+        }
+
         prompt_context = f"""
-        Je bent een marktanalist-AI gespecialiseerd in Bitcoin.
-        Hieronder zie je recente marktdata met OHLC, volume en prijsverandering:
+Je bent een marktanalist-AI gespecialiseerd in Bitcoin.
 
-        {data_text}
+Hieronder zie je:
+- De laatste BTC marktdata (prijs, 24h verandering, volume)
+- De afgelopen 7 dagen OHLC + volume
+- Scoreregels voor marktindicatoren (range_min/range_max → score, trend, interpretatie, actie)
+- De samengestelde market-score en belangrijkste contributors uit een eerder scoringssysteem.
 
-        Geef je antwoord als JSON met:
-        - trend: bullish, bearish of neutraal
-        - momentum: sterk, zwak of neutraal
-        - volatility: laag, gemiddeld of hoog
-        - liquidity: goed, matig of laag
-        - summary: max 2 zinnen met interpretatie van de marktstructuur
-        - top_signals: lijst van de belangrijkste prijs/volume-observaties
-        """
+DATA:
+{json.dumps(data_payload, ensure_ascii=False, indent=2)}
+
+Geef je antwoord in **geldige JSON** met exact deze keys:
+- trend: "bullish", "bearish" of "neutraal"
+- momentum: "sterk", "zwak" of "neutraal"
+- volatility: "laag", "gemiddeld" of "hoog"
+- liquidity: "goed", "matig" of "laag"
+- summary: een korte samenvatting (max 2 zinnen) van de huidige marktsituatie
+- top_signals: een lijst met de belangrijkste 3 observaties (korte bulletteksten)
+
+Voorbeeldstructuur:
+{{
+  "trend": "bullish",
+  "momentum": "sterk",
+  "volatility": "gemiddeld",
+  "liquidity": "goed",
+  "summary": "Korte tekst...",
+  "top_signals": [
+    "Signaal 1...",
+    "Signaal 2...",
+    "Signaal 3..."
+  ]
+}}
+"""
 
         ai_response_context = ask_gpt(prompt_context)
         try:
             ai_context = json.loads(ai_response_context)
+            if not isinstance(ai_context, dict):
+                raise ValueError("AI-context is geen JSON object.")
         except Exception:
-            logger.warning("⚠️ AI-context kon niet als JSON worden geparsed.")
-            ai_context = {"summary": ai_response_context[:200]}
+            logger.warning("⚠️ AI-context kon niet als JSON worden geparsed, fallback naar raw string.")
+            ai_context = {
+                "trend": None,
+                "momentum": None,
+                "volatility": None,
+                "liquidity": None,
+                "summary": ai_response_context[:300],
+                "top_signals": [],
+            }
 
-        # === 5️⃣ Reflectie per indicator ===
+        # =========================================================
+        # 5️⃣ Prompt: reflectie per indicator (volume / prijs / volatiliteit etc.)
+        # =========================================================
         prompt_reflection = f"""
-        Beoordeel de marktcondities hieronder.
-        Geef voor elke factor (prijs, volume, volatiliteit, momentum):
-        - ai_score (0-100): jouw beoordeling van de huidige marktsterkte
-        - compliance (0-100): volgt de gebruiker zijn plan of wijkt hij af?
-        - comment: korte reflectie (max 1 zin)
-        - recommendation: 1 zin met advies of aandachtspunt
+Je bent dezelfde marktanalist-AI. Gebruik dezelfde data hieronder:
 
-        {data_text}
+{json.dumps(data_payload, ensure_ascii=False, indent=2)}
 
-        Geef als JSON-lijst, bijvoorbeeld:
-        [
-          {{
-            "indicator": "volume",
-            "ai_score": 60,
-            "compliance": 80,
-            "comment": "Volume stijgt, maar prijs daalt — distributie mogelijk",
-            "recommendation": "Wacht op bevestiging van vraagsteun"
-          }},
-          ...
-        ]
-        """
+Maak nu een korte reflectie per factor:
+- prijs
+- volume
+- change_24h
+- volatiliteit (afgeleid uit de laatste 7 dagen)
+- marktdruk (bull vs bear, af te leiden uit prijs + volume)
+
+Geef je antwoord als **geldige JSON-lijst**.
+Elke entry moet deze keys hebben:
+- indicator: bijvoorbeeld "price", "volume", "change_24h", "volatiliteit", "druk"
+- ai_score: integer 0–100 (hoe sterk/uitgesproken is deze factor nu)
+- compliance: integer 0–100 (hoe goed deze situatie past bij een gedisciplineerde swingtrader setup)
+- comment: max 1 zin met observatie
+- recommendation: max 1 zin met advies of aandachtspunt
+
+Voorbeeld:
+[
+  {{
+    "indicator": "volume",
+    "ai_score": 60,
+    "compliance": 80,
+    "comment": "Volume stijgt terwijl prijs zijwaarts gaat – mogelijke accumulatie.",
+    "recommendation": "Let op een uitbraak boven recente highs met volume."
+  }}
+]
+"""
 
         ai_response_reflection = ask_gpt(prompt_reflection)
         try:
             ai_reflections = json.loads(ai_response_reflection)
             if not isinstance(ai_reflections, list):
-                ai_reflections = []
+                raise ValueError("AI-reflectie is geen JSON-lijst.")
         except Exception:
-            logger.warning("⚠️ Reflectie kon niet als JSON worden geparsed.")
+            logger.warning("⚠️ AI-reflectie kon niet als JSON worden geparsed, fallback naar lege lijst.")
             ai_reflections = []
 
         logger.info(f"🧠 AI market interpretatie: {ai_context}")
         logger.info(f"🪞 AI market reflecties: {len(ai_reflections)} items")
 
-        # === 6️⃣ Opslaan interpretatie (categorie samenvatting) ===
+        # =========================================================
+        # 6️⃣ Opslaan categorie-samenvatting in ai_category_insights
+        # =========================================================
+        trend = ai_context.get("trend")
+        momentum = ai_context.get("momentum")
+        volatility = ai_context.get("volatility")
+        summary = ai_context.get("summary")
+        top_signals = ai_context.get("top_signals", [])
+
+        # avg_score = market_avg (komende uit generate_scores_db("market"))
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO ai_category_insights (category, avg_score, trend, bias, risk, summary, top_signals)
-                VALUES ('market', NULL, %s, %s, %s, %s, %s)
+                VALUES ('market', %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (category, date) DO UPDATE SET
+                    avg_score = EXCLUDED.avg_score,
                     trend = EXCLUDED.trend,
                     bias = EXCLUDED.bias,
                     risk = EXCLUDED.risk,
@@ -169,20 +282,26 @@ def generate_market_insight():
                     top_signals = EXCLUDED.top_signals,
                     created_at = NOW();
             """, (
-                ai_context.get("trend"),
-                ai_context.get("momentum"),
-                ai_context.get("volatility"),
-                ai_context.get("summary"),
-                json.dumps(ai_context.get("top_signals", [])),
+                market_avg,
+                trend,
+                momentum,         # bias ~ momentum
+                volatility,       # risk ~ volatiliteit
+                summary,
+                json.dumps(top_signals, ensure_ascii=False),
             ))
 
-        # === 7️⃣ Opslaan individuele reflecties ===
+        # =========================================================
+        # 7️⃣ Opslaan individuele reflecties in ai_reflections
+        # =========================================================
         for r in ai_reflections:
             indicator = r.get("indicator")
             ai_score = r.get("ai_score")
             compliance = r.get("compliance")
             comment = r.get("comment")
             recommendation = r.get("recommendation")
+
+            if not indicator:
+                continue
 
             with conn.cursor() as cur:
                 cur.execute("""
