@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # =========================================================
-# 🧩 Bekende naam-aliases
+# 🧩 Naam-aliases voor consistentie
 # =========================================================
 NAME_ALIASES = {
     "fear_and_greed_index": "fear_greed_index",
@@ -34,9 +34,8 @@ def normalize_indicator_name(name: str) -> str:
     )
     return NAME_ALIASES.get(normalized, normalized)
 
-
 # =========================================================
-# ✅ Universele database-functie
+# 🎯 Score regel ophalen uit database
 # =========================================================
 def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> Optional[dict]:
     conn = get_db_connection()
@@ -79,53 +78,43 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
         return None
 
     except Exception as e:
-        logger.error(f"❌ get_score_rule_from_db({indicator_name}): {e}", exc_info=True)
+        logger.error(f"❌ Error in get_score_rule_from_db({indicator_name}): {e}", exc_info=True)
         return None
-
     finally:
         conn.close()
 
-
 # =========================================================
-# 🔥 MARKET: Nieuwe dynamische mapping
+# 🔥 MARKET: Dynamische indicatoren + ruwe data
 # =========================================================
 def load_market_indicators(conn):
-    """Laad welke indicatoren actief zijn volgens de DB."""
     with conn.cursor() as cur:
         cur.execute("SELECT DISTINCT indicator FROM market_indicator_rules;")
         return [r[0] for r in cur.fetchall()]
 
-
 def load_market_raw_data(conn):
-    """Laadt prijs/volume/change voor BTC uit market_data + laatste OHLC uit 7d."""
     with conn.cursor() as cur:
         cur.execute("""
             SELECT price, volume, change_24h
             FROM market_data
-            WHERE symbol = 'BTC'
-            ORDER BY timestamp DESC
-            LIMIT 1;
+            WHERE symbol='BTC'
+            ORDER BY timestamp DESC LIMIT 1;
         """)
         snapshot = cur.fetchone()
 
         cur.execute("""
             SELECT open, high, low, close, change
             FROM market_data_7d
-            WHERE symbol = 'BTC'
-            ORDER BY date DESC
-            LIMIT 1;
+            WHERE symbol='BTC'
+            ORDER BY date DESC LIMIT 1;
         """)
         ohlc = cur.fetchone()
 
     return snapshot, ohlc
 
-
 def extract_market_data(rule_indicators, snapshot, ohlc):
-    """Bouwt data dict op op basis van welke indicators actief zijn."""
-
     data = {}
 
-    # Snapshot -> price, volume, change_24h
+    # Snapshot values
     if snapshot:
         price = float(snapshot[0])
         volume = float(snapshot[1])
@@ -133,36 +122,32 @@ def extract_market_data(rule_indicators, snapshot, ohlc):
     else:
         price = volume = change_24h = None
 
-    # OHLC -> open, high, low, close, daily change
+    # OHLC values
     if ohlc:
         o, h, l, c, ch = map(float, ohlc)
     else:
         o = h = l = c = ch = None
 
-    # 1️⃣ btc_change_24h
+    # Mapped indicators
     if "btc_change_24h" in rule_indicators and change_24h is not None:
         data["btc_change_24h"] = change_24h
 
-    # 2️⃣ price_trend (uit 7d daily % change)
     if "price_trend" in rule_indicators and ch is not None:
         data["price_trend"] = ch
 
-    # 3️⃣ volatility = (high - low) / close * 100
     if "volatility" in rule_indicators and c and h and l:
         data["volatility"] = ((h - l) / c) * 100
 
-    # 4️⃣ volume_strength = volume USD
     if "volume_strength" in rule_indicators and volume is not None:
         data["volume_strength"] = volume
 
     return data
 
-
 # =========================================================
-# 🔢 Dynamische scoregenerator
+# 🔢 Scoregenerator
 # =========================================================
-def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
-
+def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None):
+    # MARKET special case
     if category == "market":
         conn = get_db_connection()
         if not conn:
@@ -172,12 +157,11 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
             rule_indicators = load_market_indicators(conn)
             snapshot, ohlc = load_market_raw_data(conn)
             data = extract_market_data(rule_indicators, snapshot, ohlc)
-
         finally:
             conn.close()
 
-    # Technical / Macro auto-load
-    if data is None:
+    # MACRO / TECHNICAL autodata
+    elif data is None:
         data = {}
         conn = get_db_connection()
         if not conn:
@@ -202,15 +186,13 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
                     """)
                     rows = cur.fetchall()
                     data = {normalize_indicator_name(r[0]): float(r[1]) for r in rows}
-
         finally:
             conn.close()
 
-    # Geen data?
+    # Geen data → exit
     if not data:
         return {"scores": {}, "total_score": 0}
 
-    # Scores berekenen
     scores = {}
     total_score = 0
     count = 0
@@ -224,9 +206,9 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
         scores[indicator] = {
             "value": value,
             "score": score,
-            "trend": rule.get("trend", ""),
-            "interpretation": rule.get("interpretation", ""),
-            "action": rule.get("action", ""),
+            "trend": rule["trend"],
+            "interpretation": rule["interpretation"],
+            "action": rule["action"],
         }
 
         total_score += score
@@ -235,7 +217,6 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None) -
     avg_score = round(total_score / count) if count else 10
 
     return {"scores": scores, "total_score": avg_score}
-
 
 # =========================================================
 # 🔗 Combined scores
@@ -249,7 +230,6 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
     try:
         with conn.cursor() as cur:
 
-            # --- Macro ---
             cur.execute("""
                 SELECT DISTINCT ON (name) name, value
                 FROM macro_data
@@ -257,7 +237,6 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             """)
             macro_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall()}
 
-            # --- Technical ---
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
@@ -283,21 +262,19 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
         }
 
         if include_metadata:
-
             def top(scores_dict):
                 if "scores" not in scores_dict:
                     return []
-                                    return sorted(
-                        scores_dict["scores"].items(),
-                        key=lambda x: x[1]["score"],
-                        reverse=True
-                    )[:3]
+                return sorted(
+                    scores_dict["scores"].items(),
+                    key=lambda x: x[1]["score"],
+                    reverse=True
+                )[:3]
 
             result.update({
                 "macro_top_contributors": [i[0] for i in top(macro_scores)],
                 "technical_top_contributors": [i[0] for i in top(tech_scores)],
                 "market_top_contributors": [i[0] for i in top(market_scores)],
-
                 "macro_interpretation": "Macro-data via scoreregels",
                 "technical_interpretation": "Technische data via scoreregels",
                 "market_interpretation": "Marktdata via scoreregels",
@@ -306,8 +283,7 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
         return result
 
     except Exception as e:
-        logger.error(f"❌ get_scores_for_symbol(): {e}", exc_info=True)
+        logger.error(f"❌ Error in get_scores_for_symbol(): {e}", exc_info=True)
         return {}
-
     finally:
         conn.close()
