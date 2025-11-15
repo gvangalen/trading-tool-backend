@@ -11,83 +11,95 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# ✅ Setup matching helper (blijft correct)
+# 🔍 Luxe setup-matching (macro + technical + market)
 # =========================================================
-def match_setups_to_score(setups, setup_score):
+def match_setups_to_score(setups, scores):
     """
-    Bepaalt welke setups het best overeenkomen met de huidige setup_score.
-    Match gebeurt op min/max score die voor setups geldt.
+    Nieuwe matching:
+    - Macro-score moet binnen min/max_macro_score vallen
+    - Technical-score binnen min/max_technical_score
+    - Market-score binnen min/max_market_score
+    - Sorteren op dichtst-bij totale setup_score
     """
-    if not setups:
-        return []
+
+    macro_score = scores["macro_score"]
+    technical_score = scores["technical_score"]
+    market_score = scores["market_score"]
+    setup_score = scores["setup_score"]
 
     matched = []
+
     for s in setups:
         try:
-            min_score = float(s.get("min_macro_score") or s.get("min_score") or 0)
-            max_score = float(s.get("max_macro_score") or s.get("max_score") or 100)
+            # Macro
+            min_macro = float(s.get("min_macro_score") or 0)
+            max_macro = float(s.get("max_macro_score") or 100)
+            if not (min_macro <= macro_score <= max_macro):
+                continue
 
-            if min_score <= setup_score <= max_score:
-                matched.append(s)
+            # Technical
+            min_tech = float(s.get("min_technical_score") or 0)
+            max_tech = float(s.get("max_technical_score") or 100)
+            if not (min_tech <= technical_score <= max_tech):
+                continue
+
+            # Market
+            min_market = float(s.get("min_market_score") or 0)
+            max_market = float(s.get("max_market_score") or 100)
+            if not (min_market <= market_score <= max_market):
+                continue
+
+            matched.append(s)
 
         except Exception as e:
-            logger.warning(f"⚠️ Setup match fout ({s.get('name')}): {e}")
+            logger.warning(f"⚠️ Setup match fout bij '{s.get('name')}': {e}")
 
-    # Sorteer op dichtst bij de score
+    # Sorteren op dichtst bij totale setup_score
     matched.sort(
-        key=lambda x: abs(setup_score - (
-            (float(x.get("min_macro_score") or 0) +
-             float(x.get("max_macro_score") or 100)) / 2
-        ))
+        key=lambda s: abs(
+            setup_score - (
+                (
+                    float(s.get("min_macro_score") or 0) +
+                    float(s.get("max_macro_score") or 100) +
+                    float(s.get("min_technical_score") or 0) +
+                    float(s.get("max_technical_score") or 100)
+                ) / 4
+            )
+        )
     )
+
     return matched
 
 
 # =========================================================
-# 🧠 DAGELIJKSE LUXE SCORE-TASK (MACRO / TECH / MARKET / SETUP)
+# 🧠 DAGELIJKSE SUPER-LUXE SCORE TASK
 # =========================================================
 @shared_task(name="backend.celery_task.store_daily_scores_task")
 def store_daily_scores_task():
-    """
-    De volledige luxe daily score pipeline:
-    - Haal macro/technical/market/setup via nieuwe DB-rule engine
-    - Opslaan in daily_scores (met uitleg + contributors)
-    - Setup matching + active setup opslaan
-    """
+
     logger.info("🧠 Dagelijkse scoreberekening gestart...")
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen databaseverbinding bij daily score opslag.")
+        logger.error("❌ Geen DB-verbinding")
         return
 
     today = datetime.utcnow().date()
 
     try:
         # =====================================================
-        # 1️⃣ BEREKEN SCORES VIA DB RULE ENGINE (macro + tech + market + setup)
+        # 1️⃣ SCORES OPHALEN (MACRO + TECH + MARKET)
         # =====================================================
-        scores = get_scores_for_symbol(include_metadata=True) or {}
+        scores = get_scores_for_symbol(include_metadata=True)
 
         if not scores:
-            logger.warning("⚠️ Geen scores uit DB – fallback waarden gebruikt.")
-            scores = {
-                "macro_score": 0,
-                "technical_score": 0,
-                "market_score": 0,
-                "setup_score": 0,
-                "macro_interpretation": "Geen data",
-                "technical_interpretation": "Geen data",
-                "market_interpretation": "Geen data",
-                "macro_top_contributors": [],
-                "technical_top_contributors": [],
-                "market_top_contributors": [],
-            }
+            logger.error("❌ Geen scores beschikbaar — stop task")
+            return
 
-        logger.info(f"📊 Berekende DB-scores: {json.dumps(scores, indent=2)}")
+        logger.info(f"📊 DB-scores:\n{json.dumps(scores, indent=2)}")
 
         # =====================================================
-        # 2️⃣ OPSLAAN IN daily_scores (volledig luxe structuur)
+        # 2️⃣ OPSLAAN IN daily_scores
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -146,33 +158,35 @@ def store_daily_scores_task():
                 json.dumps(scores["market_top_contributors"]),
 
                 float(scores["setup_score"]),
-                scores.get("setup_interpretation", "Geen data"),
+                "Op basis van rule-engine",  # 👈 Kan je later uitbreiden
                 json.dumps(scores.get("setup_top_contributors", [])),
             ))
 
         # =====================================================
-        # 3️⃣ MATCH ACTIEVE SETUP OP BASIS VAN SETUP SCORE
+        # 3️⃣ SETUP MATCHING
         # =====================================================
-        setups = get_all_setups() or []
-        matched = match_setups_to_score(setups, scores["setup_score"])
+        setups = get_all_setups()
 
-        # Eerst alles van vandaag deactiveren
+        matched = match_setups_to_score(setups, scores)
+
+        # Eerst alles deactiveren (correcte kolom: report_date)
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE daily_setup_scores
                 SET is_active = false
-                WHERE date = %s
+                WHERE report_date = %s
             """, (today,))
 
         if matched:
             best = matched[0]
-            logger.info(f"🎯 Beste setup: {best['name']} (score={scores['setup_score']})")
+
+            logger.info(f"🎯 Beste setup geselecteerd: {best['name']}")
 
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO daily_setup_scores (setup_id, date, score, explanation, is_active)
+                    INSERT INTO daily_setup_scores (setup_id, report_date, score, explanation, is_active)
                     VALUES (%s, %s, %s, %s, true)
-                    ON CONFLICT (date, setup_id) DO UPDATE SET
+                    ON CONFLICT (report_date, setup_id) DO UPDATE SET
                         score = EXCLUDED.score,
                         explanation = EXCLUDED.explanation,
                         is_active = true
@@ -183,18 +197,15 @@ def store_daily_scores_task():
                     best.get("explanation", ""),
                 ))
         else:
-            logger.warning("⚠️ Geen setup matched huidige setup_score.")
+            logger.warning("⚠️ Geen enkele setup matcht de huidige score.")
 
-        # =====================================================
-        # 4️⃣ Commit
-        # =====================================================
         conn.commit()
-        logger.info("✅ Dagelijkse scores + actieve setup opgeslagen.")
+        logger.info("✅ Dagelijkse scores + setup saved")
 
     except Exception as e:
-        logger.error(f"❌ Fout bij dagelijkse scoring: {e}", exc_info=True)
+        logger.error(f"❌ Fout bij daily score task: {e}", exc_info=True)
         conn.rollback()
 
     finally:
         conn.close()
-        logger.info("🔒 Databaseverbinding gesloten.")
+        logger.info("🔒 Verbinding gesloten")
