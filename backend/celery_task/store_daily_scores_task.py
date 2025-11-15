@@ -16,34 +16,36 @@ logger = logging.getLogger(__name__)
 def match_setups_to_score(setups, scores):
     """
     Nieuwe matching:
-    - Macro-score moet binnen min/max_macro_score vallen
-    - Technical-score binnen min/max_technical_score
-    - Market-score binnen min/max_market_score
-    - Sorteren op dichtst-bij totale setup_score
+    Setups matchen op min/max per categorie:
+    - Macro-score
+    - Technical-score
+    - Market-score
+
+    Daarna sorteren op dichtst-bij het midden van alle ranges.
     """
 
-    macro_score = scores["macro_score"]
-    technical_score = scores["technical_score"]
-    market_score = scores["market_score"]
-    setup_score = scores["setup_score"]
+    macro_score = float(scores["macro_score"])
+    technical_score = float(scores["technical_score"])
+    market_score = float(scores["market_score"])
+    setup_score = float(scores["setup_score"])
 
     matched = []
 
     for s in setups:
         try:
-            # Macro
+            # Macro matching
             min_macro = float(s.get("min_macro_score") or 0)
             max_macro = float(s.get("max_macro_score") or 100)
             if not (min_macro <= macro_score <= max_macro):
                 continue
 
-            # Technical
+            # Technical matching
             min_tech = float(s.get("min_technical_score") or 0)
             max_tech = float(s.get("max_technical_score") or 100)
             if not (min_tech <= technical_score <= max_tech):
                 continue
 
-            # Market
+            # Market matching
             min_market = float(s.get("min_market_score") or 0)
             max_market = float(s.get("max_market_score") or 100)
             if not (min_market <= market_score <= max_market):
@@ -54,19 +56,22 @@ def match_setups_to_score(setups, scores):
         except Exception as e:
             logger.warning(f"⚠️ Setup match fout bij '{s.get('name')}': {e}")
 
-    # Sorteren op dichtst bij totale setup_score
-    matched.sort(
-        key=lambda s: abs(
-            setup_score - (
-                (
-                    float(s.get("min_macro_score") or 0) +
-                    float(s.get("max_macro_score") or 100) +
-                    float(s.get("min_technical_score") or 0) +
-                    float(s.get("max_technical_score") or 100)
-                ) / 4
-            )
-        )
-    )
+    # =========================================================
+    # SORTEREN OP NAUWKEURIGHEID (zeer luxe)
+    # Gebruik gemiddelde van alle ranges → centrale waarde
+    # =========================================================
+    def center_value(setup):
+        vals = [
+            float(setup.get("min_macro_score") or 0),
+            float(setup.get("max_macro_score") or 100),
+            float(setup.get("min_technical_score") or 0),
+            float(setup.get("max_technical_score") or 100),
+            float(setup.get("min_market_score") or 0),
+            float(setup.get("max_market_score") or 100),
+        ]
+        return sum(vals) / len(vals)
+
+    matched.sort(key=lambda s: abs(setup_score - center_value(s)))
 
     return matched
 
@@ -158,7 +163,7 @@ def store_daily_scores_task():
                 json.dumps(scores["market_top_contributors"]),
 
                 float(scores["setup_score"]),
-                "Op basis van rule-engine",  # 👈 Kan je later uitbreiden
+                "Op basis van rule-engine",
                 json.dumps(scores.get("setup_top_contributors", [])),
             ))
 
@@ -169,7 +174,7 @@ def store_daily_scores_task():
 
         matched = match_setups_to_score(setups, scores)
 
-        # Eerst alles deactiveren (correcte kolom: report_date)
+        # Eerst alle setups van vandaag inactief maken
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE daily_setup_scores
@@ -177,9 +182,9 @@ def store_daily_scores_task():
                 WHERE report_date = %s
             """, (today,))
 
+        # Beste match opslaan
         if matched:
             best = matched[0]
-
             logger.info(f"🎯 Beste setup geselecteerd: {best['name']}")
 
             with conn.cursor() as cur:
@@ -197,10 +202,10 @@ def store_daily_scores_task():
                     best.get("explanation", ""),
                 ))
         else:
-            logger.warning("⚠️ Geen enkele setup matcht de huidige score.")
+            logger.warning("⚠️ Geen enkele setup matcht macro/technical/market score.")
 
         conn.commit()
-        logger.info("✅ Dagelijkse scores + setup saved")
+        logger.info("✅ Dagelijkse scores + actieve setup opgeslagen.")
 
     except Exception as e:
         logger.error(f"❌ Fout bij daily score task: {e}", exc_info=True)
