@@ -287,7 +287,27 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
             def top(scores_dict):
                 if "scores" not in scores_dict:
                     return []
-                return sorted(
-                    scores_dict["scores"].items(),
-                    key=lambda x: x[1]["score"],
-                    reverse
+                                    return sorted(
+                        scores_dict["scores"].items(),
+                        key=lambda x: x[1]["score"],
+                        reverse=True
+                    )[:3]
+
+            result.update({
+                "macro_top_contributors": [i[0] for i in top(macro_scores)],
+                "technical_top_contributors": [i[0] for i in top(tech_scores)],
+                "market_top_contributors": [i[0] for i in top(market_scores)],
+
+                "macro_interpretation": "Macro-data via scoreregels",
+                "technical_interpretation": "Technische data via scoreregels",
+                "market_interpretation": "Marktdata via scoreregels",
+            })
+
+        return result
+
+    except Exception as e:
+        logger.error(f"❌ get_scores_for_symbol(): {e}", exc_info=True)
+        return {}
+
+    finally:
+        conn.close()
