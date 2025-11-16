@@ -217,25 +217,29 @@ def get_market_indicator_rules(name: str):
         cur = conn.cursor()
         cur.execute("""
             SELECT range_min, range_max, score, trend, interpretation, action
-            FROM indicator_score_rules
-            WHERE indicator = %s AND category = 'market'
+            FROM market_indicator_rules
+            WHERE name = %s
             ORDER BY range_min ASC
         """, (name,))
         rows = cur.fetchall()
+        cur.close()
         conn.close()
 
-        return [{
-            "range_min": r[0],
-            "range_max": r[1],
-            "score": r[2],
-            "trend": r[3],
-            "interpretation": r[4],
-            "action": r[5]
-        } for r in rows]
+        return [
+            {
+                "range_min": r[0],
+                "range_max": r[1],
+                "score": r[2],
+                "trend": r[3],
+                "interpretation": r[4],
+                "action": r[5],
+            }
+            for r in rows
+        ]
 
     except Exception as e:
         logger.error(f"❌ [indicator_rules] {e}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 
