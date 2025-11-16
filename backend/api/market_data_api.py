@@ -113,6 +113,219 @@ def save_market_data():
         logger.error(f"❌ Fout bij opslaan marktdata: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# =========================================================
+# 📅 /market_data/day — Dagelijkse market-indicatoren
+# =========================================================
+@router.get("/market_data/day")
+async def get_latest_market_day_data():
+    logger.info("📄 [market/day] Ophalen market-dagdata (met fallback)...")
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(
+            status_code=500,
+            detail="❌ Geen databaseverbinding."
+        )
+
+    try:
+        with conn.cursor() as cur:
+
+            # 1️⃣ Eerst proberen: TODAY
+            cur.execute("""
+                SELECT indicator, value, score, action, interpretation, timestamp
+                FROM market_active_indicators
+                WHERE DATE(timestamp) = CURRENT_DATE
+                ORDER BY timestamp DESC;
+            """)
+            rows = cur.fetchall()
+
+            # 2️⃣ FALLBACK: meest recente dag
+            if not rows:
+                logger.warning("⚠️ Geen market-data voor vandaag — gebruik fallback dag.")
+
+                cur.execute("""
+                    SELECT timestamp 
+                    FROM market_active_indicators
+                    ORDER BY timestamp DESC
+                    LIMIT 1;
+                """)
+                last = cur.fetchone()
+
+                if not last:
+                    logger.warning("⚠️ Geen market fallback data gevonden — tabel leeg?")
+                    return []
+
+                fallback_date = last[0].date()
+
+                cur.execute("""
+                    SELECT indicator, value, score, action, interpretation, timestamp
+                    FROM market_active_indicators
+                    WHERE DATE(timestamp) = %s
+                    ORDER BY timestamp DESC;
+                """, (fallback_date,))
+                rows = cur.fetchall()
+
+        # 3️⃣ Formatteren
+        return [
+            {
+                "name": row[0],
+                "value": row[1],
+                "score": row[2],
+                "action": row[3],
+                "interpretation": row[4],
+                "timestamp": row[5].isoformat() if row[5] else None
+            }
+            for row in rows
+        ]
+
+    except Exception as e:
+        logger.error(f"❌ [market/day] Fout bij ophalen market dagdata: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="❌ [DB06] Ophalen market dagdata mislukt."
+        )
+
+    finally:
+        conn.close()
+
+import logging
+from fastapi import APIRouter, HTTPException
+from backend.utils.db import get_db_connection
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+# =========================================================
+# 📌 1. Alle beschikbare market indicators (uit DB)
+# =========================================================
+@router.get("/market/indicator_names")
+def get_market_indicator_names():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT name, display_name
+            FROM indicators
+            WHERE category = 'market'
+        """)
+        rows = cur.fetchall()
+        conn.close()
+
+        return [{"name": r[0], "display_name": r[1]} for r in rows]
+
+    except Exception as e:
+        logger.error(f"❌ [indicator_names] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================================
+# 📌 2. Scoreregels ophalen voor één market indicator
+# =========================================================
+@router.get("/market/indicator_rules/{name}")
+def get_market_indicator_rules(name: str):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT range_min, range_max, score, trend, interpretation, action
+            FROM indicator_score_rules
+            WHERE indicator = %s AND category = 'market'
+            ORDER BY range_min ASC
+        """, (name,))
+        rows = cur.fetchall()
+        conn.close()
+
+        return [{
+            "range_min": r[0],
+            "range_max": r[1],
+            "score": r[2],
+            "trend": r[3],
+            "interpretation": r[4],
+            "action": r[5]
+        } for r in rows]
+
+    except Exception as e:
+        logger.error(f"❌ [indicator_rules] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================================
+# 📌 3. Actieve daily market indicators
+# =========================================================
+@router.get("/market/active_indicators")
+def get_active_market_indicators():
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT name, value, score, action, interpretation
+            FROM market_active_indicators
+            ORDER BY name ASC
+        """)
+        rows = cur.fetchall()
+        conn.close()
+
+        return [{
+            "name": r[0],
+            "value": r[1],
+            "score": r[2],
+            "action": r[3],
+            "interpretation": r[4],
+        } for r in rows]
+
+    except Exception as e:
+        logger.error(f"❌ [active_indicators] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================================
+# 📌 4. Market indicator toevoegen aan dagelijkse analyse
+# =========================================================
+@router.post("/market/add_indicator")
+def add_market_indicator(data: dict):
+    indicator = data.get("indicator")
+    if not indicator:
+        raise HTTPException(status_code=400, detail="indicator ontbreekt")
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO market_active_indicators (name)
+            VALUES (%s)
+            ON CONFLICT DO NOTHING
+        """, (indicator,))
+        conn.commit()
+        conn.close()
+        return {"status": "ok", "added": indicator}
+
+    except Exception as e:
+        logger.error(f"❌ [add_indicator] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================================
+# 📌 5. Market indicator verwijderen
+# =========================================================
+@router.delete("/market/delete_indicator/{name}")
+def delete_market_indicator(name: str):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            DELETE FROM market_active_indicators
+            WHERE name = %s
+        """, (name,))
+        conn.commit()
+        conn.close()
+
+        return {"deleted": name}
+
+    except Exception as e:
+        logger.error(f"❌ [delete_indicator] {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # =========================================================
 # ✅ /market_data/list — recente marketdata ophalen
