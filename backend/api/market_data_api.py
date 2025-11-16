@@ -132,7 +132,7 @@ async def get_latest_market_day_data():
 
             # 1️⃣ Eerst proberen: TODAY
             cur.execute("""
-                SELECT indicator, value, score, action, interpretation, timestamp
+                SELECT name, value, score, action, interpretation, timestamp
                 FROM market_active_indicators
                 WHERE DATE(timestamp) = CURRENT_DATE
                 ORDER BY timestamp DESC;
@@ -158,7 +158,7 @@ async def get_latest_market_day_data():
                 fallback_date = last[0].date()
 
                 cur.execute("""
-                    SELECT indicator, value, score, action, interpretation, timestamp
+                    SELECT name, value, score, action, interpretation, timestamp
                     FROM market_active_indicators
                     WHERE DATE(timestamp) = %s
                     ORDER BY timestamp DESC;
