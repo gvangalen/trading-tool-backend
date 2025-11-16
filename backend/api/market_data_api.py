@@ -188,14 +188,6 @@ async def get_latest_market_day_data():
     finally:
         conn.close()
 
-import logging
-from fastapi import APIRouter, HTTPException
-from backend.utils.db import get_db_connection
-
-router = APIRouter()
-logger = logging.getLogger(__name__)
-
-
 # =========================================================
 # 📌 1. Alle beschikbare market indicators (uit DB)
 # =========================================================
@@ -670,19 +662,3 @@ async def save_forward_returns(data: list[dict]):
         logger.error(f"❌ [forward/save] Fout bij opslaan forward returns: {e}")
         raise HTTPException(status_code=500, detail="Fout bij opslaan forward returns.")
 
-# =========================================================
-# ✅ Delete indicator
-# =========================================================
-@router.delete("/market_data/{id}")
-async def delete_market_asset(id: int):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("DELETE FROM market_data WHERE id = %s", (id,))
-        conn.commit()
-        conn.close()
-        logger.info(f"🗑️ [delete] Markt asset met ID {id} verwijderd.")
-        return {"message": f"🗑️ Asset {id} verwijderd."}
-    except Exception as e:
-        logger.error(f"❌ [delete] Fout bij verwijderen: {e}")
-        raise HTTPException(status_code=500, detail="❌ Kon asset niet verwijderen.")
