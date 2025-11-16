@@ -188,22 +188,37 @@ async def get_latest_market_day_data():
 # =========================================================
 @router.get("/market/indicator_names")
 def get_market_indicator_names():
+    """
+    Geeft alle MARKET-indicators terug die:
+    - in de tabel 'indicators' staan (met API-link/config)
+    - én een entry hebben in 'market_indicator_rules' (scoreregels)
+    """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT name, display_name
-            FROM indicators
-            WHERE category = 'market'
+            SELECT i.name, i.display_name
+            FROM indicators i
+            JOIN market_indicator_rules r
+                ON r.indicator = i.name
+            WHERE i.category = 'market'
+            GROUP BY i.name, i.display_name
+            ORDER BY i.display_name ASC;
         """)
         rows = cur.fetchall()
         conn.close()
 
-        return [{"name": r[0], "display_name": r[1]} for r in rows]
+        return [
+            {
+                "name": r[0],          # bv. 'btc_change_24h'
+                "display_name": r[1],  # bv. 'BTC Change 24h'
+            }
+            for r in rows
+        ]
 
     except Exception as e:
         logger.error(f"❌ [indicator_names] {e}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 
@@ -212,6 +227,10 @@ def get_market_indicator_names():
 # =========================================================
 @router.get("/market/indicator_rules/{name}")
 def get_market_indicator_rules(name: str):
+    """
+    Haalt alle scoreregels op voor één market-indicator
+    vanuit 'market_indicator_rules'.
+    """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -238,7 +257,7 @@ def get_market_indicator_rules(name: str):
 
     except Exception as e:
         logger.error(f"❌ [indicator_rules] {e}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 # =========================================================
 # GET /market_data/list — ruwe BTC data
