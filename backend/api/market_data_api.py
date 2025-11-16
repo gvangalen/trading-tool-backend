@@ -130,60 +130,56 @@ async def get_latest_market_day_data():
     try:
         with conn.cursor() as cur:
 
-            # 1️⃣ Eerst proberen: TODAY
+            # 1️⃣ Eerst vandaag proberen
             cur.execute("""
-                SELECT name, value, score, action, interpretation, timestamp
-                FROM market_active_indicators
+                SELECT name, value, trend, interpretation, action, score, timestamp
+                FROM market_data_indicators
                 WHERE DATE(timestamp) = CURRENT_DATE
                 ORDER BY timestamp DESC;
             """)
             rows = cur.fetchall()
 
-            # 2️⃣ FALLBACK: meest recente dag
+            # 2️⃣ FALLBACK
             if not rows:
-                logger.warning("⚠️ Geen market-data voor vandaag — gebruik fallback dag.")
+                logger.warning("⚠️ Geen market-data voor vandaag — fallback gebruiken.")
 
                 cur.execute("""
-                    SELECT timestamp 
-                    FROM market_active_indicators
+                    SELECT timestamp
+                    FROM market_data_indicators
                     ORDER BY timestamp DESC
                     LIMIT 1;
                 """)
                 last = cur.fetchone()
 
                 if not last:
-                    logger.warning("⚠️ Geen market fallback data gevonden — tabel leeg?")
                     return []
 
                 fallback_date = last[0].date()
 
                 cur.execute("""
-                    SELECT name, value, score, action, interpretation, timestamp
-                    FROM market_active_indicators
+                    SELECT name, value, trend, interpretation, action, score, timestamp
+                    FROM market_data_indicators
                     WHERE DATE(timestamp) = %s
                     ORDER BY timestamp DESC;
                 """, (fallback_date,))
                 rows = cur.fetchall()
 
-        # 3️⃣ Formatteren
         return [
             {
-                "name": row[0],
-                "value": row[1],
-                "score": row[2],
-                "action": row[3],
-                "interpretation": row[4],
-                "timestamp": row[5].isoformat() if row[5] else None
+                "name": r[0],
+                "value": r[1],
+                "trend": r[2],
+                "interpretation": r[3],
+                "action": r[4],
+                "score": r[5],
+                "timestamp": r[6].isoformat() if r[6] else None
             }
-            for row in rows
+            for r in rows
         ]
 
     except Exception as e:
         logger.error(f"❌ [market/day] Fout bij ophalen market dagdata: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="❌ [DB06] Ophalen market dagdata mislukt."
-        )
+        raise HTTPException(status_code=500, detail="❌ Ophalen market dagdata mislukt.")
 
     finally:
         conn.close()
