@@ -114,7 +114,7 @@ def save_market_data():
 
 
 # =========================================================
-# 📅 GET /market_data/day — DAGTABEL (zoals macro)
+# 📅 GET /market_data/day — DAGTABEL 
 # =========================================================
 @router.get("/market_data/day")
 async def get_latest_market_day_data():
@@ -218,11 +218,10 @@ def get_market_indicator_rules(name: str):
         cur.execute("""
             SELECT range_min, range_max, score, trend, interpretation, action
             FROM market_indicator_rules
-            WHERE name = %s
-            ORDER BY range_min ASC
+            WHERE indicator = %s
+            ORDER BY range_min ASC;
         """, (name,))
         rows = cur.fetchall()
-        cur.close()
         conn.close()
 
         return [
@@ -239,9 +238,7 @@ def get_market_indicator_rules(name: str):
 
     except Exception as e:
         logger.error(f"❌ [indicator_rules] {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
+        raise HTTPException(500, str(e))
 
 # =========================================================
 # GET /market_data/list — ruwe BTC data
