@@ -19,28 +19,28 @@ logger.info("🚀 market_data_api.py geladen – alle market-data routes actief.
 # =========================================================
 # 🔄 Dynamisch laden van API endpoints uit database
 # =========================================================
-def get_market_endpoints():
-    """Haalt actieve market-indicator endpoints uit de database."""
+def get_market_raw_endpoints():
+    """Haalt ALLE actieve market_raw endpoints uit de database."""
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name, link
                 FROM indicators
-                WHERE category = 'market' AND active = true
+                WHERE category = 'market_raw' AND active = TRUE
             """)
             result = {row[0]: row[1] for row in cur.fetchall()}
-        conn.close()
 
-        logger.info(f"✅ Market endpoints geladen: {list(result.keys())}")
+        conn.close()
+        logger.info(f"✅ Market RAW endpoints geladen: {list(result.keys())}")
         return result
 
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen market endpoints: {e}")
+        logger.error(f"❌ Fout bij ophalen market_raw endpoints: {e}")
         return {}
-
-MARKET_ENDPOINTS = get_market_endpoints()
-if not MARKET_ENDPOINTS:
+        
+MARKET_RAW_ENDPOINTS = get_market_raw_endpoints()
+if not MARKET_RAW_ENDPOINTS:
     logger.warning("⚠️ Geen actieve market endpoints in DB – gebruik standaard CoinGecko URLs.")
 
 
@@ -49,68 +49,68 @@ if not MARKET_ENDPOINTS:
 # =========================================================
 @router.post("/market_data")
 def save_market_data():
-    """Haalt BTC-marktgegevens op via de URLs uit de database en slaat ze op."""
+    """Haalt BTC prijs/volume/change op via market_raw endpoints en slaat op."""
     try:
-        price_url = MARKET_ENDPOINTS.get(
-            "btc_price", 
+        price_url = MARKET_RAW_ENDPOINTS.get(
+            "btc_price",
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
         )
-        change_url = MARKET_ENDPOINTS.get(
-            "btc_change_24h", 
+
+        change_url = MARKET_RAW_ENDPOINTS.get(
+            "btc_change_24h",
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
         )
-        volume_url = MARKET_ENDPOINTS.get(
-            "btc_volume", 
-            "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=7"
+
+        volume_url = MARKET_RAW_ENDPOINTS.get(
+            "btc_volume",
+            "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"
         )
 
         with httpx.Client(timeout=10.0) as client:
-            price_resp = client.get(change_url)
-            price_resp.raise_for_status()
-            price_data = price_resp.json()
+            r = client.get(change_url)
+            r.raise_for_status()
+            data = r.json()
 
-            if "bitcoin" in price_data:
-                price = price_data["bitcoin"].get("usd")
-                change_24h = price_data["bitcoin"].get("usd_24h_change")
-                volume = price_data["bitcoin"].get("usd_24h_vol")
-            elif "market_data" in price_data:
-                md = price_data["market_data"]
-                price = md.get("current_price", {}).get("usd")
-                change_24h = md.get("price_change_percentage_24h")
-                volume = md.get("total_volume", {}).get("usd")
-            else:
-                raise ValueError("Onverwacht JSON-formaat voor prijs/24h change")
+        # Parsing volgens 2 mogelijke JSON formats
+        if "bitcoin" in data:
+            price = data["bitcoin"].get("usd")
+            change_24h = data["bitcoin"].get("usd_24h_change")
+        else:
+            md = data["market_data"]
+            price = md["current_price"]["usd"]
+            change_24h = md["price_change_percentage_24h"]
 
-            if not volume:
-                vol_resp = client.get(volume_url)
-                vol_json = vol_resp.json()
-                if "total_volumes" in vol_json and vol_json["total_volumes"]:
-                    volume = float(vol_json["total_volumes"][-1][1])
+        # Volume ophalen
+        volume = None
+        with httpx.Client(timeout=10.0) as client:
+            vol_resp = client.get(volume_url).json()
+            if "total_volumes" in vol_resp:
+                volume = vol_resp["total_volumes"][-1][1]
 
-        if price is None or volume is None or change_24h is None:
-            raise ValueError("Ontbrekende velden in CoinGecko response")
+        if price is None or change_24h is None or volume is None:
+            raise ValueError("Ontbrekende price/change/volume in API")
 
         conn = get_db_connection()
         cur = conn.cursor()
+
         cur.execute("""
             INSERT INTO market_data (symbol, price, volume, change_24h, timestamp)
-            VALUES (%s, %s, %s, %s, %s)
-        """, ("BTC", price, volume, change_24h, datetime.utcnow()))
+            VALUES ('BTC', %s, %s, %s, NOW())
+        """, (price, volume, change_24h))
+
         conn.commit()
         conn.close()
 
-        logger.info(f"✅ Marktdata opgeslagen: prijs={price}, volume={volume}, change={change_24h}")
         return {
-            "message": "✅ Marktdata succesvol opgeslagen.",
+            "status": "ok",
             "price": price,
-            "volume": volume,
-            "change_24h": change_24h
+            "change_24h": change_24h,
+            "volume": volume
         }
 
     except Exception as e:
-        logger.error(f"❌ Fout bij opslaan marktdata: {e}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        logger.error(f"❌ Error in save_market_data: {e}")
+        raise HTTPException(500, str(e))
 
 
 # =========================================================
