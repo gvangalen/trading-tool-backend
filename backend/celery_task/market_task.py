@@ -32,16 +32,21 @@ def safe_get(url, params=None):
 
 
 # =====================================================
-# 🔍 DB Helper — Market RAW endpoints
+# 🔍 Market RAW Endpoints (GEFIXT — altijd ophalen)
 # =====================================================
 def load_market_raw_endpoints():
-    """Laadt alle actieve market_raw endpoints uit de DB (btc_price, btc_volume, btc_change_24h)."""
+    """
+    Haalt ALLE market_raw endpoints op (btc_price, btc_volume, btc_ohlc, btc_change_24h).
+    LET OP:
+    - RAW endpoints moeten ALTIJD opgehaald worden
+    - NIET filteren op active = TRUE
+    """
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute("""
             SELECT name, link
             FROM indicators
-            WHERE category = 'market_raw' AND active = TRUE
+            WHERE category = 'market_raw'
         """)
         endpoints = {r[0]: r[1] for r in cur.fetchall()}
     conn.close()
@@ -49,16 +54,15 @@ def load_market_raw_endpoints():
 
 
 # =====================================================
-# 🌐 Market RAW ophalen via database-endpoints
+# 🌐 RAW Market Data ophalen
 # =====================================================
 def fetch_raw_market_data():
     """
-    Haalt BTC price, volume en change_24h op via de market_raw endpoints in de DB.
-    Verwacht indicatoren:
-      - btc_price
-      - btc_change_24h
-      - btc_volume
+    Haalt price, volume, change_24h op via market_raw endpoints.
+    Belangrijk: deze data wordt NOOIT gescoord.
+    Enkel gebruikt voor: live prijs / volume / change + dag-score-basis.
     """
+
     endpoints = load_market_raw_endpoints()
 
     price_url = endpoints.get(
@@ -75,36 +79,35 @@ def fetch_raw_market_data():
     )
 
     with requests.Session() as s:
-        # Price + Change ophalen
+        # Prijs + 24h change ophalen
         r = s.get(change_url, timeout=10).json()
 
         if "bitcoin" in r:
-            price = r["bitcoin"]["usd"]
-            change_24h = r["bitcoin"]["usd_24h_change"]
+            price = float(r["bitcoin"]["usd"])
+            change_24h = float(r["bitcoin"]["usd_24h_change"])
         else:
-            md = r["market_data"]
-            price = md["current_price"]["usd"]
-            change_24h = md["price_change_percentage_24h"]
+            md = r.get("market_data", {})
+            price = float(md.get("current_price", {}).get("usd"))
+            change_24h = float(md.get("price_change_percentage_24h"))
 
-        # Volume ophalen
+        # Volume
         r2 = s.get(volume_url, timeout=10).json()
         if "total_volumes" in r2:
-            volume = r2["total_volumes"][-1][1]
+            volume = float(r2["total_volumes"][-1][1])
         else:
             volume = None
 
     return {
-        "price": float(price),
-        "volume": float(volume),
-        "change_24h": float(change_24h)
+        "price": price,
+        "volume": volume,
+        "change_24h": change_24h
     }
 
 
 # =====================================================
-# 💾 RAW Market Data opslaan
+# 💾 RAW opslaan in DB
 # =====================================================
 def store_market_data_db(symbol, price, volume, change_24h):
-    """Slaat raw market data zonder upsert op (jouw table ondersteunt upsert niet)."""
     conn = get_db_connection()
     ts = datetime.utcnow()
 
@@ -126,22 +129,15 @@ def store_market_data_db(symbol, price, volume, change_24h):
 
 
 # =====================================================
-# 📊 Market Scoring (market → market_indicator_rules → market_data_indicators)
+# 📊 Market Scoring — alleen de 4 MARKET indicators
 # =====================================================
 def apply_market_scoring():
-    """
-    Zet raw market_data om naar gescoorde indicatoren in market_data_indicators.
-    FIXED VERSION:
-    - gebruikt alleen ACTIEVE indicators uit indicators-table
-    - scoort direct nieuwe dagwaarden
-    - wist eerst alle rows van vandaag om dubbele data te voorkomen
-    """
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
 
-            # 1️⃣ Laatste RAW market_data ophalen
+            # RAW ophalen
             cur.execute("""
                 SELECT price, volume, change_24h
                 FROM market_data
@@ -152,29 +148,24 @@ def apply_market_scoring():
             raw = cur.fetchone()
 
             if not raw:
-                logger.warning("⚠️ Geen raw market data beschikbaar voor scoring.")
+                logger.warning("⚠️ Geen RAW data beschikbaar voor scoring.")
                 return
 
             price, volume, change_24h = raw
 
-            # 2️⃣ Eerst dagdata opschonen
-            cur.execute("""
-                DELETE FROM market_data_indicators
-                WHERE DATE(timestamp) = CURRENT_DATE
-            """)
+            # Dagdata wissen
+            cur.execute("DELETE FROM market_data_indicators WHERE DATE(timestamp) = CURRENT_DATE")
 
-            # 3️⃣ Alleen ACTIEVE market indicators ophalen
+            # ALLEEN MARKET indicators ophalen
             cur.execute("""
-                SELECT name 
-                FROM indicators
-                WHERE category='market' AND active=TRUE
+                SELECT name FROM indicators
+                WHERE category='market' AND active = TRUE
             """)
             indicators = [r[0] for r in cur.fetchall()]
 
-            # 4️⃣ Per indicator → juiste raw waarde + matchende scoreregel
             for ind in indicators:
 
-                # juiste waarde kiezen
+                # juiste raw waarde kiezen
                 if ind == "btc_change_24h":
                     value = change_24h
                 elif ind == "volume_strength":
@@ -184,10 +175,9 @@ def apply_market_scoring():
                 elif ind == "volatility":
                     value = abs(change_24h)
                 else:
-                    # onbekende indicator — overslaan
-                    continue
+                    continue  # onbekende indicator
 
-                # bijbehorende scoreregels ophalen
+                # scoreregels ophalen
                 cur.execute("""
                     SELECT range_min, range_max, score, trend, interpretation, action
                     FROM market_indicator_rules
@@ -196,14 +186,13 @@ def apply_market_scoring():
                 """, (ind,))
                 rules = cur.fetchall()
 
-                # juiste regel vinden binnen range
                 rule = next((r for r in rules if r[0] <= value < r[1]), None)
                 if not rule:
                     continue
 
                 range_min, range_max, score, trend, interp, action = rule
 
-                # 5️⃣ wegschrijven in market_data_indicators
+                # opslaan
                 cur.execute("""
                     INSERT INTO market_data_indicators
                         (name, value, trend, interpretation, action, score, timestamp)
@@ -211,10 +200,10 @@ def apply_market_scoring():
                 """, (ind, value, trend, interp, action, score))
 
         conn.commit()
-        logger.info("📊 Market scoring uitgevoerd (actieve indicators).")
+        logger.info("📊 Market scoring uitgevoerd.")
 
     except Exception:
-        logger.error("❌ Fout bij market scoring:")
+        logger.error("❌ Fout bij market scoring")
         logger.error(traceback.format_exc())
 
     finally:
@@ -222,10 +211,9 @@ def apply_market_scoring():
 
 
 # =====================================================
-# 🔁 Combined processing
+# 🔁 Complete RAW → DB → SCORE pipeline
 # =====================================================
 def process_market_now():
-    """Complete pipeline: RAW ophalen → opslaan → scoring."""
     raw = fetch_raw_market_data()
     if not raw:
         logger.warning("⚠️ Geen raw market data ontvangen.")
@@ -236,7 +224,7 @@ def process_market_now():
 
 
 # =====================================================
-# 🚀 Celery Task: Elke ±15 min RAW + Scoring
+# 🚀 Celery Task — elke 15m
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data")
 def fetch_market_data_task():
@@ -251,25 +239,17 @@ def fetch_market_data_task():
 
 
 # =====================================================
-# 🕛 Dagelijks snapshot (Binance 1d OHLC)
+# 🕛 Dagelijkse snapshot
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.save_market_data_daily")
 def save_market_data_daily():
-    """
-    Dagelijkse snapshot:
-    - RAW marketdata (via process_market_now)
-    - Binance 1d candle
-    - 7d update
-    """
     logger.info("🕛 Dagelijkse market snapshot gestart...")
 
     try:
-        # 1️⃣ Raw snapshot + scoring
         process_market_now()
-        logger.info("✅ Raw snapshot + scoring gedaan.")
+        logger.info("✅ Raw + scoring gedaan.")
 
-        # 2️⃣ Binance candle ophalen
-        logger.info("📊 Ophalen Binance OHLC candle (1d) ...")
+        # Binance 1d candle ophalen
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": "BTCUSDT", "interval": "1d", "limit": 1}
         candles = safe_get(url, params=params)
@@ -280,14 +260,14 @@ def save_market_data_daily():
             high_p = float(k[2])
             low_p = float(k[3])
             close_p = float(k[4])
-            base_vol_btc = float(k[5])
             quote_vol_usd = float(k[7])
             change = round(((close_p - open_p) / open_p) * 100, 2)
 
             conn = get_db_connection()
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume, created_at)
+                    INSERT INTO market_data_7d 
+                    (symbol, date, open, high, low, close, change, volume, created_at)
                     VALUES ('BTC', CURRENT_DATE, %s, %s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (symbol, date)
                     DO UPDATE SET
@@ -303,11 +283,8 @@ def save_market_data_daily():
             conn.commit()
             conn.close()
 
-            logger.info(f"✅ Dagrecord bijgewerkt | Δ{change:+.2f}% | VolumeUSD:{quote_vol_usd}")
-
-        # 3️⃣ 7-daagse update
+        # update 7 dagen extra
         fetch_market_data_7d()
-        logger.info("🔁 7-daagse update klaar.")
 
     except Exception:
         logger.error("❌ Fout in save_market_data_daily")
@@ -315,7 +292,7 @@ def save_market_data_daily():
 
 
 # =====================================================
-# 📆 7-daagse Binance + CoinGecko volume
+# 📆 7-daagse update
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
@@ -327,12 +304,12 @@ def fetch_market_data_7d():
         return
 
     try:
-        # Binance 7 days OHLC
+        # Binance 7 dagen OHLC
         binance_url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": "BTCUSDT", "interval": "1d", "limit": 7}
         candles = safe_get(binance_url, params=params)
 
-        # CoinGecko 7 days volume
+        # CoinGecko volume
         cg_url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
         vol_data = safe_get(cg_url, params={"vs_currency": "usd", "days": "7"})
         volume_points = vol_data.get("total_volumes", [])
@@ -357,7 +334,8 @@ def fetch_market_data_7d():
                 volume = float(avg_volume.get(date, 0.0))
 
                 cur.execute("""
-                    INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume, created_at)
+                    INSERT INTO market_data_7d 
+                    (symbol, date, open, high, low, close, change, volume, created_at)
                     VALUES ('BTC', %s, %s, %s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (symbol, date)
                     DO UPDATE SET
@@ -383,7 +361,7 @@ def fetch_market_data_7d():
 
 
 # =====================================================
-# 📈 Forward returns (blijft zoals origineel)
+# 📈 Forward returns
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.calculate_and_save_forward_returns")
 def calculate_and_save_forward_returns():
@@ -399,7 +377,6 @@ def calculate_and_save_forward_returns():
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning("⚠️ Geen data in btc_price_history.")
             return
 
         data = [{"date": r[0], "price": float(r[1])} for r in rows]
@@ -411,6 +388,7 @@ def calculate_and_save_forward_returns():
                 j = i + days
                 if j >= len(data):
                     continue
+
                 end = data[j]
                 change = ((end["price"] - start["price"]) / start["price"]) * 100
                 avg_daily = change / days
@@ -430,7 +408,6 @@ def calculate_and_save_forward_returns():
                 """, (f"{days}d", s_date, e_date, round(change, 2), round(avg_daily, 3)))
 
         conn.commit()
-        logger.info(f"✅ Forward returns opgeslagen ({len(results)} rows).")
 
     except Exception:
         logger.error("❌ Fout in calculate_and_save_forward_returns")
