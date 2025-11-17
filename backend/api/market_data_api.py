@@ -655,3 +655,81 @@ async def save_forward_returns(data: list[dict]):
     except Exception as e:
         logger.error(f"❌ [forward/save] {e}")
         raise HTTPException(500, "Fout bij opslaan forward returns.")
+
+# =========================================================
+# POST /market/add_indicator — indicator activeren voor dag-analyse
+# =========================================================
+@router.post("/market/add_indicator")
+def add_market_indicator(payload: dict):
+    name = payload.get("indicator")
+    if not name:
+        raise HTTPException(400, "Indicator naam ontbreekt.")
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # 1️⃣ Bestaat indicator in indicators?
+        cur.execute("""
+            SELECT name FROM indicators 
+            WHERE name = %s AND category = 'market'
+        """, (name,))
+        if not cur.fetchone():
+            conn.close()
+            raise HTTPException(404, f"Indicator '{name}' bestaat niet in indicators.")
+
+        # 2️⃣ Heeft indicator scoreregels?
+        cur.execute("""
+            SELECT 1 FROM market_indicator_rules WHERE indicator = %s LIMIT 1
+        """, (name,))
+        if not cur.fetchone():
+            conn.close()
+            raise HTTPException(400, "Deze indicator heeft nog geen scoreregels.")
+
+        # 3️⃣ Indicator activeren (active = true)
+        cur.execute("""
+            UPDATE indicators
+            SET active = TRUE
+            WHERE name = %s
+        """, (name,))
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "ok", "message": f"Indicator '{name}' is toegevoegd aan de market-analyse."}
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+# =========================================================
+# DELETE /market/delete_indicator/{name} — indicator deactiveren
+# =========================================================
+@router.delete("/market/delete_indicator/{name}")
+def delete_market_indicator(name: str):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Bestaat hij wel?
+        cur.execute("""
+            SELECT name FROM indicators 
+            WHERE name = %s AND category = 'market'
+        """, (name,))
+        if not cur.fetchone():
+            conn.close()
+            raise HTTPException(404, f"Indicator '{name}' niet gevonden.")
+
+        # Deactiveren
+        cur.execute("""
+            UPDATE indicators
+            SET active = FALSE
+            WHERE name = %s
+        """, (name,))
+
+        conn.commit()
+        conn.close()
+
+        return {"status": "ok", "message": f"Indicator '{name}' is verwijderd uit de dag-analyse."}
+
+    except Exception as e:
+        raise HTTPException(500, str(e))
