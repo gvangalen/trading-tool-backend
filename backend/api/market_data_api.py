@@ -17,17 +17,20 @@ logger.info("🚀 market_data_api.py geladen – alle market-data routes actief.
 
 
 # =========================================================
-# 🔄 Dynamisch laden van API endpoints uit database
+# 🔄 Dynamisch laden van API endpoints uit database (RAW)
 # =========================================================
 def get_market_raw_endpoints():
-    """Haalt ALLE actieve market_raw endpoints uit de database."""
+    """
+    Haalt ALLE market_raw endpoints uit de database.
+    LET OP: GEEN filter op active – raw endpoints zijn altijd nodig.
+    """
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name, link
                 FROM indicators
-                WHERE category = 'market_raw' AND active = TRUE
+                WHERE category = 'market_raw'
             """)
             result = {row[0]: row[1] for row in cur.fetchall()}
 
@@ -38,98 +41,11 @@ def get_market_raw_endpoints():
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen market_raw endpoints: {e}")
         return {}
-        
+
+# Globale cache
 MARKET_RAW_ENDPOINTS = get_market_raw_endpoints()
 
 
-# =========================================================
-# 📌 POST /market_data — BTC prijs/volume/change opslaan
-# =========================================================
-@router.post("/market/add_indicator")
-def add_market_indicator(payload: dict):
-    name = payload.get("indicator")
-    if not name:
-        raise HTTPException(400, "Indicator naam ontbreekt.")
-
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # 1️⃣ Bestaat indicator in indicators?
-        cur.execute("""
-            SELECT name, link
-            FROM indicators 
-            WHERE name = %s AND category = 'market'
-        """, (name,))
-        row = cur.fetchone()
-        if not row:
-            conn.close()
-            raise HTTPException(404, f"Indicator '{name}' bestaat niet in indicators.")
-
-        _, link = row
-
-        # 2️⃣ Heeft indicator scoreregels?
-        cur.execute("""
-            SELECT 1 FROM market_indicator_rules WHERE indicator = %s LIMIT 1
-        """, (name,))
-        if not cur.fetchone():
-            conn.close()
-            raise HTTPException(400, "Deze indicator heeft nog geen scoreregels.")
-
-        # 3️⃣ Indicator activeren
-        cur.execute("""
-            UPDATE indicators
-            SET active = TRUE
-            WHERE name = %s
-        """, (name,))
-        conn.commit()
-
-        # 4️⃣ Meteen API waarde ophalen
-        import requests
-        resp = requests.get(link, timeout=10).json()
-
-        # Voorbeeld: simpele extractie (pas aan per API link)
-        # Hier moet jij eventueel aanpassen aan jouw bronnen
-        if "value" in resp:
-            value = float(resp["value"])
-        elif isinstance(resp, dict):
-            # generieke fallback
-            value = list(resp.values())[0]
-        else:
-            value = None
-
-        if value is None:
-            logger.warning(f"⚠️ Geen waarde opgehaald voor {name}, geen dagrecord gemaakt")
-            return {"status": "ok", "message": f"Indicator '{name}' geactiveerd, maar geen waarde opgehaald."}
-
-        # 5️⃣ Score genereren via DB-engine
-        from backend.utils.scoring_utils import generate_scores_db
-        result = generate_scores_db("market", {name: value})
-        score_data = result["scores"].get(name)
-
-        if not score_data:
-            logger.warning(f"⚠️ Geen scoreregels gevonden voor {name} (score_data=None)")
-        else:
-            # 6️⃣ Dagrecord opslaan
-            cur.execute("""
-                INSERT INTO market_data_indicators (name, value, trend, interpretation, action, score, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
-            """, (
-                name,
-                value,
-                score_data.get("trend"),
-                score_data.get("interpretation"),
-                score_data.get("action"),
-                score_data.get("score")
-            ))
-            conn.commit()
-
-        conn.close()
-
-        return {"status": "ok", "message": f"Indicator '{name}' is toegevoegd en direct verwerkt."}
-
-    except Exception as e:
-        raise HTTPException(500, str(e))
 # =========================================================
 # 📅 GET /market_data/day — DAGTABEL 
 # =========================================================
@@ -199,7 +115,6 @@ async def get_latest_market_day_data():
         conn.close()
 
 
-
 # =========================================================
 # 📌 GET /market/indicator_names — lijst beschikbare indicators
 # =========================================================
@@ -207,7 +122,7 @@ async def get_latest_market_day_data():
 def get_market_indicator_names():
     """
     Geeft alle MARKET-indicators terug die:
-    - in de tabel 'indicators' staan (met API-link/config)
+    - in de tabel 'indicators' staan (category = 'market')
     - én een entry hebben in 'market_indicator_rules' (scoreregels)
     """
     try:
@@ -236,7 +151,6 @@ def get_market_indicator_names():
     except Exception as e:
         logger.error(f"❌ [indicator_names] {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 # =========================================================
@@ -276,6 +190,7 @@ def get_market_indicator_rules(name: str):
         logger.error(f"❌ [indicator_rules] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 # =========================================================
 # GET /market_data/list — ruwe BTC data
 # =========================================================
@@ -304,7 +219,6 @@ async def list_market_data(since_minutes: int = Query(default=1440)):
         raise HTTPException(500, "❌ Kon marktdata niet ophalen.")
 
 
-
 # =========================================================
 # GET /market_data/btc/7d/fill — BTC 7d ophalen & opslaan
 # =========================================================
@@ -318,8 +232,9 @@ async def fill_btc_7day_data():
     try:
         coingecko_id = "bitcoin"
         url_ohlc = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc?vs_currency=usd&days=7"
-        url_volume = MARKET_ENDPOINTS.get(
-            "btc_volume", f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart?vs_currency=usd&days=7"
+        url_volume = MARKET_RAW_ENDPOINTS.get(
+            "btc_volume",
+            f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart?vs_currency=usd&days=7"
         )
 
         with httpx.Client(timeout=10.0) as client:
@@ -339,7 +254,8 @@ async def fill_btc_7day_data():
                 change = round((close_p - open_p) / open_p * 100, 2)
                 volume = volume_by_date.get(date)
 
-                cur.execute("SELECT 1 FROM market_data_7d WHERE symbol = %s AND date = %s", ('BTC', date))
+                cur.execute("SELECT 1 FROM market_data_7d WHERE symbol = %s AND date = %s",
+                            ('BTC', date))
                 if cur.fetchone():
                     continue
 
@@ -358,7 +274,6 @@ async def fill_btc_7day_data():
 
     finally:
         conn.close()
-
 
 
 # =========================================================
@@ -382,7 +297,6 @@ def get_latest_btc_price():
 
         keys = ['id', 'symbol', 'price', 'change_24h', 'volume', 'timestamp']
         return dict(zip(keys, row))
-
 
 
 # =========================================================
@@ -427,7 +341,6 @@ async def fetch_interpreted_data():
         raise HTTPException(500, "❌ Interpretatiefout via scoring_util.")
 
 
-
 # =========================================================
 # GET /market_data/7d — laatste 7 dagen
 # =========================================================
@@ -465,7 +378,6 @@ async def get_market_data_7d():
         conn.close()
 
 
-
 # =========================================================
 # GET /market_data/forward — alle forward returns
 # =========================================================
@@ -497,7 +409,6 @@ async def get_market_forward_returns():
         raise HTTPException(500, "Fout bij ophalen forward returns.")
 
 
-
 # =========================================================
 # GET /market_data/forward/week
 # =========================================================
@@ -524,7 +435,6 @@ def get_week_returns():
     except Exception as e:
         logger.error(f"❌ Week returns error: {e}")
         raise HTTPException(500, "Fout bij ophalen week returns.")
-
 
 
 # =========================================================
@@ -555,7 +465,6 @@ def get_month_returns():
         raise HTTPException(500, "Fout bij ophalen maand returns.")
 
 
-
 # =========================================================
 # GET /market_data/forward/kwartaal
 # =========================================================
@@ -584,7 +493,6 @@ def get_quarter_returns():
         raise HTTPException(500, "Fout bij ophalen kwartaal returns.")
 
 
-
 # =========================================================
 # GET /market_data/forward/jaar
 # =========================================================
@@ -611,7 +519,6 @@ def get_year_returns():
     except Exception as e:
         logger.error(f"❌ Year returns error: {e}")
         raise HTTPException(500, "Fout bij ophalen jaar returns.")
-
 
 
 # =========================================================
@@ -645,7 +552,6 @@ async def save_market_data_7d(data: list[dict]):
         raise HTTPException(500, "Fout bij opslaan 7d data.")
 
 
-
 # =========================================================
 # POST /market_data/forward/save
 # =========================================================
@@ -676,11 +582,17 @@ async def save_forward_returns(data: list[dict]):
         logger.error(f"❌ [forward/save] {e}")
         raise HTTPException(500, "Fout bij opslaan forward returns.")
 
+
 # =========================================================
 # POST /market/add_indicator — indicator activeren voor dag-analyse
 # =========================================================
 @router.post("/market/add_indicator")
 def add_market_indicator(payload: dict):
+    """
+    Indicator activeren voor dag-analyse:
+    - Werkt alleen op category = 'market'
+    - RAW data + scoring worden door de Celery-task gedaan
+    """
     name = payload.get("indicator")
     if not name:
         raise HTTPException(400, "Indicator naam ontbreekt.")
@@ -721,6 +633,7 @@ def add_market_indicator(payload: dict):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+
 # =========================================================
 # DELETE /market/delete_indicator/{name} — indicator deactiveren
 # =========================================================
@@ -753,6 +666,7 @@ def delete_market_indicator(name: str):
 
     except Exception as e:
         raise HTTPException(500, str(e))
+
 
 # =========================================================
 # GET /market/active_indicators — lijst met actieve market indicators
