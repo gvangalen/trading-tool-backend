@@ -129,12 +129,19 @@ def store_market_data_db(symbol, price, volume, change_24h):
 # 📊 Market Scoring (market → market_indicator_rules → market_data_indicators)
 # =====================================================
 def apply_market_scoring():
-    """Zet raw market_data om naar gescoorde indicatoren in market_data_indicators."""
+    """
+    Zet raw market_data om naar gescoorde indicatoren in market_data_indicators.
+    FIXED VERSION:
+    - gebruikt alleen ACTIEVE indicators uit indicators-table
+    - scoort direct nieuwe dagwaarden
+    - wist eerst alle rows van vandaag om dubbele data te voorkomen
+    """
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-            # 1️⃣ Haal laatste RAW market_data op
+
+            # 1️⃣ Laatste RAW market_data ophalen
             cur.execute("""
                 SELECT price, volume, change_24h
                 FROM market_data
@@ -150,16 +157,24 @@ def apply_market_scoring():
 
             price, volume, change_24h = raw
 
-            # 2️⃣ Haal alle scorebare indicatoren (category='market')
+            # 2️⃣ Eerst dagdata opschonen
             cur.execute("""
-                SELECT DISTINCT indicator FROM market_indicator_rules
+                DELETE FROM market_data_indicators
+                WHERE DATE(timestamp) = CURRENT_DATE
+            """)
+
+            # 3️⃣ Alleen ACTIEVE market indicators ophalen
+            cur.execute("""
+                SELECT name 
+                FROM indicators
+                WHERE category='market' AND active=TRUE
             """)
             indicators = [r[0] for r in cur.fetchall()]
 
-            # 3️⃣ Per indicator → bepaal raw value → selecteer bijpassende regel → opslaan
+            # 4️⃣ Per indicator → juiste raw waarde + matchende scoreregel
             for ind in indicators:
 
-                # juiste raw waarde kiezen
+                # juiste waarde kiezen
                 if ind == "btc_change_24h":
                     value = change_24h
                 elif ind == "volume_strength":
@@ -167,11 +182,12 @@ def apply_market_scoring():
                 elif ind == "price_trend":
                     value = price
                 elif ind == "volatility":
-                    value = abs(change_24h)  # voorlopig: vol = absolute change
+                    value = abs(change_24h)
                 else:
+                    # onbekende indicator — overslaan
                     continue
 
-                # regels ophalen
+                # bijbehorende scoreregels ophalen
                 cur.execute("""
                     SELECT range_min, range_max, score, trend, interpretation, action
                     FROM market_indicator_rules
@@ -180,12 +196,14 @@ def apply_market_scoring():
                 """, (ind,))
                 rules = cur.fetchall()
 
+                # juiste regel vinden binnen range
                 rule = next((r for r in rules if r[0] <= value < r[1]), None)
                 if not rule:
                     continue
 
                 range_min, range_max, score, trend, interp, action = rule
 
+                # 5️⃣ wegschrijven in market_data_indicators
                 cur.execute("""
                     INSERT INTO market_data_indicators
                         (name, value, trend, interpretation, action, score, timestamp)
@@ -193,7 +211,7 @@ def apply_market_scoring():
                 """, (ind, value, trend, interp, action, score))
 
         conn.commit()
-        logger.info("📊 Market scoring uitgevoerd en opgeslagen.")
+        logger.info("📊 Market scoring uitgevoerd (actieve indicators).")
 
     except Exception:
         logger.error("❌ Fout bij market scoring:")
