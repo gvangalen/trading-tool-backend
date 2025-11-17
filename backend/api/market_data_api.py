@@ -40,8 +40,6 @@ def get_market_raw_endpoints():
         return {}
         
 MARKET_RAW_ENDPOINTS = get_market_raw_endpoints()
-if not MARKET_RAW_ENDPOINTS:
-    logger.warning("⚠️ Geen actieve market endpoints in DB – gebruik standaard CoinGecko URLs.")
 
 
 # =========================================================
@@ -51,6 +49,7 @@ if not MARKET_RAW_ENDPOINTS:
 def save_market_data():
     """Haalt BTC prijs/volume/change op via market_raw endpoints en slaat op."""
     try:
+        # Endpoints ophalen
         price_url = MARKET_RAW_ENDPOINTS.get(
             "btc_price",
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
@@ -66,28 +65,27 @@ def save_market_data():
             "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"
         )
 
+        # HTTP client hergebruiken
         with httpx.Client(timeout=10.0) as client:
-            r = client.get(change_url)
-            r.raise_for_status()
-            data = r.json()
+            resp_change = client.get(change_url).json()
 
-        # Parsing volgens 2 mogelijke JSON formats
-        if "bitcoin" in data:
-            price = data["bitcoin"].get("usd")
-            change_24h = data["bitcoin"].get("usd_24h_change")
-        else:
-            md = data["market_data"]
-            price = md["current_price"]["usd"]
-            change_24h = md["price_change_percentage_24h"]
+            # Change + Price
+            if "bitcoin" in resp_change:
+                price = resp_change["bitcoin"].get("usd")
+                change_24h = resp_change["bitcoin"].get("usd_24h_change")
+            else:
+                md = resp_change["market_data"]
+                price = md["current_price"]["usd"]
+                change_24h = md["price_change_percentage_24h"]
 
-        # Volume ophalen
-        volume = None
-        with httpx.Client(timeout=10.0) as client:
-            vol_resp = client.get(volume_url).json()
-            if "total_volumes" in vol_resp:
-                volume = vol_resp["total_volumes"][-1][1]
+            # Volume
+            resp_volume = client.get(volume_url).json()
+            if "total_volumes" in resp_volume:
+                volume = resp_volume["total_volumes"][-1][1]
+            else:
+                volume = None
 
-        if price is None or change_24h is None or volume is None:
+        if price is None or volume is None or change_24h is None:
             raise ValueError("Ontbrekende price/change/volume in API")
 
         conn = get_db_connection()
@@ -111,7 +109,6 @@ def save_market_data():
     except Exception as e:
         logger.error(f"❌ Error in save_market_data: {e}")
         raise HTTPException(500, str(e))
-
 
 # =========================================================
 # 📅 GET /market_data/day — DAGTABEL 
