@@ -45,71 +45,91 @@ MARKET_RAW_ENDPOINTS = get_market_raw_endpoints()
 # =========================================================
 # 📌 POST /market_data — BTC prijs/volume/change opslaan
 # =========================================================
-@router.post("/market_data")
-def save_market_data():
-    """Haalt BTC prijs/volume/change op via market_raw endpoints en slaat op."""
+@router.post("/market/add_indicator")
+def add_market_indicator(payload: dict):
+    name = payload.get("indicator")
+    if not name:
+        raise HTTPException(400, "Indicator naam ontbreekt.")
+
     try:
-        # Endpoints ophalen
-        price_url = MARKET_RAW_ENDPOINTS.get(
-            "btc_price",
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd"
-        )
-
-        change_url = MARKET_RAW_ENDPOINTS.get(
-            "btc_change_24h",
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
-        )
-
-        volume_url = MARKET_RAW_ENDPOINTS.get(
-            "btc_volume",
-            "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=1"
-        )
-
-        # HTTP client hergebruiken
-        with httpx.Client(timeout=10.0) as client:
-            resp_change = client.get(change_url).json()
-
-            # Change + Price
-            if "bitcoin" in resp_change:
-                price = resp_change["bitcoin"].get("usd")
-                change_24h = resp_change["bitcoin"].get("usd_24h_change")
-            else:
-                md = resp_change["market_data"]
-                price = md["current_price"]["usd"]
-                change_24h = md["price_change_percentage_24h"]
-
-            # Volume
-            resp_volume = client.get(volume_url).json()
-            if "total_volumes" in resp_volume:
-                volume = resp_volume["total_volumes"][-1][1]
-            else:
-                volume = None
-
-        if price is None or volume is None or change_24h is None:
-            raise ValueError("Ontbrekende price/change/volume in API")
-
         conn = get_db_connection()
         cur = conn.cursor()
 
+        # 1️⃣ Bestaat indicator in indicators?
         cur.execute("""
-            INSERT INTO market_data (symbol, price, volume, change_24h, timestamp)
-            VALUES ('BTC', %s, %s, %s, NOW())
-        """, (price, volume, change_24h))
+            SELECT name, link
+            FROM indicators 
+            WHERE name = %s AND category = 'market'
+        """, (name,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            raise HTTPException(404, f"Indicator '{name}' bestaat niet in indicators.")
 
+        _, link = row
+
+        # 2️⃣ Heeft indicator scoreregels?
+        cur.execute("""
+            SELECT 1 FROM market_indicator_rules WHERE indicator = %s LIMIT 1
+        """, (name,))
+        if not cur.fetchone():
+            conn.close()
+            raise HTTPException(400, "Deze indicator heeft nog geen scoreregels.")
+
+        # 3️⃣ Indicator activeren
+        cur.execute("""
+            UPDATE indicators
+            SET active = TRUE
+            WHERE name = %s
+        """, (name,))
         conn.commit()
+
+        # 4️⃣ Meteen API waarde ophalen
+        import requests
+        resp = requests.get(link, timeout=10).json()
+
+        # Voorbeeld: simpele extractie (pas aan per API link)
+        # Hier moet jij eventueel aanpassen aan jouw bronnen
+        if "value" in resp:
+            value = float(resp["value"])
+        elif isinstance(resp, dict):
+            # generieke fallback
+            value = list(resp.values())[0]
+        else:
+            value = None
+
+        if value is None:
+            logger.warning(f"⚠️ Geen waarde opgehaald voor {name}, geen dagrecord gemaakt")
+            return {"status": "ok", "message": f"Indicator '{name}' geactiveerd, maar geen waarde opgehaald."}
+
+        # 5️⃣ Score genereren via DB-engine
+        from backend.utils.scoring_utils import generate_scores_db
+        result = generate_scores_db("market", {name: value})
+        score_data = result["scores"].get(name)
+
+        if not score_data:
+            logger.warning(f"⚠️ Geen scoreregels gevonden voor {name} (score_data=None)")
+        else:
+            # 6️⃣ Dagrecord opslaan
+            cur.execute("""
+                INSERT INTO market_data_indicators (name, value, trend, interpretation, action, score, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+            """, (
+                name,
+                value,
+                score_data.get("trend"),
+                score_data.get("interpretation"),
+                score_data.get("action"),
+                score_data.get("score")
+            ))
+            conn.commit()
+
         conn.close()
 
-        return {
-            "status": "ok",
-            "price": price,
-            "change_24h": change_24h,
-            "volume": volume
-        }
+        return {"status": "ok", "message": f"Indicator '{name}' is toegevoegd en direct verwerkt."}
 
     except Exception as e:
-        logger.error(f"❌ Error in save_market_data: {e}")
         raise HTTPException(500, str(e))
-
 # =========================================================
 # 📅 GET /market_data/day — DAGTABEL 
 # =========================================================
