@@ -733,3 +733,28 @@ def delete_market_indicator(name: str):
 
     except Exception as e:
         raise HTTPException(500, str(e))
+
+# =========================================================
+# GET /market/active_indicators — lijst met actieve market indicators
+# =========================================================
+@router.get("/market/active_indicators")
+def get_active_market_indicators():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT name, display_name
+                FROM indicators
+                WHERE category = 'market' AND active = TRUE
+                ORDER BY display_name ASC;
+            """)
+            rows = cur.fetchall()
+        conn.close()
+
+        return [
+            {"name": r[0], "display_name": r[1]}
+            for r in rows
+        ]
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
