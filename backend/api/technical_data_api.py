@@ -1,45 +1,30 @@
+import os
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
+from dotenv import load_dotenv
 from backend.utils.db import get_db_connection
 
-router = APIRouter()
+# ✅ .env laden
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path=dotenv_path)
+
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s")
 
+router = APIRouter()
+logger.info("🚀 technical_data_api.py geladen – verbeterde DB-versie actief.")
 
-# =========================================================
-# 🧩 SAFE HELPERS — voorkomen ALLE future crashes
-# =========================================================
-def safe_float(value):
-    """Convert any value to float safely. NULL → 0.0"""
-    try:
-        if value is None:
-            return 0.0
-        return float(value)
-    except Exception:
-        return 0.0
-
-
-def safe_int(value):
-    """Convert any value to int safely. NULL → 0"""
-    try:
-        if value is None:
-            return 0
-        return int(value)
-    except Exception:
-        return 0
-
-
-def safe_fetchall(cur):
-    """Fetchall dat nooit crasht en nooit None teruggeeft."""
-    try:
-        rows = cur.fetchall()
-        return rows or []
-    except Exception as e:
-        logger.warning(f"⚠️ safe_fetchall issue: {e}")
-        return []
-
+# =====================================
+# 🔧 Helper
+# =====================================
+def get_db_cursor():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500,
+            detail="❌ [DB01] Geen databaseverbinding.")
+    return conn, conn.cursor()
 
 # =========================================================
 # 📊 GET ALL TECHNICAL DATA (limit 50)
