@@ -9,10 +9,6 @@ from backend.utils.scoring_utils import (
     normalize_indicator_name
 )
 
-normalized = normalize_indicator_name(name)
-
-score_obj = get_score_rule_from_db("technical", normalized, value)
-
 # =====================================
 # 🔧 ENV + Logging
 # =====================================
@@ -89,7 +85,6 @@ async def add_technical_indicator(request: Request):
         raise HTTPException(status_code=400, detail="❌ 'indicator' is verplicht.")
 
     # Normaliseer direct
-    from backend.utils.scoring_utils import normalize_indicator_name
     name = normalize_indicator_name(name_raw)
 
     conn = get_db_connection()
@@ -98,7 +93,7 @@ async def add_technical_indicator(request: Request):
 
     try:
         # =============================================
-        # 1️⃣ Indicator-config ophalen
+        # 1️⃣ Config ophalen
         # =============================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -119,7 +114,7 @@ async def add_technical_indicator(request: Request):
         source, link = cfg
 
         # =============================================
-        # 2️⃣ Waarde ophalen via technical_interpreter
+        # 2️⃣ Waarde ophalen
         # =============================================
         from backend.utils.technical_interpreter import fetch_technical_value
 
@@ -131,10 +126,8 @@ async def add_technical_indicator(request: Request):
         value = float(result["value"] if isinstance(result, dict) else result)
 
         # =============================================
-        # 3️⃣ Juiste SCORING (met normalized name)
+        # 3️⃣ Scoreregels ophalen (met normalized name)
         # =============================================
-        from backend.utils.scoring_utils import get_score_rule_from_db
-
         score_obj = get_score_rule_from_db("technical", name, value)
 
         if not score_obj:
@@ -179,7 +172,7 @@ async def add_technical_indicator(request: Request):
 
     finally:
         conn.close()
-        
+
 # =====================================
 # 📅 DAY
 # =====================================
@@ -195,7 +188,6 @@ async def get_latest_day_data():
         """)
         rows = safe_fetchall(cur)
 
-        # fallback
         if not rows:
             cur.execute("""
                 SELECT timestamp FROM technical_indicators
