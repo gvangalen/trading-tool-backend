@@ -104,7 +104,7 @@ async def add_technical_indicator(request: Request):
 
         source, link = cfg
 
-        # Waarde ophalen (zonder await!)
+        # Waarde ophalen (NIET async)
         from backend.utils.technical_interpreter import fetch_technical_value
         result = fetch_technical_value(
             name=name,
@@ -115,19 +115,19 @@ async def add_technical_indicator(request: Request):
         if not result:
             raise HTTPException(status_code=500, detail=f"❌ Geen waarde voor '{name}'")
 
-        # Extract
+        # Extract waarde
         if isinstance(result, dict) and "value" in result:
             value = float(result["value"])
         else:
             value = float(result)
 
-        # Score berekenen — FIXED
+        # === HIER DE FIX — PRECIES ZOALS MACRO ===
         from backend.utils.scoring_utils import generate_scores_db
-        score_obj = generate_scores_db(name, value, "technical")
+        score_obj = generate_scores_db(name, value)
 
         score = score_obj.get("score", 10)
-        advies = score_obj.get("trend", "–")
-        uitleg = score_obj.get("interpretation", "–")
+        trend = score_obj.get("trend", "–")
+        interpretation = score_obj.get("interpretation", "–")
         action = score_obj.get("action", "–")
 
         # Opslaan
@@ -138,7 +138,7 @@ async def add_technical_indicator(request: Request):
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id;
             """,
-            (name, value, score, advies, uitleg, datetime.utcnow()))
+            (name, value, score, trend, interpretation, datetime.utcnow()))
 
             new_id = cur.fetchone()[0]
             conn.commit()
@@ -148,8 +148,8 @@ async def add_technical_indicator(request: Request):
             "id": new_id,
             "value": value,
             "score": score,
-            "advies": advies,
-            "uitleg": uitleg,
+            "trend": trend,
+            "interpretation": interpretation,
             "action": action
         }
 
