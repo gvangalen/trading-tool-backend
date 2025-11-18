@@ -4,6 +4,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 from backend.utils.db import get_db_connection
+from backend.utils.scoring_utils import normalize_indicator_name
 
 # =====================================
 # 🔧 ENV + Logging
@@ -104,31 +105,30 @@ async def add_technical_indicator(request: Request):
 
         source, link = cfg
 
-        # Waarde ophalen (NIET async)
+        # Waarde ophalen
         from backend.utils.technical_interpreter import fetch_technical_value
-        result = fetch_technical_value(
-            name=name,
-            source=source,
-            link=link
-        )
+        result = fetch_technical_value(name=name, source=source, link=link)
 
         if not result:
-            raise HTTPException(status_code=500, detail=f"❌ Geen waarde voor '{name}'")
+            raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'.")
 
-        # Extract waarde
-        if isinstance(result, dict) and "value" in result:
-            value = float(result["value"])
-        else:
-            value = float(result)
+        value = float(result["value"] if isinstance(result, dict) else result)
 
-        # === HIER DE FIX — PRECIES ZOALS MACRO ===
-        from backend.utils.scoring_utils import generate_scores_db
-        score_obj = generate_scores_db(name, value)
+        # SCORE FIX — juiste aanroep!
+        from backend.utils.scoring_utils import (
+            generate_scores_db,
+            normalize_indicator_name
+        )
 
-        score = score_obj.get("score", 10)
-        trend = score_obj.get("trend", "–")
-        interpretation = score_obj.get("interpretation", "–")
-        action = score_obj.get("action", "–")
+        score_obj = generate_scores_db(
+            "technical",
+            {normalize_indicator_name(name): value}
+        )
+
+        score = score_obj["scores"][normalize_indicator_name(name)]["score"]
+        advies = score_obj["scores"][normalize_indicator_name(name)]["trend"]
+        uitleg = score_obj["scores"][normalize_indicator_name(name)]["interpretation"]
+        action = score_obj["scores"][normalize_indicator_name(name)]["action"]
 
         # Opslaan
         with conn.cursor() as cur:
@@ -138,7 +138,7 @@ async def add_technical_indicator(request: Request):
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id;
             """,
-            (name, value, score, trend, interpretation, datetime.utcnow()))
+            (name, value, score, advies, uitleg, datetime.utcnow()))
 
             new_id = cur.fetchone()[0]
             conn.commit()
@@ -148,14 +148,15 @@ async def add_technical_indicator(request: Request):
             "id": new_id,
             "value": value,
             "score": score,
-            "trend": trend,
-            "interpretation": interpretation,
+            "advies": advies,
+            "uitleg": uitleg,
             "action": action
         }
 
     except Exception as e:
         logger.error(f"❌ [add_technical_indicator] Fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
     finally:
         conn.close()
         
