@@ -457,3 +457,39 @@ async def fetch_strategy_explanation(strategy_id: int):
         return {"id": strategy_id, "explanation": explanation}
     finally:
         conn.close()
+
+@router.get("/strategies/last")
+async def get_last_strategy():
+    """
+    Haalt de meest recente strategy op (op basis van created_at).
+    """
+    conn = get_db_connection()
+    if not conn:
+        logger.error("[get_last_strategy] Geen databaseverbinding")
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, data, created_at 
+                FROM strategies
+                ORDER BY created_at DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+
+        if not row:
+            return {"message": "Geen strategieën gevonden"}
+
+        id_, data, created_at = row
+        data["id"] = id_
+        data["created_at"] = created_at.isoformat()
+
+        return data
+
+    except Exception as e:
+        logger.error(f"[get_last_strategy] Fout: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        conn.close()
