@@ -76,10 +76,14 @@ async def get_technical_data():
 async def add_technical_indicator(request: Request):
     logger.info("📐 [add] Technische indicator toevoegen...")
     data = await request.json()
-    name = data.get("indicator")
 
-    if not name:
+    name_raw = data.get("indicator")
+    if not name_raw:
         raise HTTPException(status_code=400, detail="❌ 'indicator' is verplicht.")
+
+    # Normaliseer direct
+    from backend.utils.scoring_utils import normalize_indicator_name
+    name = normalize_indicator_name(name_raw)
 
     conn = get_db_connection()
     if not conn:
@@ -109,7 +113,6 @@ async def add_technical_indicator(request: Request):
 
         # =============================================
         # 2️⃣ Waarde ophalen via technical_interpreter
-        #    LET OP: GEEN await — deze functie is sync!
         # =============================================
         from backend.utils.technical_interpreter import fetch_technical_value
 
@@ -118,11 +121,10 @@ async def add_technical_indicator(request: Request):
         if not result:
             raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'.")
 
-        # Dict of direct getal
         value = float(result["value"] if isinstance(result, dict) else result)
 
         # =============================================
-        # 3️⃣ Juiste SCORING (één indicator → één regel)
+        # 3️⃣ Juiste SCORING (met normalized name)
         # =============================================
         from backend.utils.scoring_utils import get_score_rule_from_db
 
@@ -140,7 +142,7 @@ async def add_technical_indicator(request: Request):
         action = score_obj["action"]
 
         # =============================================
-        # 4️⃣ Opslaan in DB
+        # 4️⃣ Opslaan
         # =============================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -154,9 +156,6 @@ async def add_technical_indicator(request: Request):
 
         conn.commit()
 
-        # =============================================
-        # ✔️ Teruggeven
-        # =============================================
         return {
             "message": f"Indicator '{name}' toegevoegd.",
             "id": new_id,
