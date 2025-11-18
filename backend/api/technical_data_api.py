@@ -451,15 +451,17 @@ async def get_rules_for_indicator(indicator_name: str):
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
+
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, indicator, range_min, range_max, score, trend, interpretation, action
                 FROM technical_indicator_rules
-                WHERE indicator = %s
-                ORDER BY score DESC;
+                WHERE LOWER(indicator) = LOWER(%s)
+                ORDER BY range_min ASC;
             """, (indicator_name,))
             rows = cur.fetchall()
+
         return [
             {
                 "id": r[0],
@@ -469,12 +471,12 @@ async def get_rules_for_indicator(indicator_name: str):
                 "score": r[4],
                 "trend": r[5],
                 "interpretation": r[6],
-                "action": r[7]
+                "action": r[7],
             } for r in rows
         ]
+
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen scoreregels voor {indicator_name}: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen scoreregels.")
     finally:
         conn.close()
-
