@@ -10,7 +10,7 @@ logger.setLevel(logging.INFO)
 
 
 # =========================================================
-# 🤖 SETUP AGENT — kiest de best passende setup van vandaag
+# 🤖 1. SETUP AGENT — kiest beste setup van vandaag
 # =========================================================
 def run_setup_agent(asset="BTC"):
     logger.info("🤖 Setup-Agent gestart...")
@@ -65,7 +65,7 @@ def run_setup_agent(asset="BTC"):
         best_total_score = -999
 
         # -------------------------------------------------
-        # 3️⃣ Elke setup checken tegen de drie categorie-scores
+        # 3️⃣ Elke setup scoren
         # -------------------------------------------------
         for (
             setup_id, name,
@@ -82,8 +82,6 @@ def run_setup_agent(asset="BTC"):
             market_ok = min_market <= market_score <= max_market
 
             active = macro_ok and tech_ok and market_ok
-
-            # AI-setup score
             total_score = round((macro_score + technical_score + market_score) / 3)
 
             # Beste setup bepalen
@@ -92,7 +90,7 @@ def run_setup_agent(asset="BTC"):
                 best_setup_id = setup_id
 
             # -------------------------------------------------
-            # 4️⃣ AI-uitleg (universele GPT helper)
+            # 4️⃣ AI-uitleg genereren
             # -------------------------------------------------
             prompt = f"""
 Je bent een professionele crypto analist.
@@ -160,7 +158,7 @@ Geef een korte, duidelijke uitleg in het Nederlands.
                     WHERE setup_id = %s AND date = %s
                 """, (best_setup_id, date.today()))
 
-            # Markeer ook lokaal in resultatenlijst
+            # Markeer lokaal
             for r in results:
                 if r["setup_id"] == best_setup_id:
                     r["best_of_day"] = True
@@ -169,9 +167,96 @@ Geef een korte, duidelijke uitleg in het Nederlands.
         logger.info("✅ Setup-Agent voltooid.")
         return results
 
-    except Exception as e:
+    except Exception:
         logger.error("❌ Setup-Agent crash:", exc_info=True)
         return []
+
+    finally:
+        conn.close()
+
+
+
+# =========================================================
+# 🧠 2. **EXTRA FUNCTIE**: Losse AI-uitleg per setup (API-knop)
+# =========================================================
+def generate_setup_explanation(setup_id: int) -> str:
+    """
+    Deze functie wordt gebruikt door de frontend-knop:
+    “Genereer AI uitleg”.
+
+    - Haalt 1 setup op
+    - Bouwt een korte prompt
+    - Maakt AI-uitleg met ask_gpt_text()
+    - Slaat het op in setups.explanation
+    """
+    logger.info(f"🧠 AI-uitleg genereren voor setup {setup_id}...")
+
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen databaseverbinding.")
+        return "Fout: geen databaseverbinding."
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT name, symbol, trend, timeframe, min_macro_score, max_macro_score,
+                       min_technical_score, max_technical_score,
+                       min_market_score, max_market_score
+                FROM setups
+                WHERE id = %s
+            """, (setup_id,))
+            row = cur.fetchone()
+
+        if not row:
+            return "Setup niet gevonden."
+
+        (
+            name, symbol, trend, timeframe,
+            min_macro, max_macro,
+            min_tech, max_tech,
+            min_market, max_market
+        ) = row
+
+        # -------------------------------
+        # Prompt bouwen
+        # -------------------------------
+        prompt = f"""
+Je bent een professionele crypto-analist.
+
+Genereer een korte uitleg (max 3 zinnen) voor deze trading setup:
+
+Naam: {name}
+Asset: {symbol}
+Trend: {trend}
+Timeframe: {timeframe}
+
+Score ranges:
+- Macro: {min_macro} — {max_macro}
+- Technical: {min_tech} — {max_tech}
+- Market: {min_market} — {max_market}
+
+Maak het duidelijk, beknopt en begrijpelijk.
+"""
+
+        explanation = ask_gpt_text(prompt)
+
+        # -------------------------------
+        # Opslaan in DB
+        # -------------------------------
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE setups
+                SET explanation = %s
+                WHERE id = %s
+            """, (explanation, setup_id))
+            conn.commit()
+
+        logger.info(f"✅ AI-uitleg opgeslagen voor setup {setup_id}")
+        return explanation
+
+    except Exception:
+        logger.error("❌ Fout bij AI-uitleg genereren:", exc_info=True)
+        return "Fout bij uitleg genereren."
 
     finally:
         conn.close()
