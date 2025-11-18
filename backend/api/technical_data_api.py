@@ -4,7 +4,14 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from dotenv import load_dotenv
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import normalize_indicator_name
+from backend.utils.scoring_utils import (
+    get_score_rule_from_db,
+    normalize_indicator_name
+)
+
+normalized = normalize_indicator_name(name)
+
+score_obj = get_score_rule_from_db("technical", normalized, value)
 
 # =====================================
 # 🔧 ENV + Logging
