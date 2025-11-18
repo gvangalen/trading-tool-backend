@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path)
 
+# Rootpad toevoegen
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Logging
@@ -62,25 +63,13 @@ def safe_include(import_path, name=""):
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
-safe_include("backend.api.setups_api", "setup_api")
+safe_include("backend.api.setups_api", "setups_api")
 safe_include("backend.api.dashboard_api", "dashboard_api")
 safe_include("backend.api.report_api", "report_api")
 safe_include("backend.api.sidebar_api", "sidebar_api")
 safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
-
-# ============================
-# 🤖 AI v2 ROUTERS
-# ============================
-safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
-safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
-safe_include("backend.api.ai.ai_status_api", "ai_status_api")
-
-# 🚫 Oude / Niet meer gebruikte AI routes verwijderd:
-# safe_include("backend.api.ai.validate_setups_api")
-# safe_include("backend.api.ai.ai_daily_report_generator")
-# safe_include("backend.api.ai.ai_trading_api")
 
 # ============================
 # ➕ Extra routes
