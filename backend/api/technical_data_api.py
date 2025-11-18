@@ -69,31 +69,30 @@ async def get_technical_data():
         conn.close()
 
 # =====================================
-# POST — NIEUWE INDICATOR TOEVOEGEN
+# ➕ Technische indicator toevoegen
 # =====================================
 @router.post("/technical_data")
 async def add_technical_indicator(request: Request):
     """
-    Flow:
-    - check indicator in DB
-    - haal live waarde op
-    - bereken score via DB-rules
-    - sla op in technical_indicators
+    ➕ Voeg een technische indicator toe
+    - Controleert of de indicator bestaat in `indicators`
+    - Haalt waarde op via technical_interpreter
+    - Berekent score via technical_indicator_rules
+    - Slaat op in technical_indicators
     """
+    logger.info("📐 [add] Technische indicator toevoegen...")
     data = await request.json()
     name = data.get("indicator")
 
     if not name:
-        raise HTTPException(status_code=400,
-            detail="❌ 'indicator' is verplicht.")
+        raise HTTPException(status_code=400, detail="❌ 'indicator' is verplicht.")
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500,
-            detail="❌ Geen databaseverbinding.")
+        raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
 
     try:
-        # 1️⃣ Config ophalen
+        # 1️⃣ Controleer of indicator-config bestaat
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source, data_url, symbol, interval
@@ -102,17 +101,19 @@ async def add_technical_indicator(request: Request):
                 AND category='technical'
                 AND active=TRUE;
             """, (name,))
-            row = cur.fetchone()
+            cfg = cur.fetchone()
 
-        if not row:
+        if not cfg:
             raise HTTPException(
                 status_code=404,
-                detail=f"Indicator '{name}' staat niet in de DB-config."
+                detail=f"Indicator '{name}' bestaat niet in de DB-config."
             )
 
-        source, data_url, symbol, interval = row
+        source, data_url, symbol, interval = cfg
 
         # 2️⃣ Waarde ophalen
+        logger.info(f"⚙️ Ophalen waarde voor '{name}' via {source}")
+
         from backend.utils.technical_interpreter import fetch_technical_value
         result = await fetch_technical_value(
             name=name,
@@ -123,42 +124,76 @@ async def add_technical_indicator(request: Request):
         )
 
         if not result:
-            raise HTTPException(status_code=500,
-                detail=f"❌ Geen waarde ontvangen voor '{name}'.")
+            raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'.")
 
-        value = float(result["value"] if isinstance(result, dict) else result)
+        # 3️⃣ Waardeverwerking (zelfde als macro)
+        if isinstance(result, dict):
+            if "value" in result:
+                value = float(result["value"])
+            elif "data" in result and isinstance(result["data"], dict) and "value" in result["data"]:
+                value = float(result["data"]["value"])
+            elif "result" in result:
+                value = float(result["result"])
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"❌ Ongeldig resultaatformaat voor '{name}': {result}"
+                )
+        else:
+            try:
+                value = float(result)
+            except:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"❌ Kan waarde niet converteren voor '{name}': {result}"
+                )
 
-        # 3️⃣ Score berekenen
+        logger.info(f"📊 [value] '{name}' = {value}")
+
+        # 4️⃣ Score berekenen
         from backend.utils.scoring_utils import generate_scores_db
-
         score_obj = generate_scores_db(name, value, category="technical")
 
         score = score_obj.get("score", 10)
-        advies = score_obj.get("trend", "–")
-        uitleg = score_obj.get("interpretation", "–")
+        trend = score_obj.get("trend", "–")
+        interpretation = score_obj.get("interpretation", "–")
         action = score_obj.get("action", "–")
 
-        # 4️⃣ Opslaan in DB
+        logger.info(
+            f"📈 Score={score} | Trend={trend} | Interpretation={interpretation}"
+        )
+
+        # 5️⃣ Opslaan
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_indicators
                 (indicator, value, score, advies, uitleg, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id;
-            """, (name, value, score, advies, uitleg, datetime.utcnow()))
+            """, (name, value, score, trend, interpretation, datetime.utcnow()))
             new_id = cur.fetchone()[0]
             conn.commit()
 
+        logger.info(f"✅ [add] '{name}' opgeslagen onder ID {new_id}")
+
         return {
-            "message": f"Indicator '{name}' toegevoegd.",
+            "message": f"Indicator '{name}' succesvol toegevoegd.",
             "id": new_id,
             "value": value,
             "score": score,
-            "advies": advies,
-            "uitleg": uitleg,
-            "action": action
+            "advies": trend,
+            "uitleg": interpretation,
+            "action": action,
         }
 
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [add_technical_indicator] Fout: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"❌ Fout bij opslaan technical indicator: {str(e)}"
+        )
     finally:
         conn.close()
 
