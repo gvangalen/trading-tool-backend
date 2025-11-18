@@ -9,16 +9,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.routing import APIRoute
 from dotenv import load_dotenv
 
-# ✅ .env forceren met pad (werkt altijd, ook met pm2)
+# .env inladen
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path)
-print("✅ TESTENV: DATABASE_URL =", os.getenv("DATABASE_URL"))
-print("✅ TESTENV: VOLUME_URL =", os.getenv("VOLUME_URL"))
 
-# ✅ Rootpad toevoegen voor correcte backend imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# ✅ Logging configureren
+# Logging
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -26,10 +23,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ✅ FastAPI app aanmaken
+# FastAPI app
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# ✅ CORS-configuratie (voor PDF downloads & credentials)
+# CORS
 allow_origins = [
     "http://localhost:3000",
     "http://143.47.186.148",
@@ -44,10 +41,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Static files beschikbaar maken (voor PDF downloads)
+# Static files
 app.mount("/static", StaticFiles(directory="backend/static"), name="static")
 
-# ✅ Veilige router-loader
+
+# Veilig includen
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
@@ -57,7 +55,10 @@ def safe_include(import_path, name=""):
         logger.warning(f"❌ Router FOUT: {name or import_path} — {e}")
         traceback.print_exc()
 
-# ✅ API routers
+
+# ============================
+# 📦 BASIS ROUTERS
+# ============================
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
@@ -69,29 +70,32 @@ safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
 
-# ✅ AI routers
+# ============================
+# 🤖 AI v2 ROUTERS
+# ============================
 safe_include("backend.api.ai.ai_explain_api", "ai_explain_api")
 safe_include("backend.api.ai.ai_strategy_api", "ai_strategy_api")
-safe_include("backend.api.ai.ai_trading_api", "ai_trading_api")
-safe_include("backend.api.ai.validate_setups_api", "validate_setups_api")
-safe_include("backend.api.ai.ai_daily_report_generator", "ai_daily_report_generator")
 safe_include("backend.api.ai.ai_status_api", "ai_status_api")
 
-# ✅ Extra backend routes
+# 🚫 Oude / Niet meer gebruikte AI routes verwijderd:
+# safe_include("backend.api.ai.validate_setups_api")
+# safe_include("backend.api.ai.ai_daily_report_generator")
+# safe_include("backend.api.ai.ai_trading_api")
+
+# ============================
+# ➕ Extra routes
+# ============================
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
 
-# ✅ Health check
+
+# Health check
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API is running"}
 
-# ✅ CORS test endpoint
-@app.get("/api/test-cors")
-def test_cors():
-    return {"success": True, "message": "CORS werkt correct vanaf frontend."}
 
-# ✅ Debug: alle routes loggen zonder crash
+# Debug routes
 print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
 for route in app.routes:
     if isinstance(route, APIRoute):
@@ -100,5 +104,4 @@ for route in app.routes:
         print(f"{route.path} - <non-API route>")
 print()
 
-# ✅ Debug: check env-variabele voor ASSETS_JSON
 print("🔍 ASSETS_JSON uit .env:", os.getenv("ASSETS_JSON"))
