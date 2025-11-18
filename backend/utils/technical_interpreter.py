@@ -1,6 +1,5 @@
 import logging
 import requests
-from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_score_rule_from_db, normalize_indicator_name
 
 logger = logging.getLogger(__name__)
@@ -33,12 +32,16 @@ def calculate_rsi(closes, period=14):
 # =========================================================
 def fetch_technical_value(name: str, source: str = None, link: str = None):
     """
-    Haalt technische indicator op (RSI, MA, Volume, etc.).
-    Ondersteunt Binance-klines en standaard API responses.
+    Haalt technische indicator op:
+    - RSI
+    - MA200 (met juiste RATIO!)
+    - Volume
+    - Close waarde
     """
+
     try:
         if not link:
-            logger.warning(f"⚠️ Geen data_url voor '{name}'")
+            logger.warning(f"⚠️ Geen link voor '{name}'")
             return None
 
         logger.info(f"🌐 Ophalen technische indicator '{name}' → {link}")
@@ -47,31 +50,52 @@ def fetch_technical_value(name: str, source: str = None, link: str = None):
         resp.raise_for_status()
         data = resp.json()
 
-        # --- Binance-klines ---
+        # ---------------------------------------------------------
+        # 📌 Binance klines (standaard in jouw tool)
+        # ---------------------------------------------------------
         if "binance" in link.lower() and isinstance(data, list):
+
             closes = [float(k[4]) for k in data if isinstance(k, list) and len(k) >= 5]
             volumes = [float(k[5]) for k in data if isinstance(k, list) and len(k) >= 6]
 
+            # -----------------------------------------------------
+            # 1️⃣ RSI
+            # -----------------------------------------------------
             if "rsi" in name.lower():
                 value = calculate_rsi(closes)
                 return {"value": value}
 
-            if "ma" in name.lower():
-                period = int(''.join(filter(str.isdigit, name))) or 200
-                if len(closes) >= period:
-                    ma = sum(closes[-period:]) / period
-                    return {"value": round(ma, 2)}
+            # -----------------------------------------------------
+            # 2️⃣ MA200 → RETURN RATIO voor DB score rules!
+            #
+            #   ratio = close / MA200
+            #
+            # -----------------------------------------------------
+            if "ma_200" in name.lower() or name.lower() == "ma200":
+                if len(closes) >= 200:
+                    ma = sum(closes[-200:]) / 200
+                    last_close = closes[-1]
+                    ratio = last_close / ma
+                    return {"value": round(ratio, 4)}
 
+            # -----------------------------------------------------
+            # 3️⃣ Volume (laatste 10 candles)
+            # -----------------------------------------------------
             if "volume" in name.lower():
                 return {"value": sum(volumes[-10:])}
 
-        # --- Directe API response ---
-        if "value" in data:
-            return {"value": float(data["value"])}
+            # -----------------------------------------------------
+            # 4️⃣ Close prijs
+            # -----------------------------------------------------
+            if name.lower() == "close":
+                return {"value": float(closes[-1])}
 
+        # ---------------------------------------------------------
+        # 📌 Andere API's (fallback)
+        # ---------------------------------------------------------
         if isinstance(data, dict):
-            for key in ["close", "rsi", "ma", "volume"]:
-                if key in data and isinstance(data[key], (int, float)):
+            for key in ["value", "close", "price"]:
+                if key in data:
                     return {"value": float(data[key])}
 
         if isinstance(data, list) and len(data) > 0:
@@ -100,6 +124,7 @@ def interpret_technical_indicator(name: str, value: float):
     - interpretation
     - action
     """
+
     if value is None:
         return {
             "indicator": name,
@@ -111,7 +136,6 @@ def interpret_technical_indicator(name: str, value: float):
         }
 
     normalized = normalize_indicator_name(name)
-
     rule = get_score_rule_from_db("technical", normalized, value)
 
     if not rule:
