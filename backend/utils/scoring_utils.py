@@ -55,8 +55,7 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
             cur.execute(f"""
                 SELECT range_min, range_max, score, trend, interpretation, action
                 FROM {table}
-                WHERE LOWER(REPLACE(REPLACE(REPLACE(indicator, '&', 'and'), ' ', '_'), '-', '_'))
-                      = LOWER(REPLACE(REPLACE(REPLACE(%s, '&', 'and'), ' ', '_'), '-', '_'))
+                WHERE LOWER(indicator) = LOWER(%s)
                 ORDER BY range_min ASC;
             """, (indicator_name,))
             rules = cur.fetchall()
@@ -79,6 +78,7 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
     except Exception as e:
         logger.error(f"❌ Error in get_score_rule_from_db({indicator_name}): {e}", exc_info=True)
         return None
+
     finally:
         conn.close()
 
