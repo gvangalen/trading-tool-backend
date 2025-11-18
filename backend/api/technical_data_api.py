@@ -86,14 +86,16 @@ async def add_technical_indicator(request: Request):
         raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
 
     try:
-        # Config ophalen
+        # =============================================
+        # 1️⃣ Indicator-config ophalen
+        # =============================================
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source, link
                 FROM indicators
-                WHERE LOWER(name)=LOWER(%s)
-                AND category='technical'
-                AND active=TRUE;
+                WHERE LOWER(name) = LOWER(%s)
+                AND category = 'technical'
+                AND active = TRUE;
             """, (name,))
             cfg = cur.fetchone()
 
@@ -105,32 +107,41 @@ async def add_technical_indicator(request: Request):
 
         source, link = cfg
 
-        # Waarde ophalen
+        # =============================================
+        # 2️⃣ Waarde ophalen via technical_interpreter
+        #    LET OP: GEEN await — deze functie is sync!
+        # =============================================
         from backend.utils.technical_interpreter import fetch_technical_value
+
         result = fetch_technical_value(name=name, source=source, link=link)
 
         if not result:
             raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'.")
 
+        # Dict of direct getal
         value = float(result["value"] if isinstance(result, dict) else result)
 
-        # SCORE FIX — juiste aanroep!
-        from backend.utils.scoring_utils import (
-            generate_scores_db,
-            normalize_indicator_name
-        )
+        # =============================================
+        # 3️⃣ Juiste SCORING (één indicator → één regel)
+        # =============================================
+        from backend.utils.scoring_utils import get_score_rule_from_db
 
-        score_obj = generate_scores_db(
-            "technical",
-            {normalize_indicator_name(name): value}
-        )
+        score_obj = get_score_rule_from_db("technical", name, value)
 
-        score = score_obj["scores"][normalize_indicator_name(name)]["score"]
-        advies = score_obj["scores"][normalize_indicator_name(name)]["trend"]
-        uitleg = score_obj["scores"][normalize_indicator_name(name)]["interpretation"]
-        action = score_obj["scores"][normalize_indicator_name(name)]["action"]
+        if not score_obj:
+            raise HTTPException(
+                status_code=500,
+                detail=f"❌ Geen scoreregels gevonden voor '{name}'."
+            )
 
-        # Opslaan
+        score = score_obj["score"]
+        advies = score_obj["trend"]
+        uitleg = score_obj["interpretation"]
+        action = score_obj["action"]
+
+        # =============================================
+        # 4️⃣ Opslaan in DB
+        # =============================================
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_indicators
@@ -139,10 +150,13 @@ async def add_technical_indicator(request: Request):
                 RETURNING id;
             """,
             (name, value, score, advies, uitleg, datetime.utcnow()))
-
             new_id = cur.fetchone()[0]
-            conn.commit()
 
+        conn.commit()
+
+        # =============================================
+        # ✔️ Teruggeven
+        # =============================================
         return {
             "message": f"Indicator '{name}' toegevoegd.",
             "id": new_id,
