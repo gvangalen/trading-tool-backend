@@ -101,7 +101,7 @@ def generate_market_insight():
             "timestamp": ts.isoformat() if isinstance(ts, datetime) else str(ts),
         }
 
-        # 7d OHLC samenvatting (recentste eerst in DB → we draaien om voor leesbaarheid)
+        # 7d OHLC samenvatting (recentste eerst in DB → omdraaien voor leesbaarheid)
         ohlc_rows_sorted = list(ohlc_rows)
         ohlc_rows_sorted.reverse()
         ohlc_summary = [
@@ -159,6 +159,7 @@ def generate_market_insight():
             "market_rules": rules_by_indicator,
             "market_avg_score": market_avg,
             "market_top_contributors": top_contributors_pretty,
+            "ohlc_text": ohlc_text,
         }
 
         prompt_context = f"""
@@ -180,35 +181,29 @@ Geef je antwoord in **geldige JSON** met exact deze keys:
 - liquidity: "goed", "matig" of "laag"
 - summary: een korte samenvatting (max 2 zinnen) van de huidige marktsituatie
 - top_signals: een lijst met de belangrijkste 3 observaties (korte bulletteksten)
-
-Voorbeeldstructuur:
-{{
-  "trend": "bullish",
-  "momentum": "sterk",
-  "volatility": "gemiddeld",
-  "liquidity": "goed",
-  "summary": "Korte tekst...",
-  "top_signals": [
-    "Signaal 1...",
-    "Signaal 2...",
-    "Signaal 3..."
-  ]
-}}
 """
 
-        ai_response_context = ask_gpt(prompt_context)
-        try:
-            ai_context = json.loads(ai_response_context)
-            if not isinstance(ai_context, dict):
-                raise ValueError("AI-context is geen JSON object.")
-        except Exception:
-            logger.warning("⚠️ AI-context kon niet als JSON worden geparsed, fallback naar raw string.")
+        # 👉 NU: direct via ask_gpt (al JSON-geparsed)
+        ai_context = ask_gpt(
+            prompt_context,
+            system_role=(
+                "Je bent een professionele crypto-marktanalist. "
+                "Antwoord in het Nederlands en in geldige JSON."
+            ),
+        )
+
+        if not isinstance(ai_context, dict):
+            logger.warning("⚠️ AI-context is geen dict, fallback naar lege structuur.")
+            # Als openai_client een fallback dict met 'raw_text' teruggeeft:
+            raw = ""
+            if isinstance(ai_context, dict) and "raw_text" in ai_context:
+                raw = ai_context.get("raw_text", "")[:300]
             ai_context = {
                 "trend": None,
                 "momentum": None,
                 "volatility": None,
                 "liquidity": None,
-                "summary": ai_response_context[:300],
+                "summary": raw,
                 "top_signals": [],
             }
 
@@ -234,30 +229,28 @@ Elke entry moet deze keys hebben:
 - compliance: integer 0–100 (hoe goed deze situatie past bij een gedisciplineerde swingtrader setup)
 - comment: max 1 zin met observatie
 - recommendation: max 1 zin met advies of aandachtspunt
-
-Voorbeeld:
-[
-  {{
-    "indicator": "volume",
-    "ai_score": 60,
-    "compliance": 80,
-    "comment": "Volume stijgt terwijl prijs zijwaarts gaat – mogelijke accumulatie.",
-    "recommendation": "Let op een uitbraak boven recente highs met volume."
-  }}
-]
 """
 
-        ai_response_reflection = ask_gpt(prompt_reflection)
-        try:
-            ai_reflections = json.loads(ai_response_reflection)
-            if not isinstance(ai_reflections, list):
-                raise ValueError("AI-reflectie is geen JSON-lijst.")
-        except Exception:
-            logger.warning("⚠️ AI-reflectie kon niet als JSON worden geparsed, fallback naar lege lijst.")
-            ai_reflections = []
+        ai_reflections = ask_gpt(
+            prompt_reflection,
+            system_role=(
+                "Je bent een professionele crypto-marktanalist. "
+                "Antwoord in het Nederlands en in geldige JSON."
+            ),
+        )
+
+        # ask_gpt kan een lijst of dict teruggeven
+        if isinstance(ai_reflections, list):
+            reflections_list = ai_reflections
+        elif isinstance(ai_reflections, dict) and "raw_text" in ai_reflections:
+            logger.warning("⚠️ Reflectie niet als lijst ontvangen, raw_text aanwezig – fallback naar lege lijst.")
+            reflections_list = []
+        else:
+            logger.warning("⚠️ Reflectie niet als JSON-lijst ontvangen, fallback naar lege lijst.")
+            reflections_list = []
 
         logger.info(f"🧠 AI market interpretatie: {ai_context}")
-        logger.info(f"🪞 AI market reflecties: {len(ai_reflections)} items")
+        logger.info(f"🪞 AI market reflecties: {len(reflections_list)} items")
 
         # =========================================================
         # 6️⃣ Opslaan categorie-samenvatting in ai_category_insights
@@ -268,7 +261,6 @@ Voorbeeld:
         summary = ai_context.get("summary")
         top_signals = ai_context.get("top_signals", [])
 
-        # avg_score = market_avg (komende uit generate_scores_db("market"))
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO ai_category_insights (category, avg_score, trend, bias, risk, summary, top_signals)
@@ -293,7 +285,7 @@ Voorbeeld:
         # =========================================================
         # 7️⃣ Opslaan individuele reflecties in ai_reflections
         # =========================================================
-        for r in ai_reflections:
+        for r in reflections_list:
             indicator = r.get("indicator")
             ai_score = r.get("ai_score")
             compliance = r.get("compliance")
