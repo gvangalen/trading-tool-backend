@@ -50,20 +50,19 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
     }
     table = table_map.get(category)
 
-    normalized = normalize_indicator_name(indicator_name)
-
     try:
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT range_min, range_max, score, trend, interpretation, action
                 FROM {table}
-                WHERE LOWER(REPLACE(REPLACE(REPLACE(indicator, '&', 'and'), ' ', '_'), '-', '_')) = %s
+                WHERE LOWER(REPLACE(REPLACE(REPLACE(indicator, '&', 'and'), ' ', '_'), '-', '_'))
+                      = LOWER(REPLACE(REPLACE(REPLACE(%s, '&', 'and'), ' ', '_'), '-', '_'))
                 ORDER BY range_min ASC;
-            """, (normalized,))
+            """, (indicator_name,))
             rules = cur.fetchall()
 
         if not rules:
-            logger.warning(f"⚠️ Geen scoreregels gevonden voor '{normalized}' ({category})")
+            logger.warning(f"⚠️ Geen scoreregels gevonden voor '{indicator_name}' ({category})")
             return None
 
         for r in rules:
