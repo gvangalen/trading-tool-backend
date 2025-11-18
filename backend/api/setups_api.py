@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, Query, Path
 from backend.utils.db import get_db_connection
 from datetime import datetime
 import logging
-from backend.celery_task.setup_task import validate_setups_task
+from backend.ai_agents.setup_ai_agent import generate_setup_explanation
 from typing import Optional
 
 router = APIRouter()
@@ -270,16 +270,8 @@ async def check_setup_name(name: str):
 # ✅ 7. AI-uitleg genereren (ongewijzigd)
 @router.post("/setups/explanation/{setup_id}")
 async def generate_explanation(setup_id: int):
-    from backend.api.ai.setup_explanation import generate_ai_explanation
-    explanation = generate_ai_explanation(setup_id)
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE setups SET explanation = %s WHERE id = %s", (explanation, setup_id))
-            conn.commit()
-        return {"explanation": explanation}
-    finally:
-        conn.close()
+    explanation = generate_setup_explanation(setup_id)
+    return {"explanation": explanation}
 
 
 # ✅ 8. Celery trigger
