@@ -158,7 +158,7 @@ async def add_technical_indicator(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
-
+        
 # =====================================
 # 📅 DAY
 # =====================================
