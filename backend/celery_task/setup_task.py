@@ -4,7 +4,7 @@ from datetime import date
 from celery import shared_task
 
 # Nieuwe AI Setup Agent importeren
-from backend.ai_agents.setup_agent import run_setup_agent
+from backend.ai_agents.setup_ai_agent import run_setup_agent
 from backend.utils.db import get_db_connection
 
 # Logging configureren
