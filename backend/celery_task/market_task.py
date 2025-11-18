@@ -15,7 +15,6 @@ from backend.celery_task.btc_price_history_task import update_btc_history  # bli
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 CACHE_FILE = "/tmp/last_market_data_fetch.txt"
-ASSETS = {"BTC": "bitcoin"}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -32,14 +31,17 @@ def safe_get(url, params=None):
 
 
 # =====================================================
-# 🔍 Market RAW Endpoints (GEFIXT — altijd ophalen)
+# 🔍 Market RAW Endpoints (database-driven)
 # =====================================================
 def load_market_raw_endpoints():
     """
-    Haalt ALLE market_raw endpoints op (btc_price, btc_volume, btc_ohlc, btc_change_24h).
-    LET OP:
-    - RAW endpoints moeten ALTIJD opgehaald worden
-    - NIET filteren op active = TRUE
+    Haalt ALLE market_raw endpoints op:
+    - btc_price
+    - btc_ohlc
+    - btc_volume
+    - btc_change_24h
+
+    Worden ALTIJD opgehaald, geen active-filter.
     """
     conn = get_db_connection()
     with conn.cursor() as cur:
@@ -58,11 +60,8 @@ def load_market_raw_endpoints():
 # =====================================================
 def fetch_raw_market_data():
     """
-    Haalt price, volume, change_24h op via market_raw endpoints.
-    Belangrijk: deze data wordt NOOIT gescoord.
-    Enkel gebruikt voor: live prijs / volume / change + dag-score-basis.
+    Haalt price, volume en change_24h op via market_raw endpoints.
     """
-
     endpoints = load_market_raw_endpoints()
 
     price_url = endpoints.get(
@@ -79,7 +78,7 @@ def fetch_raw_market_data():
     )
 
     with requests.Session() as s:
-        # Prijs + 24h change ophalen
+        # Prijs + 24h verandering
         r = s.get(change_url, timeout=10).json()
 
         if "bitcoin" in r:
@@ -90,7 +89,7 @@ def fetch_raw_market_data():
             price = float(md.get("current_price", {}).get("usd"))
             change_24h = float(md.get("price_change_percentage_24h"))
 
-        # Volume
+        # Volume ophalen
         r2 = s.get(volume_url, timeout=10).json()
         if "total_volumes" in r2:
             volume = float(r2["total_volumes"][-1][1])
@@ -129,7 +128,7 @@ def store_market_data_db(symbol, price, volume, change_24h):
 
 
 # =====================================================
-# 📊 Market Scoring — alleen de 4 MARKET indicators
+# 📊 Market Scoring
 # =====================================================
 def apply_market_scoring():
     conn = get_db_connection()
@@ -153,10 +152,10 @@ def apply_market_scoring():
 
             price, volume, change_24h = raw
 
-            # Dagdata wissen
+            # Vandaag wissen
             cur.execute("DELETE FROM market_data_indicators WHERE DATE(timestamp) = CURRENT_DATE")
 
-            # ALLEEN MARKET indicators ophalen
+            # MARKET indicators ophalen
             cur.execute("""
                 SELECT name FROM indicators
                 WHERE category='market' AND active = TRUE
@@ -165,7 +164,7 @@ def apply_market_scoring():
 
             for ind in indicators:
 
-                # juiste raw waarde kiezen
+                # juiste raw waarde
                 if ind == "btc_change_24h":
                     value = change_24h
                 elif ind == "volume_strength":
@@ -175,7 +174,7 @@ def apply_market_scoring():
                 elif ind == "volatility":
                     value = abs(change_24h)
                 else:
-                    continue  # onbekende indicator
+                    continue
 
                 # scoreregels ophalen
                 cur.execute("""
@@ -192,7 +191,6 @@ def apply_market_scoring():
 
                 range_min, range_max, score, trend, interp, action = rule
 
-                # opslaan
                 cur.execute("""
                     INSERT INTO market_data_indicators
                         (name, value, trend, interpretation, action, score, timestamp)
@@ -211,7 +209,7 @@ def apply_market_scoring():
 
 
 # =====================================================
-# 🔁 Complete RAW → DB → SCORE pipeline
+# 🔁 RAW → DB → SCORE
 # =====================================================
 def process_market_now():
     raw = fetch_raw_market_data()
@@ -224,7 +222,7 @@ def process_market_now():
 
 
 # =====================================================
-# 🚀 Celery Task — elke 15m
+# 🚀 Celery Task (15m)
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data")
 def fetch_market_data_task():
@@ -249,7 +247,7 @@ def save_market_data_daily():
         process_market_now()
         logger.info("✅ Raw + scoring gedaan.")
 
-        # Binance 1d candle ophalen
+        # Binance OHLC voor vandaag
         url = "https://api.binance.com/api/v3/klines"
         params = {"symbol": "BTCUSDT", "interval": "1d", "limit": 1}
         candles = safe_get(url, params=params)
@@ -283,7 +281,7 @@ def save_market_data_daily():
             conn.commit()
             conn.close()
 
-        # update 7 dagen extra
+        # En update de laatste 7 extra dagen
         fetch_market_data_7d()
 
     except Exception:
@@ -292,7 +290,7 @@ def save_market_data_daily():
 
 
 # =====================================================
-# 📆 7-daagse update
+# 📆 7-daagse update (database-driven URLs)
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
@@ -304,20 +302,37 @@ def fetch_market_data_7d():
         return
 
     try:
-        # Binance 7 dagen OHLC
-        binance_url = "https://api.binance.com/api/v3/klines"
+        # OHLC URL uit DB
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT link FROM indicators
+                WHERE name='btc_ohlc' AND category='market_raw'
+            """)
+            row = cur.fetchone()
+
+        binance_url = row[0] if row else "https://api.binance.com/api/v3/klines"
+
         params = {"symbol": "BTCUSDT", "interval": "1d", "limit": 7}
         candles = safe_get(binance_url, params=params)
 
-        # CoinGecko volume
-        cg_url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
-        vol_data = safe_get(cg_url, params={"vs_currency": "usd", "days": "7"})
+        # Volume uit market_raw endpoint
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT link FROM indicators
+                WHERE name='btc_volume' AND category='market_raw'
+            """)
+            vr = cur.fetchone()
+
+        volume_url = vr[0] if vr else "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
+
+        vol_data = safe_get(volume_url, params={"vs_currency": "usd", "days": "7"})
         volume_points = vol_data.get("total_volumes", [])
 
         volume_by_date = defaultdict(list)
         for ts, vol in volume_points:
             date = datetime.utcfromtimestamp(ts / 1000).date()
             volume_by_date[date].append(vol)
+
         avg_volume = {d: sum(v) / len(v) for d, v in volume_by_date.items()}
 
         inserted = 0
