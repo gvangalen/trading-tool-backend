@@ -1,14 +1,13 @@
 import os
 import logging
 import json
-from dotenv import load_dotenv
-from openai import OpenAI
 
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
 from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_scores_for_symbol  # DB-gedreven scores
+from backend.utils.openai_client import ask_gpt_text  # ✅ universele AI-helper (tekst)
 
 # =====================================================
 # 🪵 Logging
@@ -31,17 +30,6 @@ def log_and_print(msg: str):
         # Geen harde crash als logbestand faalt
         pass
     print(msg)
-
-
-# =====================================================
-# 🤖 OpenAI client (Report Agent)
-# =====================================================
-load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    log_and_print("❌ OPENAI_API_KEY ontbreekt in .env of omgeving.")
-client = OpenAI(api_key=api_key) if api_key else None
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
 def safe_get(obj, key, fallback="–"):
@@ -181,35 +169,23 @@ def get_latest_market_data():
 
 
 # =====================================================
-# 🧠 Generieke AI-sectie
+# 🧠 Generieke AI-sectie (via universele helper)
 # =====================================================
-def generate_section(prompt: str, retries: int = 3, model: str = DEFAULT_MODEL) -> str:
-    if client is None:
-        log_and_print("⚠️ Geen OpenAI client beschikbaar, sla AI-sectie over.")
-        return "AI niet beschikbaar (geen API-key)."
+def generate_section(prompt: str, retries: int = 3) -> str:
+    """
+    Genereert een tekstsectie via de centrale AI-helper.
+    """
+    # logging laten we hier bewust licht houden; openai_client zelf logt ook
+    text = ask_gpt_text(
+        prompt,
+        system_role="Je bent een professionele crypto-analist. Schrijf in het Nederlands.",
+        retries=retries,
+    )
 
-    for attempt in range(1, retries + 1):
-        try:
-            log_and_print(f"🔍 [AI Attempt {attempt}] Prompt (eerste 180): {prompt[:180]}")
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "Je bent een professionele crypto-analist. Schrijf in het Nederlands."
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.7,
-            )
-            content = response.choices[0].message.content.strip()
-            if content:
-                log_and_print(f"✅ [AI Response] Lengte: {len(content)} Tekst: {content[:150]}...")
-                return content
-        except Exception as e:
-            log_and_print(f"⚠️ Fout bij OpenAI poging {attempt}: {e}")
-    log_and_print("❌ Alle AI-pogingen mislukt.")
-    return "Fout: AI-generatie mislukt."
+    # Als de helper om wat voor reden dan ook None of lege string teruggeeft
+    if not text:
+        return "AI-generatie mislukt of gaf geen output."
+    return text
 
 
 # =====================================================
@@ -306,7 +282,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     Report Agent:
       - Haalt setups, ruwe scores, AI-insights en marktdata op
       - Bouwt prompts per sectie
-      - Vraagt OpenAI om tekst voor elke sectie
+      - Vraagt OpenAI (via ask_gpt_text) om tekst voor elke sectie
       - Retourneert een compleet dict dat door daily_report_task
         in de DB en PDF wordt gezet.
     """
