@@ -95,7 +95,7 @@ async def add_technical_indicator(request: Request):
         # 1️⃣ Controleer of indicator-config bestaat
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT source, data_url, symbol, interval
+                SELECT source, link, symbol, interval
                 FROM indicators
                 WHERE LOWER(name)=LOWER(%s)
                 AND category='technical'
@@ -109,7 +109,7 @@ async def add_technical_indicator(request: Request):
                 detail=f"Indicator '{name}' bestaat niet in de DB-config."
             )
 
-        source, data_url, symbol, interval = cfg
+        source, link, symbol, interval = cfg
 
         # 2️⃣ Waarde ophalen
         logger.info(f"⚙️ Ophalen waarde voor '{name}' via {source}")
@@ -120,7 +120,7 @@ async def add_technical_indicator(request: Request):
             source=source,
             symbol=symbol,
             interval=interval,
-            link=data_url
+            link=link
         )
 
         if not result:
