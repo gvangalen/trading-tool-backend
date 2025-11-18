@@ -85,7 +85,7 @@ async def add_technical_indicator(request: Request):
         raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
 
     try:
-        # 1️⃣ Config ophalen uit indicators — alleen source + link bestaan
+        # Config ophalen
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source, link
@@ -104,51 +104,42 @@ async def add_technical_indicator(request: Request):
 
         source, link = cfg
 
-        # 2️⃣ Waarde ophalen via technical_interpreter
+        # Waarde ophalen — GEEN await!
         from backend.utils.technical_interpreter import fetch_technical_value
-
-        result = await fetch_technical_value(
+        result = fetch_technical_value(
             name=name,
             source=source,
             link=link
         )
 
         if not result:
-            raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'")
+            raise HTTPException(status_code=500, detail=f"❌ Geen waarde voor '{name}'")
 
-        # 3️⃣ Extract value
-        if isinstance(result, dict):
-            if "value" in result:
-                value = float(result["value"])
-            elif "data" in result and isinstance(result["data"], dict) and "value" in result["data"]:
-                value = float(result["data"]["value"])
-            elif "result" in result:
-                value = float(result["result"])
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"❌ Geen geldige 'value' gevonden in response: {result}"
-                )
+        # Extract waarde uit dict
+        if isinstance(result, dict) and "value" in result:
+            value = float(result["value"])
         else:
             value = float(result)
 
-        # 4️⃣ Score berekenen
+        # Score berekenen
         from backend.utils.scoring_utils import generate_scores_db
         score_obj = generate_scores_db(name, value, category="technical")
 
         score = score_obj.get("score", 10)
-        trend = score_obj.get("trend", "–")
-        interpretation = score_obj.get("interpretation", "–")
+        advies = score_obj.get("trend", "–")
+        uitleg = score_obj.get("interpretation", "–")
         action = score_obj.get("action", "–")
 
-        # 5️⃣ Wegschrijven naar DB
+        # Opslaan
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_indicators
                 (indicator, value, score, advies, uitleg, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING id;
-            """, (name, value, score, trend, interpretation, datetime.utcnow()))
+            """,
+            (name, value, score, advies, uitleg, datetime.utcnow()))
+
             new_id = cur.fetchone()[0]
             conn.commit()
 
@@ -157,8 +148,8 @@ async def add_technical_indicator(request: Request):
             "id": new_id,
             "value": value,
             "score": score,
-            "advies": trend,
-            "uitleg": interpretation,
+            "advies": advies,
+            "uitleg": uitleg,
             "action": action
         }
 
@@ -166,10 +157,7 @@ async def add_technical_indicator(request: Request):
         raise
     except Exception as e:
         logger.error(f"❌ [add_technical_indicator] Fout: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"❌ Fout bij opslaan technical indicator: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
