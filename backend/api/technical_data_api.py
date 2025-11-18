@@ -78,10 +78,6 @@ async def get_technical_data():
     finally:
         conn.close()
 
-
-# =========================================================
-# ➕ POST — ADD NEW TECHNICAL INDICATOR ENTRY
-# =========================================================
 # =====================================
 # ➕ Technische indicator toevoegen
 # =====================================
