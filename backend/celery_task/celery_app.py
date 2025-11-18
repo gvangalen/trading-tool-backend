@@ -35,7 +35,7 @@ celery = Celery(
     broker=CELERY_BROKER,
     backend=CELERY_BACKEND,
     include=[
-        # 🔹 Standaard backend taken
+        # 🔹 Reguliere Celery taken
         "backend.celery_task.market_task",
         "backend.celery_task.macro_task",
         "backend.celery_task.technical_task",
@@ -48,17 +48,14 @@ celery = Celery(
         "backend.celery_task.btc_price_history_task",
         "backend.celery_task.store_daily_scores_task",
 
-        # 🔹 AI-taken
-        "backend.ai_tasks.trading_advice_task",
-        "backend.ai_tasks.validation_task",
-
-        # 🔹 Nieuwe AI agents
+        # 🔥 Nieuwe v2 AI Agents
         "backend.ai_agents.macro_ai_agent",
         "backend.ai_agents.market_ai_agent",
         "backend.ai_agents.technical_ai_agent",
         "backend.ai_agents.score_ai_agent",
-        "backend.ai_agents.strategy_ai_agent",    # ✅ TOEGEVOEGD
-        "backend.ai_agents.report_ai_agent",      # ❗ Ook nodig voor daily report PDFs
+        "backend.ai_agents.strategy_ai_agent",
+        "backend.ai_agents.setup_ai_agent",
+        "backend.ai_agents.report_ai_agent",
     ],
 )
 
@@ -114,23 +111,37 @@ celery.conf.beat_schedule = {
         "schedule": crontab(hour=1, minute=10),
     },
 
-    # ⚙️ AI VALIDATIE
-    "validate_setups_task": {
-        "task": "backend.ai_tasks.validation_task.validate_setups_task",
-        "schedule": crontab(minute=0, hour="*/6"),
+    # 🤖 AI INSIGHTS (v2 agents)
+    "generate_macro_insight": {
+        "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
+        "schedule": crontab(hour=3, minute=0),
     },
-    "generate_trading_advice": {
-        "task": "backend.ai_tasks.trading_advice_task.generate_trading_advice",
-        "schedule": crontab(minute=5, hour="*/6"),
+    "generate_market_insight": {
+        "task": "backend.ai_agents.market_ai_agent.generate_market_insight",
+        "schedule": crontab(hour=3, minute=10),
+    },
+    "generate_technical_insight": {
+        "task": "backend.ai_agents.technical_ai_agent.generate_technical_insight",
+        "schedule": crontab(hour=3, minute=20),
+    },
+    "generate_master_score": {
+        "task": "backend.ai_agents.score_ai_agent.generate_master_score",
+        "schedule": crontab(hour=3, minute=40),
     },
 
-    # 🤖 AI STRATEGIE AGENT — TOEGEVOEGD
+    # 🧠 Setup Agent
+    "run_setup_agent": {
+        "task": "backend.ai_agents.setup_ai_agent.run_setup_agent_task",
+        "schedule": crontab(hour=3, minute=50),
+    },
+
+    # 🤖 Strategie Agent
     "generate_strategy_ai": {
         "task": "backend.ai_agents.strategy_ai_agent.generate_strategy_ai",
-        "schedule": crontab(hour=3, minute=30),
+        "schedule": crontab(hour=4, minute=0),
     },
 
-    # 🧾 DAGELIJKSE RAPPORTAGE
+    # 🧾 Rapports
     "store_daily_scores": {
         "task": "backend.celery_task.store_daily_scores_task.store_daily_scores_task",
         "schedule": crontab(hour=0, minute=45),
@@ -148,7 +159,7 @@ celery.conf.beat_schedule = {
         "schedule": crontab(hour=7, minute=0),
     },
 
-    # 🗓️ WEEK/MAAND/KWARTAAL RAPPORTEN
+    # WEEK / MAAND / KWARTAAL
     "generate_weekly_report": {
         "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
         "schedule": crontab(hour=1, minute=20, day_of_week="monday"),
@@ -161,55 +172,7 @@ celery.conf.beat_schedule = {
         "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
         "schedule": crontab(hour=1, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
-
-    # 🤖 MASTER SCORE / INSIGHTS
-    "generate_macro_insight": {
-        "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
-        "schedule": crontab(hour=3, minute=0),
-    },
-    "generate_market_insight": {
-        "task": "backend.ai_agents.market_ai_agent.generate_market_insight",
-        "schedule": crontab(hour=3, minute=10),
-    },
-    "generate_technical_insight": {
-        "task": "backend.ai_agents.technical_ai_agent.generate_technical_insight",
-        "schedule": crontab(hour=3, minute=20),
-    },
-    "generate_master_score": {
-        "task": "backend.ai_agents.score_ai_agent.generate_master_score",
-        "schedule": crontab(hour=3, minute=40),
-    },
 }
-
-# =========================================================
-# ✅ Imports verifiëren
-# =========================================================
-try:
-    import backend.celery_task.market_task
-    import backend.celery_task.macro_task
-    import backend.celery_task.technical_task
-    import backend.celery_task.setup_task
-    import backend.celery_task.strategy_task
-    import backend.celery_task.daily_report_task
-    import backend.celery_task.weekly_report_task
-    import backend.celery_task.monthly_report_task
-    import backend.celery_task.quarterly_report_task
-    import backend.celery_task.btc_price_history_task
-    import backend.celery_task.store_daily_scores_task
-    import backend.ai_tasks.trading_advice_task
-    import backend.ai_tasks.validation_task
-    import backend.ai_agents.macro_ai_agent
-    import backend.ai_agents.market_ai_agent
-    import backend.ai_agents.technical_ai_agent
-    import backend.ai_agents.score_ai_agent
-    import backend.ai_agents.strategy_ai_agent    # ✅ Added
-    import backend.ai_agents.report_ai_agent      # Optional but recommended
-
-    logger.info("✅ Alle Celery taken en AI agents succesvol geïmporteerd.")
-
-except ImportError:
-    logger.error("❌ Fout bij importeren van taken:")
-    logger.error(traceback.format_exc())
 
 # =========================================================
 # 🚀 Startup log
