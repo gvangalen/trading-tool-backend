@@ -85,7 +85,7 @@ async def add_technical_indicator(request: Request):
         raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
 
     try:
-        # Config ophalen
+        # 1️⃣ Config ophalen uit indicators
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source, link
@@ -97,15 +97,14 @@ async def add_technical_indicator(request: Request):
             cfg = cur.fetchone()
 
         if not cfg:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Indicator '{name}' niet gevonden in configuratie."
-            )
+            raise HTTPException(status_code=404,
+                detail=f"Indicator '{name}' niet gevonden in configuratie.")
 
         source, link = cfg
 
-        # Waarde ophalen — GEEN await!
+        # 2️⃣ Waarde ophalen (zelfde stijl als macro)
         from backend.utils.technical_interpreter import fetch_technical_value
+
         result = fetch_technical_value(
             name=name,
             source=source,
@@ -113,15 +112,16 @@ async def add_technical_indicator(request: Request):
         )
 
         if not result:
-            raise HTTPException(status_code=500, detail=f"❌ Geen waarde voor '{name}'")
+            raise HTTPException(status_code=500,
+                detail=f"❌ Geen waarde ontvangen voor '{name}'.")
 
-        # Extract waarde uit dict
+        # 3️⃣ Waarde extraheren
         if isinstance(result, dict) and "value" in result:
             value = float(result["value"])
         else:
             value = float(result)
 
-        # Score berekenen
+        # 4️⃣ Score berekenen
         from backend.utils.scoring_utils import generate_scores_db
         score_obj = generate_scores_db(name, value, category="technical")
 
@@ -130,7 +130,7 @@ async def add_technical_indicator(request: Request):
         uitleg = score_obj.get("interpretation", "–")
         action = score_obj.get("action", "–")
 
-        # Opslaan
+        # 5️⃣ Opslaan
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_indicators
@@ -153,8 +153,6 @@ async def add_technical_indicator(request: Request):
             "action": action
         }
 
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"❌ [add_technical_indicator] Fout: {e}")
         raise HTTPException(status_code=500, detail=str(e))
