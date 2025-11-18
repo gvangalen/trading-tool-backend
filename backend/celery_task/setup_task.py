@@ -1,10 +1,8 @@
 import logging
 import traceback
-from datetime import date
 from celery import shared_task
 
-# Nieuwe AI Setup Agent importeren
-from backend.ai_agents.setup_ai_agent import run_setup_agent_task
+from backend.ai_agents.setup_ai_agent import run_setup_agent  # ✅ juiste import: functie, geen task
 from backend.utils.db import get_db_connection
 
 # Logging configureren
@@ -13,14 +11,13 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# 🤖 Celery Task — Draait dagelijks automatisch
+# 🤖 Celery Task — draait dagelijks automatisch
 # ============================================================
 @shared_task(name="backend.celery_task.setup_task.run_setup_agent_daily")
 def run_setup_agent_daily():
     """
     Draait de nieuwe Setup-AI-Agent voor elk uniek asset.
-    De agent kiest de beste setup van vandaag en slaat die op
-    in daily_setup_scores.
+    De agent kiest de beste setup van vandaag en slaat dat op in daily_setup_scores.
     """
     logger.info("🤖 [Setup-Agent Task] Start dagelijkse Setup-Agent run...")
 
@@ -31,7 +28,7 @@ def run_setup_agent_daily():
 
     try:
         # ----------------------------------------------------
-        # Unieke assets ophalen
+        # Alle unieke assets ophalen
         # ----------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("SELECT DISTINCT symbol FROM setups WHERE symbol IS NOT NULL")
@@ -46,32 +43,29 @@ def run_setup_agent_daily():
         # ----------------------------------------------------
         for asset in assets:
             logger.info(f"🔄 Setup-Agent draaien voor asset: {asset}")
-
             try:
-                results = run_setup_agent_task(asset)
+                results = run_setup_agent(asset=asset)
 
                 if not results:
-                    logger.warning(f"⚠️ Geen resultaten terug van Setup-Agent voor: {asset}")
+                    logger.warning(f"⚠️ Setup-Agent gaf geen resultaten terug voor {asset}.")
                 else:
                     logger.info(
-                        f"✅ Setup-Agent uitgevoerd voor {asset} – "
-                        f"{len(results)} setups verwerkt"
+                        f"✅ Setup-Agent succesvol uitgevoerd voor {asset} "
+                        f"({len(results)} setups verwerkt)."
                     )
 
-            except Exception:
-                logger.error(
-                    f"❌ Fout tijdens uitvoeren Setup-Agent voor asset: {asset}",
-                    exc_info=True
-                )
+            except Exception as inner:
+                logger.error(f"❌ Fout tijdens uitvoeren Setup-Agent voor {asset}: {inner}", exc_info=True)
 
         logger.info("🎯 Alle Setup-Agent runs voltooid.")
 
     except Exception:
         logger.error("❌ Algemene fout in setup_task:", exc_info=True)
+        logger.error(traceback.format_exc())
 
     finally:
         try:
             conn.close()
             logger.info("🔒 Databaseverbinding gesloten.")
-        except:
+        except Exception:
             pass
