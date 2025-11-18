@@ -73,13 +73,6 @@ async def get_technical_data():
 # =====================================
 @router.post("/technical_data")
 async def add_technical_indicator(request: Request):
-    """
-    ➕ Voeg een technische indicator toe
-    - Controleert of de indicator bestaat in `indicators`
-    - Haalt waarde op via technical_interpreter
-    - Berekent score via technical_indicator_rules
-    - Slaat op in technical_indicators
-    """
     logger.info("📐 [add] Technische indicator toevoegen...")
     data = await request.json()
     name = data.get("indicator")
@@ -92,10 +85,10 @@ async def add_technical_indicator(request: Request):
         raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
 
     try:
-        # 1️⃣ Controleer of indicator-config bestaat
+        # 1️⃣ Config ophalen uit indicators — alleen source + link bestaan
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT source, link, symbol, interval
+                SELECT source, link
                 FROM indicators
                 WHERE LOWER(name)=LOWER(%s)
                 AND category='technical'
@@ -106,27 +99,24 @@ async def add_technical_indicator(request: Request):
         if not cfg:
             raise HTTPException(
                 status_code=404,
-                detail=f"Indicator '{name}' bestaat niet in de DB-config."
+                detail=f"Indicator '{name}' niet gevonden in configuratie."
             )
 
-        source, link, symbol, interval = cfg
+        source, link = cfg
 
-        # 2️⃣ Waarde ophalen
-        logger.info(f"⚙️ Ophalen waarde voor '{name}' via {source}")
-
+        # 2️⃣ Waarde ophalen via technical_interpreter
         from backend.utils.technical_interpreter import fetch_technical_value
+
         result = await fetch_technical_value(
             name=name,
             source=source,
-            symbol=symbol,
-            interval=interval,
             link=link
         )
 
         if not result:
-            raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'.")
+            raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'")
 
-        # 3️⃣ Waardeverwerking (zelfde als macro)
+        # 3️⃣ Extract value
         if isinstance(result, dict):
             if "value" in result:
                 value = float(result["value"])
@@ -137,18 +127,10 @@ async def add_technical_indicator(request: Request):
             else:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"❌ Ongeldig resultaatformaat voor '{name}': {result}"
+                    detail=f"❌ Geen geldige 'value' gevonden in response: {result}"
                 )
         else:
-            try:
-                value = float(result)
-            except:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"❌ Kan waarde niet converteren voor '{name}': {result}"
-                )
-
-        logger.info(f"📊 [value] '{name}' = {value}")
+            value = float(result)
 
         # 4️⃣ Score berekenen
         from backend.utils.scoring_utils import generate_scores_db
@@ -159,11 +141,7 @@ async def add_technical_indicator(request: Request):
         interpretation = score_obj.get("interpretation", "–")
         action = score_obj.get("action", "–")
 
-        logger.info(
-            f"📈 Score={score} | Trend={trend} | Interpretation={interpretation}"
-        )
-
-        # 5️⃣ Opslaan
+        # 5️⃣ Wegschrijven naar DB
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_indicators
@@ -174,16 +152,14 @@ async def add_technical_indicator(request: Request):
             new_id = cur.fetchone()[0]
             conn.commit()
 
-        logger.info(f"✅ [add] '{name}' opgeslagen onder ID {new_id}")
-
         return {
-            "message": f"Indicator '{name}' succesvol toegevoegd.",
+            "message": f"Indicator '{name}' toegevoegd.",
             "id": new_id,
             "value": value,
             "score": score,
             "advies": trend,
             "uitleg": interpretation,
-            "action": action,
+            "action": action
         }
 
     except HTTPException:
