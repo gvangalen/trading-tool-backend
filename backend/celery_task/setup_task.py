@@ -1,29 +1,38 @@
 import logging
 import traceback
+from datetime import date
 from celery import shared_task
+
+# Nieuwe AI Setup Agent importeren
+from backend.ai_agents.setup_agent import run_setup_agent
 from backend.utils.db import get_db_connection
-from backend.utils.setup_validator import validate_setups  # Zorg dat dit pad klopt
 
 # Logging configureren
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-@shared_task(name="backend.celery_task.setup_task.validate_setups_task")
-def validate_setups_task():
+
+# ============================================================
+# 🤖 Celery Task — Draait dagelijks automatisch
+# ============================================================
+@shared_task(name="backend.celery_task.setup_task.run_setup_agent_daily")
+def run_setup_agent_daily():
     """
-    Valideert alle unieke setups op basis van hun symbol.
-    Haalt voor elk asset de macro-, technische- en marktdata op en past de setup logica toe.
+    Draait de nieuwe Setup-AI-Agent voor elk uniek asset.
+    De agent kiest de beste setup van vandaag en slaat dat op in daily_setup_scores.
     """
+    logger.info("🤖 [Setup-Agent Task] Start dagelijkse Setup-Agent run...")
+
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen databaseverbinding in Setup-Agent Task.")
+        return
+
     try:
-        logger.info("🔎 Setup-validatie taak gestart...")
-
-        conn = get_db_connection()
-        if not conn:
-            logger.error("❌ Geen databaseverbinding bij setup-validatie.")
-            return
-
+        # ----------------------------------------------------
+        # Alle unieke assets ophalen
+        # ----------------------------------------------------
         with conn.cursor() as cur:
-            # Unieke symbolen ophalen uit setups
             cur.execute("SELECT DISTINCT symbol FROM setups WHERE symbol IS NOT NULL")
             assets = [row[0] for row in cur.fetchall()]
 
@@ -31,23 +40,34 @@ def validate_setups_task():
             logger.warning("⚠️ Geen assets gevonden in setups-tabel.")
             return
 
+        # ----------------------------------------------------
+        # Per asset Setup-AI-Agent uitvoeren
+        # ----------------------------------------------------
         for asset in assets:
-            logger.info(f"🔄 Setup-validatie voor asset: {asset}")
-            resultaat = validate_setups(asset=asset)
+            logger.info(f"🔄 Setup-Agent draaien voor asset: {asset}")
 
-            if isinstance(resultaat, list) and resultaat:
-                logger.info(f"✅ {len(resultaat)} setups gevalideerd voor {asset}.")
-            elif isinstance(resultaat, list):
-                logger.warning(f"⚠️ Geen actieve setups gevonden voor {asset}.")
-            else:
-                logger.error(f"❌ Ongeldig resultaat van validate_setups() voor {asset}: {type(resultaat)}")
-                logger.debug(f"Inhoud resultaat: {resultaat}")
+            try:
+                results = run_setup_agent(asset=asset)
+
+                if not results:
+                    logger.warning(f"⚠️ Setup-Agent gaf geen resultaten terug voor {asset}.")
+                else:
+                    logger.info(
+                        f"✅ Setup-Agent succesvol uitgevoerd voor {asset} "
+                        f"({len(results)} setups verwerkt)."
+                    )
+
+            except Exception as inner:
+                logger.error(f"❌ Fout tijdens uitvoeren Setup-Agent voor {asset}: {inner}", exc_info=True)
+
+        logger.info("🎯 Alle Setup-Agent runs voltooid.")
 
     except Exception as e:
-        logger.error(f"❌ Fout bij setup-validatie: {e}")
-        logger.error(traceback.format_exc())
+        logger.error("❌ Algemene fout in setup_task:", exc_info=True)
 
     finally:
-        if 'conn' in locals() and conn:
+        try:
             conn.close()
             logger.info("🔒 Databaseverbinding gesloten.")
+        except:
+            pass
