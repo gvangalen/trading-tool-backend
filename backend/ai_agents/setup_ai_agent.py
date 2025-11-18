@@ -1,7 +1,7 @@
 import logging
 from datetime import date
 from backend.utils.db import get_db_connection
-from backend.ai.openai_client import ask_ai  # jouw AI wrapper
+from backend.utils.openai_client import ask_gpt
 
 logger = logging.getLogger(__name__)
 
