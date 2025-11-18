@@ -85,7 +85,7 @@ async def add_technical_indicator(request: Request):
         raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding.")
 
     try:
-        # 1️⃣ Config ophalen uit indicators
+        # Config ophalen
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source, link
@@ -97,14 +97,15 @@ async def add_technical_indicator(request: Request):
             cfg = cur.fetchone()
 
         if not cfg:
-            raise HTTPException(status_code=404,
-                detail=f"Indicator '{name}' niet gevonden in configuratie.")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Indicator '{name}' niet gevonden in configuratie."
+            )
 
         source, link = cfg
 
-        # 2️⃣ Waarde ophalen (zelfde stijl als macro)
+        # Waarde ophalen (zonder await!)
         from backend.utils.technical_interpreter import fetch_technical_value
-
         result = fetch_technical_value(
             name=name,
             source=source,
@@ -112,25 +113,24 @@ async def add_technical_indicator(request: Request):
         )
 
         if not result:
-            raise HTTPException(status_code=500,
-                detail=f"❌ Geen waarde ontvangen voor '{name}'.")
+            raise HTTPException(status_code=500, detail=f"❌ Geen waarde voor '{name}'")
 
-        # 3️⃣ Waarde extraheren
+        # Extract
         if isinstance(result, dict) and "value" in result:
             value = float(result["value"])
         else:
             value = float(result)
 
-        # 4️⃣ Score berekenen
+        # Score berekenen — FIXED
         from backend.utils.scoring_utils import generate_scores_db
-        score_obj = generate_scores_db(name, value, category="technical")
+        score_obj = generate_scores_db(name, value, "technical")
 
         score = score_obj.get("score", 10)
         advies = score_obj.get("trend", "–")
         uitleg = score_obj.get("interpretation", "–")
         action = score_obj.get("action", "–")
 
-        # 5️⃣ Opslaan
+        # Opslaan
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_indicators
