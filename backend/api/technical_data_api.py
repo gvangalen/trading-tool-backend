@@ -432,10 +432,13 @@ async def get_all_indicators():
                 SELECT name, display_name
                 FROM indicators
                 WHERE active = TRUE
+                AND category = 'technical'
                 ORDER BY name;
             """)
             rows = cur.fetchall()
+
         return [{"name": r[0], "display_name": r[1]} for r in rows]
+
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen indicatornamen: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen indicatornamen.")
