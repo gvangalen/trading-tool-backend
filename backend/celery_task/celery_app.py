@@ -1,13 +1,12 @@
 import os
 import sys
 import logging
-import traceback
 from dotenv import load_dotenv
 from celery import Celery
 from celery.schedules import crontab
 
 # =========================================================
-# ⚙️ .env en sys.path setup
+# ⚙️ .env + sys.path
 # =========================================================
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path)
@@ -24,30 +23,31 @@ logger = logging.getLogger(__name__)
 logger.info(f"🔍 ASSETS_JSON uit .env: {os.getenv('ASSETS_JSON')}")
 
 # =========================================================
-# 🧠 Celery Config
+# 🧠 Celery instance
 # =========================================================
 CELERY_BROKER = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 
-app = Celery(
+celery_app = Celery(
     "market_dashboard",
     broker=CELERY_BROKER,
     backend=CELERY_BACKEND,
 )
 
-# 🔥 AUTOMATISCH ALLE TAKEN LADEN
-app.autodiscover_tasks([
+# ⭐ BELANGRIJK: AUTODISCOVERY VOOR TAKEN
+celery_app.autodiscover_tasks([
     "backend.celery_task",
     "backend.ai_agents"
 ])
 
-app.conf.enable_utc = True
-app.conf.timezone = "UTC"
+celery_app.conf.enable_utc = True
+celery_app.conf.timezone = "UTC"
+
 
 # =========================================================
 # 🕒 Beat Schedule
 # =========================================================
-app.conf.beat_schedule = {
+celery_app.conf.beat_schedule = {
 
     # 📊 MARKET
     "fetch_market_data": {
@@ -69,7 +69,7 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=0, minute=12),
     },
 
-    # 📈 TECHNICAL ALL
+    # 📈 TECHNICAL
     "fetch_technical_data_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
         "schedule": crontab(hour=0, minute=10),
@@ -93,7 +93,7 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=1, minute=10),
     },
 
-    # 🤖 AI INSIGHTS (v2 agents)
+    # 🤖 AI INSIGHTS — V2
     "generate_macro_insight": {
         "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
         "schedule": crontab(hour=3, minute=0),
@@ -111,19 +111,19 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=40),
     },
 
-    # SETUP Agent
+    # 🤖 SETUP AGENT
     "run_setup_agent": {
         "task": "backend.ai_agents.setup_ai_agent.run_setup_agent_task",
         "schedule": crontab(hour=3, minute=50),
     },
 
-    # STRATEGIE Agent
+    # 🤖 STRATEGY AGENT
     "generate_strategy_ai": {
         "task": "backend.ai_agents.strategy_ai_agent.generate_strategy_ai",
         "schedule": crontab(hour=4, minute=0),
     },
 
-    # 🧾 REPORTS
+    # 🧾 REPORTING
     "store_daily_scores": {
         "task": "backend.celery_task.store_daily_scores_task.store_daily_scores_task",
         "schedule": crontab(hour=0, minute=45),
@@ -141,7 +141,7 @@ app.conf.beat_schedule = {
         "schedule": crontab(hour=7, minute=0),
     },
 
-    # WEEK / MAAND / KWARTAAL
+    # WEEK/MAAND/KWARTAAL
     "generate_weekly_report": {
         "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
         "schedule": crontab(hour=1, minute=20, day_of_week="monday"),
@@ -152,8 +152,11 @@ app.conf.beat_schedule = {
     },
     "generate_quarterly_report": {
         "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
-        "schedule": crontab(hour=1, minute=45, month_of_year="1,4,7,10", day_of_month="1"),
+        "schedule": crontab(hour=1, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
 }
 
-logger.info(f"🚀 Celery en Beat draaien met broker: {CELERY_BROKER}")
+logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
+
+# ✔ BELANGRIJK: expose als 'app'
+app = celery_app
