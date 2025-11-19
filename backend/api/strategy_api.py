@@ -493,3 +493,55 @@ async def get_last_strategy():
 
     finally:
         conn.close()
+
+@router.get("/strategies/by_setup/{setup_id}")
+async def get_strategy_by_setup(
+    setup_id: int,
+    strategy_type: str = Query(None, description="Optioneel: 'manual', 'trading' of 'dca'")
+):
+    """
+    Haalt de bestaande strategie voor een specifieke setup op.
+    Optioneel gefilterd op strategy_type.
+    """
+
+    conn = get_db_connection()
+    if not conn:
+        logger.error("[get_strategy_by_setup] Geen databaseverbinding")
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+
+    try:
+        with conn.cursor() as cur:
+            query = """
+                SELECT id, data
+                FROM strategies
+                WHERE (data->>'setup_id')::int = %s
+            """
+            params = [setup_id]
+
+            if strategy_type:
+                query += " AND LOWER(data->>'strategy_type') = LOWER(%s)"
+                params.append(strategy_type)
+
+            query += " ORDER BY created_at DESC LIMIT 1"
+
+            logger.info(f"[get_strategy_by_setup] Query: {query} params={params}")
+            cur.execute(query, tuple(params))
+
+            row = cur.fetchone()
+
+        if not row:
+            return {"exists": False, "message": "Geen strategy gevonden"}
+
+        id_, data = row
+        data["id"] = id_
+
+        return {
+            "exists": True,
+            "strategy": data
+        }
+
+    except Exception as e:
+        logger.error(f"[get_strategy_by_setup] ❌ {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen strategy")
+    finally:
+        conn.close()
