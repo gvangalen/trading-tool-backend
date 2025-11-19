@@ -482,6 +482,9 @@ async def get_last_strategy():
         data["created_at"] = created_at.isoformat()
 
         return data
+
+    finally:
+        conn.close()
         
 # =====================================================================
 # 🕒 CELERY TASK STATUS
