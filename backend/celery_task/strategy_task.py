@@ -43,6 +43,13 @@ def safe_request(url, method="GET", payload=None):
 # 🧩 Helper: check of strategy bestaat
 # ---------------------------------------------------------
 def find_existing_strategy(setup_id, strategy_type):
+    """
+    Returned:
+    {
+        "exists": True/False,
+        "strategy": {...}
+    }
+    """
     try:
         url = f"{API_BASE_URL}/strategies/by_setup/{setup_id}?type={strategy_type}"
         res = requests.get(url, timeout=TIMEOUT)
@@ -60,8 +67,7 @@ def find_existing_strategy(setup_id, strategy_type):
 # ---------------------------------------------------------
 def build_payload(setup, strategie):
     """
-    Zorgt ervoor dat we NIET jouw handmatige explanation overschrijven.
-    AI explanation gaat in ai_explanation.
+    AI explanation wordt ai_explanation — jouw handmatige blijft bestaan.
     """
     return {
         "setup_id": setup["id"],
@@ -71,8 +77,7 @@ def build_payload(setup, strategie):
         "timeframe": setup.get("timeframe", "1D"),
         "score": setup.get("score", 0),
 
-        # 🔥 LET OP: AI explanation gaat in ai_explanation
-        # jouw handmatige explanation blijft bestaan
+        # AI explanation
         "ai_explanation": strategie.get("explanation"),
 
         "risk_reward": strategie.get("risk_reward"),
@@ -113,18 +118,20 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         # -----------------------------------------------------
         existing = find_existing_strategy(setup_id, strategy_type)
 
-        if existing and not overwrite:
-            return {"warning": "Strategie bestaat al en overwrite=False"}
+        # Voorbeeld shape:
+        # {"exists": true, "strategy": {...}}
+        existing_strategy_id = None
+        if existing and existing.get("exists"):
+            existing_strategy_id = existing["strategy"].get("id")
 
         # -----------------------------------------------------
         # ✏ UPDATE BESTAANDE STRATEGIE
         # -----------------------------------------------------
-        if existing and overwrite:
-            strategy_id = existing["id"]
-            logger.info(f"✏ Updaten van bestaande strategie ID={strategy_id}")
+        if existing_strategy_id and overwrite:
+            logger.info(f"✏ Updaten bestaand strategy ID={existing_strategy_id}")
 
             res = requests.put(
-                f"{API_BASE_URL}/strategies/{strategy_id}",
+                f"{API_BASE_URL}/strategies/{existing_strategy_id}",
                 json=payload,
                 timeout=TIMEOUT
             )
