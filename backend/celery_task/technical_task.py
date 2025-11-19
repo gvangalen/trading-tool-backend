@@ -9,7 +9,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 # ✅ Eigen utils
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import generate_scores_db
-from backend.utils.technical_interpreter import fetch_technical_value, interpret_technical_indicator
+from backend.utils.technical_interpreter import (
+    fetch_technical_value,
+    interpret_technical_indicator
+)
 
 # === ✅ Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -38,7 +41,6 @@ def safe_request(url, params=None):
 # 📅 Check of al verwerkt vandaag
 # =====================================================
 def already_fetched_today(indicator: str) -> bool:
-    """Controleert of deze indicator vandaag al is opgeslagen."""
     conn = get_db_connection()
     if not conn:
         return False
@@ -60,7 +62,6 @@ def already_fetched_today(indicator: str) -> bool:
 # 💾 Opslaan score
 # =====================================================
 def store_technical_score_db(payload: dict):
-    """Slaat technische indicator-score op in de database (altijd nieuwe rij per dag)."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding bij technische opslag.")
@@ -97,7 +98,6 @@ def store_technical_score_db(payload: dict):
 # 📊 Indicatoren ophalen uit DB
 # =====================================================
 def get_active_technical_indicators():
-    """Haal alle actieve technische indicatoren op uit de database."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding.")
@@ -120,18 +120,15 @@ def get_active_technical_indicators():
 
 
 # =====================================================
-# 🧠 Hoofdfunctie
+# 🧠 Hoofdfunctie (SYNC!)
 # =====================================================
 def fetch_and_process_technical():
-    """Dagelijkse technische dataverwerking met DB-scoreregels."""
     logger.info("🚀 Start technische dataverwerking...")
 
     indicators = get_active_technical_indicators()
     if not indicators:
         logger.warning("⚠️ Geen technische indicatoren gevonden in DB.")
         return
-
-    utc_now = datetime.utcnow().replace(microsecond=0)
 
     for ind in indicators:
         name = ind["name"]
@@ -140,14 +137,14 @@ def fetch_and_process_technical():
 
         logger.info(f"➡️ Verwerk indicator: {name}")
 
-        # ⏩ Vermijd dubbele opslag
+        # ⏩ Dubbele opslag vermijden
         if already_fetched_today(name):
             logger.info(f"⏩ {name} is vandaag al verwerkt, overslaan.")
             continue
 
-        # ✅ Waarde ophalen via utility
+        # === ✅ Waarde ophalen (GEEN async!) ===
         try:
-            result = __import__("asyncio").run(fetch_technical_value(name, source, link))
+            result = fetch_technical_value(name, source, link)
         except Exception as e:
             logger.error(f"❌ Fout bij ophalen waarde voor '{name}': {e}")
             continue
@@ -159,8 +156,9 @@ def fetch_and_process_technical():
         value = result["value"]
         logger.info(f"📊 {name.upper()} actuele waarde: {value}")
 
-        # ✅ Scoren via scoreregels
+        # === 📈 Score berekenen ===
         interpretation = interpret_technical_indicator(name, value)
+
         if not interpretation:
             logger.warning(f"⚠️ Geen scoreregels gevonden voor '{name}'")
             continue
@@ -173,6 +171,7 @@ def fetch_and_process_technical():
             "uitleg": interpretation.get("interpretation", "–"),
         }
 
+        # Opslaan
         store_technical_score_db(payload)
 
     logger.info("✅ Alle technische indicatoren succesvol verwerkt en opgeslagen.")
