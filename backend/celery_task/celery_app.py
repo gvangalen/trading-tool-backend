@@ -34,7 +34,7 @@ celery_app = Celery(
     backend=CELERY_BACKEND,
 )
 
-# ⭐ BELANGRIJK: AUTODISCOVERY VOOR TAKEN
+# ⭐ Autodiscovery (werkt alleen met tasks.py)
 celery_app.autodiscover_tasks([
     "backend.celery_task",
     "backend.ai_agents"
@@ -43,13 +43,12 @@ celery_app.autodiscover_tasks([
 celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
-
 # =========================================================
 # 🕒 Beat Schedule
 # =========================================================
 celery_app.conf.beat_schedule = {
 
-    # 📊 MARKET
+    # 📊 MARKET TASKS
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
         "schedule": crontab(minute="*/15"),
@@ -63,13 +62,13 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=1, minute=0),
     },
 
-    # 🌍 MACRO
+    # 🌍 MACRO TASKS
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
         "schedule": crontab(hour=0, minute=12),
     },
 
-    # 📈 TECHNICAL
+    # 📈 TECHNICAL TASKS
     "fetch_technical_data_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
         "schedule": crontab(hour=0, minute=10),
@@ -87,13 +86,13 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=0, minute=25),
     },
 
-    # ₿ BTC HISTORY
+    # ₿ BTC PRICE HISTORY
     "fetch_btc_daily_price": {
         "task": "backend.celery_task.btc_price_history_task.fetch_btc_history_daily",
         "schedule": crontab(hour=1, minute=10),
     },
 
-    # 🤖 AI INSIGHTS — V2
+    # 🤖 AI INSIGHTS V2
     "generate_macro_insight": {
         "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
         "schedule": crontab(hour=3, minute=0),
@@ -141,7 +140,7 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=7, minute=0),
     },
 
-    # WEEK/MAAND/KWARTAAL
+    # WEEK / MAAND / KWARTAAL RAPPORTEN
     "generate_weekly_report": {
         "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
         "schedule": crontab(hour=1, minute=20, day_of_week="monday"),
@@ -158,5 +157,33 @@ celery_app.conf.beat_schedule = {
 
 logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
 
+# =========================================================
+# 📌 FORCE IMPORT (CRUCIAAL)
+# =========================================================
+# Zonder deze imports worden tasks NIET geregistreerd (jouw probleem!)
+try:
+    import backend.celery_task.market_task
+    import backend.celery_task.macro_task
+    import backend.celery_task.technical_task
+    import backend.celery_task.btc_price_history_task
+    import backend.celery_task.daily_report_task
+    import backend.celery_task.weekly_report_task
+    import backend.celery_task.monthly_report_task
+    import backend.celery_task.quarterly_report_task
+    import backend.celery_task.store_daily_scores_task
+
+    import backend.ai_agents.macro_ai_agent
+    import backend.ai_agents.market_ai_agent
+    import backend.ai_agents.technical_ai_agent
+    import backend.ai_agents.score_ai_agent
+    import backend.ai_agents.setup_ai_agent
+    import backend.ai_agents.strategy_ai_agent
+
+    logger.info("✅ Forced task imports succesvol geladen!")
+except Exception as e:
+    logger.error(f"❌ Fout bij laden van tasks: {e}")
+
+# ---------------------------------------------------------
 # ✔ BELANGRIJK: expose als 'app'
+# ---------------------------------------------------------
 app = celery_app
