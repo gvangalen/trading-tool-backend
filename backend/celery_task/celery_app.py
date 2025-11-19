@@ -165,6 +165,8 @@ try:
     import backend.celery_task.market_task
     import backend.celery_task.macro_task
     import backend.celery_task.technical_task
+    import backend.celery_task.strategy_task
+    import backend.celery_task.setup_task
     import backend.celery_task.btc_price_history_task
     import backend.celery_task.daily_report_task
     import backend.celery_task.weekly_report_task
@@ -175,6 +177,7 @@ try:
     import backend.ai_agents.macro_ai_agent
     import backend.ai_agents.market_ai_agent
     import backend.ai_agents.technical_ai_agent
+    import backend.ai_agents.report_ai_agent
     import backend.ai_agents.score_ai_agent
     import backend.ai_agents.setup_ai_agent
     import backend.ai_agents.strategy_ai_agent
