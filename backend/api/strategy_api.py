@@ -486,9 +486,6 @@ async def get_last_strategy():
 # =====================================================================
 # 🕒 CELERY TASK STATUS
 # =====================================================================
-from backend.celery_app import celery_app
-from celery.result import AsyncResult
-
 @router.get("/tasks/{task_id}")
 async def get_task_status(task_id: str):
     """
