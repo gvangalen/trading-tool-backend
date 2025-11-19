@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.openai_client import ask_gpt_json  # ✔ Universele AI-call
+from backend.utils.openai_client import ask_gpt  # ✔ Correcte nieuwe AI-import
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -220,7 +220,7 @@ def generate_master_score():
         prompt = build_prompt(insights, numeric)
 
         # ✔ Universele JSON-agent
-        result = ask_gpt_json(prompt)
+        result = ask_gpt(prompt)
 
         store_master_result(conn, result)
         conn.commit()
