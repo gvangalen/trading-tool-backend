@@ -237,17 +237,35 @@ async def update_setup(request: Request, setup_id: int):
         conn.close()
 
 
-# ✅ 5. Setup verwijderen
+# ✅ 5. Setup verwijderen (incl. cascade strategies)
 @router.delete("/setups/{setup_id}")
 async def delete_setup(setup_id: int):
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+        raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding")
+
     try:
         with conn.cursor() as cur:
+            # Check of setup bestaat
+            cur.execute("SELECT id FROM setups WHERE id = %s", (setup_id,))
+            exists = cur.fetchone()
+            if not exists:
+                raise HTTPException(status_code=404, detail="Setup niet gevonden")
+
+            # ❗ Cascade zorgt voor automatische deletion van strategies
             cur.execute("DELETE FROM setups WHERE id = %s", (setup_id,))
             conn.commit()
-            return {"message": f"Setup {setup_id} verwijderd"}
+
+        return {
+            "status": "success",
+            "message": f"Setup {setup_id} succesvol verwijderd (inclusief gekoppelde strategies)"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[delete_setup] Fout: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij verwijderen setup")
     finally:
         conn.close()
 
