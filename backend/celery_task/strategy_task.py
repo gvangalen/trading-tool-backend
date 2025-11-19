@@ -5,6 +5,7 @@ import json
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
+
 from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
 
 # ✅ Logging setup
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:5002/api")
 HEADERS = {"Content-Type": "application/json"}
 TIMEOUT = 10
+
 
 # ✅ Robuuste fetch-functie met retries
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
@@ -28,8 +30,9 @@ def safe_request(url, method="POST", payload=None):
         logger.error(traceback.format_exc())
         raise
 
+
 # ✅ Taak 1: Genereer strategieën voor alle setups
-@shared_task(name="backend.celery_task.strategie_task.generate_all")
+@shared_task(name="backend.celery_task.strategy_task.generate_all")
 def generate_strategieën_automatisch():
     try:
         logger.info("🚀 Start automatische strategie-generatie voor alle setups...")
@@ -40,48 +43,41 @@ def generate_strategieën_automatisch():
             return
 
         for setup in setups:
-            if setup.get("strategy_id"):
-                logger.info(f"⏭️ Strategie al aanwezig voor setup '{setup.get('name')}' → overslaan.")
+            setup_id = setup.get("id")
+            if not setup_id:
+                logger.warning(f"⚠️ Setup zonder id: {setup}")
                 continue
 
-            if not setup.get("name") or not setup.get("symbol"):
-                logger.warning(f"⚠️ Setup incompleet: {setup}")
-                continue
+            # Als je hier wilt overslaan als er al een strategy is, moet je eerst strategieën query'en.
+            # Voor nu: altijd proberen 1 strategie per setup te maken.
+            logger.info(f"🧩 Genereer strategie voor setup {setup_id} – {setup.get('name')}")
 
             strategie = generate_strategy_from_setup(setup)
             if not strategie:
-                logger.warning(f"⚠️ AI kon geen strategie genereren voor '{setup['name']}'")
+                logger.warning(f"⚠️ AI kon geen strategie genereren voor '{setup.get('name')}'")
                 continue
 
             strategy_type = setup.get("strategy_type", "manual").lower()
 
             payload = {
-                "setup_name": setup["name"],
+                "setup_id": setup_id,
+                "setup_name": setup.get("name"),
                 "strategy_type": strategy_type,
                 "symbol": setup.get("symbol", "BTC"),
                 "timeframe": setup.get("timeframe", "1D"),
                 "score": setup.get("score", 0),
                 "explanation": strategie.get("explanation"),
                 "risk_reward": strategie.get("risk_reward"),
+                "entry": strategie.get("entry"),
+                "targets": strategie.get("targets"),
+                "stop_loss": strategie.get("stop_loss"),
             }
 
-            if strategy_type == "dca":
-                payload.update({
-                    "amount": strategie.get("amount", 0),
-                    "frequency": strategie.get("frequency", "weekly"),
-                })
-            else:
-                payload.update({
-                    "entry": strategie.get("entry"),
-                    "targets": strategie.get("targets"),
-                    "stop_loss": strategie.get("stop_loss"),
-                })
-
-            logger.info(f"📦 Strategie-payload:\n{json.dumps(payload, indent=2)}")
+            logger.info(f"📦 Strategie-payload (auto):\n{json.dumps(payload, indent=2, ensure_ascii=False)}")
 
             try:
                 result = safe_request(f"{API_BASE_URL}/strategies", method="POST", payload=payload)
-                logger.info(f"✅ Strategie opgeslagen voor {setup['name']}: {result}")
+                logger.info(f"✅ Strategie opgeslagen voor {setup.get('name')}: {result}")
             except Exception as e:
                 logger.error(f"❌ Fout bij opslaan strategie: {e}")
                 logger.error(traceback.format_exc())
@@ -90,9 +86,15 @@ def generate_strategieën_automatisch():
         logger.error(f"❌ Fout in generate_strategieën_automatisch: {e}")
         logger.error(traceback.format_exc())
 
-# ✅ Taak 2: Genereer strategie voor specifieke setup
-@shared_task(name="backend.celery_task.strategie_task.generate_for_setup")
+
+# ✅ Taak 2: Genereer strategie voor specifieke setup (knop in frontend)
+@shared_task(name="backend.celery_task.strategy_task.generate_for_setup")
 def generate_strategie_voor_setup(setup_id, overwrite=True):
+    """
+    Wordt aangeroepen via:
+      POST /api/strategies/generate/{setup_id}
+    vanaf de knop "Genereer strategie (AI)" in de frontend.
+    """
     try:
         logger.info(f"🔍 Setup ophalen via ID: {setup_id}")
         res = requests.get(f"{API_BASE_URL}/setups/{setup_id}", timeout=TIMEOUT)
@@ -105,49 +107,48 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
             setup = res.json()
         except Exception:
             logger.error("❌ Setup JSON kon niet worden ingelezen")
-            return {"error": "Ongeldige JSON"}
+            return {"error": "Ongeldige JSON voor setup"}
+
+        logger.info(f"📄 Setup geladen voor strategie: {setup}")
 
         strategie = generate_strategy_from_setup(setup)
         if not strategie:
+            logger.error("❌ Strategy Agent gaf geen resultaat terug.")
             return {"error": "Strategie-generatie mislukt"}
 
-        strategy_type = setup.get("strategy_type", "manual").lower()
+        strategy_type = (setup.get("strategy_type") or "manual").lower()
 
         payload = {
+            "setup_id": setup_id,
             "setup_name": setup.get("name"),
             "strategy_type": strategy_type,
-            "symbol": setup.get("symbol"),
-            "timeframe": setup.get("timeframe"),
-            "score": setup.get("score"),
+            "symbol": setup.get("symbol", "BTC"),
+            "timeframe": setup.get("timeframe", "1D"),
+            "score": setup.get("score", 0),
             "explanation": strategie.get("explanation"),
             "risk_reward": strategie.get("risk_reward"),
+            "entry": strategie.get("entry"),
+            "targets": strategie.get("targets"),
+            "stop_loss": strategie.get("stop_loss"),
         }
 
-        if strategy_type == "dca":
-            payload.update({
-                "amount": strategie.get("amount", 0),
-                "frequency": strategie.get("frequency", "weekly"),
-            })
-        else:
-            payload.update({
-                "entry": strategie.get("entry"),
-                "targets": strategie.get("targets"),
-                "stop_loss": strategie.get("stop_loss"),
-            })
+        logger.info(f"📦 Strategie-payload (single):\n{json.dumps(payload, indent=2, ensure_ascii=False)}")
 
-        logger.info(f"📦 Strategie-payload:\n{json.dumps(payload, indent=2)}")
+        # Voor nu: altijd via POST /strategies.
+        # overwrite-flag kun je later gebruiken om een bestaande strategy op te zoeken en via PUT te updaten.
+        res = requests.post(f"{API_BASE_URL}/strategies", json=payload, timeout=TIMEOUT)
 
-        if overwrite:
-            res = requests.put(f"{API_BASE_URL}/strategies/van_setup/{setup_id}", json=payload, timeout=TIMEOUT)
-        else:
-            res = requests.post(f"{API_BASE_URL}/strategies", json=payload, timeout=TIMEOUT)
+        if res.status_code in (200, 201):
+            logger.info("✅ Strategie succesvol opgeslagen (single).")
+            return {"success": True, "strategie": payload}
 
-        if res.status_code not in [200, 201]:
-            logger.error(f"❌ Strategie opslaan faalde: {res.status_code} - {res.text}")
-            return {"error": res.text}
+        if res.status_code == 409:
+            # Strategie bestaat al voor deze setup + type
+            logger.warning(f"⚠️ Strategie bestaat al voor setup_id={setup_id} en type={strategy_type}: {res.text}")
+            return {"warning": "Strategie bestaat al voor deze setup en type."}
 
-        logger.info("✅ Strategie succesvol opgeslagen.")
-        return {"success": True, "strategie": payload}
+        logger.error(f"❌ Strategie opslaan faalde: {res.status_code} - {res.text}")
+        return {"error": res.text}
 
     except Exception as e:
         logger.error(f"❌ Fout bij strategie generatie voor setup: {e}")
