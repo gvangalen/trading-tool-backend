@@ -482,25 +482,32 @@ async def get_last_strategy():
         data["created_at"] = created_at.isoformat()
 
         return data
+        
+# =====================================================================
+# 🕒 CELERY TASK STATUS
+# =====================================================================
+from backend.celery_app import celery_app
+from celery.result import AsyncResult
 
-    @router.get("/tasks/{task_id}")
+@router.get("/tasks/{task_id}")
 async def get_task_status(task_id: str):
     """
     Haalt de status op van een Celery taak.
-    Wordt gebruikt door frontend om te wachten tot AI klaar is.
+    Gebruikt door frontend polling voor AI strategie-generatie.
     """
     try:
         result = AsyncResult(task_id, app=celery_app)
 
         response = {
             "task_id": task_id,
-            "state": result.state,
+            "state": result.state
         }
 
-        # Voeg result toe wanneer klaar
+        # Result klaar
         if result.state == "SUCCESS":
             response["result"] = result.result
 
+        # Fout
         if result.state == "FAILURE":
             response["error"] = str(result.result)
 
@@ -508,6 +515,3 @@ async def get_task_status(task_id: str):
 
     except Exception as e:
         return {"task_id": task_id, "state": "ERROR", "error": str(e)}
-
-    finally:
-        conn.close()
