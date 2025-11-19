@@ -22,18 +22,27 @@ async def save_strategy(request: Request):
     try:
         data = await request.json()
 
-        # Extract strategy type
-        strategy_type = data.get("strategy_type", "manual").lower()
+        # 🔎 Strategy type bepalen
+        strategy_type = data.get("strategy_type", "").lower()
+        if strategy_type not in ["manual", "trading", "dca"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Onbekend strategy_type '{strategy_type}'. Gebruik 'manual', 'trading' of 'dca'."
+            )
 
-        # Required fields
-        required_fields = ["setup_id", "setup_name", "symbol", "timeframe"]
+        # ---------------------------------------------------
+        # 🎯 VERPLICHTE VELDEN
+        # ---------------------------------------------------
+        required_base = ["setup_id"]
 
-        if strategy_type == "dca":
-            required_fields += ["amount", "frequency"]
-        elif strategy_type in ["manual", "trading"]:
-            required_fields += ["entry", "targets", "stop_loss"]
+        required_map = {
+            "manual": ["entry", "targets", "stop_loss"],
+            "trading": ["entry", "targets", "stop_loss"],
+            "dca": ["amount", "frequency"],  # <-- DCA gebruikt amount + frequency
+        }
 
-        # Validate
+        required_fields = required_base + required_map[strategy_type]
+
         for field in required_fields:
             if field not in data or data.get(field) in [None, "", []]:
                 raise HTTPException(
@@ -41,21 +50,30 @@ async def save_strategy(request: Request):
                     detail=f"Veld '{field}' is verplicht."
                 )
 
+        # ---------------------------------------------------
+        # 🔌 DB CONNECTIE
+        # ---------------------------------------------------
         conn = get_db_connection()
         if not conn:
             raise HTTPException(status_code=500, detail="Geen databaseverbinding")
 
         with conn.cursor() as cur:
-
-            # EXITS?
+            # ---------------------------------------------------
+            # 🛑 BESTAAT AL?
+            # ---------------------------------------------------
             cur.execute(
                 "SELECT id FROM strategies WHERE setup_id = %s AND strategy_type = %s",
                 (int(data["setup_id"]), strategy_type),
             )
             if cur.fetchone():
-                raise HTTPException(status_code=409, detail="Strategie bestaat al voor deze setup")
+                raise HTTPException(
+                    status_code=409,
+                    detail="Strategie bestaat al voor deze setup"
+                )
 
-            # TAGS
+            # ---------------------------------------------------
+            # 🏷 AUTOTAGS
+            # ---------------------------------------------------
             keywords = ["breakout", "scalp", "swing", "reversal", "dca"]
             combined_text = (
                 (data.get("setup_name", "") + " " +
@@ -71,22 +89,24 @@ async def save_strategy(request: Request):
             data.setdefault("ai_reason", "")
             data["strategy_type"] = strategy_type
 
-            # Targets normalized
+            # Targets normaliseren
             if "targets" in data and not isinstance(data["targets"], list):
                 data["targets"] = [data["targets"]]
 
-            # AI EXPLANATION FIX
-            if "ai_explanation" in data and data["ai_explanation"]:
-                explanation_val = data["ai_explanation"]
-            else:
-                explanation_val = data.get("explanation", "")
+            # Uitleg: pak ai_explanation als die bestaat, anders explanation
+            explanation_val = data.get("ai_explanation") or data.get("explanation", "")
 
-            # SQL INSERT
-            entry_val = str(data.get("entry", ""))
-            target_val = str(data.get("targets", [""])[0])
-            stop_loss_val = str(data.get("stop_loss", ""))
+            # Voor DCA laten we entry/target/stop_loss leeg opslaan (string),
+            # voor manual/trading vullen we ze vanuit de payload.
+            entry_val = "" if strategy_type == "dca" else str(data.get("entry", ""))
+            target_val = "" if strategy_type == "dca" else str(data.get("targets", [""])[0])
+            stop_loss_val = "" if strategy_type == "dca" else str(data.get("stop_loss", ""))
+
             risk_profile_val = data.get("risk_profile", None)
 
+            # ---------------------------------------------------
+            # 📝 INSERT
+            # ---------------------------------------------------
             cur.execute(
                 """
                 INSERT INTO strategies 
@@ -114,7 +134,10 @@ async def save_strategy(request: Request):
         raise
     except Exception as e:
         logger.error(f"[save_strategy] ❌ {e}")
-        raise HTTPException(status_code=500, detail="Interne serverfout bij opslaan strategie.")
+        raise HTTPException(
+            status_code=500,
+            detail="Interne serverfout bij opslaan strategie."
+        )
 
 
 # =====================================================================
@@ -337,41 +360,41 @@ async def filter_strategies(request: Request):
 # =====================================================================
 @router.get("/strategies/export")
 async def export_strategies():
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+  conn = get_db_connection()
+  if not conn:
+      raise HTTPException(status_code=500, detail="Geen databaseverbinding")
 
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, data, created_at FROM strategies")
-            rows = cur.fetchall()
+  try:
+      with conn.cursor() as cur:
+          cur.execute("SELECT id, data, created_at FROM strategies")
+          rows = cur.fetchall()
 
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(["ID", "Symbol", "Setup", "Entry", "SL", "Origin", "Created"])
+      output = io.StringIO()
+      writer = csv.writer(output)
+      writer.writerow(["ID", "Symbol", "Setup", "Entry", "SL", "Origin", "Created"])
 
-        for row in rows:
-            s = row[1]
-            writer.writerow([
-                row[0],
-                s.get("symbol"),
-                s.get("setup_name"),
-                s.get("entry"),
-                s.get("stop_loss"),
-                s.get("origin"),
-                row[2].strftime("%Y-%m-%d %H:%M")
-            ])
+      for row in rows:
+          s = row[1]
+          writer.writerow([
+              row[0],
+              s.get("symbol"),
+              s.get("setup_name"),
+              s.get("entry"),
+              s.get("stop_loss"),
+              s.get("origin"),
+              row[2].strftime("%Y-%m-%d %H:%M")
+          ])
 
-        output.seek(0)
+      output.seek(0)
 
-        return StreamingResponse(
-            iter([output.getvalue()]),
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=strategies.csv"}
-        )
+      return StreamingResponse(
+          iter([output.getvalue()]),
+          media_type="text/csv",
+          headers={"Content-Disposition": "attachment; filename=strategies.csv"}
+      )
 
-    finally:
-        conn.close()
+  finally:
+      conn.close()
 
 
 # =====================================================================
@@ -485,7 +508,8 @@ async def get_last_strategy():
 
     finally:
         conn.close()
-        
+
+
 # =====================================================================
 # 🕒 CELERY TASK STATUS
 # =====================================================================
@@ -496,6 +520,7 @@ async def get_task_status(task_id: str):
     Gebruikt door frontend polling voor AI strategie-generatie.
     """
     try:
+        # Let op: AsyncResult & celery_app moeten elders geïmporteerd worden
         result = AsyncResult(task_id, app=celery_app)
 
         response = {
@@ -503,11 +528,9 @@ async def get_task_status(task_id: str):
             "state": result.state
         }
 
-        # Result klaar
         if result.state == "SUCCESS":
             response["result"] = result.result
 
-        # Fout
         if result.state == "FAILURE":
             response["error"] = str(result.result)
 
