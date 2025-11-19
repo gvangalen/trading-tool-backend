@@ -1,10 +1,9 @@
 import logging
-import traceback
 import json
 from datetime import datetime
 
 from backend.utils.db import get_db_connection
-from backend.utils.openai_client import ask_gpt, ask_gpt_text
+from backend.utils.openai_client import ask_gpt  # ⬅️ JSON helper gebruiken
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -34,18 +33,26 @@ def generate_strategy_from_setup(setup_dict: dict):
     symbol = setup.get("symbol", "BTC")
     timeframe = setup.get("timeframe", "1D")
     trend = setup.get("trend", "?")
-    indicators = ", ".join(setup.get("indicators", [])) if isinstance(setup.get("indicators"), list) else "Geen"
 
-    logger.info(f"📄 Strategy Agent verwerkt setup: {setup_name}")
+    raw_indicators = setup.get("indicators")
+    if isinstance(raw_indicators, list):
+        indicators_str = ", ".join(raw_indicators)
+    elif isinstance(raw_indicators, str):
+        indicators_str = raw_indicators
+    else:
+        indicators_str = "Geen"
+
+    logger.info(f"📄 Strategy Agent verwerkt setup: {setup_name} ({symbol} – {timeframe})")
 
     # -------------------------------------------------------
     # 2️⃣ AI Insights laden (macro, market, technical + master)
     # -------------------------------------------------------
     ai = load_ai_insights()
-    master = ai.get("score", {})
-    macro_ai = ai.get("macro", {})
-    technical_ai = ai.get("technical", {})
-    market_ai = ai.get("market", {})
+
+    master = ai.get("score", {}) or ai.get("master", {}) or {}
+    macro_ai = ai.get("macro", {}) or {}
+    technical_ai = ai.get("technical", {}) or {}
+    market_ai = ai.get("market", {}) or {}
 
     # -------------------------------------------------------
     # 3️⃣ Prompt opbouwen (universele style)
@@ -53,7 +60,7 @@ def generate_strategy_from_setup(setup_dict: dict):
     prompt = f"""
 Je bent een professionele crypto trader en AI-strategie analist.
 
-We hebben een setup en AI-insights. Bouw een strategie die ALTIJD in geldige JSON staat.
+We hebben een setup en AI-insights. Bouw een **swingtrade strategie** die ALTIJD in geldige JSON staat.
 
 ====================
 📌 SETUP INFO
@@ -62,7 +69,7 @@ Naam: {setup_name}
 Asset: {symbol}
 Timeframe: {timeframe}
 Trend: {trend}
-Indicatoren: {indicators}
+Indicatoren: {indicators_str}
 
 ====================
 📊 AI MASTER SCORE
@@ -83,35 +90,79 @@ Technical: score={technical_ai.get("score")}, trend={technical_ai.get("trend")}
 ====================
 🎯 DOEL
 ====================
-Maak een swingtrade strategie met:
-- entry (1 niveau)
-- targets (3 niveaus)
-- stop_loss (1 niveau)
-- risk_reward (ratio)
-- explanation (kort, helder, NL)
+Maak een SWINGTRADE strategie die de richting van de trend volgt.
 
-De strategie moet in lijn liggen met:
-1) AI Master Score
-2) Macro / Technical / Market bias
-3) Trend van de setup
+Structuur JSON-output:
+{{
+  "entry": "getal of range als string, bijv. '95000' of '95000-97000'",
+  "targets": ["target1", "target2", "target3"],
+  "stop_loss": "niveau, bijv. '91000'",
+  "risk_reward": "ratio als string, bijv. '3R' of '1:3'",
+  "explanation": "korte NL uitleg (2-4 zinnen) waarom deze strategie logisch is."
+}}
 
-ANTWOORD IN PURE JSON.
+BELANGRIJK:
+- Gebruik **ALLEEN** deze velden.
+- Geen extra tekst, geen uitleg buiten JSON.
+- Antwoord in **pure JSON**.
 """
 
     # -------------------------------------------------------
-    # 4️⃣ GPT Request (universele helper)
+    # 4️⃣ GPT Request via ask_gpt (JSON helper)
     # -------------------------------------------------------
-    ai_json = ask_gpt_text(prompt)
+    response = ask_gpt(
+        prompt,
+        system_role=(
+            "Je bent een professionele crypto trader. "
+            "Antwoord ALTIJD in geldige JSON, zonder extra tekst, markdown of uitleg."
+        ),
+    )
 
-    try:
-        parsed = json.loads(ai_json)
-        if not isinstance(parsed, dict):
-            raise ValueError("AI gaf geen dict terug.")
-        return parsed
+    # Als er een error-key in zit, fallback
+    if not isinstance(response, dict):
+        logger.error(f"❌ Strategy Agent kreeg geen dict terug: {response}")
+        return fallback_strategy("AI gaf geen dict terug.")
 
-    except Exception as e:
-        logger.error(f"❌ Strategy JSON parse fout: {e}")
-        return fallback_strategy(ai_json)
+    if "error" in response and not any(k in response for k in ("entry", "targets", "stop_loss")):
+        logger.error(f"❌ Strategy Agent error: {response.get('error')}")
+        return fallback_strategy(response.get("error", "Onbekende AI-fout"))
+
+    # -------------------------------------------------------
+    # 5️⃣ Normaliseer resultaat (altijd dezelfde velden)
+    # -------------------------------------------------------
+    entry = response.get("entry")
+    targets = response.get("targets")
+    stop_loss = response.get("stop_loss")
+    rr = response.get("risk_reward") or response.get("rr") or response.get("rr_ratio")
+    explanation = response.get("explanation") or response.get("summary")
+
+    # Targets altijd lijst
+    if isinstance(targets, str):
+        # bv "95000, 98000, 100000"
+        targets = [t.strip() for t in targets.split(",") if t.strip()]
+    elif not isinstance(targets, list):
+        targets = []
+
+    # Defaults
+    if not entry:
+        entry = "n.v.t."
+    if not stop_loss:
+        stop_loss = "n.v.t."
+    if not rr:
+        rr = "?"
+    if not explanation:
+        explanation = "AI-strategie gegenereerd, maar zonder uitgebreide uitleg."
+
+    strategy = {
+        "entry": entry,
+        "targets": targets,
+        "stop_loss": stop_loss,
+        "risk_reward": rr,
+        "explanation": explanation,
+    }
+
+    logger.info(f"✅ Strategy Agent resultaat: {json.dumps(strategy, ensure_ascii=False)[:200]}")
+    return strategy
 
 
 # ------------------------------------------------------------
@@ -145,7 +196,7 @@ def fallback_strategy(reason: str):
         "targets": [],
         "stop_loss": "n.v.t.",
         "risk_reward": "?",
-        "explanation": f"AI-output kon niet worden geïnterpreteerd ({reason[:200]})"
+        "explanation": f"AI-output kon niet worden geïnterpreteerd ({str(reason)[:200]})"
     }
 
 
@@ -170,14 +221,16 @@ def load_ai_insights():
             rows = cur.fetchall()
 
         for r in rows:
-            insights[r[0]] = {
-                "score": r[1],
-                "trend": r[2],
-                "bias": r[3],
-                "risk": r[4],
-                "summary": r[5],
+            category, avg_score, trend, bias, risk, summary = r
+            insights[category] = {
+                "score": avg_score,
+                "trend": trend,
+                "bias": bias,
+                "risk": risk,
+                "summary": summary,
             }
 
+        logger.info(f"📊 AI Insights geladen voor categories: {list(insights.keys())}")
         return insights
 
     except Exception as e:
