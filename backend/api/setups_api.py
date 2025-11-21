@@ -355,3 +355,42 @@ async def get_setup_by_id(setup_id: int):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+# ✅ 11. Laatste setup ophalen (fallback voor Active Setup Card)
+@router.get("/setups/last")
+async def get_last_setup():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    id, name, symbol, timeframe, account_type, strategy_type,
+                    min_investment, dynamic_investment, tags, trend,
+                    score_logic, favorite, explanation, description, action,
+                    category,
+                    min_macro_score, max_macro_score,
+                    min_technical_score, max_technical_score,
+                    min_market_score, max_market_score,
+                    created_at
+                FROM setups
+                ORDER BY created_at DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+
+        # Geen setups in database
+        if not row:
+            return {"setup": None}
+
+        # Format één enkele rij
+        formatted = format_setup_rows([row])[0]
+        return {"setup": formatted}
+
+    except Exception as e:
+        logger.error(f"❌ get_last_setup fout: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen laatste setup")
+    finally:
+        conn.close()
