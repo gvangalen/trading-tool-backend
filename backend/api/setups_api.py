@@ -394,3 +394,75 @@ async def get_last_setup():
         raise HTTPException(status_code=500, detail="Fout bij ophalen laatste setup")
     finally:
         conn.close()
+
+# ✅ 12. Actieve setup van vandaag ophalen (uit Setup Agent)
+@router.get("/setups/active")
+async def get_active_setup():
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ Geen databaseverbinding")
+
+    try:
+        with conn.cursor() as cur:
+            # 1️⃣ Zoek de beste setup van vandaag (door de Setup-Agent bepaald)
+            cur.execute("""
+                SELECT 
+                    ds.setup_id,
+                    ds.score,
+                    ds.explanation,
+                    s.name,
+                    s.symbol,
+                    s.timeframe,
+                    s.trend,
+                    s.strategy_type,
+                    s.min_investment,
+                    s.dynamic_investment,
+                    s.tags,
+                    s.favorite,
+                    s.action,
+                    s.explanation as setup_explanation
+                FROM daily_setup_scores ds
+                JOIN setups s ON s.id = ds.setup_id
+                WHERE ds.date = CURRENT_DATE
+                AND ds.is_best = TRUE
+                LIMIT 1
+            """)
+
+            row = cur.fetchone()
+
+        if not row:
+            # Geen active setup → frontend gebruikt fallback (last setup)
+            return {"active": None}
+
+        (
+            setup_id, score, ai_explanation,
+            name, symbol, timeframe, trend, strategy_type,
+            min_investment, dynamic_investment, tags, favorite,
+            action, setup_explanation
+        ) = row
+
+        return {
+            "active": {
+                "setup_id": setup_id,
+                "score": score,
+                "ai_explanation": ai_explanation,
+                "name": name,
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "trend": trend,
+                "strategy_type": strategy_type,
+                "min_investment": min_investment,
+                "dynamic_investment": dynamic_investment,
+                "tags": tags,
+                "favorite": favorite,
+                "action": action,
+                "setup_explanation": setup_explanation,
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"❌ get_active_setup fout: {e}")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen actieve setup")
+
+    finally:
+        conn.close()
