@@ -8,10 +8,32 @@ from backend.utils.openai_client import ask_gpt_text
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# ===================================================================
+# 🧠 HELPER — score overlap berekenen
+# ===================================================================
+def score_overlap(value, min_v, max_v):
+    """
+    Hoe goed de score binnen de range valt.
+    - 100 = perfect in het midden
+    - lager = rand
+    - 0 = buiten range
+    """
+    if value < min_v or value > max_v:
+        return 0
 
-# =========================================================
-# 🤖 1. SETUP AGENT — kiest beste setup van vandaag
-# =========================================================
+    mid = (min_v + max_v) / 2
+    dist = abs(value - mid)
+    max_dist = (max_v - min_v) / 2
+
+    if max_dist == 0:
+        return 100
+
+    return round(100 - (dist / max_dist * 100))
+
+
+# ===================================================================
+# 🤖 HOOFDFUNCTIE — Find Active Setup
+# ===================================================================
 def run_setup_agent(asset="BTC"):
     logger.info("🤖 Setup-Agent gestart...")
 
@@ -23,9 +45,9 @@ def run_setup_agent(asset="BTC"):
     try:
         with conn.cursor() as cur:
 
-            # -------------------------------------------------
-            # 1️⃣ Scores ophalen (macro / technical / market)
-            # -------------------------------------------------
+            # ---------------------------------------
+            # 1️⃣ Scores ophalen (macro / tech / market)
+            # ---------------------------------------
             cur.execute("""
                 SELECT macro_score, technical_score, market_score
                 FROM daily_scores
@@ -39,20 +61,17 @@ def run_setup_agent(asset="BTC"):
 
             macro_score, technical_score, market_score = row
 
-            # -------------------------------------------------
-            # 2️⃣ Alle setups ophalen voor dit asset
-            # -------------------------------------------------
+            # ---------------------------------------
+            # 2️⃣ Alle setups voor dit asset ophalen
+            # ---------------------------------------
             cur.execute("""
                 SELECT 
-                    id, name,
+                    id, name, symbol,
                     min_macro_score, max_macro_score,
                     min_technical_score, max_technical_score,
                     min_market_score, max_market_score,
-                    explanation,
-                    action,
-                    dynamic_investment,
-                    symbol,
-                    created_at
+                    explanation, action, strategy_type,
+                    dynamic_investment, created_at
                 FROM setups
                 WHERE symbol = %s
                 ORDER BY created_at DESC
@@ -60,75 +79,91 @@ def run_setup_agent(asset="BTC"):
 
             setups = cur.fetchall()
 
-        results = []
-        best_setup_id = None
-        best_total_score = -999
+        if not setups:
+            logger.warning("⚠️ Geen setups gevonden voor asset.")
+            return []
 
-        # -------------------------------------------------
-        # 3️⃣ Elke setup scoren
-        # -------------------------------------------------
+        results = []
+        best_setup = None
+        best_score_total = -999999
+
+        # ===================================================================
+        # 3️⃣ BEREKEN MATCH PER SETUP
+        # ===================================================================
         for (
-            setup_id, name,
+            setup_id, name, symbol,
             min_macro, max_macro,
             min_tech, max_tech,
             min_market, max_market,
-            explanation, action,
-            dynamic_investment,
-            symbol, created_at
+            explanation, action, strategy_type,
+            dynamic_investment, created_at
         ) in setups:
 
-            macro_ok = min_macro <= macro_score <= max_macro
-            tech_ok = min_tech <= technical_score <= max_tech
-            market_ok = min_market <= market_score <= max_market
+            # Match checks
+            macro_match = score_overlap(macro_score, min_macro, max_macro)
+            tech_match = score_overlap(technical_score, min_tech, max_tech)
+            market_match = score_overlap(market_score, min_market, max_market)
 
-            active = macro_ok and tech_ok and market_ok
-            total_score = round((macro_score + technical_score + market_score) / 3)
+            total_match = round((macro_match + tech_match + market_match) / 3)
 
-            # Beste setup bepalen
-            if total_score > best_total_score:
-                best_total_score = total_score
-                best_setup_id = setup_id
+            active = (
+                macro_match > 0 and
+                tech_match > 0 and
+                market_match > 0
+            )
 
-            # -------------------------------------------------
-            # 4️⃣ AI-uitleg genereren
-            # -------------------------------------------------
-            prompt = f"""
+            # Beste setup bepalen (beste matchscore)
+            if total_match > best_score_total:
+                best_score_total = total_match
+                best_setup = {
+                    "setup_id": setup_id,
+                    "name": name,
+                    "symbol": symbol,
+                    "total_match": total_match,
+                    "macro_match": macro_match,
+                    "tech_match": tech_match,
+                    "market_match": market_match,
+                    "active": active,
+                    "strategy_type": strategy_type
+                }
+
+            # AI uitleg (eventueel later optimaliseren)
+            short_prompt = f"""
 Je bent een professionele crypto analist.
 
-We beoordelen een setup:
+MARKT TODAY:
+- Macro: {macro_score}
+- Technical: {technical_score}
+- Market: {market_score}
 
-=== SETUP ===
-Naam: {name}
+SETUP:
+- Naam: {name}
+- Ranges:
+  Macro {min_macro}-{max_macro}
+  Technical {min_tech}-{max_tech}
+  Market {min_market}-{max_market}
 
-=== SCORES ===
-Macro score: {macro_score}
-Technical score: {technical_score}
-Market score: {market_score}
-
-=== SETUP RANGES ===
-Macro: {min_macro} - {max_macro}
-Technical: {min_tech} - {max_tech}
-Market: {min_market} - {max_market}
-
-Vraag:
-Past deze setup bij de huidige marktsituatie?
-Geef een korte, duidelijke uitleg in het Nederlands.
+Geef één korte zin over hoe goed deze setup past.
 """
 
-            ai_explanation = ask_gpt_text(prompt)
+            ai_expl = ask_gpt_text(short_prompt)
 
             results.append({
                 "setup_id": setup_id,
                 "name": name,
-                "score": total_score,
+                "symbol": symbol,
                 "active": active,
+                "match_score": total_match,
+                "macro_match": macro_match,
+                "technical_match": tech_match,
+                "market_match": market_match,
+                "ai_comment": ai_expl,
                 "best_of_day": False,
-                "explanation": ai_explanation,
             })
 
-            # -------------------------------------------------
-            # 5️⃣ Opslaan in daily_setup_scores
-            # -------------------------------------------------
+            # --------------------------------------------
+            # Opslaan in daily_setup_scores
+            # --------------------------------------------
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO daily_setup_scores 
@@ -142,58 +177,55 @@ Geef een korte, duidelijke uitleg in het Nederlands.
                 """, (
                     setup_id,
                     date.today(),
-                    total_score,
+                    total_match,
                     active,
-                    ai_explanation
+                    ai_expl
                 ))
 
-        # -------------------------------------------------
-        # 6️⃣ Beste setup markeren
-        # -------------------------------------------------
-        if best_setup_id:
+        # ===================================================================
+        # 4️⃣ BEST OF DAY instellen
+        # ===================================================================
+        if best_setup:
             with conn.cursor() as cur:
                 cur.execute("""
                     UPDATE daily_setup_scores
                     SET is_best = TRUE
                     WHERE setup_id = %s AND date = %s
-                """, (best_setup_id, date.today()))
+                """, (best_setup["setup_id"], date.today()))
 
-            # Markeer lokaal
-            for r in results:
-                if r["setup_id"] == best_setup_id:
-                    r["best_of_day"] = True
+        # Markeer in output
+        for r in results:
+            if r["setup_id"] == best_setup["setup_id"]:
+                r["best_of_day"] = True
 
         conn.commit()
-        logger.info("✅ Setup-Agent voltooid.")
-        return results
+        logger.info("✅ Setup-Agent voltooid met actieve setup.")
+
+        return {
+            "active_setup": best_setup,
+            "all_setups": results
+        }
 
     except Exception:
         logger.error("❌ Setup-Agent crash:", exc_info=True)
-        return []
+        return {
+            "active_setup": None,
+            "all_setups": []
+        }
 
     finally:
         conn.close()
 
 
 
-# =========================================================
-# 🧠 2. **EXTRA FUNCTIE**: Losse AI-uitleg per setup (API-knop)
-# =========================================================
+# ===================================================================
+# 🧠 Losse uitleg generator voor de frontend (knop)
+# ===================================================================
 def generate_setup_explanation(setup_id: int) -> str:
-    """
-    Deze functie wordt gebruikt door de frontend-knop:
-    “Genereer AI uitleg”.
-
-    - Haalt 1 setup op
-    - Bouwt een korte prompt
-    - Maakt AI-uitleg met ask_gpt_text()
-    - Slaat het op in setups.explanation
-    """
     logger.info(f"🧠 AI-uitleg genereren voor setup {setup_id}...")
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen databaseverbinding.")
         return "Fout: geen databaseverbinding."
 
     try:
@@ -217,9 +249,6 @@ def generate_setup_explanation(setup_id: int) -> str:
             min_market, max_market
         ) = row
 
-        # -------------------------------
-        # Prompt bouwen
-        # -------------------------------
         prompt = f"""
 Je bent een professionele crypto-analist.
 
@@ -235,23 +264,20 @@ Score ranges:
 - Technical: {min_tech} — {max_tech}
 - Market: {min_market} — {max_market}
 
-Maak het duidelijk, beknopt en begrijpelijk.
+Korte, duidelijke uitleg.
 """
 
         explanation = ask_gpt_text(prompt)
 
-        # -------------------------------
-        # Opslaan in DB
-        # -------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE setups
                 SET explanation = %s
                 WHERE id = %s
             """, (explanation, setup_id))
+
             conn.commit()
 
-        logger.info(f"✅ AI-uitleg opgeslagen voor setup {setup_id}")
         return explanation
 
     except Exception:
