@@ -22,7 +22,7 @@ TIMEOUT = 10
 # ---------------------------------------------------------
 # 🔁 Safe request helper
 # ---------------------------------------------------------
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=3, max=12), reraise=True)
 def safe_request(url, method="GET", payload=None):
     try:
         response = requests.request(
@@ -43,13 +43,6 @@ def safe_request(url, method="GET", payload=None):
 # 🧩 Helper: check of strategy bestaat
 # ---------------------------------------------------------
 def find_existing_strategy(setup_id, strategy_type):
-    """
-    Returned:
-    {
-        "exists": True/False,
-        "strategy": {...}
-    }
-    """
     try:
         url = f"{API_BASE_URL}/strategies/by_setup/{setup_id}?type={strategy_type}"
         res = requests.get(url, timeout=TIMEOUT)
@@ -58,7 +51,8 @@ def find_existing_strategy(setup_id, strategy_type):
             return None
 
         return res.json()
-    except Exception:
+    except Exception as e:
+        logger.error("❌ Failed to check existing strategy")
         return None
 
 
@@ -66,9 +60,6 @@ def find_existing_strategy(setup_id, strategy_type):
 # ✨ Payload builder (AI → DB)
 # ---------------------------------------------------------
 def build_payload(setup, strategie):
-    """
-    AI explanation wordt ai_explanation — jouw handmatige blijft bestaan.
-    """
     return {
         "setup_id": setup["id"],
         "setup_name": setup.get("name"),
@@ -77,9 +68,7 @@ def build_payload(setup, strategie):
         "timeframe": setup.get("timeframe", "1D"),
         "score": setup.get("score", 0),
 
-        # AI explanation
         "ai_explanation": strategie.get("explanation"),
-
         "risk_reward": strategie.get("risk_reward"),
         "entry": strategie.get("entry"),
         "targets": strategie.get("targets"),
@@ -93,77 +82,93 @@ def build_payload(setup, strategie):
 @shared_task(name="backend.celery_task.strategy_task.generate_for_setup")
 def generate_strategie_voor_setup(setup_id, overwrite=True):
     try:
+        # -----------------------------------------------------
+        # 1. SETUP OPHALEN
+        # -----------------------------------------------------
         logger.info(f"🔍 Setup ophalen via /setups/{setup_id}")
         res = requests.get(f"{API_BASE_URL}/setups/{setup_id}", timeout=TIMEOUT)
 
         if not res.ok:
-            logger.error(f"❌ Setup ophalen mislukt: {res.status_code} - {res.text}")
-            return {"error": "Setup niet gevonden"}
+            return {
+                "state": "FAILURE",
+                "success": False,
+                "error": f"Setup niet gevonden ({res.status_code})"
+            }
 
         setup = res.json()
         logger.info(f"📄 Setup geladen: {setup}")
 
         # -----------------------------------------------------
-        # 🔍 AI strategie genereren
+        # 2. AI STRATEGIE GENEREREN
         # -----------------------------------------------------
         strategie = generate_strategy_from_setup(setup)
         if not strategie:
-            return {"error": "AI kon geen strategie genereren"}
+            return {
+                "state": "FAILURE",
+                "success": False,
+                "error": "AI kon geen strategie genereren"
+            }
 
         payload = build_payload(setup, strategie)
         strategy_type = payload["strategy_type"]
 
         # -----------------------------------------------------
-        # 🔍 Check of strategy bestaat
+        # 3. CHECK BESTAANDE STRATEGIE
         # -----------------------------------------------------
         existing = find_existing_strategy(setup_id, strategy_type)
+        existing_id = None
 
-        # Voorbeeld shape:
-        # {"exists": true, "strategy": {...}}
-        existing_strategy_id = None
-        if existing and existing.get("exists"):
-            existing_strategy_id = existing["strategy"].get("id")
+        if existing and existing.get("exists") and existing.get("strategy"):
+            existing_id = existing["strategy"].get("id")
 
         # -----------------------------------------------------
-        # ✏ UPDATE BESTAANDE STRATEGIE
+        # 4. UPDATE BESTAANDE STRATEGIE
         # -----------------------------------------------------
-        if existing_strategy_id and overwrite:
-            logger.info(f"✏ Updaten bestaand strategy ID={existing_strategy_id}")
+        if existing_id and overwrite:
+            logger.info(f"✏ Update bestaande strategy ID={existing_id}")
 
-            res = requests.put(
-                f"{API_BASE_URL}/strategies/{existing_strategy_id}",
-                json=payload,
-                timeout=TIMEOUT
+            result = safe_request(
+                f"{API_BASE_URL}/strategies/{existing_id}",
+                method="PUT",
+                payload=payload
             )
 
-            if res.status_code in (200, 201):
-                logger.info("✅ Strategie bijgewerkt")
-                return {"success": True, "updated": True, "strategy": payload}
-
-            logger.error(f"❌ Update mislukt: {res.status_code} {res.text}")
-            return {"error": "Bijwerken mislukt"}
+            return {
+                "state": "SUCCESS",
+                "success": True,
+                "updated": True,
+                "created": False,
+                "strategy": result  # full DB object!
+            }
 
         # -----------------------------------------------------
-        # ➕ CREATE Nieuwe strategie
+        # 5. CREATE NIEUWE STRATEGIE
         # -----------------------------------------------------
         logger.info("➕ Nieuwe strategie aanmaken")
-        res = requests.post(
+
+        result = safe_request(
             f"{API_BASE_URL}/strategies",
-            json=payload,
-            timeout=TIMEOUT
+            method="POST",
+            payload=payload
         )
 
-        if res.status_code in (200, 201):
-            logger.info("✅ Nieuwe strategie aangemaakt")
-            return {"success": True, "created": True, "strategy": payload}
-
-        logger.error(f"❌ Aanmaken mislukt: {res.status_code} {res.text}")
-        return {"error": "Aanmaken mislukt"}
+        return {
+            "state": "SUCCESS",
+            "success": True,
+            "updated": False,
+            "created": True,
+            "strategy": result
+        }
 
     except Exception as e:
         logger.error(f"❌ Fout in generate_strategie_voor_setup: {e}")
         logger.error(traceback.format_exc())
-        return {"error": str(e)}
+
+        return {
+            "state": "FAILURE",
+            "success": False,
+            "error": str(e)
+        }
 
 
 # ---------------------------------------------------------
@@ -176,17 +181,27 @@ def generate_strategieën_automatisch():
 
         setups = safe_request(f"{API_BASE_URL}/setups", method="GET")
         if not isinstance(setups, list):
-            return {"error": "Ongeldige response van /setups"}
+            return {"state": "FAILURE", "success": False, "error": "Ongeldige setup respons"}
+
+        results = []
 
         for setup in setups:
             setup_id = setup["id"]
-            logger.info(f"🔁 Strategy genereren voor setup {setup_id}")
+            logger.info(f"🔁 Strategie genereren voor setup {setup_id}")
 
-            generate_strategie_voor_setup(setup_id, overwrite=True)
+            result = generate_strategie_voor_setup(setup_id, overwrite=True)
+            results.append(result)
 
-        return {"success": True}
+        return {
+            "state": "SUCCESS",
+            "success": True,
+            "results": results
+        }
 
     except Exception as e:
         logger.error(f"❌ Fout generate_strategieën_automatisch: {e}")
-        logger.error(traceback.format_exc())
-        return {"error": str(e)}
+        return {
+            "state": "FAILURE",
+            "success": False,
+            "error": str(e)
+        }
