@@ -322,41 +322,7 @@ async def get_top_setups(limit: int = 3):
     finally:
         conn.close()
 
-# ✅ 10. Één enkele setup ophalen via ID
-@router.get("/setups/{setup_id}")
-async def get_setup_by_id(setup_id: int):
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, name, symbol, timeframe, account_type, strategy_type,
-                       min_investment, dynamic_investment, tags, trend,
-                       score_logic, favorite, explanation, description, action,
-                       category,
-                       min_macro_score, max_macro_score,
-                       min_technical_score, max_technical_score,
-                       min_market_score, max_market_score, created_at
-                FROM setups
-                WHERE id = %s
-            """, (setup_id,))
-            row = cur.fetchone()
-
-        if not row:
-            raise HTTPException(status_code=404, detail="Setup niet gevonden")
-
-        return format_setup_rows([row])[0]
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
-
-# ✅ 11. Laatste setup ophalen (fallback voor Active Setup Card)
+# ✅ 10. Laatste setup ophalen (fallback voor Active Setup Card)
 @router.get("/setups/last")
 async def get_last_setup():
     conn = get_db_connection()
@@ -394,6 +360,42 @@ async def get_last_setup():
         raise HTTPException(status_code=500, detail="Fout bij ophalen laatste setup")
     finally:
         conn.close()
+
+# ✅ 11. Één enkele setup ophalen via ID
+@router.get("/setups/{setup_id}")
+async def get_setup_by_id(setup_id: int):
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, name, symbol, timeframe, account_type, strategy_type,
+                       min_investment, dynamic_investment, tags, trend,
+                       score_logic, favorite, explanation, description, action,
+                       category,
+                       min_macro_score, max_macro_score,
+                       min_technical_score, max_technical_score,
+                       min_market_score, max_market_score, created_at
+                FROM setups
+                WHERE id = %s
+            """, (setup_id,))
+            row = cur.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail="Setup niet gevonden")
+
+        return format_setup_rows([row])[0]
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+
 
 # ✅ 12. Actieve setup van vandaag ophalen (uit Setup Agent)
 @router.get("/setups/active")
