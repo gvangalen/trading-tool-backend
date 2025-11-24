@@ -6,8 +6,8 @@ from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
 from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import get_scores_for_symbol  # DB-gedreven scores
-from backend.utils.openai_client import ask_gpt_text  # ✅ universele AI-helper (tekst)
+from backend.utils.scoring_utils import get_scores_for_symbol
+from backend.utils.openai_client import ask_gpt_text
 
 # =====================================================
 # 🪵 Logging
@@ -27,7 +27,6 @@ def log_and_print(msg: str):
         with open(LOG_FILE, "a") as f:
             f.write(msg + "\n")
     except Exception:
-        # Geen harde crash als logbestand faalt
         pass
     print(msg)
 
@@ -39,20 +38,27 @@ def safe_get(obj, key, fallback="–"):
 
 
 # =====================================================
+# 🎨 PREMIUM REPORT STYLE – centraal gebruikt door ALLES
+# =====================================================
+REPORT_STYLE_GUIDE = """
+Je bent een professionele Bitcoin- en macro-analist.
+Schrijf in het Nederlands in de stijl van een premium nieuwsbrief
+(een mix van Glassnode, BitcoinStrategy en TIA).
+
+Richtlijnen:
+- Schrijf beknopt, analytisch en menselijk.
+- Focus op context, beweging, risico, niveaus en kansen.
+- Gebruik korte alinea’s en duidelijke bullets waar relevant.
+- Leg geen basisconcepten uit (zoals RSI, MA, support/resistance).
+- Geen hype, geen doom — professioneel en rustig.
+- Elke sectie heeft een unieke functie; geen herhaling.
+- Vermijd schoolboek-toon, schrijf alsof het een marktupdate is voor ervaren traders.
+"""
+
+# =====================================================
 # 📊 Scores uit DB
 # =====================================================
 def get_scores_from_db():
-    """
-    ➜ 1) Probeert de live scores via scoring_utils.get_scores_for_symbol()
-    ➜ 2) Valt terug op daily_scores als dat mislukt
-
-    Verwachte keys:
-      - macro_score
-      - technical_score
-      - setup_score
-      - market_score
-      (+ eventueel *_interpretation, *_top_contributors)
-    """
     try:
         scores = get_scores_for_symbol(include_metadata=True)
         if scores:
@@ -61,7 +67,6 @@ def get_scores_from_db():
     except Exception as e:
         log_and_print(f"⚠️ Live scoreberekening mislukt: {e}")
 
-    # Fallback: oude daily_scores-tabel
     conn = get_db_connection()
     if not conn:
         log_and_print("❌ Geen DB-verbinding voor fallback-scores.")
@@ -94,20 +99,9 @@ def get_scores_from_db():
 
 
 # =====================================================
-# 🧠 AI-agent inzichten + master score uit DB
+# 🧠 AI insights laden
 # =====================================================
 def get_ai_insights_from_db():
-    """
-    Leest de laatste AI interpretaties per categorie + master-score uit ai_category_insights.
-
-    Structuur:
-      {
-        "macro":   { score, trend, bias, risk, summary },
-        "market":  { ... },
-        "technical": { ... },
-        "score":   { ... }   # = master score agent
-      }
-    """
     conn = get_db_connection()
     if not conn:
         log_and_print("❌ Geen DB-verbinding voor AI insights.")
@@ -169,123 +163,192 @@ def get_latest_market_data():
 
 
 # =====================================================
-# 🧠 Generieke AI-sectie (via universele helper)
+# 🧠 Premium text generator
 # =====================================================
 def generate_section(prompt: str, retries: int = 3) -> str:
-    """
-    Genereert een tekstsectie via de centrale AI-helper.
-    """
-    # logging laten we hier bewust licht houden; openai_client zelf logt ook
     text = ask_gpt_text(
         prompt,
-        system_role="Je bent een professionele crypto-analist. Schrijf in het Nederlands.",
+        system_role=REPORT_STYLE_GUIDE,
         retries=retries,
     )
-
-    # Als de helper om wat voor reden dan ook None of lege string teruggeeft
     if not text:
         return "AI-generatie mislukt of gaf geen output."
-    return text
+    return text.strip()
 
 
 # =====================================================
-# 🧩 Prompt helpers
+# 🧩 NEW PREMIUM PROMPTS — Glassnode + Newsletter stijl
 # =====================================================
 def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None) -> str:
-    prijsinfo = ""
-    if market_data:
-        prijsinfo = (
-            f"\nPrijs: ${market_data.get('price', '?')}, "
-            f"Volume: ${market_data.get('volume', '?')}, "
-            f"24u verandering: {market_data.get('change_24h', '?')}%"
-        )
+    price = safe_get(market_data or {}, "price")
+    volume = safe_get(market_data or {}, "volume")
+    change = safe_get(market_data or {}, "change_24h")
 
-    ai_part = ""
-    master = ai_insights.get("score") if isinstance(ai_insights, dict) else None
-    if master:
-        ai_part = (
-            f"\nAI Master Score: {master.get('score', '–')} "
-            f"({master.get('trend', '–')}, {master.get('bias', '–')}, "
-            f"risico: {master.get('risk', '–')})"
-        )
+    macro = safe_get(scores, "macro_score")
+    tech = safe_get(scores, "technical_score")
+    setup_score = safe_get(scores, "setup_score")
+    market_score = safe_get(scores, "market_score")
 
-    return f"""Geef een korte samenvatting van de huidige situatie voor Bitcoin:
-Setup: {safe_get(setup, 'name')}
+    master = ai_insights.get("score") if isinstance(ai_insights, dict) else {}
+    m_score = safe_get(master, "score")
+    m_trend = safe_get(master, "trend")
+    m_bias = safe_get(master, "bias")
+    m_risk = safe_get(master, "risk")
+
+    return f"""
+Schrijf een krachtige openingssectie (max 6–8 zinnen) voor een premium Bitcoin-rapport.
+Beschrijf:
+- De huidige staat van de markt (trend, momentum, sentiment).
+- Hoe de vier scores samen het beeld vormen:
+  Macro {macro}, Technisch {tech}, Setup {setup_score}, Markt {market_score}.
+- Hoe de AI Master Score de situatie interpreteert:
+  Score {m_score}, trend {m_trend}, bias {m_bias}, risico {m_risk}.
+- Hoe prijs ${price}, volume {volume} en 24u verandering {change}% passen in het verhaal.
+- Benoem indien relevant één belangrijk prijsniveau dat vandaag telt.
+
+Setup context:
+Naam: {safe_get(setup, 'name')}
 Timeframe: {safe_get(setup, 'timeframe')}
-Technische score: {safe_get(scores, 'technical_score', 0)}
-Setup score: {safe_get(scores, 'setup_score', 0)}
-Macro score: {safe_get(scores, 'macro_score', 0)}
-Market score: {safe_get(scores, 'market_score', 0)}{prijsinfo}{ai_part}"""
+"""
 
 
 def prompt_for_macro_summary(scores, ai_insights=None) -> str:
-    ai_summary = ""
-    macro = ai_insights.get("macro") if isinstance(ai_insights, dict) else None
-    if macro:
-        ai_summary = f"\nAI interpretatie: {macro.get('summary', '')}"
-    return f"""Vat de macro-economische situatie samen.
-Macro-score: {safe_get(scores, 'macro_score', 0)}{ai_summary}"""
+    macro_score = safe_get(scores, "macro_score")
+    macro = ai_insights.get("macro") if isinstance(ai_insights, dict) else {}
+
+    trend = safe_get(macro, "trend")
+    bias = safe_get(macro, "bias")
+    risk = safe_get(macro, "risk")
+    summary = safe_get(macro, "summary")
+
+    return f"""
+Maak een compacte macro-economische marktupdate (5–8 zinnen).
+
+Gebruik deze data:
+- Macro score: {macro_score}
+- Trend: {trend}
+- Bias: {bias}
+- Risico: {risk}
+- AI macro samenvatting: {summary}
+
+Beschrijf:
+- Hoe de macro-omgeving risk assets beïnvloedt.
+- Of macro nu eerder rugwind of tegenwind geeft voor Bitcoin.
+- Wat de belangrijkste drivers zijn (liquiditeit, rente, inflatie, equities).
+"""
 
 
 def prompt_for_setup_checklist(setup) -> str:
-    return f"""Controleer A+ criteria voor de setup:
-Setup: {safe_get(setup, 'name')}
-Timeframe: {safe_get(setup, 'timeframe')}
-Indicatoren: {safe_get(setup, 'indicators', [])}"""
+    return f"""
+Schrijf een concrete 'Setup Snapshot' voor traders.
+Geen basisuitleg, wel toepasbare bullets.
+
+Setup:
+- Naam: {safe_get(setup, 'name')}
+- Timeframe: {safe_get(setup, 'timeframe')}
+- Type: {safe_get(setup, 'type', '–')}
+- Indicatoren: {safe_get(setup, 'indicators', [])}
+
+Beschrijf in maximaal 8 bullets:
+- Wat deze setup sterk maakt
+- Wat hem zwak maakt
+- Wat nodig is voor activatie
+- Wat invalidatie is
+- Hoe een trader het beste met deze setup omgaat
+"""
 
 
 def prompt_for_priorities(setup, scores) -> str:
-    return f"""Belangrijkste aandachtspunten vandaag:
-Setup: {safe_get(setup, 'name')}
-Scores: {scores}"""
+    return f"""
+Genereer een sectie 'Dagelijkse Prioriteiten' voor traders.
+Maximaal 3–7 bullets.
+
+Context:
+- Setup: {safe_get(setup, 'name')} ({safe_get(setup, 'timeframe')})
+- Scores: {scores}
+
+Beschrijf:
+- Concrete focuspunten: niveau X, volume, trendbreuken.
+- Risico's: fakeouts, liquiditeitsgrabs, sentiment shifts.
+- Wanneer wel/niet handelen vandaag.
+"""
 
 
 def prompt_for_wyckoff_analysis(setup) -> str:
-    return f"""Wyckoff-analyse van de marktstructuur:
-Fase: {safe_get(setup, 'wyckoff_phase')}
-Beschrijving: {safe_get(setup, 'explanation')}"""
+    return f"""
+Maak een Wyckoff-analyse van de huidige marktstructuur (max 5–10 zinnen).
+
+Data:
+- Wyckoff fase (ruw): {safe_get(setup, 'wyckoff_phase')}
+- Extra context: {safe_get(setup, 'explanation')}
+
+Beschrijf:
+- In welke fase BTC waarschijnlijk zit
+- Wat dit zegt over grote spelers
+- Waar de kans ligt voor de volgende grote beweging
+- Wat de structurele invalidatie is
+"""
 
 
 def prompt_for_recommendations(strategy) -> str:
-    return f"""Tradingadvies op basis van strategie:
-Entry: {safe_get(strategy, 'entry')}
-Targets: {safe_get(strategy, 'targets')}
-Stop-loss: {safe_get(strategy, 'stop_loss')}
-Uitleg: {safe_get(strategy, 'explanation')}"""
+    return f"""
+Schrijf een premium 'Aanbevolen Strategie' sectie (6–10 zinnen).
+
+Data:
+- Entry: {safe_get(strategy, 'entry')}
+- Targets: {safe_get(strategy, 'targets')}
+- Stop-loss: {safe_get(strategy, 'stop_loss')}
+- Ruwe uitleg: {safe_get(strategy, 'explanation')}
+
+Beschrijf:
+- Logica achter het plan
+- Hoe een trader idealiter instapt (delen/confirmatie/pas na reclamatie)
+- Wanneer je targets opschuift of trade afsluit
+- Duidelijk benadrukken dat dit geen financieel advies is
+"""
 
 
 def prompt_for_conclusion(scores, ai_insights=None) -> str:
-    ai_part = ""
-    master = ai_insights.get("score") if isinstance(ai_insights, dict) else None
-    if master:
-        ai_part = (
-            f"\nAI Master Score: {master.get('score', '–')} "
-            f"({master.get('trend', '–')}, {master.get('bias', '–')}, "
-            f"risico: {master.get('risk', '–')})"
-        )
-    return f"""Slotconclusie van de dag:
-Macro: {safe_get(scores, 'macro_score', 0)}
-Technisch: {safe_get(scores, 'technical_score', 0)}{ai_part}"""
+    macro = safe_get(scores, "macro_score")
+    tech = safe_get(scores, "technical_score")
+    setup_score = safe_get(scores, "setup_score")
+    market = safe_get(scores, "market_score")
+
+    master = ai_insights.get("score") if isinstance(ai_insights, dict) else {}
+    ms = safe_get(master, "score")
+    mt = safe_get(master, "trend")
+    mb = safe_get(master, "bias")
+    mr = safe_get(master, "risk")
+    msum = safe_get(master, "summary")
+
+    return f"""
+Schrijf een slotconclusie (4–8 zinnen).
+Beschrijf:
+- Wat macro ({macro}), techniek ({tech}), setup ({setup_score}) en markt ({market}) samen zeggen.
+- Hoe de AI Master Score (score {ms}, trend {mt}, bias {mb}, risico {mr}) dit bevestigt of nuanceert.
+- Of de markt zich in een fase van kansen, risico's of neutraliteit bevindt.
+- Wat het algemene 'gevoel' van de dag is voor traders.
+"""
 
 
 def prompt_for_outlook(setup) -> str:
-    return f"""Verwachting voor de komende 2–5 dagen:
-Setup: {safe_get(setup, 'name')}
-Timeframe: {safe_get(setup, 'timeframe')}"""
+    return f"""
+Maak een vooruitblik van 2–5 dagen (5–9 zinnen).
+Gebruik scenario-denken:
+- Bullish scenario: trigger + targets
+- Bearish scenario: trigger + downside levels
+- Sideways scenario: range + signalen
+
+Setup context:
+Naam: {safe_get(setup, 'name')}
+Timeframe: {safe_get(setup, 'timeframe')}
+"""
 
 
 # =====================================================
-# 🚀 Hoofdfunctie Report Agent
+# 🚀 Main Report Builder
 # =====================================================
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
-    """
-    Report Agent:
-      - Haalt setups, ruwe scores, AI-insights en marktdata op
-      - Bouwt prompts per sectie
-      - Vraagt OpenAI (via ask_gpt_text) om tekst voor elke sectie
-      - Retourneert een compleet dict dat door daily_report_task
-        in de DB en PDF wordt gezet.
-    """
     log_and_print(f"🚀 Start rapportgeneratie voor: {symbol}")
 
     setup_raw = get_latest_setup_for_symbol(symbol)
@@ -336,17 +399,16 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
                 prompt_for_outlook(setup)
             ),
 
-            # Ruwe scores (DB)
+            # ruwe scores
             "macro_score": safe_get(scores, "macro_score", 0),
             "technical_score": safe_get(scores, "technical_score", 0),
             "setup_score": safe_get(scores, "setup_score", 0),
             "market_score": safe_get(scores, "market_score", 0),
 
-            # AI-agent info
+            # AI info
             "ai_insights": ai_insights,
             "ai_master_score": ai_insights.get("score", {}),
 
-            # Marktdata voor mail + PDF
             "market_data": market_data,
         }
         log_and_print(f"✅ Rapport succesvol gegenereerd ({len(report)} velden)")
