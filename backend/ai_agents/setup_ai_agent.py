@@ -8,15 +8,15 @@ from backend.utils.openai_client import ask_gpt_text
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
 # ===================================================================
-# 🧠 HELPER — score overlap berekenen
+# 🧠 Helper — score overlap berekenen
 # ===================================================================
 def score_overlap(value, min_v, max_v):
     """
-    Hoe goed de score binnen de range valt.
-    - 100 = perfect in het midden
-    - lager = rand
-    - 0 = buiten range
+    Match-berekening voor score ranges.
+    100 = perfect midden
+    0   = buiten range
     """
     if value < min_v or value > max_v:
         return 0
@@ -46,24 +46,26 @@ def run_setup_agent(asset="BTC"):
         with conn.cursor() as cur:
 
             # ---------------------------------------
-            # 1️⃣ Scores ophalen (macro / tech / market)
+            # 1️⃣ Scores ophalen uit daily_scores
+            #    Jouw tabel gebruikt: report_date
             # ---------------------------------------
             cur.execute("""
                 SELECT macro_score, technical_score, market_score
                 FROM daily_scores
-                WHERE date = CURRENT_DATE
+                ORDER BY report_date DESC
+                LIMIT 1;
             """)
             row = cur.fetchone()
 
             if not row:
-                logger.error("❌ Geen daily_scores gevonden voor vandaag.")
+                logger.error("❌ Geen daily_scores gevonden.")
                 return []
 
             macro_score, technical_score, market_score = row
 
             # ---------------------------------------
-            # 2️⃣ Alle setups voor dit asset ophalen
-            #    ⚠️ FIX: created_at i.p.v. date
+            # 2️⃣ Setups ophalen
+            #    created_at bestaat ✔
             # ---------------------------------------
             cur.execute("""
                 SELECT 
@@ -81,7 +83,7 @@ def run_setup_agent(asset="BTC"):
             setups = cur.fetchall()
 
         if not setups:
-            logger.warning("⚠️ Geen setups gevonden voor asset.")
+            logger.warning("⚠️ Geen setups gevonden.")
             return []
 
         results = []
@@ -89,7 +91,7 @@ def run_setup_agent(asset="BTC"):
         best_score_total = -999999
 
         # ===================================================================
-        # 3️⃣ BEREKEN MATCH PER SETUP
+        # 3️⃣ MATCH SCORE PER SETUP
         # ===================================================================
         for (
             setup_id, name, symbol,
@@ -101,17 +103,14 @@ def run_setup_agent(asset="BTC"):
         ) in setups:
 
             macro_match = score_overlap(macro_score, min_macro, max_macro)
-            tech_match = score_overlap(technical_score, min_tech, max_tech)
+            tech_match  = score_overlap(technical_score, min_tech, max_tech)
             market_match = score_overlap(market_score, min_market, max_market)
 
             total_match = round((macro_match + tech_match + market_match) / 3)
 
-            active = (
-                macro_match > 0 and
-                tech_match > 0 and
-                market_match > 0
-            )
+            active = (macro_match > 0 and tech_match > 0 and market_match > 0)
 
+            # Best match bepalen
             if total_match > best_score_total:
                 best_score_total = total_match
                 best_setup = {
@@ -126,8 +125,8 @@ def run_setup_agent(asset="BTC"):
                     "strategy_type": strategy_type
                 }
 
-            # AI feedback
-            short_prompt = f"""
+            # AI oordeel over setup
+            ai_prompt = f"""
 Je bent een professionele crypto analist.
 
 MARKT TODAY:
@@ -144,8 +143,7 @@ SETUP:
 
 Geef één korte zin over hoe goed deze setup past.
 """
-
-            ai_expl = ask_gpt_text(short_prompt)
+            ai_expl = ask_gpt_text(ai_prompt)
 
             results.append({
                 "setup_id": setup_id,
@@ -162,6 +160,7 @@ Geef één korte zin over hoe goed deze setup past.
 
             # --------------------------------------------
             # Opslaan in daily_setup_scores
+            #    ✔ Jouw tabel: (setup_id, date, score, is_active, explanation)
             # --------------------------------------------
             with conn.cursor() as cur:
                 cur.execute("""
@@ -182,7 +181,7 @@ Geef één korte zin over hoe goed deze setup past.
                 ))
 
         # ===================================================================
-        # 4️⃣ BEST OF DAY instellen
+        # 4️⃣ BEST OF DAY MARKEREN  
         # ===================================================================
         if best_setup:
             with conn.cursor() as cur:
@@ -215,8 +214,9 @@ Geef één korte zin over hoe goed deze setup past.
         conn.close()
 
 
+
 # ===================================================================
-# 🧠 Losse uitleg generator voor de frontend (knop)
+# 🧠 LOSSE UITLEG GENERATOR
 # ===================================================================
 def generate_setup_explanation(setup_id: int) -> str:
     logger.info(f"🧠 AI-uitleg genereren voor setup {setup_id}...")
@@ -228,7 +228,8 @@ def generate_setup_explanation(setup_id: int) -> str:
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT name, symbol, trend, timeframe, min_macro_score, max_macro_score,
+                SELECT name, symbol, trend, timeframe, 
+                       min_macro_score, max_macro_score,
                        min_technical_score, max_technical_score,
                        min_market_score, max_market_score
                 FROM setups
@@ -260,8 +261,6 @@ Score ranges:
 - Macro: {min_macro} — {max_macro}
 - Technical: {min_tech} — {max_tech}
 - Market: {min_market} — {max_market}
-
-Korte, duidelijke uitleg.
 """
 
         explanation = ask_gpt_text(prompt)
@@ -278,7 +277,7 @@ Korte, duidelijke uitleg.
         return explanation
 
     except Exception:
-        logger.error("❌ Fout bij AI-uitleg genereren:", exc_info=True)
+        logger.error("❌ Fout bij uitleg genereren:", exc_info=True)
         return "Fout bij uitleg genereren."
 
     finally:
