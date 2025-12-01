@@ -63,6 +63,7 @@ def run_setup_agent(asset="BTC"):
 
             # ---------------------------------------
             # 2️⃣ Alle setups voor dit asset ophalen
+            #    ⚠️ FIX: created_at i.p.v. date
             # ---------------------------------------
             cur.execute("""
                 SELECT 
@@ -99,7 +100,6 @@ def run_setup_agent(asset="BTC"):
             dynamic_investment, created_at
         ) in setups:
 
-            # Match checks
             macro_match = score_overlap(macro_score, min_macro, max_macro)
             tech_match = score_overlap(technical_score, min_tech, max_tech)
             market_match = score_overlap(market_score, min_market, max_market)
@@ -112,7 +112,6 @@ def run_setup_agent(asset="BTC"):
                 market_match > 0
             )
 
-            # Beste setup bepalen (beste matchscore)
             if total_match > best_score_total:
                 best_score_total = total_match
                 best_setup = {
@@ -127,7 +126,7 @@ def run_setup_agent(asset="BTC"):
                     "strategy_type": strategy_type
                 }
 
-            # AI uitleg (eventueel later optimaliseren)
+            # AI feedback
             short_prompt = f"""
 Je bent een professionele crypto analist.
 
@@ -193,13 +192,12 @@ Geef één korte zin over hoe goed deze setup past.
                     WHERE setup_id = %s AND date = %s
                 """, (best_setup["setup_id"], date.today()))
 
-        # Markeer in output
         for r in results:
-            if r["setup_id"] == best_setup["setup_id"]:
+            if best_setup and r["setup_id"] == best_setup["setup_id"]:
                 r["best_of_day"] = True
 
         conn.commit()
-        logger.info("✅ Setup-Agent voltooid met actieve setup.")
+        logger.info("✅ Setup-Agent voltooid.")
 
         return {
             "active_setup": best_setup,
@@ -215,7 +213,6 @@ Geef één korte zin over hoe goed deze setup past.
 
     finally:
         conn.close()
-
 
 
 # ===================================================================
