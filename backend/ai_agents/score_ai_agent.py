@@ -7,7 +7,7 @@ from decimal import Decimal
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.openai_client import ask_gpt  # JSON engine
+from backend.utils.openai_client import ask_gpt  # JSON-engine
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -47,7 +47,7 @@ def safe_json(obj, fallback):
 
 
 # ============================================================
-# 📥 1. Insights ophalen → ai_category_insights (kolom: date)
+# 📥 1. Insights ophalen → ai_category_insights
 # ============================================================
 def fetch_today_insights(conn):
     insights = {}
@@ -70,7 +70,7 @@ def fetch_today_insights(conn):
                 if row:
                     result = {
                         "category": row[0],
-                        "avg_score": int(row[1]) if row[1] else None,
+                        "avg_score": float(row[1]) if row[1] else None,
                         "trend": row[2],
                         "bias": row[3],
                         "risk": row[4],
@@ -87,7 +87,7 @@ def fetch_today_insights(conn):
 
 
 # ============================================================
-# 📊 2. Numerieke context uit daily_scores (kolom: report_date)
+# 📊 2. Numerieke context uit daily_scores
 # ============================================================
 def fetch_numeric_scores(conn):
     numeric = {
@@ -96,11 +96,11 @@ def fetch_numeric_scores(conn):
     }
 
     with conn.cursor() as cur:
-        # 🔥 FIXED — daily_scores gebruikt report_date i.p.v. date
+        # 🔥 daily_scores gebruikt report_date
         cur.execute("""
             SELECT macro_score, market_score, technical_score, setup_score
             FROM daily_scores
-            ORDER BY report_date DESC
+            WHERE report_date = CURRENT_DATE
             LIMIT 1;
         """)
         row = cur.fetchone()
@@ -113,7 +113,7 @@ def fetch_numeric_scores(conn):
                 "setup": row[3],
             }
 
-        # 🔥 ai_reflections heeft wél date-kolom
+        # 🔥 ai_reflections gebruikt date
         cur.execute("""
             SELECT category,
                    ROUND(AVG(COALESCE(ai_score, 0))::numeric, 1),
@@ -129,12 +129,11 @@ def fetch_numeric_scores(conn):
                 "avg_compliance": float(comp),
             }
 
-    # 🔥 FIXED: voorkom JSON crash
-    return convert_decimal(numeric)
+    return convert_decimal(numeric)  # JSON-safe
 
 
 # ============================================================
-# 🧠 3. Prompt ontwikkelen
+# 🧠 3. Master prompt bouwen
 # ============================================================
 def build_prompt(insights, numeric):
 
@@ -151,7 +150,6 @@ def build_prompt(insights, numeric):
 
     data_text = "\n".join(format_block(cat) for cat in CATEGORIES)
 
-    # 🔥 FIXED: numeric is nu 100% JSON-safe
     numeric_json = json.dumps(numeric, indent=2, ensure_ascii=False)
 
     return f"""
@@ -234,7 +232,51 @@ def store_master_result(conn, result):
 
 
 # ============================================================
-# 🚀 5. Celery task
+# 🕗 FIX: daily_scores vullen voordat master draait
+# ============================================================
+def store_daily_scores(conn, insights):
+    macro = insights.get("macro", {}).get("avg_score")
+    market = insights.get("market", {}).get("avg_score")
+    technical = insights.get("technical", {}).get("avg_score")
+
+    macro_sum = insights.get("macro", {}).get("summary")
+    market_sum = insights.get("market", {}).get("summary")
+    tech_sum = insights.get("technical", {}).get("summary")
+
+    if macro is None or market is None or technical is None:
+        logger.error("❌ daily_scores NIET opgeslagen — ontbrekende AI categorieën.")
+        return
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO daily_scores
+                (report_date, macro_score, market_score, technical_score,
+                 macro_interpretation, market_interpretation, technical_interpretation,
+                 setup_score, macro_top_contributors, market_top_contributors, technical_top_contributors)
+            VALUES (
+                CURRENT_DATE, %s, %s, %s,
+                %s, %s, %s,
+                NULL, '[]', '[]', '[]'
+            )
+            ON CONFLICT (report_date)
+            DO UPDATE SET
+                macro_score = EXCLUDED.macro_score,
+                market_score = EXCLUDED.market_score,
+                technical_score = EXCLUDED.technical_score,
+                macro_interpretation = EXCLUDED.macro_interpretation,
+                market_interpretation = EXCLUDED.market_interpretation,
+                technical_interpretation = EXCLUDED.technical_interpretation,
+                updated_at = NOW();
+        """, (
+            macro, market, technical,
+            macro_sum, market_sum, tech_sum,
+        ))
+
+    logger.info("💾 daily_scores succesvol opgeslagen.")
+
+
+# ============================================================
+# 🚀 5. Celery task — orchestrator
 # ============================================================
 @shared_task(name="backend.ai_agents.score_ai_agent.generate_master_score")
 def generate_master_score():
@@ -246,11 +288,22 @@ def generate_master_score():
         return
 
     try:
+        # 1️⃣ Insights ophalen
         insights = fetch_today_insights(conn)
+
+        # 2️⃣ daily_scores vullen
+        store_daily_scores(conn, insights)
+
+        # 3️⃣ Numerieke context
         numeric = fetch_numeric_scores(conn)
+
+        # 4️⃣ Prompt bouwen
         prompt = build_prompt(insights, numeric)
 
+        # 5️⃣ AI call
         result = ask_gpt(prompt)
+
+        # 6️⃣ Opslaan master
         store_master_result(conn, result)
         conn.commit()
 
