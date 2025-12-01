@@ -50,8 +50,13 @@ def safe_get(obj, key, fallback="–"):
         val = obj.get(key, fallback)
         if isinstance(val, Decimal):
             return to_float(val)
-        return val
+        return val if val not in [None, "None", ""] else fallback
     return fallback
+
+
+def nv(v):
+    """Normalizeer None → '–' voor AI prompts."""
+    return v if v not in [None, "", "None"] else "–"
 
 
 # =====================================================
@@ -65,54 +70,34 @@ Schrijf in het Nederlands in de stijl van een premium nieuwsbrief
 
 
 # =====================================================
-# 1️⃣ Scores ophalen
+# 1️⃣ SCORES — MET VEILIGE FALLBACK
 # =====================================================
 def get_scores_from_db():
     try:
         scores = get_scores_for_symbol(include_metadata=True)
         if scores:
             return {k: to_float(v) for k, v in scores.items()}
-    except Exception as e:
-        log_and_print(f"⚠️ Live scoreberekening mislukt: {e}")
+    except:
+        pass
 
-    conn = get_db_connection()
-    if not conn:
-        return {}
-
-    out = {}
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT macro_score, technical_score, setup_score, market_score
-                FROM daily_scores
-                ORDER BY report_date DESC
-                LIMIT 1;
-            """)
-            row = cur.fetchone()
-
-            if row:
-                out = {
-                    "macro_score": to_float(row[0]),
-                    "technical_score": to_float(row[1]),
-                    "setup_score": to_float(row[2]),
-                    "market_score": to_float(row[3]),
-                }
-    finally:
-        conn.close()
-
-    return out
+    # Veilig fallback
+    return {
+        "macro_score": None,
+        "technical_score": None,
+        "setup_score": None,
+        "market_score": None,
+    }
 
 
 # =====================================================
-# 2️⃣ AI insights ophalen
+# 2️⃣ AI INSIGHTS — MET VEILIGE FALLBACK
 # =====================================================
 def get_ai_insights_from_db():
-    conn = get_db_connection()
-    if not conn:
-        return {}
-
-    insights = {}
     try:
+        conn = get_db_connection()
+        if not conn:
+            return {}
+
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT category, avg_score, trend, bias, risk, summary
@@ -121,38 +106,38 @@ def get_ai_insights_from_db():
             """)
             rows = cur.fetchall()
 
-            for category, avg_score, trend, bias, risk, summary in rows:
-                insights[category] = {
-                    "avg_score": to_float(avg_score),
-                    "trend": trend,
-                    "bias": bias,
-                    "risk": risk,
-                    "summary": summary,
-                }
-    finally:
-        conn.close()
+        if not rows:
+            return {}
 
-    return insights
+        insights = {}
+        for cat, avg_score, trend, bias, risk, summary in rows:
+            insights[cat] = {
+                "avg_score": to_float(avg_score),
+                "trend": trend or "–",
+                "bias": bias or "–",
+                "risk": risk or "–",
+                "summary": summary or "Geen data."
+            }
+
+        return insights
+
+    except:
+        return {}
 
 
 # =====================================================
-# 3️⃣ Strategy correct ophalen uit database
+# 3️⃣ STRATEGY — MET FALLBACK EN JSON FIXES
 # =====================================================
 def get_latest_strategy_for_setup(setup_id: int):
-    """
-    Strategie ophalen volgens ECHTE schema:
-    - entry (text)
-    - target (text)   ← niet targets!
-    - stop_loss (text)
-    - explanation (text)
-    - risk_profile (text)
-    - data (jsonb) (optioneel met nieuwe velden)
-    """
-    conn = get_db_connection()
-    if not conn:
+
+    if not setup_id:
         return None
 
     try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT entry, target, stop_loss, explanation, risk_profile, data, created_at
@@ -164,14 +149,11 @@ def get_latest_strategy_for_setup(setup_id: int):
             row = cur.fetchone()
 
         if not row:
-            logger.warning(f"⚠️ Geen strategy gevonden voor setup {setup_id}")
             return None
 
         entry, target, stop_loss, explanation, risk_profile, data_json, created_at = row
 
-        # -------------------------
-        # JSON fallback (optioneel)
-        # -------------------------
+        # JSON override
         if isinstance(data_json, dict):
             entry = data_json.get("entry", entry)
             target = data_json.get("targets", target)
@@ -179,9 +161,7 @@ def get_latest_strategy_for_setup(setup_id: int):
             explanation = data_json.get("explanation", explanation)
             risk_profile = data_json.get("risk_reward", risk_profile)
 
-        # -------------------------
         # Targets normaliseren
-        # -------------------------
         targets = []
         if isinstance(target, str):
             targets = [t.strip() for t in target.split(",") if t.strip()]
@@ -200,19 +180,16 @@ def get_latest_strategy_for_setup(setup_id: int):
         logger.error(f"❌ Fout bij ophalen strategy: {e}", exc_info=True)
         return None
 
-    finally:
-        conn.close()
-
 
 # =====================================================
-# 4️⃣ Markt data
+# 4️⃣ MARKET DATA — MET FALLBACK
 # =====================================================
 def get_latest_market_data():
-    conn = get_db_connection()
-    if not conn:
-        return {}
-
     try:
+        conn = get_db_connection()
+        if not conn:
+            return {}
+
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT price, volume, change_24h
@@ -222,20 +199,21 @@ def get_latest_market_data():
             """)
             row = cur.fetchone()
 
-            if row:
-                return {
-                    "price": to_float(row[0]),
-                    "volume": to_float(row[1]),
-                    "change_24h": to_float(row[2]),
-                }
-    finally:
-        conn.close()
+        if row:
+            return {
+                "price": to_float(row[0]),
+                "volume": to_float(row[1]),
+                "change_24h": to_float(row[2]),
+            }
+
+    except:
+        pass
 
     return {}
 
 
 # =====================================================
-# 5️⃣ GPT helper
+# 5️⃣ GPT HELPERS
 # =====================================================
 def generate_section(prompt: str, retries: int = 3) -> str:
     text = ask_gpt_text(prompt, system_role=REPORT_STYLE_GUIDE, retries=retries)
@@ -243,28 +221,33 @@ def generate_section(prompt: str, retries: int = 3) -> str:
 
 
 # =====================================================
-# 6️⃣ PROMPTS
+# 6️⃣ PROMPTS — NU VEILIG VOOR NONE
 # =====================================================
 def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None):
-    price = safe_get(market_data, "price")
-    volume = safe_get(market_data, "volume")
-    change = safe_get(market_data, "change_24h")
+    price = nv(safe_get(market_data, "price"))
+    volume = nv(safe_get(market_data, "volume"))
+    change = nv(safe_get(market_data, "change_24h"))
 
-    macro = safe_get(scores, "macro_score")
-    tech = safe_get(scores, "technical_score")
-    setup_score = safe_get(scores, "setup_score")
-    market_score = safe_get(scores, "market_score")
+    macro = nv(scores.get("macro_score"))
+    tech = nv(scores.get("technical_score"))
+    setup_score = nv(scores.get("setup_score"))
+    market_score = nv(scores.get("market_score"))
 
     master = ai_insights.get("master", {})
+
+    master_score = nv(safe_get(master, "avg_score"))
+    master_trend = nv(safe_get(master, "trend"))
+    master_bias = nv(safe_get(master, "bias"))
+    master_risk = nv(safe_get(master, "risk"))
 
     return f"""
 Schrijf een krachtige openingssectie (6–8 zinnen).
 
 Data:
 - Scores: macro {macro}, technisch {tech}, setup {setup_score}, markt {market_score}
-- Master score: {safe_get(master, "avg_score")}, trend {safe_get(master, "trend")}, bias {safe_get(master, "bias")}, risico {safe_get(master, "risk")}
+- Master score: {master_score}, trend {master_trend}, bias {master_bias}, risico {master_risk}
 - Markt: prijs ${price}, volume {volume}, verandering {change}%
-- Setup: {setup.get('name')} ({setup.get('timeframe')})
+- Setup: {nv(setup.get('name'))} ({nv(setup.get('timeframe'))})
 """
 
 
@@ -273,24 +256,19 @@ def prompt_for_macro_summary(scores, ai_insights):
     return f"""
 Maak een compacte macro-update (5–8 zinnen).
 
-Macro score vandaag: {scores['macro_score']}
-Trend: {macro.get('trend')}
-Bias: {macro.get('bias')}
-Risico: {macro.get('risk')}
-Samenvatting: {macro.get('summary')}
+Macro score vandaag: {nv(scores['macro_score'])}
+Trend: {nv(macro.get('trend'))}
+Bias: {nv(macro.get('bias'))}
+Risico: {nv(macro.get('risk'))}
+Samenvatting: {nv(macro.get('summary'))}
 """
 
 
 def prompt_for_setup_checklist(setup):
     return f"""
-Schrijf 6–8 bullets:
-- Sterktes
-- Zwaktes
-- Activatie
-- Invalidatie
-- Praktische tips
+Schrijf 6–8 bullets over sterktes, zwaktes, activatie, invalidatie en praktische tips.
 
-Setup: {setup.get('name')} ({setup.get('timeframe')})
+Setup: {nv(setup.get('name'))} ({nv(setup.get('timeframe'))})
 """
 
 
@@ -301,8 +279,8 @@ def prompt_for_priorities(setup, scores):
 def prompt_for_wyckoff_analysis(setup):
     return f"""
 Maak een Wyckoff-analyse (5–10 zinnen).
-Setup: {setup.get('name')}
-Phase: {setup.get('wyckoff_phase')}
+Setup: {nv(setup.get('name'))}
+Phase: {nv(setup.get('wyckoff_phase'))}
 """
 
 
@@ -310,9 +288,9 @@ def prompt_for_recommendations(strategy):
     return f"""
 Schrijf een premium strategie-uitleg (6–10 zinnen).
 
-Entry: {strategy['entry']}
+Entry: {nv(strategy['entry'])}
 Targets: {strategy['targets']}
-Stop-loss: {strategy['stop_loss']}
+Stop-loss: {nv(strategy['stop_loss'])}
 """
 
 
@@ -320,7 +298,7 @@ def prompt_for_conclusion(scores, ai_insights):
     master = ai_insights.get("master", {})
     return f"""
 Schrijf een slotconclusie (4–8 zinnen).
-Master Score: {safe_get(master, "avg_score")} | trend {safe_get(master, "trend")}
+Master Score: {nv(safe_get(master, "avg_score"))} | trend {nv(safe_get(master, "trend"))}
 """
 
 
@@ -329,14 +307,23 @@ def prompt_for_outlook(setup):
 
 
 # =====================================================
-# 🚀 7️⃣ Main Report Builder
+# 7️⃣ MAIN REPORT BUILDER — MET ALLE FALLBACKS
 # =====================================================
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     log_and_print(f"🚀 Rapportgeneratie voor {symbol}")
 
     # Setup
     setup_raw = get_latest_setup_for_symbol(symbol)
-    setup = sanitize_json_input(setup_raw, context="setup")
+
+    if not setup_raw:
+        setup = {
+            "id": None,
+            "name": "Geen setup beschikbaar",
+            "timeframe": "–",
+            "wyckoff_phase": "–",
+        }
+    else:
+        setup = sanitize_json_input(setup_raw, context="setup")
 
     # Scores
     scores = sanitize_json_input(get_scores_from_db(), context="scores")
@@ -347,33 +334,49 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     # Market data
     market_data = get_latest_market_data()
 
-    # Strategy (UIT DATABASE!)
-    strategy = get_latest_strategy_for_setup(setup["id"])
+    # Strategy
+    strategy = get_latest_strategy_for_setup(setup.get("id"))
     if not strategy:
         strategy = {
             "entry": "n.v.t.",
             "targets": [],
             "stop_loss": "n.v.t.",
             "risk_reward": "?",
-            "explanation": "Geen strategy beschikbaar voor vandaag."
+            "explanation": "Geen strategy beschikbaar."
         }
 
     # Build report
     report = {
-        "btc_summary": generate_section(prompt_for_btc_summary(setup, scores, market_data, ai_insights)),
-        "macro_summary": generate_section(prompt_for_macro_summary(scores, ai_insights)),
-        "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
-        "priorities": generate_section(prompt_for_priorities(setup, scores)),
-        "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
-        "recommendations": generate_section(prompt_for_recommendations(strategy)),
-        "conclusion": generate_section(prompt_for_conclusion(scores, ai_insights)),
-        "outlook": generate_section(prompt_for_outlook(setup)),
+        "btc_summary": generate_section(
+            prompt_for_btc_summary(setup, scores, market_data, ai_insights)
+        ),
+        "macro_summary": generate_section(
+            prompt_for_macro_summary(scores, ai_insights)
+        ),
+        "setup_checklist": generate_section(
+            prompt_for_setup_checklist(setup)
+        ),
+        "priorities": generate_section(
+            prompt_for_priorities(setup, scores)
+        ),
+        "wyckoff_analysis": generate_section(
+            prompt_for_wyckoff_analysis(setup)
+        ),
+        "recommendations": generate_section(
+            prompt_for_recommendations(strategy)
+        ),
+        "conclusion": generate_section(
+            prompt_for_conclusion(scores, ai_insights)
+        ),
+        "outlook": generate_section(
+            prompt_for_outlook(setup)
+        ),
 
-        # Raw data
-        "macro_score": scores.get("macro_score"),
-        "technical_score": scores.get("technical_score"),
-        "setup_score": scores.get("setup_score"),
-        "market_score": scores.get("market_score"),
+        # Raw
+        "macro_score": scores.get("macro_score") or "–",
+        "technical_score": scores.get("technical_score") or "–",
+        "setup_score": scores.get("setup_score") or "–",
+        "market_score": scores.get("market_score") or "–",
 
         "ai_insights": ai_insights,
         "ai_master_score": ai_insights.get("master"),
