@@ -11,75 +11,79 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# 🔍 Luxe setup-matching (macro + technical + market)
+# 🔍 BEST-MATCH LOGICA
 # =========================================================
-def match_setups_to_score(setups, scores):
+def best_match(setups, scores):
     """
-    Nieuwe matching:
-    Setups matchen op min/max per categorie:
-    - Macro-score
-    - Technical-score
-    - Market-score
-
-    Daarna sorteren op dichtst-bij het midden van alle ranges.
+    Nieuwe logica:
+    👉 altijd een beste setup kiezen
+    👉 via afstand tot range per categorie
     """
 
     macro_score = float(scores["macro_score"])
     technical_score = float(scores["technical_score"])
     market_score = float(scores["market_score"])
-    setup_score = float(scores["setup_score"])
 
-    matched = []
+    def dist(val, low, high):
+        """Afstand tot range (0 = binnen range)."""
+        try:
+            low = float(low)
+            high = float(high)
+        except:
+            low, high = 0, 100
+
+        if val < low:
+            return low - val
+        if val > high:
+            return val - high
+        return 0
+
+    candidates = []
 
     for s in setups:
         try:
-            # Macro matching
             min_macro = float(s.get("min_macro_score") or 0)
             max_macro = float(s.get("max_macro_score") or 100)
-            if not (min_macro <= macro_score <= max_macro):
-                continue
 
-            # Technical matching
             min_tech = float(s.get("min_technical_score") or 0)
             max_tech = float(s.get("max_technical_score") or 100)
-            if not (min_tech <= technical_score <= max_tech):
-                continue
 
-            # Market matching
             min_market = float(s.get("min_market_score") or 0)
             max_market = float(s.get("max_market_score") or 100)
-            if not (min_market <= market_score <= max_market):
-                continue
 
-            matched.append(s)
+            d_macro = dist(macro_score, min_macro, max_macro)
+            d_tech = dist(technical_score, min_tech, max_tech)
+            d_market = dist(market_score, min_market, max_market)
+
+            total = d_macro + d_tech + d_market
+
+            candidates.append({
+                "setup": s,
+                "macro_dist": d_macro,
+                "tech_dist": d_tech,
+                "market_dist": d_market,
+                "total_dist": total
+            })
 
         except Exception as e:
-            logger.warning(f"⚠️ Setup match fout bij '{s.get('name')}': {e}")
+            logger.warning(f"⚠️ Could not evaluate setup {s.get('name')}: {e}")
 
-    # =========================================================
-    # SORTEREN OP NAUWKEURIGHEID (zeer luxe)
-    # Gebruik gemiddelde van alle ranges → centrale waarde
-    # =========================================================
-    def center_value(setup):
-        vals = [
-            float(setup.get("min_macro_score") or 0),
-            float(setup.get("max_macro_score") or 100),
-            float(setup.get("min_technical_score") or 0),
-            float(setup.get("max_technical_score") or 100),
-            float(setup.get("min_market_score") or 0),
-            float(setup.get("max_market_score") or 100),
-        ]
-        return sum(vals) / len(vals)
+    # Als er helemaal geen setups zijn
+    if not candidates:
+        return None, []
 
-    matched.sort(key=lambda s: abs(setup_score - center_value(s)))
+    # Sorteer op laagste afstand
+    candidates.sort(key=lambda x: x["total_dist"])
 
-    return matched
+    best = candidates[0]
+    return best, candidates
+
 
 
 # =========================================================
-# 🧠 DAGELIJKSE SUPER-LUXE SCORE TASK
+# 🧠 DAGELIJKSE SCORE TASK
 # =========================================================
-@shared_task(name="backend.celery_task.store_daily_scores_task")
+@shared_task(name="backend.celery_task.store_daily_scores_task.store_daily_scores_task")
 def store_daily_scores_task():
 
     logger.info("🧠 Dagelijkse scoreberekening gestart...")
@@ -168,13 +172,12 @@ def store_daily_scores_task():
             ))
 
         # =====================================================
-        # 3️⃣ SETUP MATCHING
+        # 3️⃣ SETUP MATCHING via BEST MATCH
         # =====================================================
         setups = get_all_setups()
+        best, candidates = best_match(setups, scores)
 
-        matched = match_setups_to_score(setups, scores)
-
-        # Eerst alle setups van vandaag inactief maken
+        # Alle setups van vandaag eerst inactief maken
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE daily_setup_scores
@@ -182,30 +185,42 @@ def store_daily_scores_task():
                 WHERE report_date = %s
             """, (today,))
 
-        # Beste match opslaan
-        if matched:
-            best = matched[0]
-            logger.info(f"🎯 Beste setup geselecteerd: {best['name']}")
+        if best:
+            s = best["setup"]
+            logger.info(f"🎯 Beste setup: {s['name']} (distance={best['total_dist']})")
 
+            # Breakdown opslaan
+            breakdown = {
+                "macro_dist": best["macro_dist"],
+                "tech_dist": best["tech_dist"],
+                "market_dist": best["market_dist"],
+                "total_dist": best["total_dist"]
+            }
+
+            # Beste setup opslaan in daily_setup_scores
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO daily_setup_scores (setup_id, report_date, score, explanation, is_active)
-                    VALUES (%s, %s, %s, %s, true)
+                    INSERT INTO daily_setup_scores 
+                        (setup_id, report_date, score, explanation, breakdown, is_active)
+                    VALUES (%s, %s, %s, %s, %s, true)
                     ON CONFLICT (report_date, setup_id) DO UPDATE SET
                         score = EXCLUDED.score,
                         explanation = EXCLUDED.explanation,
+                        breakdown = EXCLUDED.breakdown,
                         is_active = true
                 """, (
-                    best["id"],
+                    s["id"],
                     today,
                     float(scores["setup_score"]),
-                    best.get("explanation", ""),
+                    s.get("explanation", ""),
+                    json.dumps(breakdown),
                 ))
+
         else:
-            logger.warning("⚠️ Geen enkele setup matcht macro/technical/market score.")
+            logger.warning("⚠️ Geen enkele setup gevonden — dit zou nooit moeten gebeuren")
 
         conn.commit()
-        logger.info("✅ Dagelijkse scores + actieve setup opgeslagen.")
+        logger.info("✅ Dagelijkse scores + beste setup opgeslagen.")
 
     except Exception as e:
         logger.error(f"❌ Fout bij daily score task: {e}", exc_info=True)
