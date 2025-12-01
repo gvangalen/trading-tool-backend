@@ -12,11 +12,11 @@ logger.setLevel(logging.INFO)
 
 
 # ======================================================
-# 📊 TECHNICAL AI AGENT — FIXED (range_min / range_max)
+# 📊 TECHNICAL AI AGENT — FIXED FOR REAL DB STRUCTURE
 # ======================================================
 @shared_task(name="backend.ai_agents.technical_ai_agent.generate_technical_insight")
 def generate_technical_insight():
-    logger.info("📊 Start Technical AI Agent...")
+    logger.info("📊 Start Technical AI Agent (FIXED)...")
 
     conn = get_db_connection()
     if not conn:
@@ -25,7 +25,7 @@ def generate_technical_insight():
 
     try:
         # ------------------------------------------------------
-        # 1️⃣ Technische scoreregels ophalen (FIXED)
+        # 1️⃣ Scoreregels ophalen (range_min / range_max)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -36,71 +36,83 @@ def generate_technical_insight():
             rule_rows = cur.fetchall()
 
         rules_by_indicator = {}
-        for indicator, rmin, rmax, score, interpretation, action in rule_rows:
+        for indicator, rmin, rmax, score, interp, action in rule_rows:
             rules_by_indicator.setdefault(indicator, []).append({
                 "range_min": float(rmin),
                 "range_max": float(rmax),
                 "score": int(score),
-                "interpretation": interpretation,
+                "interpretation": interp,
                 "action": action
             })
 
-        logger.info(f"📘 {len(rules_by_indicator)} technische indicatortypes geladen.")
+        logger.info(f"📘 Regels geladen voor {len(rules_by_indicator)} technische indicatoren.")
+
 
         # ------------------------------------------------------
-        # 2️⃣ Technische indicatorwaarden ophalen
+        # 2️⃣ Technische indicatoren ophalen (FIXED → timestamp::date)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT indicator, value, score, advies, uitleg
+                SELECT 
+                    indicator,
+                    value,
+                    score,
+                    advies,
+                    uitleg
                 FROM technical_indicators
-                WHERE date = CURRENT_DATE
-                ORDER BY indicator ASC
+                WHERE timestamp::date = CURRENT_DATE
+                ORDER BY indicator ASC;
             """)
-            data_rows = cur.fetchall()
+            rows = cur.fetchall()
 
-        if not data_rows:
+        if not rows:
             logger.warning("⚠️ Geen technical_indicators gevonden voor vandaag.")
             return
 
-        # ------------------------------------------------------
-        # 3️⃣ Combineer data + scoreregels → AI prompt text
-        # ------------------------------------------------------
         combined = []
-        for ind, val, score, advies, uitleg in data_rows:
+        for (name, value, score, advies, uitleg) in rows:
             combined.append({
-                "indicator": ind,
-                "value": val,
-                "score": score,
+                "indicator": name,
+                "value": float(value),
+                "score": float(score),
                 "advies": advies,
                 "uitleg": uitleg,
-                "rules": rules_by_indicator.get(ind, [])
+                "rules": rules_by_indicator.get(name, [])
             })
 
+        # Prompttekst opbouwen
         data_text = "\n".join([
-            f"{c['indicator']} → value={c['value']} | score={c['score']} | advies={c['advies']} "
-            f"| rules={json.dumps(c['rules'], ensure_ascii=False)}"
+            f"{c['indicator']}: value={c['value']}, score={c['score']}, advies={c['advies']}, "
+            f"uitleg={c['uitleg']}, rules={json.dumps(c['rules'], ensure_ascii=False)}"
             for c in combined
         ])
 
+
         # ------------------------------------------------------
-        # 4️⃣ AI Context (trend / bias / momentum)
+        # 3️⃣ AI Context genereren
         # ------------------------------------------------------
         prompt_context = f"""
 Je bent een technische analyse AI gespecialiseerd in Bitcoin.
 
-Hieronder staan de technische indicatoren + hun scoreregels:
+Hieronder de technische indicatoren + scoreregels:
+
 {data_text}
 
-Geef antwoord als geldige JSON:
-- trend: bullish | bearish | neutraal
-- bias: short-term | long-term
-- momentum: sterk | neutraal | zwak
-- summary: max 2 zinnen
-- top_signals: lijst met belangrijkste indicatoren
-"""
+Geef ALLEEN geldige JSON terug:
+{{
+  "trend": "",
+  "bias": "",
+  "momentum": "",
+  "summary": "",
+  "top_signals": []
+}}
+        """
 
-        ai_context = ask_gpt(prompt_context)
+        ai_context = ask_gpt(
+            prompt_context,
+            system_role="Je bent een professionele crypto technical analyst. Antwoord ALTIJD in geldige JSON."
+        )
+
         if not isinstance(ai_context, dict):
             ai_context = {
                 "trend": None,
@@ -110,47 +122,52 @@ Geef antwoord als geldige JSON:
                 "top_signals": []
             }
 
+
         # ------------------------------------------------------
-        # 5️⃣ AI Reflecties per indicator
+        # 4️⃣ AI Reflecties genereren
         # ------------------------------------------------------
         prompt_reflection = f"""
-Beoordeel onderstaande indicatoren:
+Maak een JSON-lijst met per indicator:
 
+{{
+  "indicator": "",
+  "ai_score": 0,
+  "compliance": 0,
+  "comment": "",
+  "recommendation": ""
+}}
+
+Indicatoren:
 {data_text}
+        """
 
-Geef een JSON-lijst, bv:
-[
-  {{
-    "indicator": "RSI",
-    "ai_score": 70,
-    "compliance": 85,
-    "comment": "RSI daalt uit overbought-zone",
-    "recommendation": "Wacht op RSI < 50"
-  }}
-]
-"""
+        ai_reflections = ask_gpt(
+            prompt_reflection,
+            system_role="Je bent een technische analyse expert. Antwoord in geldige JSON-lijst."
+        )
 
-        ai_reflections = ask_gpt(prompt_reflection)
         if not isinstance(ai_reflections, list):
             ai_reflections = []
 
-        logger.info(f"🧠 AI Technical Context: {ai_context}")
-        logger.info(f"🪞 Reflecties: {len(ai_reflections)} items")
+        logger.info(f"🧠 Technical AI context: {ai_context}")
+        logger.info(f"🪞 Reflecties gegenereerd: {len(ai_reflections)}")
+
 
         # ------------------------------------------------------
-        # 6️⃣ Opslaan categorie-samenvatting (ai_category_insights)
+        # 5️⃣ Opslaan categorie-samenvatting (ai_category_insights)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO ai_category_insights 
+                INSERT INTO ai_category_insights
                     (category, avg_score, trend, bias, risk, summary, top_signals)
                 VALUES ('technical', NULL, %s, %s, NULL, %s, %s)
-                ON CONFLICT (category, date) DO UPDATE
-                SET trend = EXCLUDED.trend,
-                    bias = EXCLUDED.bias,
+                ON CONFLICT (category, date)
+                DO UPDATE SET
+                    trend   = EXCLUDED.trend,
+                    bias    = EXCLUDED.bias,
                     summary = EXCLUDED.summary,
                     top_signals = EXCLUDED.top_signals,
-                    created_at = NOW()
+                    created_at = NOW();
             """, (
                 ai_context.get("trend"),
                 ai_context.get("bias"),
@@ -158,12 +175,13 @@ Geef een JSON-lijst, bv:
                 json.dumps(ai_context.get("top_signals", [])),
             ))
 
+
         # ------------------------------------------------------
-        # 7️⃣ Opslaan individuele reflecties (ai_reflections)
+        # 6️⃣ Reflecties opslaan
         # ------------------------------------------------------
         for r in ai_reflections:
-            indicator = r.get("indicator")
-            if not indicator:
+            ind = r.get("indicator")
+            if not ind:
                 continue
 
             with conn.cursor() as cur:
@@ -173,14 +191,14 @@ Geef een JSON-lijst, bv:
                     )
                     VALUES ('technical', %s, NULL, %s, %s, %s, %s)
                     ON CONFLICT (category, indicator, date)
-                    DO UPDATE SET
+                    DO UPDATE SET 
                         ai_score = EXCLUDED.ai_score,
                         compliance = EXCLUDED.compliance,
                         comment = EXCLUDED.comment,
                         recommendation = EXCLUDED.recommendation,
-                        timestamp = NOW()
+                        timestamp = NOW();
                 """, (
-                    indicator,
+                    ind,
                     r.get("ai_score"),
                     r.get("compliance"),
                     r.get("comment"),
