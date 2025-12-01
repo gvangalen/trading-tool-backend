@@ -1,6 +1,7 @@
 import os
 import logging
 import json
+from decimal import Decimal
 
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
@@ -31,9 +32,26 @@ def log_and_print(msg: str):
     print(msg)
 
 
+# =====================================================
+# Helper: Safe numeric values
+# =====================================================
+def to_float(v):
+    if v is None:
+        return None
+    if isinstance(v, Decimal):
+        return float(v)
+    try:
+        return float(v)
+    except:
+        return None
+
+
 def safe_get(obj, key, fallback="–"):
     if isinstance(obj, dict):
-        return obj.get(key, fallback)
+        val = obj.get(key, fallback)
+        if isinstance(val, Decimal):
+            return to_float(val)
+        return val
     return fallback
 
 
@@ -48,23 +66,30 @@ Schrijf in het Nederlands in de stijl van een premium nieuwsbrief
 
 
 # =====================================================
-# 📊 Scores uit DB
+# 📊 Scores uit DB (met `report_date`)
 # =====================================================
 def get_scores_from_db():
     """
-    Fix: daily_scores gebruikt nu `report_date` in plaats van `date`
+    Live via score-engine, anders fallback naar daily_scores.
     """
+    # --- Live engine (beste pad)
     try:
         scores = get_scores_for_symbol(include_metadata=True)
         if scores:
-            return scores
+            # Decimal safe output
+            out = {}
+            for k, v in scores.items():
+                out[k] = to_float(v)
+            return out
     except Exception as e:
         log_and_print(f"⚠️ Live scoreberekening mislukt: {e}")
 
+    # --- Fallback: DB lezen
     conn = get_db_connection()
     if not conn:
         return {}
 
+    out = {}
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -75,25 +100,22 @@ def get_scores_from_db():
             """)
             row = cur.fetchone()
             if row:
-                return {
-                    "macro_score": row[0],
-                    "technical_score": row[1],
-                    "setup_score": row[2],
-                    "market_score": row[3],
+                out = {
+                    "macro_score": to_float(row[0]),
+                    "technical_score": to_float(row[1]),
+                    "setup_score": to_float(row[2]),
+                    "market_score": to_float(row[3]),
                 }
     finally:
         conn.close()
 
-    return {}
+    return out
 
 
 # =====================================================
-# 🧠 AI insights laden
+# 🧠 AI insights laden (ai_category_insights → kolom 'date')
 # =====================================================
 def get_ai_insights_from_db():
-    """
-    ai_category_insights heeft WEL een 'date' kolom
-    """
     conn = get_db_connection()
     if not conn:
         return {}
@@ -110,13 +132,12 @@ def get_ai_insights_from_db():
 
             for category, avg_score, trend, bias, risk, summary in rows:
                 insights[category] = {
-                    "avg_score": float(avg_score or 0),
+                    "avg_score": to_float(avg_score),
                     "trend": trend,
                     "bias": bias,
                     "risk": risk,
                     "summary": summary,
                 }
-
     finally:
         conn.close()
 
@@ -124,7 +145,7 @@ def get_ai_insights_from_db():
 
 
 # =====================================================
-# 📈 Laatste marktdata
+# 📈 Laatste marktdata (Decimal safe)
 # =====================================================
 def get_latest_market_data():
     conn = get_db_connection()
@@ -143,13 +164,15 @@ def get_latest_market_data():
 
             if row:
                 return {
-                    "price": round(row[0], 2),
-                    "volume": row[1],
-                    "change_24h": row[2],
+                    "price": to_float(row[0]),
+                    "volume": to_float(row[1]),
+                    "change_24h": to_float(row[2]),
                 }
 
     finally:
         conn.close()
+
+    return {}
 
 
 # =====================================================
@@ -215,7 +238,7 @@ Timeframe: {setup.get('timeframe')}
 
 
 def prompt_for_priorities(setup, scores):
-    return f"Genereer 3–7 dagelijkse prioriteiten voor traders."
+    return "Genereer 3–7 dagelijkse prioriteiten voor traders."
 
 
 def prompt_for_wyckoff_analysis(setup):
@@ -245,7 +268,7 @@ Master Score: {safe_get(master, "avg_score")} | trend {safe_get(master, "trend")
 
 
 def prompt_for_outlook(setup):
-    return f"Schrijf een 2–5 dagen outlook met bullish, bearish en sideways scenario."
+    return "Schrijf een 2–5 dagen outlook met bullish, bearish en sideways scenario."
 
 
 # =====================================================
@@ -278,11 +301,11 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "conclusion": generate_section(prompt_for_conclusion(scores, ai_insights)),
         "outlook": generate_section(prompt_for_outlook(setup)),
 
-        # Raw data for API/frontend
-        "macro_score": scores["macro_score"],
-        "technical_score": scores["technical_score"],
-        "setup_score": scores["setup_score"],
-        "market_score": scores["market_score"],
+        # Raw data for API / frontend
+        "macro_score": scores.get("macro_score"),
+        "technical_score": scores.get("technical_score"),
+        "setup_score": scores.get("setup_score"),
+        "market_score": scores.get("market_score"),
 
         "ai_insights": ai_insights,
         "ai_master_score": master,
