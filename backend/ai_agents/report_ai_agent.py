@@ -139,15 +139,25 @@ def get_ai_insights_from_db():
 # 3️⃣ Strategy uit database halen (GEEN GPT!)
 # =====================================================
 def get_latest_strategy_for_setup(setup_id: int):
+    """
+    Leest de meest recente strategy uit de strategies-tabel.
+
+    Huidige schema:
+    - entry      (TEXT)
+    - target     (TEXT of JSON)
+    - stop_loss  (TEXT)
+    - explanation(TEXT)
+    - (geen rr kolom op dit moment)
+    """
     conn = get_db_connection()
     if not conn:
         return None
 
     try:
         with conn.cursor() as cur:
-            # Belangrijk: jouw DB heeft kolom "target" (zonder s)
+            # Let op: geen 'rr' kolom, alleen 'target'
             cur.execute("""
-                SELECT entry, target, stop_loss, rr, explanation
+                SELECT entry, target, stop_loss, explanation
                 FROM strategies
                 WHERE setup_id = %s
                 ORDER BY date DESC
@@ -159,11 +169,12 @@ def get_latest_strategy_for_setup(setup_id: int):
             logger.warning(f"⚠️ Geen strategy gevonden voor setup {setup_id}")
             return None
 
-        entry, target, stop_loss, rr, explanation = row
+        entry, target, stop_loss, explanation = row
 
         # Targets normaliseren → altijd list
         targets = []
         if isinstance(target, str):
+            # probeert "t1,t2,t3" → ["t1","t2","t3"]
             targets = [t.strip() for t in target.split(",") if t.strip()]
         elif isinstance(target, list):
             targets = target
@@ -172,7 +183,7 @@ def get_latest_strategy_for_setup(setup_id: int):
             "entry": entry,
             "targets": targets,
             "stop_loss": stop_loss,
-            "risk_reward": rr,
+            "risk_reward": "onbekend",  # kolom rr bestaat nog niet in DB
             "explanation": explanation,
         }
 
@@ -340,14 +351,30 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
 
     # Build report
     report = {
-        "btc_summary": generate_section(prompt_for_btc_summary(setup, scores, market_data, ai_insights)),
-        "macro_summary": generate_section(prompt_for_macro_summary(scores, ai_insights)),
-        "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
-        "priorities": generate_section(prompt_for_priorities(setup, scores)),
-        "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
-        "recommendations": generate_section(prompt_for_recommendations(strategy)),
-        "conclusion": generate_section(prompt_for_conclusion(scores, ai_insights)),
-        "outlook": generate_section(prompt_for_outlook(setup)),
+        "btc_summary": generate_section(
+            prompt_for_btc_summary(setup, scores, market_data, ai_insights)
+        ),
+        "macro_summary": generate_section(
+            prompt_for_macro_summary(scores, ai_insights)
+        ),
+        "setup_checklist": generate_section(
+            prompt_for_setup_checklist(setup)
+        ),
+        "priorities": generate_section(
+            prompt_for_priorities(setup, scores)
+        ),
+        "wyckoff_analysis": generate_section(
+            prompt_for_wyckoff_analysis(setup)
+        ),
+        "recommendations": generate_section(
+            prompt_for_recommendations(strategy)
+        ),
+        "conclusion": generate_section(
+            prompt_for_conclusion(scores, ai_insights)
+        ),
+        "outlook": generate_section(
+            prompt_for_outlook(setup)
+        ),
 
         # Raw data
         "macro_score": scores.get("macro_score"),
