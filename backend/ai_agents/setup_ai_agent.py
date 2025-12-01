@@ -1,6 +1,7 @@
 import logging
 import traceback
 from datetime import date
+from decimal import Decimal
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
@@ -9,9 +10,27 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ===================================================================
-# 🧮 HELPER – range score intersect
+# 🧮 HELPER – safe numeric + range score intersect
 # ===================================================================
+
+def to_float(v):
+    """Geeft altijd float terug, ook bij Decimal of None."""
+    if v is None:
+        return None
+    if isinstance(v, Decimal):
+        return float(v)
+    try:
+        return float(v)
+    except:
+        return None
+
+
 def score_overlap(value, min_v, max_v):
+    """Match-score voor een range, 0–100."""
+    value = to_float(value)
+    min_v = to_float(min_v)
+    max_v = to_float(max_v)
+
     if value is None or min_v is None or max_v is None:
         return 0
 
@@ -22,7 +41,7 @@ def score_overlap(value, min_v, max_v):
     dist = abs(value - mid)
     max_dist = (max_v - min_v) / 2
 
-    if max_dist == 0:
+    if max_dist <= 0:
         return 100
 
     return round(100 - (dist / max_dist * 100))
@@ -40,8 +59,11 @@ def run_setup_agent(asset="BTC"):
         return {"active_setup": None, "all_setups": []}
 
     try:
+
+        # ---------------------------------------------------------------
+        # 1️⃣ SCORES VAN VANDAAG — FIXED: report_date i.p.v. date
+        # ---------------------------------------------------------------
         with conn.cursor() as cur:
-            # 1️⃣ SCORES VAN VANDAAG
             cur.execute("""
                 SELECT macro_score, technical_score, market_score
                 FROM daily_scores
@@ -55,8 +77,13 @@ def run_setup_agent(asset="BTC"):
             return {"active_setup": None, "all_setups": []}
 
         macro_score, technical_score, market_score = row
+        macro_score = to_float(macro_score)
+        technical_score = to_float(technical_score)
+        market_score = to_float(market_score)
 
+        # ---------------------------------------------------------------
         # 2️⃣ SETUPS VOOR DIT ASSET
+        # ---------------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT 
@@ -78,11 +105,11 @@ def run_setup_agent(asset="BTC"):
 
         results = []
         best_setup = None
-        best_match_score = -99999
+        best_match_score = -9999
 
-        # ===================================================================
+        # ---------------------------------------------------------------
         # 3️⃣ MATCH SCORE PER SETUP
-        # ===================================================================
+        # ---------------------------------------------------------------
         for (
             setup_id, name, symbol,
             min_macro, max_macro,
@@ -98,13 +125,9 @@ def run_setup_agent(asset="BTC"):
 
             total_match = round((macro_match + tech_match + market_match) / 3)
 
-            active = (
-                macro_match > 0 and 
-                tech_match > 0 and 
-                market_match > 0
-            )
+            active = (macro_match > 0 and tech_match > 0 and market_match > 0)
 
-            # Best of Day bepalen
+            # Beste van de dag bepalen
             if total_match > best_match_score:
                 best_match_score = total_match
                 best_setup = {
@@ -119,11 +142,13 @@ def run_setup_agent(asset="BTC"):
                     "strategy_type": strategy_type,
                 }
 
+            # -----------------------------------------------------------
             # AI comment
+            # -----------------------------------------------------------
             prompt = f"""
 Je bent een crypto analist.
 
-MARKT:
+MARKT SCORES:
 - Macro {macro_score}
 - Technical {technical_score}
 - Market {market_score}
@@ -147,24 +172,39 @@ Geef één zin waarom deze match {total_match}/100 scoort.
                 "technical_match": tech_match,
                 "market_match": market_match,
                 "ai_comment": ai_comment,
-                "best_of_day": False
+                "best_of_day": False,
             })
 
-            # 4️⃣ OPSLAAN IN daily_setup_scores (FIXED: report_date)
+            # -----------------------------------------------------------
+            # 4️⃣ Opslaan in daily_setup_scores (FIXED: report_date)
+            # -----------------------------------------------------------
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO daily_setup_scores 
-                        (setup_id, report_date, score, is_active, explanation)
-                    VALUES (%s, CURRENT_DATE, %s, %s, %s)
+                        (setup_id, report_date, score, is_active, explanation, breakdown)
+                    VALUES (%s, CURRENT_DATE, %s, %s, %s, %s)
                     ON CONFLICT (setup_id, report_date)
                     DO UPDATE SET 
                         score = EXCLUDED.score,
                         is_active = EXCLUDED.is_active,
                         explanation = EXCLUDED.explanation,
+                        breakdown = EXCLUDED.breakdown,
                         created_at = NOW();
-                """, (setup_id, total_match, active, ai_comment))
+                """, (
+                    setup_id,
+                    total_match,
+                    active,
+                    ai_comment,
+                    {
+                        "macro_match": macro_match,
+                        "technical_match": tech_match,
+                        "market_match": market_match
+                    }
+                ))
 
+        # ---------------------------------------------------------------
         # 5️⃣ BEST OF DAY MARKEREN
+        # ---------------------------------------------------------------
         if best_setup:
             for r in results:
                 if r["setup_id"] == best_setup["setup_id"]:
@@ -178,6 +218,7 @@ Geef één zin waarom deze match {total_match}/100 scoort.
                 """, (best_setup["setup_id"],))
 
         conn.commit()
+
         logger.info("✅ Setup-Agent voltooid.")
         return {"active_setup": best_setup, "all_setups": results}
 
@@ -190,7 +231,7 @@ Geef één zin waarom deze match {total_match}/100 scoort.
 
 
 # ===================================================================
-# 🧠 EXPLANATION GENERATOR
+# 🧠 UITLEG GENERATOR
 # ===================================================================
 def generate_setup_explanation(setup_id: int):
     logger.info(f"🧠 Setup-uitleg genereren voor {setup_id}...")
