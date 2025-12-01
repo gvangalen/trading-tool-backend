@@ -38,22 +38,14 @@ def safe_get(obj, key, fallback="–"):
 
 
 # =====================================================
-# 🎨 PREMIUM REPORT STYLE – centraal gebruikt door ALLES
+# 🎨 PREMIUM REPORT STYLE
 # =====================================================
 REPORT_STYLE_GUIDE = """
 Je bent een professionele Bitcoin- en macro-analist.
 Schrijf in het Nederlands in de stijl van een premium nieuwsbrief
 (een mix van Glassnode, BitcoinStrategy en TIA).
-
-Richtlijnen:
-- Schrijf beknopt, analytisch en menselijk.
-- Focus op context, beweging, risico, niveaus en kansen.
-- Gebruik korte alinea’s en duidelijke bullets waar relevant.
-- Leg geen basisconcepten uit (zoals RSI, MA, support/resistance).
-- Geen hype, geen doom — professioneel en rustig.
-- Elke sectie heeft een unieke functie; geen herhaling.
-- Vermijd schoolboek-toon, schrijf alsof het een marktupdate is voor ervaren traders.
 """
+
 
 # =====================================================
 # 📊 Scores uit DB
@@ -62,14 +54,12 @@ def get_scores_from_db():
     try:
         scores = get_scores_for_symbol(include_metadata=True)
         if scores:
-            log_and_print(f"📊 Live scores geladen uit DB: {scores}")
             return scores
     except Exception as e:
         log_and_print(f"⚠️ Live scoreberekening mislukt: {e}")
 
     conn = get_db_connection()
     if not conn:
-        log_and_print("❌ Geen DB-verbinding voor fallback-scores.")
         return {}
 
     try:
@@ -77,21 +67,17 @@ def get_scores_from_db():
             cur.execute("""
                 SELECT macro_score, technical_score, setup_score, market_score
                 FROM daily_scores
-                ORDER BY report_date DESC
+                ORDER BY date DESC
                 LIMIT 1
             """)
             row = cur.fetchone()
             if row:
-                scores = {
+                return {
                     "macro_score": row[0],
                     "technical_score": row[1],
                     "setup_score": row[2],
                     "market_score": row[3],
                 }
-                log_and_print(f"📊 Fallback scores geladen: {scores}")
-                return scores
-    except Exception as e:
-        log_and_print(f"❌ Fout bij ophalen fallback-scores: {e}")
     finally:
         conn.close()
 
@@ -104,7 +90,6 @@ def get_scores_from_db():
 def get_ai_insights_from_db():
     conn = get_db_connection()
     if not conn:
-        log_and_print("❌ Geen DB-verbinding voor AI insights.")
         return {}
 
     insights = {}
@@ -118,15 +103,12 @@ def get_ai_insights_from_db():
             rows = cur.fetchall()
             for category, avg_score, trend, bias, risk, summary in rows:
                 insights[category] = {
-                    "score": float(avg_score or 0),
+                    "avg_score": float(avg_score or 0),
                     "trend": trend,
                     "bias": bias,
                     "risk": risk,
                     "summary": summary,
                 }
-            log_and_print(f"🧩 AI insights geladen: {list(insights.keys())}")
-    except Exception as e:
-        log_and_print(f"❌ Fout bij ophalen AI insights: {e}")
     finally:
         conn.close()
 
@@ -140,6 +122,7 @@ def get_latest_market_data():
     conn = get_db_connection()
     if not conn:
         return {}
+
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -155,9 +138,6 @@ def get_latest_market_data():
                     "volume": row[1],
                     "change_24h": row[2],
                 }
-    except Exception as e:
-        log_and_print(f"❌ Fout bij ophalen market_data: {e}")
-        return {}
     finally:
         conn.close()
 
@@ -171,177 +151,106 @@ def generate_section(prompt: str, retries: int = 3) -> str:
         system_role=REPORT_STYLE_GUIDE,
         retries=retries,
     )
-    if not text:
-        return "AI-generatie mislukt of gaf geen output."
-    return text.strip()
+    return text.strip() if text else "AI-generatie mislukt of gaf geen output."
 
 
 # =====================================================
-# 🧩 NEW PREMIUM PROMPTS — Glassnode + Newsletter stijl
+# PROMPTS
 # =====================================================
-def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None) -> str:
-    price = safe_get(market_data or {}, "price")
-    volume = safe_get(market_data or {}, "volume")
-    change = safe_get(market_data or {}, "change_24h")
+def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None):
+    price = safe_get(market_data, "price")
+    volume = safe_get(market_data, "volume")
+    change = safe_get(market_data, "change_24h")
 
     macro = safe_get(scores, "macro_score")
     tech = safe_get(scores, "technical_score")
     setup_score = safe_get(scores, "setup_score")
     market_score = safe_get(scores, "market_score")
 
-    master = ai_insights.get("score") if isinstance(ai_insights, dict) else {}
-    m_score = safe_get(master, "score")
+    # FIX — master zat voorheen onder "score"
+    master = ai_insights.get("master", {})
+
+    m_score = safe_get(master, "avg_score")
     m_trend = safe_get(master, "trend")
     m_bias = safe_get(master, "bias")
     m_risk = safe_get(master, "risk")
 
     return f"""
-Schrijf een krachtige openingssectie (max 6–8 zinnen) voor een premium Bitcoin-rapport.
-Beschrijf:
-- De huidige staat van de markt (trend, momentum, sentiment).
-- Hoe de vier scores samen het beeld vormen:
-  Macro {macro}, Technisch {tech}, Setup {setup_score}, Markt {market_score}.
-- Hoe de AI Master Score de situatie interpreteert:
-  Score {m_score}, trend {m_trend}, bias {m_bias}, risico {m_risk}.
-- Hoe prijs ${price}, volume {volume} en 24u verandering {change}% passen in het verhaal.
-- Benoem indien relevant één belangrijk prijsniveau dat vandaag telt.
+Schrijf een krachtige openingssectie (6–8 zinnen).
 
-Setup context:
-Naam: {safe_get(setup, 'name')}
-Timeframe: {safe_get(setup, 'timeframe')}
+Data:
+- Scores: macro {macro}, technisch {tech}, setup {setup_score}, markt {market_score}
+- Master score: {m_score}, trend {m_trend}, bias {m_bias}, risico {m_risk}
+- Markt: prijs ${price}, volume {volume}, verandering {change}%
+- Setup: {setup.get('name')} ({setup.get('timeframe')})
 """
 
 
-def prompt_for_macro_summary(scores, ai_insights=None) -> str:
-    macro_score = safe_get(scores, "macro_score")
-    macro = ai_insights.get("macro") if isinstance(ai_insights, dict) else {}
-
-    trend = safe_get(macro, "trend")
-    bias = safe_get(macro, "bias")
-    risk = safe_get(macro, "risk")
-    summary = safe_get(macro, "summary")
+def prompt_for_macro_summary(scores, ai_insights):
+    macro = ai_insights.get("macro", {})
 
     return f"""
-Maak een compacte macro-economische marktupdate (5–8 zinnen).
+Maak een compacte macro-update (5–8 zinnen).
 
-Gebruik deze data:
-- Macro score: {macro_score}
-- Trend: {trend}
-- Bias: {bias}
-- Risico: {risk}
-- AI macro samenvatting: {summary}
-
-Beschrijf:
-- Hoe de macro-omgeving risk assets beïnvloedt.
-- Of macro nu eerder rugwind of tegenwind geeft voor Bitcoin.
-- Wat de belangrijkste drivers zijn (liquiditeit, rente, inflatie, equities).
+Macro score vandaag: {scores['macro_score']}
+Trend: {macro.get('trend')}
+Bias: {macro.get('bias')}
+Risico: {macro.get('risk')}
+Samenvatting: {macro.get('summary')}
 """
 
 
-def prompt_for_setup_checklist(setup) -> str:
+def prompt_for_setup_checklist(setup):
     return f"""
-Schrijf een concrete 'Setup Snapshot' voor traders.
-Geen basisuitleg, wel toepasbare bullets.
+Schrijf 6–8 bullets met:
+- Sterktes
+- Zwaktes
+- Activatiecondities
+- Invalidatie
+- Praktische tips
 
 Setup:
-- Naam: {safe_get(setup, 'name')}
-- Timeframe: {safe_get(setup, 'timeframe')}
-- Type: {safe_get(setup, 'type', '–')}
-- Indicatoren: {safe_get(setup, 'indicators', [])}
-
-Beschrijf in maximaal 8 bullets:
-- Wat deze setup sterk maakt
-- Wat hem zwak maakt
-- Wat nodig is voor activatie
-- Wat invalidatie is
-- Hoe een trader het beste met deze setup omgaat
+Naam: {setup.get('name')}
+Timeframe: {setup.get('timeframe')}
 """
 
 
-def prompt_for_priorities(setup, scores) -> str:
+def prompt_for_priorities(setup, scores):
     return f"""
-Genereer een sectie 'Dagelijkse Prioriteiten' voor traders.
-Maximaal 3–7 bullets.
-
-Context:
-- Setup: {safe_get(setup, 'name')} ({safe_get(setup, 'timeframe')})
-- Scores: {scores}
-
-Beschrijf:
-- Concrete focuspunten: niveau X, volume, trendbreuken.
-- Risico's: fakeouts, liquiditeitsgrabs, sentiment shifts.
-- Wanneer wel/niet handelen vandaag.
+Genereer 3–7 dagelijkse prioriteiten voor traders.
 """
 
 
-def prompt_for_wyckoff_analysis(setup) -> str:
+def prompt_for_wyckoff_analysis(setup):
     return f"""
-Maak een Wyckoff-analyse van de huidige marktstructuur (max 5–10 zinnen).
-
-Data:
-- Wyckoff fase (ruw): {safe_get(setup, 'wyckoff_phase')}
-- Extra context: {safe_get(setup, 'explanation')}
-
-Beschrijf:
-- In welke fase BTC waarschijnlijk zit
-- Wat dit zegt over grote spelers
-- Waar de kans ligt voor de volgende grote beweging
-- Wat de structurele invalidatie is
+Maak een Wyckoff-analyse (5–10 zinnen).
+Setup: {setup.get('name')}
+Phase: {setup.get('wyckoff_phase')}
 """
 
 
-def prompt_for_recommendations(strategy) -> str:
+def prompt_for_recommendations(strategy):
     return f"""
-Schrijf een premium 'Aanbevolen Strategie' sectie (6–10 zinnen).
+Schrijf een premium strategie-uitleg (6–10 zinnen).
 
-Data:
-- Entry: {safe_get(strategy, 'entry')}
-- Targets: {safe_get(strategy, 'targets')}
-- Stop-loss: {safe_get(strategy, 'stop_loss')}
-- Ruwe uitleg: {safe_get(strategy, 'explanation')}
-
-Beschrijf:
-- Logica achter het plan
-- Hoe een trader idealiter instapt (delen/confirmatie/pas na reclamatie)
-- Wanneer je targets opschuift of trade afsluit
-- Duidelijk benadrukken dat dit geen financieel advies is
+Entry: {strategy['entry']}
+Targets: {strategy['targets']}
+Stop-loss: {strategy['stop_loss']}
 """
 
 
-def prompt_for_conclusion(scores, ai_insights=None) -> str:
-    macro = safe_get(scores, "macro_score")
-    tech = safe_get(scores, "technical_score")
-    setup_score = safe_get(scores, "setup_score")
-    market = safe_get(scores, "market_score")
-
-    master = ai_insights.get("score") if isinstance(ai_insights, dict) else {}
-    ms = safe_get(master, "score")
-    mt = safe_get(master, "trend")
-    mb = safe_get(master, "bias")
-    mr = safe_get(master, "risk")
-    msum = safe_get(master, "summary")
+def prompt_for_conclusion(scores, ai_insights):
+    master = ai_insights.get("master", {})
 
     return f"""
 Schrijf een slotconclusie (4–8 zinnen).
-Beschrijf:
-- Wat macro ({macro}), techniek ({tech}), setup ({setup_score}) en markt ({market}) samen zeggen.
-- Hoe de AI Master Score (score {ms}, trend {mt}, bias {mb}, risico {mr}) dit bevestigt of nuanceert.
-- Of de markt zich in een fase van kansen, risico's of neutraliteit bevindt.
-- Wat het algemene 'gevoel' van de dag is voor traders.
+Master Score: {master.get('avg_score')} | trend {master.get('trend')}
 """
 
 
-def prompt_for_outlook(setup) -> str:
+def prompt_for_outlook(setup):
     return f"""
-Maak een vooruitblik van 2–5 dagen (5–9 zinnen).
-Gebruik scenario-denken:
-- Bullish scenario: trigger + targets
-- Bearish scenario: trigger + downside levels
-- Sideways scenario: range + signalen
-
-Setup context:
-Naam: {safe_get(setup, 'name')}
-Timeframe: {safe_get(setup, 'timeframe')}
+Schrijf een 2–5 dagen outlook met bullish, bearish en sideways scenario.
 """
 
 
@@ -356,70 +265,38 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     ai_insights = get_ai_insights_from_db()
     market_data = get_latest_market_data()
 
-    log_and_print(f"📦 setup_raw: {repr(setup_raw)[:180]}")
-    log_and_print(f"📦 scores_raw: {repr(scores_raw)[:180]}")
-    log_and_print(f"📦 ai_insights: {repr(ai_insights)[:180]}")
-
     setup = sanitize_json_input(setup_raw, context="setup")
     scores = sanitize_json_input(scores_raw, context="scores")
     strategy_raw = generate_strategy_from_setup(setup)
     strategy = sanitize_json_input(strategy_raw, context="strategy")
 
-    if not isinstance(setup, dict) or not setup:
-        return {"error": "Ongeldige setup"}
-    if not isinstance(scores, dict) or not scores:
-        return {"error": "Ongeldige scores"}
-    if not isinstance(strategy, dict) or not strategy:
-        return {"error": "Ongeldige strategy"}
+    master = ai_insights.get("master")
 
-    try:
-        report = {
-            "btc_summary": generate_section(
-                prompt_for_btc_summary(setup, scores, market_data, ai_insights)
-            ),
-            "macro_summary": generate_section(
-                prompt_for_macro_summary(scores, ai_insights)
-            ),
-            "setup_checklist": generate_section(
-                prompt_for_setup_checklist(setup)
-            ),
-            "priorities": generate_section(
-                prompt_for_priorities(setup, scores)
-            ),
-            "wyckoff_analysis": generate_section(
-                prompt_for_wyckoff_analysis(setup)
-            ),
-            "recommendations": generate_section(
-                prompt_for_recommendations(strategy)
-            ),
-            "conclusion": generate_section(
-                prompt_for_conclusion(scores, ai_insights)
-            ),
-            "outlook": generate_section(
-                prompt_for_outlook(setup)
-            ),
+    report = {
+        "btc_summary": generate_section(prompt_for_btc_summary(setup, scores, market_data, ai_insights)),
+        "macro_summary": generate_section(prompt_for_macro_summary(scores, ai_insights)),
+        "setup_checklist": generate_section(prompt_for_setup_checklist(setup)),
+        "priorities": generate_section(prompt_for_priorities(setup, scores)),
+        "wyckoff_analysis": generate_section(prompt_for_wyckoff_analysis(setup)),
+        "recommendations": generate_section(prompt_for_recommendations(strategy)),
+        "conclusion": generate_section(prompt_for_conclusion(scores, ai_insights)),
+        "outlook": generate_section(prompt_for_outlook(setup)),
 
-            # ruwe scores
-            "macro_score": safe_get(scores, "macro_score", 0),
-            "technical_score": safe_get(scores, "technical_score", 0),
-            "setup_score": safe_get(scores, "setup_score", 0),
-            "market_score": safe_get(scores, "market_score", 0),
+        "macro_score": scores["macro_score"],
+        "technical_score": scores["technical_score"],
+        "setup_score": scores["setup_score"],
+        "market_score": scores["market_score"],
 
-            # AI info
-            "ai_insights": ai_insights,
-            "ai_master_score": ai_insights.get("score", {}),
+        "ai_insights": ai_insights,
+        "ai_master_score": master,
 
-            "market_data": market_data,
-        }
-        log_and_print(f"✅ Rapport succesvol gegenereerd ({len(report)} velden)")
-        return report
+        "market_data": market_data,
+    }
 
-    except Exception as e:
-        log_and_print(f"❌ Exception tijdens rapportgeneratie: {e}")
-        return {"error": str(e)}
+    log_and_print("✅ Rapport succesvol gegenereerd")
+    return report
 
 
 if __name__ == "__main__":
     result = generate_daily_report_sections("BTC")
-    print("\n🎯 RESULTAAT:")
     print(json.dumps(result, indent=2, ensure_ascii=False))
