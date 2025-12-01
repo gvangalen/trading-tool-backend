@@ -4,7 +4,6 @@ import json
 from decimal import Decimal
 
 from backend.utils.setup_utils import get_latest_setup_for_symbol
-from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
 from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_scores_for_symbol
@@ -22,6 +21,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# =====================================================
+# Helpers
+# =====================================================
 def log_and_print(msg: str):
     logger.info(msg)
     try:
@@ -32,9 +34,6 @@ def log_and_print(msg: str):
     print(msg)
 
 
-# =====================================================
-# Helper: Safe numeric values
-# =====================================================
 def to_float(v):
     if v is None:
         return None
@@ -66,25 +65,16 @@ Schrijf in het Nederlands in de stijl van een premium nieuwsbrief
 
 
 # =====================================================
-# 📊 Scores uit DB (met `report_date`)
+# 1️⃣ Scores ophalen (met report_date)
 # =====================================================
 def get_scores_from_db():
-    """
-    Live via score-engine, anders fallback naar daily_scores.
-    """
-    # --- Live engine (beste pad)
     try:
         scores = get_scores_for_symbol(include_metadata=True)
         if scores:
-            # Decimal safe output
-            out = {}
-            for k, v in scores.items():
-                out[k] = to_float(v)
-            return out
+            return {k: to_float(v) for k, v in scores.items()}
     except Exception as e:
         log_and_print(f"⚠️ Live scoreberekening mislukt: {e}")
 
-    # --- Fallback: DB lezen
     conn = get_db_connection()
     if not conn:
         return {}
@@ -96,9 +86,10 @@ def get_scores_from_db():
                 SELECT macro_score, technical_score, setup_score, market_score
                 FROM daily_scores
                 ORDER BY report_date DESC
-                LIMIT 1
+                LIMIT 1;
             """)
             row = cur.fetchone()
+
             if row:
                 out = {
                     "macro_score": to_float(row[0]),
@@ -113,7 +104,7 @@ def get_scores_from_db():
 
 
 # =====================================================
-# 🧠 AI insights laden (ai_category_insights → kolom 'date')
+# 2️⃣ AI insights ophalen
 # =====================================================
 def get_ai_insights_from_db():
     conn = get_db_connection()
@@ -145,7 +136,43 @@ def get_ai_insights_from_db():
 
 
 # =====================================================
-# 📈 Laatste marktdata (Decimal safe)
+# 3️⃣ Strategy uit database halen (BELANGRIJK!)
+# =====================================================
+def get_latest_strategy_for_setup(setup_id: int):
+    conn = get_db_connection()
+    if not conn:
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT entry, targets, stop_loss, rr, explanation
+                FROM strategies
+                WHERE setup_id = %s
+                ORDER BY date DESC
+                LIMIT 1;
+            """, (setup_id,))
+            row = cur.fetchone()
+
+            if not row:
+                return None
+
+            entry, targets, stop_loss, rr, explanation = row
+
+            return {
+                "entry": entry,
+                "targets": targets,
+                "stop_loss": stop_loss,
+                "risk_reward": rr,
+                "explanation": explanation,
+            }
+
+    finally:
+        conn.close()
+
+
+# =====================================================
+# 4️⃣ Markt data
 # =====================================================
 def get_latest_market_data():
     conn = get_db_connection()
@@ -158,7 +185,7 @@ def get_latest_market_data():
                 SELECT price, volume, change_24h
                 FROM market_data
                 ORDER BY timestamp DESC
-                LIMIT 1
+                LIMIT 1;
             """)
             row = cur.fetchone()
 
@@ -168,7 +195,6 @@ def get_latest_market_data():
                     "volume": to_float(row[1]),
                     "change_24h": to_float(row[2]),
                 }
-
     finally:
         conn.close()
 
@@ -176,15 +202,15 @@ def get_latest_market_data():
 
 
 # =====================================================
-# 🧠 Premium text generator
+# 5️⃣ GPT helper
 # =====================================================
 def generate_section(prompt: str, retries: int = 3) -> str:
     text = ask_gpt_text(prompt, system_role=REPORT_STYLE_GUIDE, retries=retries)
-    return text.strip() if text else "AI-generatie mislukt of gaf geen output."
+    return text.strip() if text else "AI-generatie mislukt."
 
 
 # =====================================================
-# PROMPTS
+# 6️⃣ PROMPTS
 # =====================================================
 def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None):
     price = safe_get(market_data, "price")
@@ -224,16 +250,14 @@ Samenvatting: {macro.get('summary')}
 
 def prompt_for_setup_checklist(setup):
     return f"""
-Schrijf 6–8 bullets met:
+Schrijf 6–8 bullets:
 - Sterktes
 - Zwaktes
-- Activatiecondities
+- Activatie
 - Invalidatie
 - Praktische tips
 
-Setup:
-Naam: {setup.get('name')}
-Timeframe: {setup.get('timeframe')}
+Setup: {setup.get('name')} ({setup.get('timeframe')})
 """
 
 
@@ -272,25 +296,36 @@ def prompt_for_outlook(setup):
 
 
 # =====================================================
-# 🚀 Main Report Builder
+# 🚀 7️⃣ Main Report Builder (GEEN nieuwe strategy)
 # =====================================================
 def generate_daily_report_sections(symbol: str = "BTC") -> dict:
-    log_and_print(f"🚀 Start rapportgeneratie voor: {symbol}")
+    log_and_print(f"🚀 Rapportgeneratie voor {symbol}")
 
+    # Setup
     setup_raw = get_latest_setup_for_symbol(symbol)
     setup = sanitize_json_input(setup_raw, context="setup")
 
-    scores_raw = get_scores_from_db()
-    scores = sanitize_json_input(scores_raw, context="scores")
+    # Scores
+    scores = sanitize_json_input(get_scores_from_db(), context="scores")
 
+    # AI insights
     ai_insights = get_ai_insights_from_db()
+
+    # Market data
     market_data = get_latest_market_data()
 
-    strategy_raw = generate_strategy_from_setup(setup)
-    strategy = sanitize_json_input(strategy_raw, context="strategy")
+    # Strategy (UIT DATABASE!)
+    strategy = get_latest_strategy_for_setup(setup["id"])
+    if not strategy:
+        strategy = {
+            "entry": "n.v.t.",
+            "targets": [],
+            "stop_loss": "n.v.t.",
+            "risk_reward": "?",
+            "explanation": "Geen strategy beschikbaar voor vandaag."
+        }
 
-    master = ai_insights.get("master")
-
+    # Build report
     report = {
         "btc_summary": generate_section(prompt_for_btc_summary(setup, scores, market_data, ai_insights)),
         "macro_summary": generate_section(prompt_for_macro_summary(scores, ai_insights)),
@@ -301,18 +336,19 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "conclusion": generate_section(prompt_for_conclusion(scores, ai_insights)),
         "outlook": generate_section(prompt_for_outlook(setup)),
 
-        # Raw data for API / frontend
+        # Raw data
         "macro_score": scores.get("macro_score"),
         "technical_score": scores.get("technical_score"),
         "setup_score": scores.get("setup_score"),
         "market_score": scores.get("market_score"),
 
         "ai_insights": ai_insights,
-        "ai_master_score": master,
+        "ai_master_score": ai_insights.get("master"),
         "market_data": market_data,
+        "strategy": strategy,
     }
 
-    log_and_print("✅ Rapport succesvol gegenereerd")
+    log_and_print("✅ Rapport succesvol gegenereerd.")
     return report
 
 
