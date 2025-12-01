@@ -12,13 +12,13 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ============================================================
-# ✔ Nieuwe categorie-architectuur
+# ✔ Categorie-architectuur conform jouw DB
 # ============================================================
 CATEGORIES = ["macro", "market", "technical", "setup", "strategy", "master"]
 
 
 # ============================================================
-# 🔧 Kleine helpers
+# Helpers
 # ============================================================
 def safe_json(obj, fallback):
     if isinstance(obj, dict):
@@ -27,13 +27,12 @@ def safe_json(obj, fallback):
         try:
             return json.loads(obj)
         except:
-            logger.warning("⚠️ Kon JSON niet parsen, fallback gebruiken.")
             return fallback
     return fallback
 
 
 # ============================================================
-# 📥 1. Insights ophalen (laatste 3 dagen)
+# 📥 1. Insights ophalen → ai_category_insights (kolom: date)
 # ============================================================
 def fetch_today_insights(conn):
     insights = {}
@@ -43,6 +42,7 @@ def fetch_today_insights(conn):
     with conn.cursor() as cur:
         for cat in CATEGORIES:
             result = None
+
             for d in lookback:
                 cur.execute("""
                     SELECT category, avg_score, trend, bias, risk, summary, top_signals
@@ -72,7 +72,7 @@ def fetch_today_insights(conn):
 
 
 # ============================================================
-# 📊 2. Numerieke context ophalen
+# 📊 2. Numerieke context uit daily_scores (kolom: report_date)
 # ============================================================
 def fetch_numeric_scores(conn):
     numeric = {
@@ -81,14 +81,15 @@ def fetch_numeric_scores(conn):
     }
 
     with conn.cursor() as cur:
-        # Daily scores ophalen + juiste kolomnaam 'date'
+        # 🔥 FIXED — daily_scores gebruikt report_date i.p.v. date
         cur.execute("""
             SELECT macro_score, market_score, technical_score, setup_score
             FROM daily_scores
-            ORDER BY date DESC
+            ORDER BY report_date DESC
             LIMIT 1;
         """)
         row = cur.fetchone()
+
         if row:
             numeric["daily_scores"] = {
                 "macro": row[0],
@@ -97,7 +98,7 @@ def fetch_numeric_scores(conn):
                 "setup": row[3],
             }
 
-        # AI reflections averages
+        # 🔥 ai_reflections heeft wél date-kolom
         cur.execute("""
             SELECT category,
                    ROUND(AVG(COALESCE(ai_score, 0))::numeric, 1),
@@ -117,37 +118,42 @@ def fetch_numeric_scores(conn):
 
 
 # ============================================================
-# 🧠 3. Prompt bouwen voor master orchestrator
+# 🧠 3. Prompt ontwikkelen
 # ============================================================
 def build_prompt(insights, numeric):
+
     def format_block(cat):
         i = insights.get(cat)
         if not i:
             return f"[{cat}] — GEEN DATA"
         sigs = ", ".join(i["top_signals"]) if i["top_signals"] else "-"
         return (
-            f"[{cat}] score≈{i['avg_score']} | trend={i['trend']} | bias={i['bias']} | risk={i['risk']}\n"
-            f" summary: {i['summary']}\n"
-            f" signals: {sigs}"
+            f"[{cat}] score={i['avg_score']} | trend={i['trend']} | bias={i['bias']} | risk={i['risk']}\n"
+            f"summary: {i['summary']}\n"
+            f"signals: {sigs}"
         )
 
-    blocks = "\n".join(format_block(cat) for cat in CATEGORIES)
+    data_text = "\n".join(format_block(cat) for cat in CATEGORIES)
 
     return f"""
 Je bent de MASTER Orchestrator AI voor trading. 
-Combineer macro, market, technical, setup, strategy en eerdere master-score tot één totaalbeeld.
+Combineer macro, market, technical, setup, strategy, master in één totaalbeeld.
 
-Antwoord UITSLUITEND in geldige JSON:
+Antwoord ALLEEN met geldige JSON:
 
 {{
   "master_trend": "",
   "master_bias": "",
   "master_risk": "",
   "master_score": 0,
-  "weights": {{
-    "macro": 0.25, "market": 0.25, "technical": 0.25, "setup": 0.15, "strategy": 0.10
-  }},
   "alignment_score": 0,
+  "weights": {{
+    "macro": 0.25,
+    "market": 0.25,
+    "technical": 0.25,
+    "setup": 0.15,
+    "strategy": 0.10
+  }},
   "data_warnings": [],
   "summary": "",
   "outlook": "",
@@ -161,27 +167,27 @@ Antwoord UITSLUITEND in geldige JSON:
 }}
 
 === INPUT DATA ===
-{blocks}
+{data_text}
 
-Raw numeric context:
+=== NUMBERS ===
 {json.dumps(numeric, indent=2)}
 """
 
 
 # ============================================================
-# 💾 4. Opslaan in ai_category_insights als categorie 'master'
+# 💾 4. Opslaan → ai_category_insights (categorie: 'master')
 # ============================================================
 def store_master_result(conn, result):
     if not isinstance(result, dict):
-        logger.error("❌ AI-output was geen dict.")
+        logger.error("❌ Geen geldige JSON van AI.")
         return
 
     meta = {
-        "outlook": result.get("outlook"),
-        "weights": result.get("weights", {}),
+        "weights": result.get("weights"),
         "alignment_score": result.get("alignment_score"),
-        "data_warnings": result.get("data_warnings", []),
-        "domains": result.get("domains", {}),
+        "data_warnings": result.get("data_warnings"),
+        "domains": result.get("domains"),
+        "outlook": result.get("outlook"),
     }
 
     with conn.cursor() as cur:
@@ -189,7 +195,8 @@ def store_master_result(conn, result):
             INSERT INTO ai_category_insights
                 (category, avg_score, trend, bias, risk, summary, top_signals)
             VALUES ('master', %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (category, date) DO UPDATE SET
+            ON CONFLICT (category, date)
+            DO UPDATE SET
                 avg_score = EXCLUDED.avg_score,
                 trend = EXCLUDED.trend,
                 bias = EXCLUDED.bias,
@@ -198,7 +205,7 @@ def store_master_result(conn, result):
                 top_signals = EXCLUDED.top_signals,
                 created_at = NOW();
         """, (
-            int(result.get("master_score")) if result.get("master_score") else None,
+            result.get("master_score"),
             result.get("master_trend"),
             result.get("master_bias"),
             result.get("master_risk"),
@@ -208,15 +215,15 @@ def store_master_result(conn, result):
 
 
 # ============================================================
-# 🚀 5. Celery task — MASTER AI orchestrator
+# 🚀 5. Celery task
 # ============================================================
 @shared_task(name="backend.ai_agents.score_ai_agent.generate_master_score")
 def generate_master_score():
-    logger.info("🧠 Start Score-Orchestrator agent...")
+    logger.info("🧠 Start MASTER Score AI...")
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding.")
+        logger.error("❌ Geen databaseverbinding.")
         return
 
     try:
@@ -224,16 +231,14 @@ def generate_master_score():
         numeric = fetch_numeric_scores(conn)
         prompt = build_prompt(insights, numeric)
 
-        # JSON-engine
         result = ask_gpt(prompt)
-
         store_master_result(conn, result)
         conn.commit()
 
         logger.info("✅ Master score opgeslagen.")
 
     except Exception:
-        logger.error("❌ Score-Orchestrator fout:")
+        logger.error("❌ Score orchestrator crash:")
         logger.error(traceback.format_exc())
 
     finally:
