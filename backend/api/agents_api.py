@@ -1,121 +1,190 @@
-import os
 import logging
 from datetime import datetime
+from typing import List, Dict, Any
+
 from fastapi import APIRouter, HTTPException, Query
-from dotenv import load_dotenv
 
 from backend.utils.db import get_db_connection
 
-# =========================================
-# 🔧 ENV + Logging
-# =========================================
-dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-load_dotenv(dotenv_path=dotenv_path)
-
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger.setLevel(logging.INFO)
 
 router = APIRouter()
-logger.info("🚀 agents_api.py geladen – AI Agents backend actief.")
+logger.info("🚀 agents_api.py geladen – v2 met ai_category_insights + ai_reflections")
 
 
-# =========================================
-# 🔧 Helper: DB cursor
-# =========================================
-def get_db_cursor():
+# ==========================================
+# 🔧 Helper: DB connectie
+# ==========================================
+def get_conn_cursor():
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="❌ [DB01] Geen databaseverbinding.")
+        logger.error("❌ [agents] Geen databaseverbinding.")
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding.")
     return conn, conn.cursor()
 
 
-# =========================================
-# 🧠 GET /api/agents/insights?category=macro
-# =========================================
+# ==========================================
+# 🧠 Categorie-insight ophalen
+# ==========================================
 @router.get("/agents/insights")
-async def get_agent_insight(category: str = Query(...)):
+async def get_agent_insight(category: str = Query(..., description="Categorie: macro, market, technical, setup, ...")):
+    """
+    Haal de laatste AI-categorie-insight op uit `ai_category_insights`.
+
+    Frontend verwacht:
+    {
+      "insight": {
+        "category": "technical",
+        "score": 73.5,
+        "trend": "bullish",
+        "bias": "risk-on",
+        "risk": "gemiddeld",
+        "summary": "Korte samenvatting...",
+        "top_signals": [...],
+        "date": "2025-12-01",
+        "created_at": "2025-12-01T07:30:00"
+      }
+    }
+    """
     logger.info(f"📡 [agents] Insight ophalen voor categorie={category}")
 
-    conn, cur = get_db_cursor()
-
+    conn, cur = get_conn_cursor()
     try:
-        cur.execute("""
-            SELECT id, category, insight, created_at
+        cur.execute(
+            """
+            SELECT category,
+                   avg_score,
+                   trend,
+                   bias,
+                   risk,
+                   summary,
+                   top_signals,
+                   date,
+                   created_at
             FROM ai_category_insights
             WHERE category = %s
-            ORDER BY created_at DESC
+            ORDER BY date DESC, created_at DESC
             LIMIT 1;
-        """, (category,))
-
+            """,
+            (category,),
+        )
         row = cur.fetchone()
 
         if not row:
-            logger.warning(f"⚠️ Geen insight gevonden voor {category}")
-            return {"category": category, "insight": None}
+            logger.warning(f"⚠️ [agents] Geen ai_category_insights gevonden voor category={category}")
+            return {"insight": None}
 
-        insight_obj = {
-            "id": row[0],
-            "category": row[1],
-            "text": row[2],
-            "created_at": row[3].isoformat() if row[3] else None,
+        (
+            cat,
+            avg_score,
+            trend,
+            bias,
+            risk,
+            summary,
+            top_signals,
+            d,
+            created_at,
+        ) = row
+
+        insight = {
+            "category": cat,
+            "score": float(avg_score) if avg_score is not None else None,
+            "trend": trend,
+            "bias": bias,
+            "risk": risk,
+            "summary": summary,
+            "top_signals": top_signals,  # jsonb → dict/list in Python
+            "date": d.isoformat() if d else None,
+            "created_at": created_at.isoformat() if isinstance(created_at, datetime) else None,
         }
 
-        return {
-            "category": category,
-            "insight": insight_obj["text"],
-            "meta": insight_obj,
-        }
+        return {"insight": insight}
 
     except Exception as e:
         logger.error(f"❌ [agents/insights] Databasefout: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen AI insight.")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen AI-insight.")
     finally:
         conn.close()
 
 
-# =========================================
-# 🧠 GET /api/agents/reflections?category=macro
-# =========================================
+# ==========================================
+# 🪞 Reflecties per categorie
+# ==========================================
 @router.get("/agents/reflections")
 async def get_agent_reflections(
-    category: str = Query(...),
-    limit: int = Query(5, ge=1, le=50),
+    category: str = Query(..., description="Categorie: macro, market, technical, setup, ..."),
+    limit: int = Query(5, ge=1, le=50, description="Max aantal reflecties"),
 ):
+    """
+    Haal AI-reflecties op uit `ai_reflections`.
+
+    Frontend verwacht:
+    {
+      "reflections": [
+        {
+          "indicator": "RSI",
+          "raw_score": null,
+          "ai_score": 72,
+          "compliance": 80,
+          "comment": "Korte observatie...",
+          "recommendation": "Korte aanbeveling...",
+          "date": "2025-12-01",
+          "timestamp": "2025-12-01T07:31:00"
+        },
+        ...
+      ]
+    }
+    """
     logger.info(f"📡 [agents] Reflections ophalen voor categorie={category} limit={limit}")
 
-    conn, cur = get_db_cursor()
-
+    conn, cur = get_conn_cursor()
     try:
-        cur.execute("""
-            SELECT id, category, title, reflection, weight, created_at
+        cur.execute(
+            """
+            SELECT indicator,
+                   raw_score,
+                   ai_score,
+                   compliance,
+                   comment,
+                   recommendation,
+                   date,
+                   timestamp
             FROM ai_reflections
             WHERE category = %s
-            ORDER BY created_at DESC
+            ORDER BY date DESC, timestamp DESC
             LIMIT %s;
-        """, (category, limit))
-
+            """,
+            (category, limit),
+        )
         rows = cur.fetchall()
 
-        reflections = [
-            {
-                "id": r[0],
-                "category": r[1],
-                "title": r[2],
-                "text": r[3],
-                "weight": r[4],
-                "created_at": r[5].isoformat() if r[5] else None
-            }
-            for r in rows
-        ]
+        reflections: List[Dict[str, Any]] = []
+        for (
+            indicator,
+            raw_score,
+            ai_score,
+            compliance,
+            comment,
+            recommendation,
+            d,
+            ts,
+        ) in rows:
+            reflections.append({
+                "indicator": indicator,
+                "raw_score": float(raw_score) if raw_score is not None else None,
+                "ai_score": float(ai_score) if ai_score is not None else None,
+                "compliance": float(compliance) if compliance is not None else None,
+                "comment": comment,
+                "recommendation": recommendation,
+                "date": d.isoformat() if d else None,
+                "timestamp": ts.isoformat() if isinstance(ts, datetime) else None,
+            })
 
-        return {
-            "category": category,
-            "count": len(reflections),
-            "reflections": reflections,
-        }
+        return {"reflections": reflections}
 
     except Exception as e:
         logger.error(f"❌ [agents/reflections] Fout: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen AI reflections.")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen AI-reflecties.")
     finally:
         conn.close()
