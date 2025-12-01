@@ -61,7 +61,7 @@ def run_setup_agent(asset="BTC"):
 
     try:
         # ---------------------------------------------------------------
-        # 1️⃣ SCORES VAN VANDAAG — FIXED: report_date i.p.v date
+        # 1️⃣ SYSTEEM SCORES VAN VANDAAG
         # ---------------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -82,7 +82,7 @@ def run_setup_agent(asset="BTC"):
         market_score = to_float(market_score)
 
         # ---------------------------------------------------------------
-        # 2️⃣ SETUPS VOOR DIT ASSET
+        # 2️⃣ SETUPS OPHALEN
         # ---------------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -127,7 +127,7 @@ def run_setup_agent(asset="BTC"):
 
             active = (macro_match > 0 and tech_match > 0 and market_match > 0)
 
-            # Beste van de dag bepalen
+            # Best match bepalen
             if total_match > best_match_score:
                 best_match_score = total_match
                 best_setup = {
@@ -176,13 +176,13 @@ Geef één zin waarom deze match {total_match}/100 scoort.
             })
 
             # -----------------------------------------------------------
-            # 4️⃣ Opslaan in daily_setup_scores (FIXED: report_date)
+            # 4️⃣ Opslaan in daily_setup_scores — FIXED JSONB
             # -----------------------------------------------------------
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO daily_setup_scores 
                         (setup_id, report_date, score, is_active, explanation, breakdown)
-                    VALUES (%s, CURRENT_DATE, %s, %s, %s, %s)
+                    VALUES (%s, CURRENT_DATE, %s, %s, %s, %s::jsonb)
                     ON CONFLICT (setup_id, report_date)
                     DO UPDATE SET 
                         score = EXCLUDED.score,
@@ -195,15 +195,15 @@ Geef één zin waarom deze match {total_match}/100 scoort.
                     total_match,
                     active,
                     ai_comment,
-                    {
+                    json.dumps({
                         "macro_match": macro_match,
                         "technical_match": tech_match,
                         "market_match": market_match
-                    }
+                    })
                 ))
 
         # ---------------------------------------------------------------
-        # 5️⃣ BEST OF DAY MARKEREN
+        # 5️⃣ BEST VAN DE DAG MARKEREN
         # ---------------------------------------------------------------
         if best_setup:
             for r in results:
@@ -218,19 +218,13 @@ Geef één zin waarom deze match {total_match}/100 scoort.
                 """, (best_setup["setup_id"],))
 
         # ---------------------------------------------------------------
-        # 6️⃣ INSIGHTS OPSLAAN — FIXED date logic (same as strategy)
+        # 6️⃣ SAMENVATTING OPSLAAN — ai_category_insights
         # ---------------------------------------------------------------
         if results:
-            # gemiddelde score
-            avg_score = round(
-                sum(r["match_score"] for r in results) / len(results),
-                2
-            )
-
+            avg_score = round(sum(r["match_score"] for r in results) / len(results), 2)
             active_count = sum(1 for r in results if r["active"])
             total_setups = len(results)
 
-            # simpele heuristiek
             if best_match_score >= 70:
                 trend = "Sterke match"
             elif best_match_score >= 40:
@@ -255,11 +249,9 @@ Geef één zin waarom deze match {total_match}/100 scoort.
                 )
             else:
                 summary = (
-                    f"Er zijn {total_setups} setups geëvalueerd, maar geen duidelijke "
-                    f"match gevonden."
+                    f"Er zijn {total_setups} setups geëvalueerd, maar geen duidelijke match gevonden."
                 )
 
-            # top 3
             sorted_results = sorted(results, key=lambda r: r["match_score"], reverse=True)
             top3 = sorted_results[:3]
             top_signals = [
