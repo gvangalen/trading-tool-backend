@@ -136,7 +136,7 @@ def get_ai_insights_from_db():
 
 
 # =====================================================
-# 3️⃣ Strategy uit database halen (BELANGRIJK!)
+# 3️⃣ Strategy uit database halen (GEEN GPT!)
 # =====================================================
 def get_latest_strategy_for_setup(setup_id: int):
     conn = get_db_connection()
@@ -145,8 +145,9 @@ def get_latest_strategy_for_setup(setup_id: int):
 
     try:
         with conn.cursor() as cur:
+            # Belangrijk: jouw DB heeft kolom "target" (zonder s)
             cur.execute("""
-                SELECT entry, targets, stop_loss, rr, explanation
+                SELECT entry, target, stop_loss, rr, explanation
                 FROM strategies
                 WHERE setup_id = %s
                 ORDER BY date DESC
@@ -154,18 +155,30 @@ def get_latest_strategy_for_setup(setup_id: int):
             """, (setup_id,))
             row = cur.fetchone()
 
-            if not row:
-                return None
+        if not row:
+            logger.warning(f"⚠️ Geen strategy gevonden voor setup {setup_id}")
+            return None
 
-            entry, targets, stop_loss, rr, explanation = row
+        entry, target, stop_loss, rr, explanation = row
 
-            return {
-                "entry": entry,
-                "targets": targets,
-                "stop_loss": stop_loss,
-                "risk_reward": rr,
-                "explanation": explanation,
-            }
+        # Targets normaliseren → altijd list
+        targets = []
+        if isinstance(target, str):
+            targets = [t.strip() for t in target.split(",") if t.strip()]
+        elif isinstance(target, list):
+            targets = target
+
+        return {
+            "entry": entry,
+            "targets": targets,
+            "stop_loss": stop_loss,
+            "risk_reward": rr,
+            "explanation": explanation,
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Fout bij ophalen strategy: {e}", exc_info=True)
+        return None
 
     finally:
         conn.close()
