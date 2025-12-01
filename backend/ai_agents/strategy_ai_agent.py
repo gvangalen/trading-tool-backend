@@ -190,12 +190,12 @@ def generate_strategy_ai():
                 """, (
                     s["setup_id"],
                     strat["entry"],
-                    ",".join(strat["targets"]),        # target → text
+                    ",".join(strat["targets"]),        # 👈 target → text
                     strat["stop_loss"],
                     strat["explanation"],
-                    strat["risk_reward"],              # risk_profile kolom
+                    strat["risk_reward"],              # 👈 risk_profile
                     "ai",
-                    json.dumps(strat),                 # volledige JSON in data kolom
+                    json.dumps(strat),                 # 👈 volledige JSON blob
                 ))
 
         conn.commit()
