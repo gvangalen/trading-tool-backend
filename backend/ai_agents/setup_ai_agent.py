@@ -61,7 +61,7 @@ def run_setup_agent(asset="BTC"):
 
     try:
         # ---------------------------------------------------------------
-        # 1️⃣ SCORES VAN VANDAAG — FIXED: report_date i.p.v. date
+        # 1️⃣ SCORES VAN VANDAAG — FIXED: report_date i.p.v date
         # ---------------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -218,10 +218,10 @@ Geef één zin waarom deze match {total_match}/100 scoort.
                 """, (best_setup["setup_id"],))
 
         # ---------------------------------------------------------------
-        # 6️⃣ NIEUWE: SAMENVATTING NAAR ai_category_insights ('setup')
+        # 6️⃣ INSIGHTS OPSLAAN — FIXED date logic (same as strategy)
         # ---------------------------------------------------------------
         if results:
-            # Gemiddelde score over alle setups
+            # gemiddelde score
             avg_score = round(
                 sum(r["match_score"] for r in results) / len(results),
                 2
@@ -230,7 +230,7 @@ Geef één zin waarom deze match {total_match}/100 scoort.
             active_count = sum(1 for r in results if r["active"])
             total_setups = len(results)
 
-            # Eenvoudige trend/bias/risk heuristiek
+            # simpele heuristiek
             if best_match_score >= 70:
                 trend = "Sterke match"
             elif best_match_score >= 40:
@@ -247,31 +247,26 @@ Geef één zin waarom deze match {total_match}/100 scoort.
             else:
                 risk = "Laag"
 
-            # Korte samenvattingstekst
             if best_setup:
                 summary = (
                     f"Vandaag is '{best_setup['name']}' de best passende setup "
-                    f"voor {asset} met een match-score van {best_setup['total_match']}/100. "
-                    f"Er zijn {total_setups} setups geëvalueerd, waarvan {active_count} "
-                    f"binnen hun score-ranges actief zijn."
+                    f"met een match-score van {best_setup['total_match']}/100. "
+                    f"{active_count}/{total_setups} setups zijn actief binnen hun ranges."
                 )
             else:
                 summary = (
-                    f"Er zijn {total_setups} setups geëvalueerd, maar er is geen duidelijke "
-                    f"dominante match gevonden op basis van de huidige markt- en scoresituatie."
+                    f"Er zijn {total_setups} setups geëvalueerd, maar geen duidelijke "
+                    f"match gevonden."
                 )
 
-            # Top 3 signalen
+            # top 3
             sorted_results = sorted(results, key=lambda r: r["match_score"], reverse=True)
             top3 = sorted_results[:3]
             top_signals = [
                 {
                     "name": r["name"],
                     "match_score": r["match_score"],
-                    "active": r["active"],
-                    "macro_match": r["macro_match"],
-                    "technical_match": r["technical_match"],
-                    "market_match": r["market_match"],
+                    "active": r["active"]
                 }
                 for r in top3
             ]
