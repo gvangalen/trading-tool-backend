@@ -258,7 +258,7 @@ async def update_strategy(strategy_id: int, request: Request):
 
 
 # =====================================================================
-# 🗑 5. DELETE
+# 🗑 5. DELETE — FIXED (404 resolved)
 # =====================================================================
 @router.delete("/strategies/{strategy_id}")
 async def delete_strategy(strategy_id: int):
@@ -269,8 +269,10 @@ async def delete_strategy(strategy_id: int):
     try:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM strategies WHERE id = %s", (strategy_id,))
-            conn.commit()
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Strategie niet gevonden")
 
+        conn.commit()
         return {"message": "🗑 Strategie verwijderd"}
 
     finally:
@@ -334,7 +336,7 @@ async def filter_strategies(request: Request):
             query += " AND data->>'timeframe' = %s"
             params.append(timeframe)
         if tag:
-            query += " AND %s = ANY(data->'tags')"
+            query += " AND %s = ANY(data->'tags')" 
             params.append(tag)
         if min_score is not None:
             query += " AND (data->>'score')::float >= %s"
