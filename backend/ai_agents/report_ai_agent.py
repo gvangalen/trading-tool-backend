@@ -51,6 +51,9 @@ Schrijf in het Nederlands in de stijl van een premium nieuwsbrief
 # 📊 Scores uit DB
 # =====================================================
 def get_scores_from_db():
+    """
+    Fix: daily_scores gebruikt nu `report_date` in plaats van `date`
+    """
     try:
         scores = get_scores_for_symbol(include_metadata=True)
         if scores:
@@ -67,7 +70,7 @@ def get_scores_from_db():
             cur.execute("""
                 SELECT macro_score, technical_score, setup_score, market_score
                 FROM daily_scores
-                ORDER BY date DESC
+                ORDER BY report_date DESC
                 LIMIT 1
             """)
             row = cur.fetchone()
@@ -88,6 +91,9 @@ def get_scores_from_db():
 # 🧠 AI insights laden
 # =====================================================
 def get_ai_insights_from_db():
+    """
+    ai_category_insights heeft WEL een 'date' kolom
+    """
     conn = get_db_connection()
     if not conn:
         return {}
@@ -101,6 +107,7 @@ def get_ai_insights_from_db():
                 WHERE date = CURRENT_DATE;
             """)
             rows = cur.fetchall()
+
             for category, avg_score, trend, bias, risk, summary in rows:
                 insights[category] = {
                     "avg_score": float(avg_score or 0),
@@ -109,6 +116,7 @@ def get_ai_insights_from_db():
                     "risk": risk,
                     "summary": summary,
                 }
+
     finally:
         conn.close()
 
@@ -132,12 +140,14 @@ def get_latest_market_data():
                 LIMIT 1
             """)
             row = cur.fetchone()
+
             if row:
                 return {
                     "price": round(row[0], 2),
                     "volume": row[1],
                     "change_24h": row[2],
                 }
+
     finally:
         conn.close()
 
@@ -146,11 +156,7 @@ def get_latest_market_data():
 # 🧠 Premium text generator
 # =====================================================
 def generate_section(prompt: str, retries: int = 3) -> str:
-    text = ask_gpt_text(
-        prompt,
-        system_role=REPORT_STYLE_GUIDE,
-        retries=retries,
-    )
+    text = ask_gpt_text(prompt, system_role=REPORT_STYLE_GUIDE, retries=retries)
     return text.strip() if text else "AI-generatie mislukt of gaf geen output."
 
 
@@ -167,20 +173,14 @@ def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None):
     setup_score = safe_get(scores, "setup_score")
     market_score = safe_get(scores, "market_score")
 
-    # FIX — master zat voorheen onder "score"
     master = ai_insights.get("master", {})
-
-    m_score = safe_get(master, "avg_score")
-    m_trend = safe_get(master, "trend")
-    m_bias = safe_get(master, "bias")
-    m_risk = safe_get(master, "risk")
 
     return f"""
 Schrijf een krachtige openingssectie (6–8 zinnen).
 
 Data:
 - Scores: macro {macro}, technisch {tech}, setup {setup_score}, markt {market_score}
-- Master score: {m_score}, trend {m_trend}, bias {m_bias}, risico {m_risk}
+- Master score: {safe_get(master, "avg_score")}, trend {safe_get(master, "trend")}, bias {safe_get(master, "bias")}, risico {safe_get(master, "risk")}
 - Markt: prijs ${price}, volume {volume}, verandering {change}%
 - Setup: {setup.get('name')} ({setup.get('timeframe')})
 """
@@ -188,7 +188,6 @@ Data:
 
 def prompt_for_macro_summary(scores, ai_insights):
     macro = ai_insights.get("macro", {})
-
     return f"""
 Maak een compacte macro-update (5–8 zinnen).
 
@@ -216,9 +215,7 @@ Timeframe: {setup.get('timeframe')}
 
 
 def prompt_for_priorities(setup, scores):
-    return f"""
-Genereer 3–7 dagelijkse prioriteiten voor traders.
-"""
+    return f"Genereer 3–7 dagelijkse prioriteiten voor traders."
 
 
 def prompt_for_wyckoff_analysis(setup):
@@ -241,17 +238,14 @@ Stop-loss: {strategy['stop_loss']}
 
 def prompt_for_conclusion(scores, ai_insights):
     master = ai_insights.get("master", {})
-
     return f"""
 Schrijf een slotconclusie (4–8 zinnen).
-Master Score: {master.get('avg_score')} | trend {master.get('trend')}
+Master Score: {safe_get(master, "avg_score")} | trend {safe_get(master, "trend")}
 """
 
 
 def prompt_for_outlook(setup):
-    return f"""
-Schrijf een 2–5 dagen outlook met bullish, bearish en sideways scenario.
-"""
+    return f"Schrijf een 2–5 dagen outlook met bullish, bearish en sideways scenario."
 
 
 # =====================================================
@@ -261,12 +255,14 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
     log_and_print(f"🚀 Start rapportgeneratie voor: {symbol}")
 
     setup_raw = get_latest_setup_for_symbol(symbol)
+    setup = sanitize_json_input(setup_raw, context="setup")
+
     scores_raw = get_scores_from_db()
+    scores = sanitize_json_input(scores_raw, context="scores")
+
     ai_insights = get_ai_insights_from_db()
     market_data = get_latest_market_data()
 
-    setup = sanitize_json_input(setup_raw, context="setup")
-    scores = sanitize_json_input(scores_raw, context="scores")
     strategy_raw = generate_strategy_from_setup(setup)
     strategy = sanitize_json_input(strategy_raw, context="strategy")
 
@@ -282,6 +278,7 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         "conclusion": generate_section(prompt_for_conclusion(scores, ai_insights)),
         "outlook": generate_section(prompt_for_outlook(setup)),
 
+        # Raw data for API/frontend
         "macro_score": scores["macro_score"],
         "technical_score": scores["technical_score"],
         "setup_score": scores["setup_score"],
@@ -289,7 +286,6 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
 
         "ai_insights": ai_insights,
         "ai_master_score": master,
-
         "market_data": market_data,
     }
 
