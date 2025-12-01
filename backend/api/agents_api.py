@@ -1,4 +1,5 @@
 import logging
+import json
 from datetime import datetime
 from typing import List, Dict, Any
 
@@ -10,7 +11,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 router = APIRouter()
-logger.info("🚀 agents_api.py geladen – v2 met ai_category_insights + ai_reflections")
+logger.info("🚀 agents_api.py geladen – FIXED v3 (top_signals parser)")
 
 
 # ==========================================
@@ -25,29 +26,15 @@ def get_conn_cursor():
 
 
 # ==========================================
-# 🧠 Categorie-insight ophalen
+# 🧠 Categorie-insight ophalen (MET FIX)
 # ==========================================
 @router.get("/agents/insights")
 async def get_agent_insight(category: str = Query(..., description="Categorie: macro, market, technical, setup, ...")):
     """
-    Haal de laatste AI-categorie-insight op uit `ai_category_insights`.
-
-    Frontend verwacht:
-    {
-      "insight": {
-        "category": "technical",
-        "score": 73.5,
-        "trend": "bullish",
-        "bias": "risk-on",
-        "risk": "gemiddeld",
-        "summary": "Korte samenvatting...",
-        "top_signals": [...],
-        "date": "2025-12-01",
-        "created_at": "2025-12-01T07:30:00"
-      }
-    }
+    Haalt laatste AI-category insight op uit ai_category_insights.
+    FIX → top_signals wordt altijd parsed naar array.
     """
-    logger.info(f"📡 [agents] Insight ophalen voor categorie={category}")
+    logger.info(f"📡 [agents] Insight ophalen voor category={category}")
 
     conn, cur = get_conn_cursor()
     try:
@@ -82,10 +69,23 @@ async def get_agent_insight(category: str = Query(..., description="Categorie: m
             bias,
             risk,
             summary,
-            top_signals,
+            top_signals_raw,
             d,
             created_at,
         ) = row
+
+        # ==========================================
+        # 🔥 FIX: top_signals is soms string → json.loads
+        # ==========================================
+        parsed_top_signals = []
+        try:
+            if isinstance(top_signals_raw, str):
+                parsed_top_signals = json.loads(top_signals_raw)
+            else:
+                parsed_top_signals = top_signals_raw
+        except Exception:
+            logger.error("⚠️ kon top_signals niet parsen → fallback lege lijst")
+            parsed_top_signals = []
 
         insight = {
             "category": cat,
@@ -94,7 +94,7 @@ async def get_agent_insight(category: str = Query(..., description="Categorie: m
             "bias": bias,
             "risk": risk,
             "summary": summary,
-            "top_signals": top_signals,  # jsonb → dict/list in Python
+            "top_signals": parsed_top_signals,
             "date": d.isoformat() if d else None,
             "created_at": created_at.isoformat() if isinstance(created_at, datetime) else None,
         }
@@ -102,14 +102,14 @@ async def get_agent_insight(category: str = Query(..., description="Categorie: m
         return {"insight": insight}
 
     except Exception as e:
-        logger.error(f"❌ [agents/insights] Databasefout: {e}")
+        logger.error(f"❌ [agents/insights] DB error: {e}")
         raise HTTPException(status_code=500, detail="Fout bij ophalen AI-insight.")
     finally:
         conn.close()
 
 
 # ==========================================
-# 🪞 Reflecties per categorie
+# 🪞 Reflecties per categorie (onveranderd)
 # ==========================================
 @router.get("/agents/reflections")
 async def get_agent_reflections(
@@ -117,26 +117,9 @@ async def get_agent_reflections(
     limit: int = Query(5, ge=1, le=50, description="Max aantal reflecties"),
 ):
     """
-    Haal AI-reflecties op uit `ai_reflections`.
-
-    Frontend verwacht:
-    {
-      "reflections": [
-        {
-          "indicator": "RSI",
-          "raw_score": null,
-          "ai_score": 72,
-          "compliance": 80,
-          "comment": "Korte observatie...",
-          "recommendation": "Korte aanbeveling...",
-          "date": "2025-12-01",
-          "timestamp": "2025-12-01T07:31:00"
-        },
-        ...
-      ]
-    }
+    Haalt AI-reflecties op uit ai_reflections.
     """
-    logger.info(f"📡 [agents] Reflections ophalen voor categorie={category} limit={limit}")
+    logger.info(f"📡 [agents] Reflections ophalen voor category={category} limit={limit}")
 
     conn, cur = get_conn_cursor()
     try:
@@ -170,6 +153,7 @@ async def get_agent_reflections(
             d,
             ts,
         ) in rows:
+
             reflections.append({
                 "indicator": indicator,
                 "raw_score": float(raw_score) if raw_score is not None else None,
@@ -185,6 +169,6 @@ async def get_agent_reflections(
 
     except Exception as e:
         logger.error(f"❌ [agents/reflections] Fout: {e}")
-        raise HTTPException(status_code=500, detail="Fout bij ophalen AI-reflecties.")
+        raise HTTPException(status_code=500, detail="Fout bij ophalen reflecties.")
     finally:
         conn.close()
