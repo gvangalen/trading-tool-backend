@@ -6,17 +6,20 @@ from celery import shared_task
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
+from backend.utils.scoring_utils import generate_scores_db
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
 # ======================================================
-# 🌍 MACRO AI AGENT — volledig gefixt volgens DB structuur
+# 🧠 MACRO AI AGENT – v3 (perfect aligned with MARKET)
 # ======================================================
+
 @shared_task(name="backend.ai_agents.macro_ai_agent.generate_macro_insight")
 def generate_macro_insight():
-    logger.info("🌍 Start Macro AI Agent (V2, FIXED)...")
+
+    logger.info("🌍 Start Macro AI Agent...")
 
     conn = get_db_connection()
     if not conn:
@@ -24,83 +27,99 @@ def generate_macro_insight():
         return
 
     try:
-        # =====================================================
-        # 1️⃣ Macro scoreregels ophalen (range_min / range_max)
-        # =====================================================
+        # =========================================================
+        # 1️⃣ Scoreregels ophalen
+        # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT indicator, range_min, range_max, score, interpretation, action
+                SELECT indicator, range_min, range_max, score,
+                       trend, interpretation, action
                 FROM macro_indicator_rules
-                ORDER BY indicator ASC, score ASC;
+                ORDER BY indicator ASC, range_min ASC;
             """)
             rule_rows = cur.fetchall()
 
         rules_by_indicator = {}
-        for indicator, rmin, rmax, score, interp, action in rule_rows:
+        for r in rule_rows:
+            indicator, rmin, rmax, score, trend, interp, action = r
             rules_by_indicator.setdefault(indicator, []).append({
                 "range_min": float(rmin),
                 "range_max": float(rmax),
                 "score": int(score),
+                "trend": trend,
                 "interpretation": interp,
                 "action": action,
             })
 
-        logger.info(f"📘 Macro-regels geladen voor {len(rules_by_indicator)} indicatoren.")
+        logger.info(f"📘 Macro regels geladen ({len(rules_by_indicator)})")
 
-
-        # =====================================================
-        # 2️⃣ Macro-data ophalen (FIXED → timestamp::date)
-        # =====================================================
+        # =========================================================
+        # 2️⃣ Macro-data uit DB ophalen
+        # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT 
-                    name,       -- indicator name!
-                    value,
-                    score,
-                    interpretation,
-                    action,
-                    trend
+                SELECT indicator, value, timestamp
                 FROM macro_data
-                WHERE timestamp::date = CURRENT_DATE
-                ORDER BY name ASC;
+                WHERE date = CURRENT_DATE
+                ORDER BY indicator ASC;
             """)
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning("⚠️ Geen macro_data gevonden voor vandaag (timestamp::date).")
+            logger.warning("⚠️ Geen macro_data voor vandaag")
             return
 
-        combined = []
-        for (name, value, score, interp, action, trend) in rows:
-            combined.append({
-                "indicator": name,
+        macro_values = {
+            indicator: {
                 "value": float(value),
-                "score": float(score),
-                "interpretation": interp,
-                "action": action,
-                "trend": trend,
-                "rules": rules_by_indicator.get(name, []),
-            })
+                "timestamp": ts.isoformat() if isinstance(ts, datetime) else str(ts)
+            }
+            for indicator, value, ts in rows
+        }
 
-        # prompt tekst
-        data_text = "\n".join([
-            f"{c['indicator']}: value={c['value']}, score={c['score']}, trend={c['trend']}, "
-            f"interpretation={c['interpretation']}, rules={json.dumps(c['rules'], ensure_ascii=False)}"
-            for c in combined
-        ])
+        # =========================================================
+        # 3️⃣ Macro-score berekenen via DB-logica
+        # =========================================================
+        macro_scores = generate_scores_db("macro")
+        macro_avg = macro_scores.get("total_score", 0)
+        score_items = macro_scores.get("scores", {})
 
+        # Top contributors (max 3)
+        top_contributors = sorted(
+            score_items.items(),
+            key=lambda kv: kv[1].get("score", 0),
+            reverse=True
+        )[:3]
 
-        # =====================================================
-        # 3️⃣ AI Macro-interpretatie
-        # =====================================================
+        top_contributors_pretty = [
+            {
+                "indicator": name,
+                "value": data.get("value"),
+                "score": data.get("score"),
+                "trend": data.get("trend"),
+                "interpretation": data.get("interpretation"),
+            }
+            for name, data in top_contributors
+        ]
+
+        # =========================================================
+        # 4️⃣ Bouw prompt payload
+        # =========================================================
+        data_payload = {
+            "macro_values": macro_values,
+            "macro_rules": rules_by_indicator,
+            "macro_avg_score": macro_avg,
+            "macro_top_contributors": top_contributors_pretty,
+        }
+
         prompt_context = f"""
-Je bent een macro-economische analyse-AI gespecialiseerd in Bitcoin.
+Je bent een professionele macro-econoom gespecialiseerd in Bitcoin.
 
-Hieronder staan de actuele macro-indicatoren + scoreregels:
+Analyseer deze macrodata + scoreregels:
 
-{data_text}
+{json.dumps(data_payload, ensure_ascii=False, indent=2)}
 
-Geef ALLEEN geldige JSON:
+Geef geldige JSON terug met:
 {{
   "trend": "",
   "bias": "",
@@ -108,108 +127,54 @@ Geef ALLEEN geldige JSON:
   "summary": "",
   "top_signals": []
 }}
-        """
+"""
 
+        # =========================================================
+        # 5️⃣ AI-context via ask_gpt (parsed JSON)
+        # =========================================================
         ai_context = ask_gpt(
             prompt_context,
             system_role="Je bent een professionele macro-analist. Antwoord ALTIJD in geldige JSON."
         )
 
         if not isinstance(ai_context, dict):
-            logger.warning("⚠️ Geen dict → fallback.")
+            raw = ai_context.get("raw_text", "")[:200] if isinstance(ai_context, dict) else ""
             ai_context = {
-                "trend": None,
-                "bias": None,
-                "risk": None,
-                "summary": str(ai_context)[:300],
-                "top_signals": [],
+                "trend": "",
+                "bias": "",
+                "risk": "",
+                "summary": raw,
+                "top_signals": []
             }
 
-
-        # =====================================================
-        # 4️⃣ AI Reflecties per indicator
-        # =====================================================
-        prompt_reflection = f"""
-Genereer een JSON-lijst. Per item:
-
-{{
-  "indicator": "",
-  "ai_score": 0,
-  "compliance": 0,
-  "comment": "",
-  "recommendation": ""
-}}
-
-Indicatoren:
-{data_text}
-        """
-
-        ai_ref = ask_gpt(
-            prompt_reflection,
-            system_role="Je bent een professionele macro-analist. Antwoord in JSON-lijst."
-        )
-
-        if not isinstance(ai_ref, list):
-            logger.warning("⚠️ Reflecties geen lijst → fallback lege lijst.")
-            ai_ref = []
-
-
-        # =====================================================
-        # 5️⃣ Opslaan macro category insight
-        # =====================================================
+        # =========================================================
+        # 6️⃣ Opslaan in ai_category_insights
+        # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO ai_category_insights
                     (category, avg_score, trend, bias, risk, summary, top_signals)
-                VALUES ('macro', NULL, %s, %s, %s, %s, %s)
+                VALUES ('macro', %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (category, date)
                 DO UPDATE SET
+                    avg_score = EXCLUDED.avg_score,
                     trend = EXCLUDED.trend,
-                    bias  = EXCLUDED.bias,
-                    risk  = EXCLUDED.risk,
+                    bias = EXCLUDED.bias,
+                    risk = EXCLUDED.risk,
                     summary = EXCLUDED.summary,
                     top_signals = EXCLUDED.top_signals,
                     created_at = NOW();
             """, (
+                macro_avg,
                 ai_context.get("trend"),
                 ai_context.get("bias"),
                 ai_context.get("risk"),
                 ai_context.get("summary"),
-                json.dumps(ai_context.get("top_signals", [])),
+                json.dumps(ai_context.get("top_signals", []), ensure_ascii=False),
             ))
 
-
-        # =====================================================
-        # 6️⃣ Opslaan individuele reflecties
-        # =====================================================
-        for r in ai_ref:
-            ind = r.get("indicator")
-            if not ind:
-                continue
-
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO ai_reflections (
-                        category, indicator, raw_score, ai_score, compliance, comment, recommendation
-                    )
-                    VALUES ('macro', %s, NULL, %s, %s, %s, %s)
-                    ON CONFLICT (category, indicator, date)
-                    DO UPDATE SET
-                        ai_score = EXCLUDED.ai_score,
-                        compliance = EXCLUDED.compliance,
-                        comment = EXCLUDED.comment,
-                        recommendation = EXCLUDED.recommendation,
-                        timestamp = NOW();
-                """, (
-                    ind,
-                    r.get("ai_score"),
-                    r.get("compliance"),
-                    r.get("comment"),
-                    r.get("recommendation"),
-                ))
-
         conn.commit()
-        logger.info("✅ Macro AI insights + reflecties opgeslagen.")
+        logger.info("✅ Macro AI insight opgeslagen")
 
     except Exception:
         logger.error("❌ Macro Agent FOUT:")
