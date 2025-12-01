@@ -43,12 +43,12 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 BEAT SCHEDULE — VOLLEDIGE AI PIPELINE
+# 🕒 BEAT SCHEDULE — VOLLEDIGE PIPELINE
 # =========================================================
 celery_app.conf.beat_schedule = {
 
     # =========================================================
-    # 1) MARKET DATA (continue & dagelijks)
+    # 1) MARKET DATA
     # =========================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -64,7 +64,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =========================================================
-    # 2) MACRO DATA FETCH
+    # 2) MACRO DATA
     # =========================================================
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
@@ -120,7 +120,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =========================================================
-    # 6) SETUP AGENT (koppelt setup aan scores)
+    # 6) SETUP AGENT
     # =========================================================
     "run_setup_agent": {
         "task": "backend.ai_agents.setup_ai_agent.run_setup_agent_task",
@@ -128,7 +128,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =========================================================
-    # 7) STRATEGY AGENT (maakt trading-strategie)
+    # 7) STRATEGY AGENT
     # =========================================================
     "generate_strategy_ai": {
         "task": "backend.ai_agents.strategy_ai_agent.generate_strategy_ai",
@@ -136,15 +136,15 @@ celery_app.conf.beat_schedule = {
     },
 
     # =========================================================
-    # 8) DAILY SCORES OPSLAAN
+    # 8) DAILY SCORES TASK **FIXED**
     # =========================================================
     "store_daily_scores": {
-        "task": "backend.celery_task.store_daily_scores_task.store_daily_scores_task",
+        "task": "backend.celery_task.store_daily_scores_task",
         "schedule": crontab(hour=4, minute=30),
     },
 
     # =========================================================
-    # 9) DAILY REPORT BUILDER (AI + PDF)
+    # 9) DAILY REPORTS
     # =========================================================
     "generate_daily_report_sections": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
@@ -160,7 +160,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =========================================================
-    # WEEK / MAAND / KWARTAAL RAPPORTEN
+    # 10) WEEK/MONTH/QUARTER REPORTS
     # =========================================================
     "generate_weekly_report": {
         "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
@@ -179,7 +179,7 @@ celery_app.conf.beat_schedule = {
 logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
 
 # =========================================================
-# 📌 FORCE IMPORT (ZONDER DEZE WERKT BEAT NIET!)
+# 📌 FORCE IMPORT — zodat Beat alles ziet
 # =========================================================
 try:
     import backend.celery_task.market_task
@@ -207,6 +207,6 @@ except Exception as e:
     logger.error(f"❌ Fout bij laden van tasks: {e}")
 
 # ---------------------------------------------------------
-# EXPOSE CELERY APP
+# EXPOSE APP
 # ---------------------------------------------------------
 app = celery_app
