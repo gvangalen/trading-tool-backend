@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ===================================================================
-# ⛑️ Fallback strategie als AI-output niet correct is
+# ⛑️ Fallback strategie
 # ===================================================================
 def fallback_strategy(reason: str):
     return {
@@ -23,7 +23,7 @@ def fallback_strategy(reason: str):
 
 
 # ===================================================================
-# 📡 Laden van AI insights uit ai_category_insights (huidige dag)
+# 📡 AI insights ophalen
 # ===================================================================
 def load_ai_insights():
     conn = get_db_connection()
@@ -63,38 +63,20 @@ def load_ai_insights():
 
 
 # ===================================================================
-# 🎯 Strategie genereren op basis van setup + AI insights
+# 🎯 Strategie genereren
 # ===================================================================
 def generate_strategy_from_setup(setup_dict: dict):
-    """
-    Genereert een strategie (entry, targets, SL, uitleg)
-    gebaseerd op:
-    - Setup structuur
-    - Macro / Technical / Market AI insights
-    - Master score (bias / trend / risico)
-    """
 
     if not isinstance(setup_dict, dict):
-        logger.error("❌ Ongeldige setup meegegeven aan Strategy Agent.")
-        return fallback_strategy("Setup niet leesbaar.")
+        return fallback_strategy("Ongeldige setup")
 
     setup = setup_dict
     setup_name = setup.get("name", "Onbekende setup")
     symbol = setup.get("symbol", "BTC")
     timeframe = setup.get("timeframe", "1D")
-    trend = setup.get("trend", "?")
-    indicators = setup.get("indicators") or []
-
-    if isinstance(indicators, str):
-        indicators_str = indicators
-    else:
-        indicators_str = ", ".join(indicators)
 
     logger.info(f"📄 Strategy Agent verwerkt setup: {setup_name} ({symbol} – {timeframe})")
 
-    # -------------------------------------------------------
-    # AI-insights laden
-    # -------------------------------------------------------
     ai = load_ai_insights()
 
     master    = ai.get("master", {}) or {}
@@ -110,67 +92,36 @@ Je bent een professionele swingtrader.
 
 Genereer een tradingstrategie uitsluitend in geldige JSON.
 
-====================
-📌 SETUP INFO
-====================
-Naam: {setup_name}
-Asset: {symbol}
-Timeframe: {timeframe}
-Trend: {trend}
-Indicatoren: {indicators_str}
-
-====================
-📊 MASTER SCORE
-====================
-Score: {master.get("score")}
-Trend: {master.get("trend")}
-Bias: {master.get("bias")}
-Risico: {master.get("risk")}
-Samenvatting: {master.get("summary")}
-
-====================
-🔎 CATEGORIE INSIGHTS
-====================
-Macro: score={macro_ai.get("score")}, trend={macro_ai.get("trend")}, bias={macro_ai.get("bias")}
-Market: score={market_ai.get("score")}, trend={market_ai.get("trend")}
-Technical: score={tech_ai.get("score")}, trend={tech_ai.get("trend")}
-
-====================
-🎯 DOEL
-====================
-Genereer een SWINGTRADE strategie die trend-gebaseerd is.
-
 JSON structuur:
 {{
-  "entry": "prijs of range als string",
-  "targets": ["t1", "t2", "t3"],
+  "entry": "range",
+  "targets": ["t1","t2","t3"],
   "stop_loss": "prijs",
   "risk_reward": "1:3",
-  "explanation": "max 3 zinnen"
+  "explanation": "1–3 korte zinnen"
 }}
 
 BELANGRIJK:
-- Antwoord ALLEEN in geldige JSON
-- Geen tekst buiten JSON
+- Alleen pure JSON
 """
 
     response = ask_gpt(
         prompt,
-        system_role="Je bent een professionele crypto trader. Antwoord ALTIJD in pure JSON."
+        system_role="Je bent een professionele crypto trader. Antwoord altijd in geldige JSON."
     )
 
     if not isinstance(response, dict):
-        logger.error(f"❌ Geen geldige JSON: {response}")
-        return fallback_strategy("Geen geldige JSON")
+        logger.error("❌ AI gaf geen geldige JSON terug.")
+        return fallback_strategy("Invalid JSON")
 
     entry       = response.get("entry", "n.v.t.")
     targets     = response.get("targets", [])
     stop_loss   = response.get("stop_loss", "n.v.t.")
     rr          = response.get("risk_reward", "?")
-    explanation = response.get("explanation", "AI-strategie gegenereerd.")
+    explanation = response.get("explanation", "Geen uitleg")
 
     if isinstance(targets, str):
-        targets = [x.strip() for x in targets.split(",")]
+        targets = [t.strip() for t in targets.split(",") if t.strip()]
 
     strategy = {
         "entry": entry,
@@ -180,38 +131,15 @@ BELANGRIJK:
         "explanation": explanation,
     }
 
-    logger.info(f"✅ Strategy resultaat: {json.dumps(strategy, ensure_ascii=False)[:250]}")
+    logger.info(f"✅ Strategy resultaat: {json.dumps(strategy, ensure_ascii=False)[:200]}")
     return strategy
 
 
 # ===================================================================
-# 🧠 Bulk generator (voor Celery)
-# ===================================================================
-def generate_strategy_advice(setups: list):
-    strategies = []
-    if not isinstance(setups, list):
-        return strategies
-
-    for setup in setups:
-        strat = generate_strategy_from_setup(setup)
-        strategies.append({
-            "setup": setup.get("name"),
-            "symbol": setup.get("symbol", "BTC"),
-            "timeframe": setup.get("timeframe", "1D"),
-            "strategy": strat
-        })
-
-    return strategies
-
-
-# ===================================================================
-# 🕒 CELERY TASK — AI-strategieën genereren en opslaan
+# 🕒 CELERY TASK — Strategy opslaan in strategies tabel (GEFIXT)
 # ===================================================================
 @shared_task(name="backend.ai_agents.strategy_ai_agent.generate_strategy_ai")
 def generate_strategy_ai():
-    """
-    Pakt alle BTC setups → Genereert AI strategie → Slaat op in DB
-    """
     logger.info("🧠 Start Strategy AI Agent...")
 
     conn = get_db_connection()
@@ -220,9 +148,9 @@ def generate_strategy_ai():
         return
 
     try:
-        # --------------------------------------
+        # ---------------------------
         # 1️⃣ Alle setups ophalen
-        # --------------------------------------
+        # ---------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, name, symbol, timeframe, trend
@@ -239,45 +167,35 @@ def generate_strategy_ai():
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "trend": trend,
-                "indicators": []  # setup-form definieert indicators optioneel
+                "indicators": []
             })
 
         if not setups:
             logger.warning("⚠️ Geen BTC setups.")
             return
 
-        # --------------------------------------
-        # 2️⃣ Strategieën genereren
-        # --------------------------------------
-        strategies = []
-        for s in setups:
-            strat = generate_strategy_from_setup(s)
-            strategies.append((s["setup_id"], strat))
-
-        # --------------------------------------
-        # 3️⃣ Opslaan
-        # --------------------------------------
+        # ---------------------------
+        # 2️⃣ Strategie per setup
+        # ---------------------------
         with conn.cursor() as cur:
-            for setup_id, strat in strategies:
+            for s in setups:
+                strat = generate_strategy_from_setup(s)
+
+                # Opslaan in echte kolommen
                 cur.execute("""
                     INSERT INTO strategies
-                        (setup_id, date, entry, targets, stop_loss, rr, explanation)
+                        (setup_id, entry, target, stop_loss, explanation, risk_profile, strategy_type, data, created_at)
                     VALUES
-                        (%s, CURRENT_DATE, %s, %s, %s, %s, %s)
-                    ON CONFLICT (setup_id, date) DO UPDATE SET
-                        entry       = EXCLUDED.entry,
-                        targets     = EXCLUDED.targets,
-                        stop_loss   = EXCLUDED.stop_loss,
-                        rr          = EXCLUDED.rr,
-                        explanation = EXCLUDED.explanation,
-                        created_at  = NOW()
+                        (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 """, (
-                    setup_id,
+                    s["setup_id"],
                     strat["entry"],
-                    json.dumps(strat["targets"]),
+                    ",".join(strat["targets"]),        # target → text
                     strat["stop_loss"],
-                    strat["risk_reward"],
-                    strat["explanation"]
+                    strat["explanation"],
+                    strat["risk_reward"],              # risk_profile kolom
+                    "ai",
+                    json.dumps(strat),                 # volledige JSON in data kolom
                 ))
 
         conn.commit()
