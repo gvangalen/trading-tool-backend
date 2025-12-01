@@ -11,17 +11,17 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ======================================================
-# 🌍 MACRO AI AGENT — V2 (met ask_gpt JSON-engine)
+# 🌍 MACRO AI AGENT — FIXED (range_min / range_max)
 # ======================================================
 
 @shared_task(name="backend.ai_agents.macro_ai_agent.generate_macro_insight")
 def generate_macro_insight():
     """
     Macro AI Agent (V2)
-    - Laadt alle macro-data + scoreregels uit DB.
-    - Laat AI een macro-interpretatie genereren (trend/bias/risk/summary).
-    - Laat AI reflecties per indicator genereren.
-    - Slaat alles op in ai_category_insights + ai_reflections.
+    - Haalt macro scoreregels op (range_min/range_max)
+    - Haalt macro_data van vandaag op
+    - Laat AI context + reflecties genereren
+    - Slaat op in ai_category_insights & ai_reflections
     """
 
     logger.info("🌍 Start Macro AI Agent (V2)...")
@@ -33,20 +33,21 @@ def generate_macro_insight():
 
     try:
         # =====================================================
-        # 1️⃣ Regels ophalen per macro-indicator
+        # 1️⃣ Regels ophalen per macro-indicator (FIXED)
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT indicator, rule_range, score, interpretation, action
+                SELECT indicator, range_min, range_max, score, interpretation, action
                 FROM macro_indicator_rules
                 ORDER BY indicator ASC, score ASC;
             """)
             rule_rows = cur.fetchall()
 
         rules_by_indicator = {}
-        for indicator, rule_range, score, interpretation, action in rule_rows:
+        for indicator, rmin, rmax, score, interpretation, action in rule_rows:
             rules_by_indicator.setdefault(indicator, []).append({
-                "range": rule_range,
+                "range_min": float(rmin),
+                "range_max": float(rmax),
                 "score": int(score),
                 "interpretation": interpretation,
                 "action": action,
@@ -81,14 +82,14 @@ def generate_macro_insight():
                 "rules": rules_by_indicator.get(ind, []),
             })
 
-        # Text voor AI
+        # Text voor AI prompt
         data_text = "\n".join([
-            f"{c['indicator']}: waarde={c['value']}, score={c['score']}, advies={c['advies']}, regels={json.dumps(c['rules'], ensure_ascii=False)}"
+            f"{c['indicator']}: value={c['value']}, score={c['score']}, advies={c['advies']}, rules={json.dumps(c['rules'], ensure_ascii=False)}"
             for c in combined
         ])
 
         # =====================================================
-        # 3️⃣ AI: Macro-interpretatie (JSON verwacht)
+        # 3️⃣ AI: Macro-interpretatie
         # =====================================================
         prompt_context = f"""
 Je bent een macro-economische analyse-AI gespecialiseerd in Bitcoin.
@@ -97,23 +98,22 @@ Hieronder staan de actuele macro-indicatoren en hun scoreregels:
 
 {data_text}
 
-Geef antwoord als **geldige JSON** met:
+Geef antwoord als JSON:
 - trend: bullish | bearish | neutraal
 - bias: risk-on | risk-off | gemengd
 - risk: laag | gemiddeld | hoog
 - summary: max 2 zinnen
-- top_signals: lijst van macrofactoren die vandaag het meest tellen
+- top_signals: lijst (tekst)
 """
 
         ai_context = ask_gpt(
             prompt_context,
-            system_role="Je bent een professionele macro-Economie AI. Antwoord altijd in geldige JSON."
+            system_role="Je bent een professionele macro-economie AI. Antwoord ALTIJD in geldige JSON."
         )
 
-        # Fallback indien ask_gpt een tekst/dict met raw_text teruggeeft
         if not isinstance(ai_context, dict):
-            logger.warning("⚠️ AI-context was geen geldige dict – fallback.")
-            txt = ai_context.get("raw_text", "")[:300] if isinstance(ai_context, dict) else str(ai_context)[:300]
+            logger.warning("⚠️ AI-context was geen dict – fallback.")
+            txt = ai_context.get("raw_text", "")[:300] if isinstance(ai_context, dict) else str(ai_context)
             ai_context = {
                 "trend": None,
                 "bias": None,
@@ -123,41 +123,36 @@ Geef antwoord als **geldige JSON** met:
             }
 
         # =====================================================
-        # 4️⃣ AI: Reflectie per indicator
+        # 4️⃣ AI: Reflecties per indicator
         # =====================================================
         prompt_reflection = f"""
-Je bent dezelfde Macro-AI. Hieronder alle indicatoren:
+Je bent dezelfde Macro-AI.
 
+Hieronder alle indicatoren:
 {data_text}
 
-Maak per indicator een reflectie in **JSON-lijst**.
-Per item:
+Genereer een JSON-lijst met entries:
 - indicator
-- ai_score (0–100)
-- compliance (0–100)
-- comment (1 zin)
-- recommendation (1 zin)
+- ai_score
+- compliance
+- comment
+- recommendation
 """
 
         ai_reflections = ask_gpt(
             prompt_reflection,
-            system_role="Je bent een professionele macro-analist. Antwoord in geldige JSON-lijst."
+            system_role="Je bent een professionele macro-analist. Geef JSON-lijst."
         )
 
-        if isinstance(ai_reflections, list):
-            reflections = ai_reflections
-        elif isinstance(ai_reflections, dict) and "raw_text" in ai_reflections:
-            logger.warning("⚠️ Reflectie als raw_text ontvangen – fallback naar lege lijst.")
-            reflections = []
-        else:
-            logger.warning("⚠️ Reflectie niet in JSON-lijst – fallback.")
-            reflections = []
+        if not isinstance(ai_reflections, list):
+            logger.warning("⚠️ Reflecties niet in lijstvorm – fallback.")
+            ai_reflections = []
 
         logger.info(f"🧠 Macro interpretatie: {ai_context}")
-        logger.info(f"🪞 Reflecties: {len(reflections)} items")
+        logger.info(f"🪞 Reflecties: {len(ai_reflections)} items")
 
         # =====================================================
-        # 5️⃣ Opslaan categorie-samenvatting (ai_category_insights)
+        # 5️⃣ Opslaan categorie-samenvatting
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -181,17 +176,12 @@ Per item:
             ))
 
         # =====================================================
-        # 6️⃣ Opslaan individuele indicator-reflecties (ai_reflections)
+        # 6️⃣ Opslaan reflecties
         # =====================================================
-        for r in reflections:
+        for r in ai_reflections:
             ind = r.get("indicator")
             if not ind:
                 continue
-
-            ai_score = r.get("ai_score")
-            compliance = r.get("compliance")
-            comment = r.get("comment")
-            rec = r.get("recommendation")
 
             with conn.cursor() as cur:
                 cur.execute("""
@@ -206,7 +196,13 @@ Per item:
                         comment = EXCLUDED.comment,
                         recommendation = EXCLUDED.recommendation,
                         timestamp = NOW();
-                """, (ind, ai_score, compliance, comment, rec))
+                """, (
+                    ind,
+                    r.get("ai_score"),
+                    r.get("compliance"),
+                    r.get("comment"),
+                    r.get("recommendation"),
+                ))
 
         conn.commit()
         logger.info("✅ Macro AI insights + reflecties opgeslagen.")
