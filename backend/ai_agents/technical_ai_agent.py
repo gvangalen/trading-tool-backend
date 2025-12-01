@@ -12,7 +12,7 @@ logger.setLevel(logging.INFO)
 
 
 # ======================================================
-# 📊 TECHNICAL AI AGENT – Universele AI-agent structuur
+# 📊 TECHNICAL AI AGENT — FIXED (range_min / range_max)
 # ======================================================
 @shared_task(name="backend.ai_agents.technical_ai_agent.generate_technical_insight")
 def generate_technical_insight():
@@ -25,21 +25,22 @@ def generate_technical_insight():
 
     try:
         # ------------------------------------------------------
-        # 1️⃣ Scoreregels ophalen
+        # 1️⃣ Technische scoreregels ophalen (FIXED)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT indicator, rule_range, score, interpretation, action
+                SELECT indicator, range_min, range_max, score, interpretation, action
                 FROM technical_indicator_rules
                 ORDER BY indicator ASC, score ASC
             """)
             rule_rows = cur.fetchall()
 
         rules_by_indicator = {}
-        for indicator, rule_range, score, interpretation, action in rule_rows:
+        for indicator, rmin, rmax, score, interpretation, action in rule_rows:
             rules_by_indicator.setdefault(indicator, []).append({
-                "range": rule_range,
-                "score": score,
+                "range_min": float(rmin),
+                "range_max": float(rmax),
+                "score": int(score),
                 "interpretation": interpretation,
                 "action": action
             })
@@ -77,7 +78,8 @@ def generate_technical_insight():
             })
 
         data_text = "\n".join([
-            f"{c['indicator']} → value={c['value']} | score={c['score']} | advies={c['advies']} | rules={json.dumps(c['rules'], ensure_ascii=False)}"
+            f"{c['indicator']} → value={c['value']} | score={c['score']} | advies={c['advies']} "
+            f"| rules={json.dumps(c['rules'], ensure_ascii=False)}"
             for c in combined
         ])
 
@@ -85,41 +87,48 @@ def generate_technical_insight():
         # 4️⃣ AI Context (trend / bias / momentum)
         # ------------------------------------------------------
         prompt_context = f"""
-        Je bent een technische analyse AI gespecialiseerd in Bitcoin.
+Je bent een technische analyse AI gespecialiseerd in Bitcoin.
 
-        Hieronder staan de technische indicatoren + hun scoreregels:
-        {data_text}
+Hieronder staan de technische indicatoren + hun scoreregels:
+{data_text}
 
-        Geef antwoord als JSON met:
-        - trend: bullish, bearish of neutraal
-        - bias: short-term of long-term
-        - momentum: zwak / neutraal / sterk
-        - summary: max 2 zinnen
-        - top_signals: lijst van indicatoren die doorslaggevend zijn
-        """
+Geef antwoord als geldige JSON:
+- trend: bullish | bearish | neutraal
+- bias: short-term | long-term
+- momentum: sterk | neutraal | zwak
+- summary: max 2 zinnen
+- top_signals: lijst met belangrijkste indicatoren
+"""
 
         ai_context = ask_gpt(prompt_context)
         if not isinstance(ai_context, dict):
-            ai_context = {"summary": str(ai_context)[:200]}
+            ai_context = {
+                "trend": None,
+                "bias": None,
+                "momentum": None,
+                "summary": str(ai_context)[:200],
+                "top_signals": []
+            }
 
         # ------------------------------------------------------
         # 5️⃣ AI Reflecties per indicator
         # ------------------------------------------------------
         prompt_reflection = f"""
-        Beoordeel onderstaande indicatoren:
-        {data_text}
+Beoordeel onderstaande indicatoren:
 
-        Geef een JSON-lijst, bv:
-        [
-          {{
-            "indicator": "RSI",
-            "ai_score": 70,
-            "compliance": 85,
-            "comment": "RSI daalt uit overbought-zone",
-            "recommendation": "Wacht op RSI < 50"
-          }}
-        ]
-        """
+{data_text}
+
+Geef een JSON-lijst, bv:
+[
+  {{
+    "indicator": "RSI",
+    "ai_score": 70,
+    "compliance": 85,
+    "comment": "RSI daalt uit overbought-zone",
+    "recommendation": "Wacht op RSI < 50"
+  }}
+]
+"""
 
         ai_reflections = ask_gpt(prompt_reflection)
         if not isinstance(ai_reflections, list):
@@ -129,7 +138,7 @@ def generate_technical_insight():
         logger.info(f"🪞 Reflecties: {len(ai_reflections)} items")
 
         # ------------------------------------------------------
-        # 6️⃣ Opslaan categorie-samenvatting
+        # 6️⃣ Opslaan categorie-samenvatting (ai_category_insights)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -150,9 +159,13 @@ def generate_technical_insight():
             ))
 
         # ------------------------------------------------------
-        # 7️⃣ Opslaan individuele reflecties
+        # 7️⃣ Opslaan individuele reflecties (ai_reflections)
         # ------------------------------------------------------
         for r in ai_reflections:
+            indicator = r.get("indicator")
+            if not indicator:
+                continue
+
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO ai_reflections (
@@ -167,7 +180,7 @@ def generate_technical_insight():
                         recommendation = EXCLUDED.recommendation,
                         timestamp = NOW()
                 """, (
-                    r.get("indicator"),
+                    indicator,
                     r.get("ai_score"),
                     r.get("compliance"),
                     r.get("comment"),
