@@ -1,5 +1,6 @@
 import logging
 import traceback
+import json
 from datetime import date
 from decimal import Decimal
 
@@ -59,7 +60,6 @@ def run_setup_agent(asset="BTC"):
         return {"active_setup": None, "all_setups": []}
 
     try:
-
         # ---------------------------------------------------------------
         # 1️⃣ SCORES VAN VANDAAG — FIXED: report_date i.p.v. date
         # ---------------------------------------------------------------
@@ -143,7 +143,7 @@ def run_setup_agent(asset="BTC"):
                 }
 
             # -----------------------------------------------------------
-            # AI comment
+            # AI comment per setup
             # -----------------------------------------------------------
             prompt = f"""
 Je bent een crypto analist.
@@ -216,6 +216,88 @@ Geef één zin waarom deze match {total_match}/100 scoort.
                     SET is_best = TRUE
                     WHERE setup_id = %s AND report_date = CURRENT_DATE;
                 """, (best_setup["setup_id"],))
+
+        # ---------------------------------------------------------------
+        # 6️⃣ NIEUWE: SAMENVATTING NAAR ai_category_insights ('setup')
+        # ---------------------------------------------------------------
+        if results:
+            # Gemiddelde score over alle setups
+            avg_score = round(
+                sum(r["match_score"] for r in results) / len(results),
+                2
+            )
+
+            active_count = sum(1 for r in results if r["active"])
+            total_setups = len(results)
+
+            # Eenvoudige trend/bias/risk heuristiek
+            if best_match_score >= 70:
+                trend = "Sterke match"
+            elif best_match_score >= 40:
+                trend = "Gemiddelde match"
+            else:
+                trend = "Zwakke match"
+
+            bias = "Kansrijk" if active_count > 0 else "Afwachten"
+
+            if market_score is not None and market_score < 40:
+                risk = "Hoog"
+            elif market_score is not None and market_score < 60:
+                risk = "Gemiddeld"
+            else:
+                risk = "Laag"
+
+            # Korte samenvattingstekst
+            if best_setup:
+                summary = (
+                    f"Vandaag is '{best_setup['name']}' de best passende setup "
+                    f"voor {asset} met een match-score van {best_setup['total_match']}/100. "
+                    f"Er zijn {total_setups} setups geëvalueerd, waarvan {active_count} "
+                    f"binnen hun score-ranges actief zijn."
+                )
+            else:
+                summary = (
+                    f"Er zijn {total_setups} setups geëvalueerd, maar er is geen duidelijke "
+                    f"dominante match gevonden op basis van de huidige markt- en scoresituatie."
+                )
+
+            # Top 3 signalen
+            sorted_results = sorted(results, key=lambda r: r["match_score"], reverse=True)
+            top3 = sorted_results[:3]
+            top_signals = [
+                {
+                    "name": r["name"],
+                    "match_score": r["match_score"],
+                    "active": r["active"],
+                    "macro_match": r["macro_match"],
+                    "technical_match": r["technical_match"],
+                    "market_match": r["market_match"],
+                }
+                for r in top3
+            ]
+
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO ai_category_insights
+                        (category, avg_score, trend, bias, risk, summary, top_signals)
+                    VALUES ('setup', %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (category, date)
+                    DO UPDATE SET
+                        avg_score   = EXCLUDED.avg_score,
+                        trend       = EXCLUDED.trend,
+                        bias        = EXCLUDED.bias,
+                        risk        = EXCLUDED.risk,
+                        summary     = EXCLUDED.summary,
+                        top_signals = EXCLUDED.top_signals,
+                        created_at  = NOW();
+                """, (
+                    avg_score,
+                    trend,
+                    bias,
+                    risk,
+                    summary,
+                    json.dumps(top_signals),
+                ))
 
         conn.commit()
 
