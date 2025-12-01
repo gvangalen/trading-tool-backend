@@ -6,12 +6,15 @@ from datetime import datetime, timedelta
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.openai_client import ask_gpt  # ✔ Correcte nieuwe AI-import
+from backend.utils.openai_client import ask_gpt  # JSON engine
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-CATEGORIES = ["macro", "market", "technical", "setup", "strategy"]
+# ============================================================
+# ✔ Nieuwe categorie-architectuur
+# ============================================================
+CATEGORIES = ["macro", "market", "technical", "setup", "strategy", "master"]
 
 
 # ============================================================
@@ -47,6 +50,7 @@ def fetch_today_insights(conn):
                     WHERE category = %s AND date = %s
                     LIMIT 1;
                 """, (cat, d))
+
                 row = cur.fetchone()
                 if row:
                     result = {
@@ -77,12 +81,11 @@ def fetch_numeric_scores(conn):
     }
 
     with conn.cursor() as cur:
-
-        # Last daily_scores
+        # Daily scores ophalen + juiste kolomnaam 'date'
         cur.execute("""
             SELECT macro_score, market_score, technical_score, setup_score
             FROM daily_scores
-            ORDER BY report_date DESC
+            ORDER BY date DESC
             LIMIT 1;
         """)
         row = cur.fetchone()
@@ -103,6 +106,7 @@ def fetch_numeric_scores(conn):
             WHERE date = CURRENT_DATE
             GROUP BY category;
         """)
+
         for cat, ai_score, comp in cur.fetchall() or []:
             numeric["ai_reflections"][cat] = {
                 "avg_ai_score": float(ai_score),
@@ -113,7 +117,7 @@ def fetch_numeric_scores(conn):
 
 
 # ============================================================
-# 🧠 3. Prompt bouwen voor orchestrator
+# 🧠 3. Prompt bouwen voor master orchestrator
 # ============================================================
 def build_prompt(insights, numeric):
     def format_block(cat):
@@ -130,9 +134,10 @@ def build_prompt(insights, numeric):
     blocks = "\n".join(format_block(cat) for cat in CATEGORIES)
 
     return f"""
-Je bent een orchestrator AI voor trading. Combineer macro, market, technical, setup en strategy tot één coherent totaalbeeld.
+Je bent de MASTER Orchestrator AI voor trading. 
+Combineer macro, market, technical, setup, strategy en eerdere master-score tot één totaalbeeld.
 
-Geef UITSLUITEND geldige JSON terug, volgens dit schema:
+Antwoord UITSLUITEND in geldige JSON:
 
 {{
   "master_trend": "",
@@ -164,7 +169,7 @@ Raw numeric context:
 
 
 # ============================================================
-# 💾 4. Opslaan in ai_category_insights
+# 💾 4. Opslaan in ai_category_insights als categorie 'master'
 # ============================================================
 def store_master_result(conn, result):
     if not isinstance(result, dict):
@@ -183,7 +188,7 @@ def store_master_result(conn, result):
         cur.execute("""
             INSERT INTO ai_category_insights
                 (category, avg_score, trend, bias, risk, summary, top_signals)
-            VALUES ('score', %s, %s, %s, %s, %s, %s)
+            VALUES ('master', %s, %s, %s, %s, %s, %s)
             ON CONFLICT (category, date) DO UPDATE SET
                 avg_score = EXCLUDED.avg_score,
                 trend = EXCLUDED.trend,
@@ -203,7 +208,7 @@ def store_master_result(conn, result):
 
 
 # ============================================================
-# 🚀 5. Celery task
+# 🚀 5. Celery task — MASTER AI orchestrator
 # ============================================================
 @shared_task(name="backend.ai_agents.score_ai_agent.generate_master_score")
 def generate_master_score():
@@ -219,7 +224,7 @@ def generate_master_score():
         numeric = fetch_numeric_scores(conn)
         prompt = build_prompt(insights, numeric)
 
-        # ✔ Universele JSON-agent
+        # JSON-engine
         result = ask_gpt(prompt)
 
         store_master_result(conn, result)
