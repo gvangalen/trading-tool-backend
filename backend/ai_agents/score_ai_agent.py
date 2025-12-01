@@ -2,6 +2,7 @@ import json
 import logging
 import traceback
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from celery import shared_task
 
@@ -18,7 +19,21 @@ CATEGORIES = ["macro", "market", "technical", "setup", "strategy", "master"]
 
 
 # ============================================================
-# Helpers
+# ⚙️ Helper: Decimal → float converter (FIX)
+# ============================================================
+def convert_decimal(obj):
+    """Recursively convert Decimal objects into float so json.dumps never crashes."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: convert_decimal(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [convert_decimal(i) for i in obj]
+    return obj
+
+
+# ============================================================
+# Helper safe_json
 # ============================================================
 def safe_json(obj, fallback):
     if isinstance(obj, dict):
@@ -114,7 +129,8 @@ def fetch_numeric_scores(conn):
                 "avg_compliance": float(comp),
             }
 
-    return numeric
+    # 🔥 FIXED: voorkom JSON crash
+    return convert_decimal(numeric)
 
 
 # ============================================================
@@ -134,6 +150,9 @@ def build_prompt(insights, numeric):
         )
 
     data_text = "\n".join(format_block(cat) for cat in CATEGORIES)
+
+    # 🔥 FIXED: numeric is nu 100% JSON-safe
+    numeric_json = json.dumps(numeric, indent=2, ensure_ascii=False)
 
     return f"""
 Je bent de MASTER Orchestrator AI voor trading. 
@@ -170,7 +189,7 @@ Antwoord ALLEEN met geldige JSON:
 {data_text}
 
 === NUMBERS ===
-{json.dumps(numeric, indent=2)}
+{numeric_json}
 """
 
 
