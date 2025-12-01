@@ -23,9 +23,17 @@ def fallback_strategy(reason: str):
 
 
 # ===================================================================
-# 📡 AI insights ophalen
+# 📡 AI insights ophalen (FIXED DATE FILTER)
 # ===================================================================
 def load_ai_insights():
+    """
+    Haalt recente AI-insights op uit ai_category_insights.
+
+    🔧 Belangrijke fix:
+    - NIET meer strikt WHERE date = CURRENT_DATE
+    - Wel: laatste ~24–30 uur pakken, zodat timezone / runtimes geen probleem zijn
+    """
+
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen database in load_ai_insights")
@@ -35,23 +43,35 @@ def load_ai_insights():
 
     try:
         with conn.cursor() as cur:
+            # Pak alles van de afgelopen ~30 uur voor alle categorieën
             cur.execute("""
-                SELECT category, avg_score, trend, bias, risk, summary
+                SELECT category, avg_score, trend, bias, risk, summary, date, created_at
                 FROM ai_category_insights
-                WHERE date = CURRENT_DATE
+                WHERE date >= (CURRENT_DATE - INTERVAL '1 day')
+                ORDER BY date DESC, created_at DESC;
             """)
             rows = cur.fetchall()
 
-        for cat, avg_score, trend, bias, risk, summary in rows:
+        if not rows:
+            logger.warning("⚠️ load_ai_insights: geen recente ai_category_insights gevonden.")
+            return {}
+
+        for (cat, avg_score, trend, bias, risk, summary, d, created_at) in rows:
+            # Alleen de eerste (meest recente) per categorie bewaren
+            if cat in insights:
+                continue
+
             insights[cat] = {
-                "score": float(avg_score) if avg_score else None,
+                "score": float(avg_score) if avg_score is not None else None,
                 "trend": trend,
                 "bias": bias,
                 "risk": risk,
                 "summary": summary,
+                "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
+                "created_at": created_at.isoformat() if isinstance(created_at, datetime) else None,
             }
 
-        logger.info(f"📊 Loaded AI insights: {list(insights.keys())}")
+        logger.info(f"📊 Loaded AI insights voor categorieën: {list(insights.keys())}")
         return insights
 
     except Exception as e:
@@ -77,16 +97,26 @@ def generate_strategy_from_setup(setup_dict: dict):
 
     logger.info(f"📄 Strategy Agent verwerkt setup: {setup_name} ({symbol} – {timeframe})")
 
-    # 1️⃣ Laad andere AI inzichten
+    # 1️⃣ Laad andere AI inzichten (macro / market / technical / setup / master / strategy)
     ai = load_ai_insights()
 
-    # 2️⃣ Prompt
+    # Eventueel later in de prompt gebruiken:
+    # macro = ai.get("macro")
+    # market = ai.get("market")
+    # technical = ai.get("technical")
+    # ...
+
+    # 2️⃣ Prompt (nu nog basic; kan later uitgebreid worden met ai-context)
     prompt = f"""
 Je bent een professionele swingtrader.
 
-Genereer een tradingstrategie uitsluitend in geldige JSON.
+Genereer een tradingstrategie voor deze setup:
+- Naam: {setup_name}
+- Symbool: {symbol}
+- Timeframe: {timeframe}
 
-JSON structuur:
+Gebruik ALLEEN geldige JSON:
+
 {{
   "entry": "",
   "targets": ["t1","t2","t3"],
@@ -95,7 +125,9 @@ JSON structuur:
   "explanation": "1–3 korte zinnen"
 }}
 
-BELANGRIJK: Alleen JSON.
+BELANGRIJK:
+- Alleen JSON als output.
+- Geen tekst erbuiten.
 """
 
     response = ask_gpt(
@@ -178,7 +210,7 @@ def generate_strategy_ai():
                 generated_strategies.append({
                     "setup_id": s["setup_id"],
                     "name": s["name"],
-                    "match_quality": 75,  # dikke placeholder; AI kan dit later bepalen
+                    "match_quality": 75,  # placeholder; AI kan dit later bepalen
                     "risk_reward": strat["risk_reward"],
                     "entry": strat["entry"],
                 })
@@ -202,9 +234,10 @@ def generate_strategy_ai():
         logger.info("💾 Strategieën opgeslagen.")
 
         # -----------------------------------------------------------------
-        # 3️⃣ AI SUMMARY OPSLAAN IN ai_category_insights
+        # 3️⃣ AI SUMMARY OPSLAAN IN ai_category_insights (category = 'strategy')
         # -----------------------------------------------------------------
         if generated_strategies:
+            # super simpele "score" uit risk_reward, placeholder
             avg_risk = sum(
                 1 if s["risk_reward"] == "1:3" else 0
                 for s in generated_strategies
@@ -217,7 +250,7 @@ def generate_strategy_ai():
 
             summary = (
                 f"Vandaag zijn {len(generated_strategies)} strategieën gegenereerd. "
-                f"Gemiddelde risk/reward is {avg_score}/100. "
+                f"Gemiddelde strategy-score is {avg_score}/100. "
                 f"Beste setup was '{generated_strategies[0]['name']}'."
             )
 
