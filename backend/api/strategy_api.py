@@ -522,38 +522,3 @@ async def get_last_strategy():
 
     finally:
         conn.close()
-
-# =====================================================================
-# 🕒 CELERY TASK STATUS (FIXED)
-# =====================================================================
-from celery.result import AsyncResult
-from backend.celery_app import celery_app   # <-- BELANGRIJK
-
-@router.get("/tasks/{task_id}")
-async def get_task_status(task_id: str):
-    """
-    Haalt de status op van een Celery taak.
-    Gebruikt door frontend polling voor AI strategie-generatie.
-    """
-    try:
-        result = AsyncResult(task_id, app=celery_app)
-
-        response = {
-            "task_id": task_id,
-            "state": result.state
-        }
-
-        if result.state == "SUCCESS":
-            response["result"] = result.result
-
-        if result.state == "FAILURE":
-            response["error"] = str(result.result)
-
-        return response
-
-    except Exception as e:
-        return {
-            "task_id": task_id,
-            "state": "ERROR",
-            "error": str(e)
-        }
