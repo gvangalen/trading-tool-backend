@@ -46,9 +46,9 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory="backend/static"), name="static")
 
 
-# ============================
-# 🔧 Veilig includen helper
-# ============================
+# ============================================================
+# 🔧 Helper: veilig routers includen
+# ============================================================
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
@@ -59,9 +59,9 @@ def safe_include(import_path, name=""):
         traceback.print_exc()
 
 
-# ============================
+# ============================================================
 # 📦 BASIS ROUTERS
-# ============================
+# ============================================================
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
@@ -73,29 +73,35 @@ safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
 
-# ============================
+# ============================================================
 # 🧠 AI AGENTS (NIEUW)
-# ============================
+# ============================================================
 safe_include("backend.api.agents_api", "agents_api")
 
-# ============================
-# ➕ Extra routes (legacy)
-# ============================
+# ============================================================
+# 🔐 AUTHENTICATIE (NIEUW)
+# ============================================================
+safe_include("backend.auth_api", "auth_api")
+
+
+# ============================================================
+# ➕ Extra (legacy)
+# ============================================================
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
 
 
-# ============================
+# ============================================================
 # 👨‍⚕️ Health check
-# ============================
+# ============================================================
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API is running"}
 
 
-# ============================
+# ============================================================
 # 🔍 Debug routes
-# ============================
+# ============================================================
 print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
 for route in app.routes:
     if isinstance(route, APIRoute):
