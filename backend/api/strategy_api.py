@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from backend.utils.db import get_db_connection
 from backend.celery_task.strategy_task import generate_strategie_voor_setup as generate_strategy_task
+
 import json
 import csv
 import io
@@ -22,7 +23,9 @@ async def save_strategy(request: Request):
     try:
         data = await request.json()
 
-        # 🔎 Strategy type bepalen
+        # ---------------------------------------------------
+        # Strategy type
+        # ---------------------------------------------------
         strategy_type = data.get("strategy_type", "").lower()
         if strategy_type not in ["manual", "trading", "dca"]:
             raise HTTPException(
@@ -31,18 +34,16 @@ async def save_strategy(request: Request):
             )
 
         # ---------------------------------------------------
-        # 🎯 VERPLICHTE VELDEN
+        # Verplichte velden
         # ---------------------------------------------------
         required_base = ["setup_id"]
-
         required_map = {
             "manual": ["entry", "targets", "stop_loss"],
             "trading": ["entry", "targets", "stop_loss"],
-            "dca": ["amount", "frequency"],  # <-- DCA gebruikt amount + frequency
+            "dca": ["amount", "frequency"],
         }
 
         required_fields = required_base + required_map[strategy_type]
-
         for field in required_fields:
             if field not in data or data.get(field) in [None, "", []]:
                 raise HTTPException(
@@ -51,16 +52,14 @@ async def save_strategy(request: Request):
                 )
 
         # ---------------------------------------------------
-        # 🔌 DB CONNECTIE
+        # DB
         # ---------------------------------------------------
         conn = get_db_connection()
         if not conn:
             raise HTTPException(status_code=500, detail="Geen databaseverbinding")
 
         with conn.cursor() as cur:
-            # ---------------------------------------------------
-            # 🛑 BESTAAT AL?
-            # ---------------------------------------------------
+
             cur.execute(
                 "SELECT id FROM strategies WHERE setup_id = %s AND strategy_type = %s",
                 (int(data["setup_id"]), strategy_type),
@@ -71,9 +70,9 @@ async def save_strategy(request: Request):
                     detail="Strategie bestaat al voor deze setup"
                 )
 
-            # ---------------------------------------------------
-            # 🏷 AUTOTAGS
-            # ---------------------------------------------------
+            # ------------------------------
+            # Autotags
+            # ------------------------------
             keywords = ["breakout", "scalp", "swing", "reversal", "dca"]
             combined_text = (
                 (data.get("setup_name", "") + " " +
@@ -89,24 +88,19 @@ async def save_strategy(request: Request):
             data.setdefault("ai_reason", "")
             data["strategy_type"] = strategy_type
 
-            # Targets normaliseren
+            # Targets fix
             if "targets" in data and not isinstance(data["targets"], list):
                 data["targets"] = [data["targets"]]
 
-            # Uitleg: pak ai_explanation als die bestaat, anders explanation
             explanation_val = data.get("ai_explanation") or data.get("explanation", "")
-
-            # Voor DCA laten we entry/target/stop_loss leeg opslaan (string),
-            # voor manual/trading vullen we ze vanuit de payload.
             entry_val = "" if strategy_type == "dca" else str(data.get("entry", ""))
             target_val = "" if strategy_type == "dca" else str(data.get("targets", [""])[0])
             stop_loss_val = "" if strategy_type == "dca" else str(data.get("stop_loss", ""))
-
             risk_profile_val = data.get("risk_profile", None)
 
-            # ---------------------------------------------------
-            # 📝 INSERT
-            # ---------------------------------------------------
+            # ------------------------------
+            # INSERT
+            # ------------------------------
             cur.execute(
                 """
                 INSERT INTO strategies 
@@ -125,6 +119,7 @@ async def save_strategy(request: Request):
                     json.dumps(data),
                 ),
             )
+
             strategy_id = cur.fetchone()[0]
             conn.commit()
 
@@ -134,10 +129,8 @@ async def save_strategy(request: Request):
         raise
     except Exception as e:
         logger.error(f"[save_strategy] ❌ {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Interne serverfout bij opslaan strategie."
-        )
+        raise HTTPException(status_code=500, detail="Interne serverfout bij opslaan strategie.")
+
 
 
 # =====================================================================
@@ -162,16 +155,18 @@ async def query_strategies(request: Request):
             if symbol:
                 query += " AND data->>'symbol' = %s"
                 params.append(symbol)
+
             if timeframe:
                 query += " AND data->>'timeframe' = %s"
                 params.append(timeframe)
+
             if tag:
                 query += " AND %s = ANY(data->'tags')"
                 params.append(tag)
 
             query += " ORDER BY created_at DESC"
-
             cur.execute(query, tuple(params))
+
             rows = cur.fetchall()
 
         result = []
@@ -183,6 +178,7 @@ async def query_strategies(request: Request):
 
     finally:
         conn.close()
+
 
 
 # =====================================================================
@@ -216,12 +212,12 @@ async def generate_strategy_for_setup(setup_id: int, request: Request):
         conn.close()
 
 
+
 # =====================================================================
 # ✏ 4. UPDATE STRATEGY
 # =====================================================================
 @router.put("/strategies/{strategy_id}")
 async def update_strategy(strategy_id: int, request: Request):
-
     data = await request.json()
 
     conn = get_db_connection()
@@ -233,12 +229,13 @@ async def update_strategy(strategy_id: int, request: Request):
 
             cur.execute("SELECT data FROM strategies WHERE id = %s", (strategy_id,))
             row = cur.fetchone()
+
             if not row:
                 raise HTTPException(status_code=404, detail="Strategie niet gevonden")
 
             strategy_data = row[0]
 
-            # AI EXPLANATION FIX
+            # AI explanation fix
             if "ai_explanation" in data:
                 strategy_data["explanation"] = data["ai_explanation"]
 
@@ -249,6 +246,7 @@ async def update_strategy(strategy_id: int, request: Request):
                 "UPDATE strategies SET data = %s WHERE id = %s",
                 (json.dumps(strategy_data), strategy_id)
             )
+
             conn.commit()
 
         return {"message": "✅ Strategie bijgewerkt"}
@@ -257,8 +255,9 @@ async def update_strategy(strategy_id: int, request: Request):
         conn.close()
 
 
+
 # =====================================================================
-# 🗑 5. DELETE — FIXED (404 resolved)
+# 🗑 5. DELETE — FIXED
 # =====================================================================
 @router.delete("/strategies/{strategy_id}")
 async def delete_strategy(strategy_id: int):
@@ -268,6 +267,7 @@ async def delete_strategy(strategy_id: int):
 
     try:
         with conn.cursor() as cur:
+
             cur.execute("DELETE FROM strategies WHERE id = %s", (strategy_id,))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Strategie niet gevonden")
@@ -277,6 +277,7 @@ async def delete_strategy(strategy_id: int):
 
     finally:
         conn.close()
+
 
 
 # =====================================================================
@@ -292,6 +293,7 @@ async def toggle_favorite(strategy_id: int):
         with conn.cursor() as cur:
             cur.execute("SELECT data FROM strategies WHERE id = %s", (strategy_id,))
             row = cur.fetchone()
+
             if not row:
                 raise HTTPException(status_code=404, detail="Niet gevonden")
 
@@ -308,6 +310,7 @@ async def toggle_favorite(strategy_id: int):
 
     finally:
         conn.close()
+
 
 
 # =====================================================================
@@ -332,12 +335,15 @@ async def filter_strategies(request: Request):
         if symbol:
             query += " AND data->>'symbol' = %s"
             params.append(symbol)
+
         if timeframe:
             query += " AND data->>'timeframe' = %s"
             params.append(timeframe)
+
         if tag:
-            query += " AND %s = ANY(data->'tags')" 
+            query += " AND %s = ANY(data->'tags')"
             params.append(tag)
+
         if min_score is not None:
             query += " AND (data->>'score')::float >= %s"
             params.append(min_score)
@@ -357,46 +363,49 @@ async def filter_strategies(request: Request):
         conn.close()
 
 
+
 # =====================================================================
 # 📤 EXPORT
 # =====================================================================
 @router.get("/strategies/export")
 async def export_strategies():
-  conn = get_db_connection()
-  if not conn:
-      raise HTTPException(status_code=500, detail="Geen databaseverbinding")
 
-  try:
-      with conn.cursor() as cur:
-          cur.execute("SELECT id, data, created_at FROM strategies")
-          rows = cur.fetchall()
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="Geen databaseverbinding")
 
-      output = io.StringIO()
-      writer = csv.writer(output)
-      writer.writerow(["ID", "Symbol", "Setup", "Entry", "SL", "Origin", "Created"])
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, data, created_at FROM strategies")
+            rows = cur.fetchall()
 
-      for row in rows:
-          s = row[1]
-          writer.writerow([
-              row[0],
-              s.get("symbol"),
-              s.get("setup_name"),
-              s.get("entry"),
-              s.get("stop_loss"),
-              s.get("origin"),
-              row[2].strftime("%Y-%m-%d %H:%M")
-          ])
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Symbol", "Setup", "Entry", "SL", "Origin", "Created"])
 
-      output.seek(0)
+        for row in rows:
+            s = row[1]
+            writer.writerow([
+                row[0],
+                s.get("symbol"),
+                s.get("setup_name"),
+                s.get("entry"),
+                s.get("stop_loss"),
+                s.get("origin"),
+                row[2].strftime("%Y-%m-%d %H:%M")
+            ])
 
-      return StreamingResponse(
-          iter([output.getvalue()]),
-          media_type="text/csv",
-          headers={"Content-Disposition": "attachment; filename=strategies.csv"}
-      )
+        output.seek(0)
 
-  finally:
-      conn.close()
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=strategies.csv"}
+        )
+
+    finally:
+        conn.close()
+
 
 
 # =====================================================================
@@ -419,7 +428,8 @@ async def score_matrix():
         for (s,) in rows:
             symbol = s.get("symbol")
             tf = s.get("timeframe")
-            score = float(s.get("score", 0))
+            score = float(s.get("score", 0) or 0)
+
             if not symbol or not tf:
                 continue
 
@@ -433,6 +443,7 @@ async def score_matrix():
 
     finally:
         conn.close()
+
 
 
 # =====================================================================
@@ -463,8 +474,8 @@ async def get_strategy_by_setup(
                 params.append(strategy_type)
 
             query += " ORDER BY created_at DESC LIMIT 1"
-
             cur.execute(query, tuple(params))
+
             row = cur.fetchone()
 
         if not row:
@@ -477,6 +488,7 @@ async def get_strategy_by_setup(
 
     finally:
         conn.close()
+
 
 
 # =====================================================================
@@ -511,10 +523,12 @@ async def get_last_strategy():
     finally:
         conn.close()
 
+# =====================================================================
+# 🕒 CELERY TASK STATUS (FIXED)
+# =====================================================================
+from celery.result import AsyncResult
+from backend.celery_app import celery_app   # <-- BELANGRIJK
 
-# =====================================================================
-# 🕒 CELERY TASK STATUS
-# =====================================================================
 @router.get("/tasks/{task_id}")
 async def get_task_status(task_id: str):
     """
@@ -522,7 +536,6 @@ async def get_task_status(task_id: str):
     Gebruikt door frontend polling voor AI strategie-generatie.
     """
     try:
-        # Let op: AsyncResult & celery_app moeten elders geïmporteerd worden
         result = AsyncResult(task_id, app=celery_app)
 
         response = {
@@ -539,4 +552,8 @@ async def get_task_status(task_id: str):
         return response
 
     except Exception as e:
-        return {"task_id": task_id, "state": "ERROR", "error": str(e)}
+        return {
+            "task_id": task_id,
+            "state": "ERROR",
+            "error": str(e)
+        }
