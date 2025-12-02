@@ -79,10 +79,9 @@ safe_include("backend.api.strategy_api", "strategy_api")
 safe_include("backend.api.agents_api", "agents_api")
 
 # ============================================================
-# 🔐 AUTHENTICATIE (NIEUW)
+# 🔐 AUTHENTICATIE (JUISTE PAD)
 # ============================================================
-safe_include("backend.auth_api", "auth_api")
-
+safe_include("backend.api.auth_api", "auth_api")
 
 # ============================================================
 # ➕ Extra (legacy)
