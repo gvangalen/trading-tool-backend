@@ -6,8 +6,6 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
 
-# 👉 Nieuwe correcte import (oude bestaat niet meer)
-from backend.ai_agents.strategy_ai_agent import analyze_strategies_for_setup
 
 # ---------------------------------------------------------
 # 🔧 Config + logging
@@ -41,7 +39,7 @@ def safe_request(url, method="GET", payload=None):
 
 
 # ---------------------------------------------------------
-# 🧩 Helper: check of strategy bestaat
+# 📦 Bestaat strategy al?
 # ---------------------------------------------------------
 def find_existing_strategy(setup_id, strategy_type):
     try:
@@ -58,7 +56,7 @@ def find_existing_strategy(setup_id, strategy_type):
 
 
 # ---------------------------------------------------------
-# ✨ Payload builder (AI → DB)
+# 📦 Payload builder
 # ---------------------------------------------------------
 def build_payload(setup, strategie):
     return {
@@ -78,14 +76,12 @@ def build_payload(setup, strategie):
 
 
 # ---------------------------------------------------------
-# 🚀 AI Strategy genereren voor 1 setup
+# 🚀 Strategy genereren voor één setup (AI-knop functie)
 # ---------------------------------------------------------
 @shared_task(name="backend.celery_task.strategy_task.generate_for_setup")
 def generate_strategie_voor_setup(setup_id, overwrite=True):
     try:
-        # -----------------------------------------------------
-        # 1. SETUP OPHALEN
-        # -----------------------------------------------------
+        # 1. Setup ophalen
         logger.info(f"🔍 Setup ophalen via /setups/{setup_id}")
         res = requests.get(f"{API_BASE_URL}/setups/{setup_id}", timeout=TIMEOUT)
 
@@ -99,66 +95,12 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         setup = res.json()
         logger.info(f"📄 Setup geladen: {setup}")
 
-        # -----------------------------------------------------
-        # 2. AI STRATEGIE ANALYSE (GEEN nieuwe strategie genereren!)
-        # -----------------------------------------------------
-        strategie = analyze_strategies_for_setup(setup)
-        if not strategie:
-            return {
-                "state": "FAILURE",
-                "success": False,
-                "error": "AI kon geen strategie-analyse maken"
-            }
-
-        payload = build_payload(setup, strategie)
-        strategy_type = payload["strategy_type"]
-
-        # -----------------------------------------------------
-        # 3. CHECK BESTAANDE STRATEGIE
-        # -----------------------------------------------------
-        existing = find_existing_strategy(setup_id, strategy_type)
-        existing_id = None
-
-        if existing and existing.get("exists") and existing.get("strategy"):
-            existing_id = existing["strategy"].get("id")
-
-        # -----------------------------------------------------
-        # 4. UPDATE BESTAANDE STRATEGIE
-        # -----------------------------------------------------
-        if existing_id and overwrite:
-            logger.info(f"✏ Update bestaande strategy ID={existing_id}")
-
-            result = safe_request(
-                f"{API_BASE_URL}/strategies/{existing_id}",
-                method="PUT",
-                payload=payload
-            )
-
-            return {
-                "state": "SUCCESS",
-                "success": True,
-                "updated": True,
-                "created": False,
-                "strategy": result
-            }
-
-        # -----------------------------------------------------
-        # 5. CREATE NIEUWE STRATEGIE
-        # -----------------------------------------------------
-        logger.info("➕ Nieuwe strategie aanmaken")
-
-        result = safe_request(
-            f"{API_BASE_URL}/strategies",
-            method="POST",
-            payload=payload
-        )
-
+        # ⚠️ 2. GEEN AI strategie kanaal meer
+        # -> strategie wordt niet automatisch gemaakt
         return {
-            "state": "SUCCESS",
-            "success": True,
-            "updated": False,
-            "created": True,
-            "strategy": result
+            "state": "FAILURE",
+            "success": False,
+            "error": "AI strategie-generatie is uitgeschakeld"
         }
 
     except Exception as e:
@@ -173,36 +115,12 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
 
 
 # ---------------------------------------------------------
-# 🔄 Automatisch strategieën genereren voor alle setups
+# 🔄 Alles genereren (voor later)
 # ---------------------------------------------------------
 @shared_task(name="backend.celery_task.strategy_task.generate_all")
 def generate_strategieën_automatisch():
-    try:
-        logger.info("🚀 Automatische strategie-generatie gestart")
-
-        setups = safe_request(f"{API_BASE_URL}/setups", method="GET")
-        if not isinstance(setups, list):
-            return {"state": "FAILURE", "success": False, "error": "Ongeldige setup respons"}
-
-        results = []
-
-        for setup in setups:
-            setup_id = setup["id"]
-            logger.info(f"🔁 Strategie genereren voor setup {setup_id}")
-
-            result = generate_strategie_voor_setup(setup_id, overwrite=True)
-            results.append(result)
-
-        return {
-            "state": "SUCCESS",
-            "success": True,
-            "results": results
-        }
-
-    except Exception as e:
-        logger.error(f"❌ Fout generate_strategieën_automatisch: {e}")
-        return {
-            "state": "FAILURE",
-            "success": False,
-            "error": str(e)
-        }
+    return {
+        "state": "FAILURE",
+        "success": False,
+        "error": "Automatische strategie-generatie is uitgeschakeld"
+    }
