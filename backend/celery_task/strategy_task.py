@@ -6,7 +6,8 @@ import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
 
-from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
+# 👉 Nieuwe correcte import (oude bestaat niet meer)
+from backend.ai_agents.strategy_ai_agent import analyze_strategies_for_setup
 
 # ---------------------------------------------------------
 # 🔧 Config + logging
@@ -99,14 +100,14 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
         logger.info(f"📄 Setup geladen: {setup}")
 
         # -----------------------------------------------------
-        # 2. AI STRATEGIE GENEREREN
+        # 2. AI STRATEGIE ANALYSE (GEEN nieuwe strategie genereren!)
         # -----------------------------------------------------
-        strategie = generate_strategy_from_setup(setup)
+        strategie = analyze_strategies_for_setup(setup)
         if not strategie:
             return {
                 "state": "FAILURE",
                 "success": False,
-                "error": "AI kon geen strategie genereren"
+                "error": "AI kon geen strategie-analyse maken"
             }
 
         payload = build_payload(setup, strategie)
@@ -138,7 +139,7 @@ def generate_strategie_voor_setup(setup_id, overwrite=True):
                 "success": True,
                 "updated": True,
                 "created": False,
-                "strategy": result  # full DB object!
+                "strategy": result
             }
 
         # -----------------------------------------------------
