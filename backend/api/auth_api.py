@@ -17,7 +17,10 @@ from backend.utils.auth_utils import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+# ---------------------------
+# 🔧 FIXED PREFIX
+# ---------------------------
+router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 # =========================================
@@ -32,7 +35,7 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
-    role: Optional[str] = "admin"  # voor eerste user → admin
+    role: Optional[str] = "admin"
 
 
 class UserOut(BaseModel):
@@ -62,7 +65,6 @@ def _get_user_by_id(user_id: int) -> Optional[dict]:
     if not row:
         return None
 
-    # row = (id, email, password_hash, role, is_active)
     return {
         "id": row[0],
         "email": row[1],
@@ -138,24 +140,18 @@ async def get_current_user(
 
 
 # =========================================
-# 🧪 REGISTER (simpel bootstrap)
+# 🧪 REGISTER
 # =========================================
 
 @router.post("/register")
 def register_user(body: RegisterRequest):
-    """
-    Simpel endpoint om een eerste user aan te maken.
-    In productie zou je dit beperken (alleen admin / éénmalig).
-    """
     conn = get_db_connection()
     with conn.cursor() as cur:
-        # bestaan er al users?
         cur.execute("SELECT COUNT(*) FROM users")
         (count,) = cur.fetchone()
 
         role = body.role or "user"
         if count == 0:
-            # eerste user → admin
             role = "admin"
 
         password_hash = hash_password(body.password)
@@ -206,31 +202,28 @@ def login(body: LoginRequest, response: Response):
             detail="Onjuiste inloggegevens",
         )
 
-    # Tokens maken
     payload = {"sub": str(user["id"]), "role": user["role"]}
     access_token = create_access_token(payload)
     refresh_token = create_refresh_token(payload)
 
-    # Cookies zetten (HttpOnly)
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False,    # 🔴 in productie → True
+        secure=False,
         samesite="lax",
-        max_age=60 * 60,  # 1 uur
+        max_age=60 * 60,
     )
 
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=False,    # 🔴 in productie → True
+        secure=False,
         samesite="lax",
-        max_age=60 * 60 * 24 * 7,  # 7 dagen
+        max_age=60 * 60 * 24 * 7,
     )
 
-    # last_login_at updaten
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute(
@@ -306,7 +299,7 @@ def refresh_token(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False,  # 🔴 in productie: True
+        secure=False,
         samesite="lax",
         max_age=60 * 60,
     )
