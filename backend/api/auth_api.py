@@ -17,11 +17,7 @@ from backend.utils.auth_utils import (
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------
-# 🔧 FIXED PREFIX
-# ---------------------------
-router = APIRouter(prefix="/auth", tags=["auth"])
-
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 # =========================================
 # 🔢 SCHEMAS
@@ -33,9 +29,11 @@ class LoginRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
+    first_name: str
+    last_name: Optional[str] = None
     email: EmailStr
     password: str
-    role: Optional[str] = "admin"
+    role: Optional[str] = "admin"  # eerste user → admin
 
 
 class UserOut(BaseModel):
@@ -43,35 +41,42 @@ class UserOut(BaseModel):
     email: EmailStr
     role: str
     is_active: bool
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
 
 
 # =========================================
 # 🔎 Helpers
 # =========================================
 
-def _get_user_by_id(user_id: int) -> Optional[dict]:
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, email, password_hash, role, is_active
-            FROM users
-            WHERE id = %s
-            """,
-            (user_id,),
-        )
-        row = cur.fetchone()
-
+def _row_to_user(row) -> Optional[dict]:
+    # row = (id, email, password_hash, role, is_active, first_name, last_name)
     if not row:
         return None
-
     return {
         "id": row[0],
         "email": row[1],
         "password_hash": row[2],
         "role": row[3],
         "is_active": row[4],
+        "first_name": row[5],
+        "last_name": row[6],
     }
+
+
+def _get_user_by_id(user_id: int) -> Optional[dict]:
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, email, password_hash, role, is_active, first_name, last_name
+            FROM users
+            WHERE id = %s
+            """,
+            (user_id,),
+        )
+        row = cur.fetchone()
+    return _row_to_user(row)
 
 
 def _get_user_by_email(email: str) -> Optional[dict]:
@@ -79,24 +84,14 @@ def _get_user_by_email(email: str) -> Optional[dict]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT id, email, password_hash, role, is_active
+            SELECT id, email, password_hash, role, is_active, first_name, last_name
             FROM users
             WHERE email = %s
             """,
             (email,),
         )
         row = cur.fetchone()
-
-    if not row:
-        return None
-
-    return {
-        "id": row[0],
-        "email": row[1],
-        "password_hash": row[2],
-        "role": row[3],
-        "is_active": row[4],
-    }
+    return _row_to_user(row)
 
 
 async def get_current_user(
@@ -140,18 +135,24 @@ async def get_current_user(
 
 
 # =========================================
-# 🧪 REGISTER
+# 🧪 REGISTER (simpel bootstrap)
 # =========================================
 
 @router.post("/register")
 def register_user(body: RegisterRequest):
+    """
+    Simpel endpoint om een eerste user aan te maken.
+    In productie zou je dit beperken (alleen admin / éénmalig).
+    """
     conn = get_db_connection()
     with conn.cursor() as cur:
+        # bestaan er al users?
         cur.execute("SELECT COUNT(*) FROM users")
         (count,) = cur.fetchone()
 
         role = body.role or "user"
         if count == 0:
+            # eerste user → admin
             role = "admin"
 
         password_hash = hash_password(body.password)
@@ -159,11 +160,11 @@ def register_user(body: RegisterRequest):
         try:
             cur.execute(
                 """
-                INSERT INTO users (email, password_hash, role, is_active)
-                VALUES (%s, %s, %s, TRUE)
-                RETURNING id, email, role, is_active
+                INSERT INTO users (email, password_hash, role, is_active, first_name, last_name)
+                VALUES (%s, %s, %s, TRUE, %s, %s)
+                RETURNING id, email, role, is_active, first_name, last_name
                 """,
-                (body.email, password_hash, role),
+                (body.email, password_hash, role, body.first_name, body.last_name),
             )
             row = cur.fetchone()
             conn.commit()
@@ -180,6 +181,8 @@ def register_user(body: RegisterRequest):
         email=row[1],
         role=row[2],
         is_active=row[3],
+        first_name=row[4],
+        last_name=row[5],
     )
 
 
@@ -202,28 +205,31 @@ def login(body: LoginRequest, response: Response):
             detail="Onjuiste inloggegevens",
         )
 
+    # Tokens maken
     payload = {"sub": str(user["id"]), "role": user["role"]}
     access_token = create_access_token(payload)
     refresh_token = create_refresh_token(payload)
 
+    # Cookies zetten (HttpOnly)
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False,
+        secure=False,    # 🔴 in productie → True
         samesite="lax",
-        max_age=60 * 60,
+        max_age=60 * 60,  # 1 uur
     )
 
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=False,
+        secure=False,    # 🔴 in productie → True
         samesite="lax",
-        max_age=60 * 60 * 24 * 7,
+        max_age=60 * 60 * 24 * 7,  # 7 dagen
     )
 
+    # last_login_at updaten
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute(
@@ -238,6 +244,8 @@ def login(body: LoginRequest, response: Response):
             "id": user["id"],
             "email": user["email"],
             "role": user["role"],
+            "first_name": user["first_name"],
+            "last_name": user["last_name"],
         },
     }
 
@@ -248,6 +256,7 @@ def login(body: LoginRequest, response: Response):
 
 @router.post("/logout")
 def logout(response: Response):
+    # altijd succes, ook als er geen cookies zijn
     response = JSONResponse({"success": True, "message": "Uitgelogd"})
     response.delete_cookie("access_token")
     response.delete_cookie("refresh_token")
@@ -299,7 +308,7 @@ def refresh_token(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False,
+        secure=False,  # 🔴 in productie: True
         samesite="lax",
         max_age=60 * 60,
     )
@@ -318,4 +327,6 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         email=current_user["email"],
         role=current_user["role"],
         is_active=current_user["is_active"],
+        first_name=current_user.get("first_name"),
+        last_name=current_user.get("last_name"),
     )
