@@ -33,7 +33,8 @@ class RegisterRequest(BaseModel):
     last_name: Optional[str] = None
     email: EmailStr
     password: str
-    role: Optional[str] = "admin"  # eerste user → admin
+    # ⚠️ GEEN 'admin' default meer – rol bepalen we server-side
+    role: Optional[str] = None
 
 
 class UserOut(BaseModel):
@@ -135,25 +136,35 @@ async def get_current_user(
 
 
 # =========================================
-# 🧪 REGISTER (simpel bootstrap)
+# 🧪 REGISTER (bootstrap)
 # =========================================
 
-@router.post("/register")
+@router.post("/register", response_model=UserOut)
 def register_user(body: RegisterRequest):
     """
-    Simpel endpoint om een eerste user aan te maken.
-    In productie zou je dit beperken (alleen admin / éénmalig).
+    Users aanmaken.
+
+    Logica:
+    - eerste user in de DB → admin
+    - alle volgende users → user
     """
     conn = get_db_connection()
+    if not conn:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Geen databaseverbinding",
+        )
+
     with conn.cursor() as cur:
         # bestaan er al users?
         cur.execute("SELECT COUNT(*) FROM users")
         (count,) = cur.fetchone()
 
-        role = body.role or "user"
+        # 🎯 rol NIET uit request halen, maar op basis van count bepalen
         if count == 0:
-            # eerste user → admin
             role = "admin"
+        else:
+            role = "user"
 
         password_hash = hash_password(body.password)
 
