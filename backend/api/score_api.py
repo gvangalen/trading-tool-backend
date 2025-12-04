@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 import psycopg2.extras
 from datetime import date
 
@@ -8,18 +8,18 @@ from backend.utils.scoring_utils import (
     generate_scores_db,
     get_scores_for_symbol,
 )
+from backend.utils.auth_utils import get_current_user   # 🔐 USER SUPPORT
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# Helpers
+# Helpers – nu user-specifiek
 # =========================================================
-def fetch_active_setups():
+def fetch_active_setups(user_id: int):
     """
-    Haalt alle setups op + score uit daily_setup_scores van vandaag.
-    Gebruikt daily_setup_scores.active om een setup als actief te markeren.
+    Haalt alle setups op voor deze user + score uit daily_setup_scores van vandaag.
     """
     conn = get_db_connection()
     if not conn:
@@ -43,10 +43,13 @@ def fetch_active_setups():
                        COALESCE(ds.breakdown, '{}'::jsonb) AS breakdown
                 FROM setups s
                 LEFT JOIN daily_setup_scores ds
-                    ON s.id = ds.setup_id AND ds.report_date = %s
+                    ON s.id = ds.setup_id 
+                    AND ds.report_date = %s
+                    AND ds.user_id = %s
+                WHERE s.user_id = %s
                 ORDER BY s.id, ds.report_date DESC
                 LIMIT 100
-            """, (today,))
+            """, (today, user_id, user_id))
             return [dict(r) for r in cur.fetchall()]
 
     except Exception as e:
@@ -61,9 +64,11 @@ def fetch_active_setups():
 # Macro Score
 # =========================================================
 @router.get("/score/macro")
-async def get_macro_score():
+async def get_macro_score(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+
     try:
-        return generate_scores_db("macro")
+        return generate_scores_db("macro", user_id=user_id)
     except Exception as e:
         logger.error(f"❌ /score/macro: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Fout bij ophalen macro-score")
@@ -73,9 +78,11 @@ async def get_macro_score():
 # Technical Score
 # =========================================================
 @router.get("/score/technical")
-async def get_technical_score():
+async def get_technical_score(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+
     try:
-        return generate_scores_db("technical")
+        return generate_scores_db("technical", user_id=user_id)
     except Exception as e:
         logger.error(f"❌ /score/technical: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Fout bij ophalen technische score")
@@ -85,10 +92,11 @@ async def get_technical_score():
 # Market Score
 # =========================================================
 @router.get("/score/market")
-async def get_market_score():
-    """Haalt markt-score op via market_indicator_rules."""
+async def get_market_score(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+
     try:
-        return generate_scores_db("market")
+        return generate_scores_db("market", user_id=user_id)
     except Exception as e:
         logger.error(f"❌ /score/market: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Fout bij ophalen market-score")
@@ -98,14 +106,17 @@ async def get_market_score():
 # Daily Combined Score (Dashboard)
 # =========================================================
 @router.get("/scores/daily")
-async def get_daily_scores():
-    """
-    Combineert macro-, technische-, market- en setup-scores
-    en levert top-contributors + actieve setups.
-    """
+async def get_daily_scores(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+
     try:
-        scores = get_scores_for_symbol(include_metadata=True) or {}
-        active_setups = fetch_active_setups()
+        # Score engine → per user
+        try:
+            scores = get_scores_for_symbol(user_id=user_id, include_metadata=True) or {}
+        except TypeError:
+            scores = get_scores_for_symbol(include_metadata=True)
+
+        active_setups = fetch_active_setups(user_id)
 
         response = {
             "macro": {
@@ -144,10 +155,12 @@ async def get_daily_scores():
 
 
 # =========================================================
-# AI Master Score
+# AI Master Score (user-specifiek)
 # =========================================================
 @router.get("/ai/master_score")
-def get_ai_master_score():
+def get_ai_master_score(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+
     conn = get_db_connection()
     if not conn:
         return {"error": "Geen DB-verbinding"}
@@ -168,9 +181,11 @@ def get_ai_master_score():
                     summary,
                     date
                 FROM ai_master_score_view
+                WHERE user_id = %s
                 ORDER BY date DESC
                 LIMIT 1;
-            """)
+            """, (user_id,))
+
             row = cur.fetchone()
 
             if not row:
