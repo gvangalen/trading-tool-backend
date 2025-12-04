@@ -1,12 +1,14 @@
 import logging
 import traceback
-from fastapi import APIRouter, HTTPException, Query
-from datetime import datetime, timedelta
-import httpx
 from collections import defaultdict
+from datetime import datetime, timedelta
+
+from fastapi import APIRouter, HTTPException, Query, Depends
+import httpx
 
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_scores_for_symbol
+from backend.routes.auth_api import get_current_user  # ⬅️ user ophalen uit cookie/JWT
 
 # =========================================================
 # ⚙️ Router setup
@@ -42,16 +44,23 @@ def get_market_raw_endpoints():
         logger.error(f"❌ Fout bij ophalen market_raw endpoints: {e}")
         return {}
 
+
 # Globale cache
 MARKET_RAW_ENDPOINTS = get_market_raw_endpoints()
 
 
 # =========================================================
-# 📅 GET /market_data/day — DAGTABEL 
+# 📅 GET /market_data/day — DAGTABEL (per user)
 # =========================================================
 @router.get("/market_data/day")
-async def get_latest_market_day_data():
+async def get_latest_market_day_data(current_user: dict = Depends(get_current_user)):
+    """
+    Haalt de meest recente market-indicatoren op voor de ingelogde user.
+    Eerst vandaag, anders fallback naar laatste beschikbare dag.
+    """
     logger.info("📄 [market/day] Ophalen market-dagdata (met fallback)...")
+
+    user_id = current_user["id"]
 
     conn = get_db_connection()
     if not conn:
@@ -59,26 +68,27 @@ async def get_latest_market_day_data():
 
     try:
         with conn.cursor() as cur:
-
             # 1️⃣ Eerst vandaag proberen
             cur.execute("""
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM market_data_indicators
                 WHERE DATE(timestamp) = CURRENT_DATE
+                  AND user_id = %s
                 ORDER BY timestamp DESC;
-            """)
+            """, (user_id,))
             rows = cur.fetchall()
 
-            # 2️⃣ FALLBACK naar meest recente dag
+            # 2️⃣ FALLBACK naar meest recente dag voor deze user
             if not rows:
                 logger.warning("⚠️ Geen market-data voor vandaag — fallback gebruiken.")
 
                 cur.execute("""
                     SELECT timestamp
                     FROM market_data_indicators
+                    WHERE user_id = %s
                     ORDER BY timestamp DESC
                     LIMIT 1;
-                """)
+                """, (user_id,))
                 last = cur.fetchone()
 
                 if not last:
@@ -90,8 +100,9 @@ async def get_latest_market_day_data():
                     SELECT name, value, trend, interpretation, action, score, timestamp
                     FROM market_data_indicators
                     WHERE DATE(timestamp) = %s
+                      AND user_id = %s
                     ORDER BY timestamp DESC;
-                """, (fallback_date,))
+                """, (fallback_date, user_id))
                 rows = cur.fetchall()
 
         return [
@@ -117,6 +128,7 @@ async def get_latest_market_day_data():
 
 # =========================================================
 # 📌 GET /market/indicator_names — lijst beschikbare indicators
+# (globale config, niet per user)
 # =========================================================
 @router.get("/market/indicator_names")
 def get_market_indicator_names():
@@ -155,6 +167,7 @@ def get_market_indicator_names():
 
 # =========================================================
 # 📌 GET /market/indicator_rules/{name}
+# (globale scoreregels)
 # =========================================================
 @router.get("/market/indicator_rules/{name}")
 def get_market_indicator_rules(name: str):
@@ -192,10 +205,15 @@ def get_market_indicator_rules(name: str):
 
 
 # =========================================================
-# GET /market_data/list — ruwe BTC data
+# GET /market_data/list — ruwe BTC data (per user)
 # =========================================================
 @router.get("/market_data/list")
-async def list_market_data(since_minutes: int = Query(default=1440)):
+async def list_market_data(
+    since_minutes: int = Query(default=1440),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -204,15 +222,22 @@ async def list_market_data(since_minutes: int = Query(default=1440)):
             SELECT id, symbol, price, open, high, low, change_24h, volume, timestamp
             FROM market_data
             WHERE timestamp >= %s
+              AND user_id = %s
             ORDER BY timestamp DESC
-        """, (time_threshold,))
+        """, (time_threshold, user_id))
         rows = cur.fetchall()
         conn.close()
 
         return [{
-            "id": r[0], "symbol": r[1], "price": r[2], "open": r[3],
-            "high": r[4], "low": r[5], "change_24h": r[6],
-            "volume": r[7], "timestamp": r[8]
+            "id": r[0],
+            "symbol": r[1],
+            "price": r[2],
+            "open": r[3],
+            "high": r[4],
+            "low": r[5],
+            "change_24h": r[6],
+            "volume": r[7],
+            "timestamp": r[8],
         } for r in rows]
     except Exception as e:
         logger.error(f"❌ [list] DB-fout: {e}")
@@ -221,6 +246,7 @@ async def list_market_data(since_minutes: int = Query(default=1440)):
 
 # =========================================================
 # GET /market_data/btc/7d/fill — BTC 7d ophalen & opslaan
+# (globale 7d tabel, geen user_id)
 # =========================================================
 @router.post("/market_data/btc/7d/fill")
 async def fill_btc_7day_data():
@@ -254,8 +280,10 @@ async def fill_btc_7day_data():
                 change = round((close_p - open_p) / open_p * 100, 2)
                 volume = volume_by_date.get(date)
 
-                cur.execute("SELECT 1 FROM market_data_7d WHERE symbol = %s AND date = %s",
-                            ('BTC', date))
+                cur.execute(
+                    "SELECT 1 FROM market_data_7d WHERE symbol = %s AND date = %s",
+                    ('BTC', date),
+                )
                 if cur.fetchone():
                     continue
 
@@ -277,19 +305,22 @@ async def fill_btc_7day_data():
 
 
 # =========================================================
-# GET /market_data/btc/latest
+# GET /market_data/btc/latest  (per user)
 # =========================================================
 @router.get("/market_data/btc/latest")
-def get_latest_btc_price():
+def get_latest_btc_price(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute("""
             SELECT id, symbol, price, change_24h, volume, timestamp
             FROM market_data
             WHERE symbol = 'BTC'
+              AND user_id = %s
             ORDER BY timestamp DESC
             LIMIT 1
-        """)
+        """, (user_id,))
         row = cur.fetchone()
 
         if not row:
@@ -300,10 +331,12 @@ def get_latest_btc_price():
 
 
 # =========================================================
-# GET /market_data/interpreted — interpretatie + score
+# GET /market_data/interpreted — interpretatie + score (per user)
 # =========================================================
 @router.get("/market_data/interpreted")
-async def fetch_interpreted_data():
+async def fetch_interpreted_data(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -311,9 +344,10 @@ async def fetch_interpreted_data():
             SELECT symbol, price, change_24h, volume, timestamp
             FROM market_data
             WHERE symbol = 'BTC'
+              AND user_id = %s
             ORDER BY timestamp DESC
             LIMIT 1
-        """)
+        """, (user_id,))
         row = cur.fetchone()
         conn.close()
 
@@ -322,7 +356,8 @@ async def fetch_interpreted_data():
 
         symbol, price, change, volume, timestamp = row
 
-        scores = get_scores_for_symbol(include_metadata=True)
+        # ⬇️ score voor deze user ophalen
+        scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
 
         return {
             "symbol": symbol,
@@ -342,7 +377,7 @@ async def fetch_interpreted_data():
 
 
 # =========================================================
-# GET /market_data/7d — laatste 7 dagen
+# GET /market_data/7d — laatste 7 dagen (globaal)
 # =========================================================
 @router.get("/market_data/7d")
 async def get_market_data_7d():
@@ -360,14 +395,16 @@ async def get_market_data_7d():
 
         rows.reverse()  # van oud → nieuw
         return [{
-            "id": r[0], "symbol": r[1], "date": r[2].isoformat(),
+            "id": r[0],
+            "symbol": r[1],
+            "date": r[2].isoformat(),
             "open": float(r[3]) if r[3] else None,
             "high": float(r[4]) if r[4] else None,
             "low": float(r[5]) if r[5] else None,
             "close": float(r[6]) if r[6] else None,
             "change": float(r[7]) if r[7] else None,
             "volume": float(r[8]) if r[8] else None,
-            "created_at": r[9].isoformat() if r[9] else None
+            "created_at": r[9].isoformat() if r[9] else None,
         } for r in rows]
 
     except Exception as e:
@@ -379,7 +416,7 @@ async def get_market_data_7d():
 
 
 # =========================================================
-# GET /market_data/forward — alle forward returns
+# GET /market_data/forward — alle forward returns (globaal)
 # =========================================================
 @router.get("/market_data/forward")
 async def get_market_forward_returns():
@@ -401,7 +438,7 @@ async def get_market_forward_returns():
             "end": r[4].isoformat(),
             "change": float(r[5]) if r[5] else None,
             "avgDaily": float(r[6]) if r[6] else None,
-            "created_at": r[7].isoformat() if r[7] else None
+            "created_at": r[7].isoformat() if r[7] else None,
         } for r in rows]
 
     except Exception as e:
@@ -410,7 +447,7 @@ async def get_market_forward_returns():
 
 
 # =========================================================
-# GET /market_data/forward/week
+# GET /market_data/forward/week (globaal)
 # =========================================================
 @router.get("/market_data/forward/week")
 def get_week_returns():
@@ -438,7 +475,7 @@ def get_week_returns():
 
 
 # =========================================================
-# GET /market_data/forward/maand
+# GET /market_data/forward/maand (globaal)
 # =========================================================
 @router.get("/market_data/forward/maand")
 def get_month_returns():
@@ -466,7 +503,7 @@ def get_month_returns():
 
 
 # =========================================================
-# GET /market_data/forward/kwartaal
+# GET /market_data/forward/kwartaal (globaal)
 # =========================================================
 @router.get("/market_data/forward/kwartaal")
 def get_quarter_returns():
@@ -494,7 +531,7 @@ def get_quarter_returns():
 
 
 # =========================================================
-# GET /market_data/forward/jaar
+# GET /market_data/forward/jaar (globaal)
 # =========================================================
 @router.get("/market_data/forward/jaar")
 def get_year_returns():
@@ -522,7 +559,7 @@ def get_year_returns():
 
 
 # =========================================================
-# POST /market_data/7d/save
+# POST /market_data/7d/save (globaal)
 # =========================================================
 @router.post("/market_data/7d/save")
 async def save_market_data_7d(data: list[dict]):
@@ -540,7 +577,7 @@ async def save_market_data_7d(data: list[dict]):
                 ON CONFLICT (symbol, date) DO NOTHING
             """, (
                 row["symbol"], row["date"], row["open"], row["high"],
-                row["low"], row["close"], row["change"]
+                row["low"], row["close"], row["change"],
             ))
 
         conn.commit()
@@ -553,7 +590,7 @@ async def save_market_data_7d(data: list[dict]):
 
 
 # =========================================================
-# POST /market_data/forward/save
+# POST /market_data/forward/save (globaal)
 # =========================================================
 @router.post("/market_data/forward/save")
 async def save_forward_returns(data: list[dict]):
@@ -571,7 +608,7 @@ async def save_forward_returns(data: list[dict]):
                 ON CONFLICT DO NOTHING
             """, (
                 row["symbol"], row["period"], row["start_date"],
-                row["end_date"], row["change"], row["avg_daily"]
+                row["end_date"], row["change"], row["avg_daily"],
             ))
 
         conn.commit()
@@ -585,6 +622,7 @@ async def save_forward_returns(data: list[dict]):
 
 # =========================================================
 # POST /market/add_indicator — indicator activeren voor dag-analyse
+# (globale config)
 # =========================================================
 @router.post("/market/add_indicator")
 def add_market_indicator(payload: dict):
