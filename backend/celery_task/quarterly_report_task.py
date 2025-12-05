@@ -32,10 +32,10 @@ def avg(values):
 
 
 # =====================================================
-# 📅 Maandrapporten ophalen voor het kwartaal
+# 📅 Maandrapporten ophalen voor HET KWARTAAL — PER USER
 # =====================================================
 
-def fetch_monthly_reports_for_quarter():
+def fetch_monthly_reports_for_quarter(user_id: int):
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding bij ophalen maandrapporten.")
@@ -43,7 +43,7 @@ def fetch_monthly_reports_for_quarter():
 
     try:
         today = datetime.now(timezone("UTC")).date()
-        start_date = today - timedelta(days=93)  # ca. 3 maanden
+        start_date = today - timedelta(days=93)  # ± drie maanden
 
         with conn.cursor() as cur:
             cur.execute("""
@@ -55,10 +55,12 @@ def fetch_monthly_reports_for_quarter():
                        market_score
                 FROM monthly_reports
                 WHERE report_date >= %s
+                  AND user_id = %s
                 ORDER BY report_date ASC
-            """, (start_date,))
+            """, (start_date, user_id))
+
             results = cur.fetchall()
-            logger.info(f"📊 {len(results)} maandrapporten gevonden voor kwartaalanalyse.")
+            logger.info(f"📊 {len(results)} maandrapporten gevonden voor kwartaalanalyse (user={user_id}).")
             return results
 
     except Exception as e:
@@ -69,10 +71,10 @@ def fetch_monthly_reports_for_quarter():
 
 
 # =====================================================
-# 💾 Opslaan in database
+# 💾 Opslaan in quarterly_reports — PER USER
 # =====================================================
 
-def save_quarterly_report_to_db(date, report_data):
+def save_quarterly_report_to_db(date, report_data, user_id: int):
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding beschikbaar.")
@@ -83,6 +85,7 @@ def save_quarterly_report_to_db(date, report_data):
             cur.execute("""
                 INSERT INTO quarterly_reports (
                     report_date,
+                    user_id,
                     summary,
                     top_performance,
                     major_mistake,
@@ -92,8 +95,10 @@ def save_quarterly_report_to_db(date, report_data):
                     technical_score,
                     setup_score,
                     market_score
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (report_date) DO UPDATE SET
+                ) VALUES (%s, %s,
+                          %s, %s, %s, %s, %s,
+                          %s, %s, %s, %s)
+                ON CONFLICT (report_date, user_id) DO UPDATE SET
                     summary = EXCLUDED.summary,
                     top_performance = EXCLUDED.top_performance,
                     major_mistake = EXCLUDED.major_mistake,
@@ -105,6 +110,7 @@ def save_quarterly_report_to_db(date, report_data):
                     market_score = EXCLUDED.market_score
             """, (
                 date,
+                user_id,
                 report_data.get("summary"),
                 report_data.get("top_performance"),
                 report_data.get("major_mistake"),
@@ -115,8 +121,9 @@ def save_quarterly_report_to_db(date, report_data):
                 report_data.get("setup_score"),
                 report_data.get("market_score"),
             ))
+
             conn.commit()
-            logger.info(f"✅ Kwartaalrapport succesvol opgeslagen of bijgewerkt ({date})")
+            logger.info(f"✅ Kwartaalrapport opgeslagen of bijgewerkt ({date}, user={user_id})")
             return True
 
     except Exception as e:
@@ -127,67 +134,68 @@ def save_quarterly_report_to_db(date, report_data):
 
 
 # =====================================================
-# 🚀 Hoofd Celery-task
+# 🚀 Hoofd Celery-task — draait per user
 # =====================================================
 
 @shared_task(name="backend.celery_task.quarterly_report_task.generate_quarterly_report")
-def generate_quarterly_report():
-    logger.info("📊 Start genereren kwartaalrapport...")
+def generate_quarterly_report(user_id: int):
+    logger.info(f"📊 Start genereren kwartaalrapport voor user_id={user_id}...")
 
     # 1️⃣ Maandrapporten ophalen
-    monthly_reports = fetch_monthly_reports_for_quarter()
+    monthly_reports = fetch_monthly_reports_for_quarter(user_id=user_id)
     if not monthly_reports:
-        logger.warning("⚠️ Geen maandrapporten beschikbaar voor dit kwartaal.")
-        return {"status": "no_data"}
+        logger.warning(f"⚠️ Geen maandrapporten beschikbaar voor dit kwartaal (user={user_id}).")
+        return {"status": "no_data", "user_id": user_id}
 
     today = datetime.now(timezone("UTC")).date()
 
-    # 2️⃣ Samenvatting en scores berekenen
+    # 2️⃣ Samenvatting & scoreberekening
     quarter_summary = "📆 Kwartaaloverzicht:\n\n" + "\n\n".join(
         [f"{r[0]}:\n{sanitize_field(r[1])}" for r in monthly_reports]
     )
 
-    macro_scores = [r[2] for r in monthly_reports]
+    macro_scores     = [r[2] for r in monthly_reports]
     technical_scores = [r[3] for r in monthly_reports]
-    setup_scores = [r[4] for r in monthly_reports]
-    market_scores = [r[5] for r in monthly_reports]
+    setup_scores     = [r[4] for r in monthly_reports]
+    market_scores    = [r[5] for r in monthly_reports]
 
     report_data = {
         "summary": sanitize_field(quarter_summary),
-        "top_performance": "Setup X leverde in april en mei samen +25% rendement op.",
-        "major_mistake": "In juni werd volume overschat tijdens CPI-week – trade mislukte.",
+        "top_performance": "Setup X leverde sterke rendementen in dit kwartaal.",
+        "major_mistake": "Verkeerde inschatting van volatiliteit tijdens CPI/FOMC week.",
         "ai_reflection": (
-            "Het kwartaal toonde een duidelijke bullish shift met toenemend volume. "
-            "Setups op breakouts werkten vooral goed in combinatie met macrotrends. "
-            "Een verbeterpunt is het tijdig afbouwen bij overextensie."
+            "Het kwartaal toonde structureel bullish momentum. "
+            "Breakouts werkten goed wanneer macro-data dit ondersteunden. "
+            "Risk management blijft verbeterpunt, vooral bij low-volume omstandigheden."
         ),
-        "outlook": "Komend kwartaal lijkt correctie aannemelijk. Mogelijk range-periode met opleving richting kwartaalafsluiting.",
+        "outlook": "Komend kwartaal waarschijnlijk consolidatie; macro blijft bepalend.",
         "macro_score": avg(macro_scores),
         "technical_score": avg(technical_scores),
         "setup_score": avg(setup_scores),
         "market_score": avg(market_scores),
     }
 
-    # 3️⃣ Backup JSON maken
+    # 3️⃣ Backup (per user)
     try:
-        backup_dir = "backend/backups"
+        backup_dir = "backend/backups/quarterly"
         os.makedirs(backup_dir, exist_ok=True)
-        backup_path = os.path.join(backup_dir, f"quarterly_report_{today}.json")
+        backup_path = os.path.join(backup_dir, f"quarterly_report_{today}_u{user_id}.json")
         with open(backup_path, "w") as f:
             json.dump(report_data, f, indent=2, ensure_ascii=False)
         logger.info(f"🧾 Backup opgeslagen: {backup_path}")
     except Exception as e:
-        logger.warning(f"⚠️ Backup JSON maken mislukt: {e}")
+        logger.warning(f"⚠️ Backup JSON mislukt voor user {user_id}: {e}")
 
-    # 4️⃣ Opslaan in database
-    success = save_quarterly_report_to_db(today, report_data)
+    # 4️⃣ Opslaan in DB
+    success = save_quarterly_report_to_db(today, report_data, user_id=user_id)
 
     status = "ok" if success else "db_failed"
-    logger.info(f"🏁 Kwartaalrapport afgerond: {status.upper()} ({today})")
+    logger.info(f"🏁 Kwartaalrapport afgerond ({today}) voor user {user_id} → {status.upper()}")
 
     return {
         "status": status,
         "date": str(today),
+        "user_id": user_id,
         "records": len(monthly_reports),
         "report_data": report_data,
     }
