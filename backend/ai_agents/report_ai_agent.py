@@ -70,17 +70,16 @@ Schrijf in het Nederlands in de stijl van een premium nieuwsbrief
 
 
 # =====================================================
-# 1️⃣ SCORES — MET VEILIGE FALLBACK
+# 1️⃣ SCORES — USER SPECIFIC
 # =====================================================
-def get_scores_from_db():
+def get_scores_from_db(user_id: int):
     try:
-        scores = get_scores_for_symbol(include_metadata=True)
+        scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
         if scores:
             return {k: to_float(v) for k, v in scores.items()}
     except:
         pass
 
-    # Veilig fallback
     return {
         "macro_score": None,
         "technical_score": None,
@@ -90,9 +89,9 @@ def get_scores_from_db():
 
 
 # =====================================================
-# 2️⃣ AI INSIGHTS — MET VEILIGE FALLBACK
+# 2️⃣ AI INSIGHTS — USER SPECIFIC
 # =====================================================
-def get_ai_insights_from_db():
+def get_ai_insights_from_db(user_id: int):
     try:
         conn = get_db_connection()
         if not conn:
@@ -102,8 +101,8 @@ def get_ai_insights_from_db():
             cur.execute("""
                 SELECT category, avg_score, trend, bias, risk, summary
                 FROM ai_category_insights
-                WHERE date = CURRENT_DATE;
-            """)
+                WHERE date = CURRENT_DATE AND user_id = %s;
+            """, (user_id,))
             rows = cur.fetchall()
 
         if not rows:
@@ -121,14 +120,15 @@ def get_ai_insights_from_db():
 
         return insights
 
-    except:
+    except Exception:
+        logger.error("⚠️ Fout in get_ai_insights_from_db()", exc_info=True)
         return {}
 
 
 # =====================================================
-# 3️⃣ STRATEGY — MET FALLBACK EN JSON FIXES
+# 3️⃣ STRATEGY — USER SPECIFIC
 # =====================================================
-def get_latest_strategy_for_setup(setup_id: int):
+def get_latest_strategy_for_setup(setup_id: int, user_id: int):
 
     if not setup_id:
         return None
@@ -142,10 +142,10 @@ def get_latest_strategy_for_setup(setup_id: int):
             cur.execute("""
                 SELECT entry, target, stop_loss, explanation, risk_profile, data, created_at
                 FROM strategies
-                WHERE setup_id = %s
+                WHERE setup_id = %s AND user_id = %s
                 ORDER BY created_at DESC
                 LIMIT 1;
-            """, (setup_id,))
+            """, (setup_id, user_id))
             row = cur.fetchone()
 
         if not row:
@@ -161,7 +161,6 @@ def get_latest_strategy_for_setup(setup_id: int):
             explanation = data_json.get("explanation", explanation)
             risk_profile = data_json.get("risk_reward", risk_profile)
 
-        # Targets normaliseren
         targets = []
         if isinstance(target, str):
             targets = [t.strip() for t in target.split(",") if t.strip()]
@@ -177,14 +176,14 @@ def get_latest_strategy_for_setup(setup_id: int):
         }
 
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen strategy: {e}", exc_info=True)
+        logger.error(f"❌ Strategy fout: {e}", exc_info=True)
         return None
 
 
 # =====================================================
-# 4️⃣ MARKET DATA — MET FALLBACK
+# 4️⃣ MARKET DATA — USER SPECIFIC
 # =====================================================
-def get_latest_market_data():
+def get_latest_market_data(user_id: int):
     try:
         conn = get_db_connection()
         if not conn:
@@ -194,9 +193,10 @@ def get_latest_market_data():
             cur.execute("""
                 SELECT price, volume, change_24h
                 FROM market_data
+                WHERE user_id = %s
                 ORDER BY timestamp DESC
                 LIMIT 1;
-            """)
+            """, (user_id,))
             row = cur.fetchone()
 
         if row:
@@ -206,8 +206,8 @@ def get_latest_market_data():
                 "change_24h": to_float(row[2]),
             }
 
-    except:
-        pass
+    except Exception:
+        logger.error("⚠️ Market data fout", exc_info=True)
 
     return {}
 
@@ -221,7 +221,7 @@ def generate_section(prompt: str, retries: int = 3) -> str:
 
 
 # =====================================================
-# 6️⃣ PROMPTS — NU VEILIG VOOR NONE
+# 6️⃣ PROMPTS (ongewijzigde logica, maar user-aware)
 # =====================================================
 def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None):
     price = nv(safe_get(market_data, "price"))
@@ -307,13 +307,13 @@ def prompt_for_outlook(setup):
 
 
 # =====================================================
-# 7️⃣ MAIN REPORT BUILDER — MET ALLE FALLBACKS
+# 7️⃣ MAIN REPORT BUILDER — USER SPECIFIC
 # =====================================================
-def generate_daily_report_sections(symbol: str = "BTC") -> dict:
-    log_and_print(f"🚀 Rapportgeneratie voor {symbol}")
+def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> dict:
+    log_and_print(f"🚀 Rapportgeneratie voor {symbol} (user_id={user_id})")
 
     # Setup
-    setup_raw = get_latest_setup_for_symbol(symbol)
+    setup_raw = get_latest_setup_for_symbol(symbol=symbol, user_id=user_id)
 
     if not setup_raw:
         setup = {
@@ -326,16 +326,16 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
         setup = sanitize_json_input(setup_raw, context="setup")
 
     # Scores
-    scores = sanitize_json_input(get_scores_from_db(), context="scores")
+    scores = sanitize_json_input(get_scores_from_db(user_id=user_id), context="scores")
 
     # AI insights
-    ai_insights = get_ai_insights_from_db()
+    ai_insights = get_ai_insights_from_db(user_id=user_id)
 
     # Market data
-    market_data = get_latest_market_data()
+    market_data = get_latest_market_data(user_id=user_id)
 
     # Strategy
-    strategy = get_latest_strategy_for_setup(setup.get("id"))
+    strategy = get_latest_strategy_for_setup(setup.get("id"), user_id=user_id)
     if not strategy:
         strategy = {
             "entry": "n.v.t.",
@@ -389,5 +389,5 @@ def generate_daily_report_sections(symbol: str = "BTC") -> dict:
 
 
 if __name__ == "__main__":
-    result = generate_daily_report_sections("BTC")
+    result = generate_daily_report_sections("BTC", user_id=1)
     print(json.dumps(result, indent=2, ensure_ascii=False))
