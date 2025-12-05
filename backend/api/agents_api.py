@@ -1,9 +1,10 @@
 import logging
 import json
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 from backend.utils.db import get_db_connection
+from backend.utils.auth_utils import get_current_user  # 🔐 user uit token
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,8 +25,9 @@ def get_conn_cursor():
 # ============================================================
 
 @router.get("/agents/insights/macro")
-async def get_macro_insight():
+async def get_macro_insight(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [macro] Insight ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -33,10 +35,11 @@ async def get_macro_insight():
             SELECT category, avg_score, trend, bias, risk, summary,
                    top_signals, date, created_at
             FROM ai_category_insights
-            WHERE category='macro'
+            WHERE category = 'macro'
+              AND user_id = %s
             ORDER BY date DESC, created_at DESC
             LIMIT 1;
-        """)
+        """, (user_id,))
 
         row = cur.fetchone()
         if not row:
@@ -49,14 +52,14 @@ async def get_macro_insight():
         if isinstance(top_signals_raw, str):
             try:
                 top_signals = json.loads(top_signals_raw)
-            except:
+            except Exception:
                 top_signals = []
         else:
             top_signals = top_signals_raw or []
 
         return {
             "insight": {
-                "score": float(avg_score) if avg_score else None,
+                "score": float(avg_score) if avg_score is not None else None,
                 "trend": trend,
                 "bias": bias,
                 "risk": risk,
@@ -72,8 +75,9 @@ async def get_macro_insight():
 
 
 @router.get("/agents/reflections/macro")
-async def get_macro_reflections():
+async def get_macro_reflections(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [macro] Reflecties ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -81,10 +85,11 @@ async def get_macro_reflections():
             SELECT indicator, raw_score, ai_score, compliance,
                    comment, recommendation, date, timestamp
             FROM ai_reflections
-            WHERE category='macro'
+            WHERE category = 'macro'
+              AND user_id = %s
             ORDER BY date DESC, timestamp DESC
             LIMIT 10;
-        """)
+        """, (user_id,))
 
         rows = cur.fetchall()
         reflections = []
@@ -94,9 +99,9 @@ async def get_macro_reflections():
 
             reflections.append({
                 "indicator": indicator,
-                "raw_score": float(raw_score) if raw_score else None,
-                "ai_score": float(ai_score) if ai_score else None,
-                "compliance": float(compliance) if compliance else None,
+                "raw_score": float(raw_score) if raw_score is not None else None,
+                "ai_score": float(ai_score) if ai_score is not None else None,
+                "compliance": float(compliance) if compliance is not None else None,
                 "comment": comment,
                 "recommendation": recommendation,
                 "date": d.isoformat() if d else None,
@@ -110,12 +115,13 @@ async def get_macro_reflections():
 
 
 # ============================================================
-# ==========  MARKET  =========================================
+# ==========  MARKET  ========================================
 # ============================================================
 
 @router.get("/agents/insights/market")
-async def get_market_insight():
+async def get_market_insight(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [market] Insight ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -123,10 +129,11 @@ async def get_market_insight():
             SELECT category, avg_score, trend, bias, risk, summary,
                    top_signals, date, created_at
             FROM ai_category_insights
-            WHERE category='market'
+            WHERE category = 'market'
+              AND user_id = %s
             ORDER BY date DESC, created_at DESC
             LIMIT 1;
-        """)
+        """, (user_id,))
 
         row = cur.fetchone()
         if not row:
@@ -138,21 +145,21 @@ async def get_market_insight():
         if isinstance(top_signals_raw, str):
             try:
                 top_signals = json.loads(top_signals_raw)
-            except:
+            except Exception:
                 top_signals = []
         else:
             top_signals = top_signals_raw or []
 
         return {
             "insight": {
-                "score": float(avg_score) if avg_score else None,
+                "score": float(avg_score) if avg_score is not None else None,
                 "trend": trend,
                 "bias": bias,
                 "risk": risk,
                 "summary": summary,
                 "top_signals": top_signals,
-                "date": d.isoformat(),
-                "created_at": created_at.isoformat(),
+                "date": d.isoformat() if d else None,
+                "created_at": created_at.isoformat() if created_at else None,
             }
         }
 
@@ -161,8 +168,9 @@ async def get_market_insight():
 
 
 @router.get("/agents/reflections/market")
-async def get_market_reflections():
+async def get_market_reflections(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [market] Reflecties ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -170,10 +178,11 @@ async def get_market_reflections():
             SELECT indicator, raw_score, ai_score, compliance,
                    comment, recommendation, date, timestamp
             FROM ai_reflections
-            WHERE category='market'
+            WHERE category = 'market'
+              AND user_id = %s
             ORDER BY date DESC, timestamp DESC
             LIMIT 10;
-        """)
+        """, (user_id,))
 
         rows = cur.fetchall()
         reflections = []
@@ -183,12 +192,12 @@ async def get_market_reflections():
 
             reflections.append({
                 "indicator": indicator,
-                "raw_score": float(raw_score) if raw_score else None,
-                "ai_score": float(ai_score) if ai_score else None,
-                "compliance": float(compliance) if compliance else None,
+                "raw_score": float(raw_score) if raw_score is not None else None,
+                "ai_score": float(ai_score) if ai_score is not None else None,
+                "compliance": float(compliance) if compliance is not None else None,
                 "comment": comment,
                 "recommendation": recommendation,
-                "date": d.isoformat(),
+                "date": d.isoformat() if d else None,
                 "timestamp": ts.isoformat() if ts else None,
             })
 
@@ -203,8 +212,9 @@ async def get_market_reflections():
 # ============================================================
 
 @router.get("/agents/insights/technical")
-async def get_technical_insight():
+async def get_technical_insight(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [technical] Insight ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -212,10 +222,11 @@ async def get_technical_insight():
             SELECT category, avg_score, trend, bias, risk, summary,
                    top_signals, date, created_at
             FROM ai_category_insights
-            WHERE category='technical'
+            WHERE category = 'technical'
+              AND user_id = %s
             ORDER BY date DESC, created_at DESC
             LIMIT 1;
-        """)
+        """, (user_id,))
 
         row = cur.fetchone()
         if not row:
@@ -227,21 +238,21 @@ async def get_technical_insight():
         if isinstance(top_signals_raw, str):
             try:
                 top_signals = json.loads(top_signals_raw)
-            except:
+            except Exception:
                 top_signals = []
         else:
             top_signals = top_signals_raw or []
 
         return {
             "insight": {
-                "score": float(avg_score) if avg_score else None,
+                "score": float(avg_score) if avg_score is not None else None,
                 "trend": trend,
                 "bias": bias,
                 "risk": risk,
                 "summary": summary,
                 "top_signals": top_signals,
-                "date": d.isoformat(),
-                "created_at": created_at.isoformat(),
+                "date": d.isoformat() if d else None,
+                "created_at": created_at.isoformat() if created_at else None,
             }
         }
 
@@ -250,8 +261,9 @@ async def get_technical_insight():
 
 
 @router.get("/agents/reflections/technical")
-async def get_technical_reflections():
+async def get_technical_reflections(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [technical] Reflecties ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -259,10 +271,11 @@ async def get_technical_reflections():
             SELECT indicator, raw_score, ai_score, compliance,
                    comment, recommendation, date, timestamp
             FROM ai_reflections
-            WHERE category='technical'
+            WHERE category = 'technical'
+              AND user_id = %s
             ORDER BY date DESC, timestamp DESC
             LIMIT 10;
-        """)
+        """, (user_id,))
 
         rows = cur.fetchall()
         reflections = []
@@ -272,13 +285,13 @@ async def get_technical_reflections():
 
             reflections.append({
                 "indicator": indicator,
-                "raw_score": float(raw_score) if raw_score else None,
-                "ai_score": float(ai_score) if ai_score else None,
-                "compliance": float(compliance) if compliance else None,
+                "raw_score": float(raw_score) if raw_score is not None else None,
+                "ai_score": float(ai_score) if ai_score is not None else None,
+                "compliance": float(compliance) if compliance is not None else None,
                 "comment": comment,
                 "recommendation": recommendation,
-                "date": d.isoformat(),
-                "timestamp": ts.isoformat(),
+                "date": d.isoformat() if d else None,
+                "timestamp": ts.isoformat() if ts else None,
             })
 
         return {"reflections": reflections}
@@ -292,8 +305,9 @@ async def get_technical_reflections():
 # ============================================================
 
 @router.get("/agents/insights/setup")
-async def get_setup_insight():
+async def get_setup_insight(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [setup] Insight ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -301,10 +315,11 @@ async def get_setup_insight():
             SELECT category, avg_score, trend, bias, risk, summary,
                    top_signals, date, created_at
             FROM ai_category_insights
-            WHERE category='setup'
+            WHERE category = 'setup'
+              AND user_id = %s
             ORDER BY date DESC, created_at DESC
             LIMIT 1;
-        """)
+        """, (user_id,))
 
         row = cur.fetchone()
         if not row:
@@ -316,21 +331,21 @@ async def get_setup_insight():
         if isinstance(top_signals_raw, str):
             try:
                 top_signals = json.loads(top_signals_raw)
-            except:
+            except Exception:
                 top_signals = []
         else:
             top_signals = top_signals_raw or []
 
         return {
             "insight": {
-                "score": float(avg_score) if avg_score else None,
+                "score": float(avg_score) if avg_score is not None else None,
                 "trend": trend,
                 "bias": bias,
                 "risk": risk,
                 "summary": summary,
                 "top_signals": top_signals,
-                "date": d.isoformat(),
-                "created_at": created_at.isoformat(),
+                "date": d.isoformat() if d else None,
+                "created_at": created_at.isoformat() if created_at else None,
             }
         }
 
@@ -339,8 +354,9 @@ async def get_setup_insight():
 
 
 @router.get("/agents/reflections/setup")
-async def get_setup_reflections():
+async def get_setup_reflections(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [setup] Reflecties ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -348,10 +364,11 @@ async def get_setup_reflections():
             SELECT indicator, raw_score, ai_score, compliance,
                    comment, recommendation, date, timestamp
             FROM ai_reflections
-            WHERE category='setup'
+            WHERE category = 'setup'
+              AND user_id = %s
             ORDER BY date DESC, timestamp DESC
             LIMIT 10;
-        """)
+        """, (user_id,))
 
         rows = cur.fetchall()
         reflections = []
@@ -361,13 +378,13 @@ async def get_setup_reflections():
 
             reflections.append({
                 "indicator": indicator,
-                "raw_score": float(raw_score) if raw_score else None,
-                "ai_score": float(ai_score) if ai_score else None,
-                "compliance": float(compliance) if compliance else None,
+                "raw_score": float(raw_score) if raw_score is not None else None,
+                "ai_score": float(ai_score) if ai_score is not None else None,
+                "compliance": float(compliance) if compliance is not None else None,
                 "comment": comment,
                 "recommendation": recommendation,
-                "date": d.isoformat(),
-                "timestamp": ts.isoformat(),
+                "date": d.isoformat() if d else None,
+                "timestamp": ts.isoformat() if ts else None,
             })
 
         return {"reflections": reflections}
@@ -377,12 +394,13 @@ async def get_setup_reflections():
 
 
 # ============================================================
-# ==========  STRATEGY  =========================================
+# ==========  STRATEGY  ======================================
 # ============================================================
 
 @router.get("/agents/insights/strategy")
-async def get_strategy_insight():
+async def get_strategy_insight(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [strategy] Insight ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -390,10 +408,11 @@ async def get_strategy_insight():
             SELECT category, avg_score, trend, bias, risk, summary,
                    top_signals, date, created_at
             FROM ai_category_insights
-            WHERE category='strategy'
+            WHERE category = 'strategy'
+              AND user_id = %s
             ORDER BY date DESC, created_at DESC
             LIMIT 1;
-        """)
+        """, (user_id,))
 
         row = cur.fetchone()
         if not row:
@@ -408,30 +427,32 @@ async def get_strategy_insight():
         if isinstance(top_signals_raw, str):
             try:
                 top_signals = json.loads(top_signals_raw)
-            except:
+            except Exception:
                 top_signals = []
         else:
             top_signals = top_signals_raw or []
 
         return {
             "insight": {
-                "score": float(avg_score) if avg_score else None,
+                "score": float(avg_score) if avg_score is not None else None,
                 "trend": trend,
                 "bias": bias,
                 "risk": risk,
                 "summary": summary,
                 "top_signals": top_signals,
                 "date": d.isoformat() if d else None,
-                "created_at": created_at.isoformat() if created_at else None
+                "created_at": created_at.isoformat() if created_at else None,
             }
         }
 
     finally:
         conn.close()
 
+
 @router.get("/agents/reflections/strategy")
-async def get_strategy_reflections():
+async def get_strategy_reflections(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [strategy] Reflecties ophalen")
+    user_id = current_user["id"]
 
     conn, cur = get_conn_cursor()
     try:
@@ -439,10 +460,11 @@ async def get_strategy_reflections():
             SELECT indicator, raw_score, ai_score, compliance,
                    comment, recommendation, date, timestamp
             FROM ai_reflections
-            WHERE category='strategy'
+            WHERE category = 'strategy'
+              AND user_id = %s
             ORDER BY date DESC, timestamp DESC
             LIMIT 10;
-        """)
+        """, (user_id,))
 
         rows = cur.fetchall()
         reflections = []
@@ -454,9 +476,9 @@ async def get_strategy_reflections():
 
             reflections.append({
                 "indicator": indicator,
-                "raw_score": float(raw_score) if raw_score else None,
-                "ai_score": float(ai_score) if ai_score else None,
-                "compliance": float(compliance) if compliance else None,
+                "raw_score": float(raw_score) if raw_score is not None else None,
+                "ai_score": float(ai_score) if ai_score is not None else None,
+                "compliance": float(compliance) if compliance is not None else None,
                 "comment": comment,
                 "recommendation": recommendation,
                 "date": d.isoformat() if d else None,
