@@ -42,10 +42,13 @@ celery_app.autodiscover_tasks([
 celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
+
 # =========================================================
 # 🕒 BEAT SCHEDULE — VOLLEDIGE PIPELINE
+# LET OP: alle task-namen komen exact overeen met @shared_task(name="...")
 # =========================================================
 celery_app.conf.beat_schedule = {
+
     # =========================================================
     # 1) MARKET DATA
     # =========================================================
@@ -57,14 +60,9 @@ celery_app.conf.beat_schedule = {
         "task": "backend.celery_task.market_task.save_market_data_daily",
         "schedule": crontab(hour=0, minute=5),
     },
-    # ✅ prijs-history + forward returns gesplitst
-    "update_btc_history": {
-        "task": "backend.celery_task.btc_price_history_task.update_btc_history",
+    "sync_price_history_and_returns": {
+        "task": "backend.celery_task.market_task.sync_price_history_and_returns",
         "schedule": crontab(hour=1, minute=0),
-    },
-    "calculate_forward_returns": {
-        "task": "backend.celery_task.market_task.calculate_and_save_forward_returns",
-        "schedule": crontab(hour=1, minute=10),
     },
 
     # =========================================================
@@ -76,24 +74,23 @@ celery_app.conf.beat_schedule = {
     },
 
     # =========================================================
-    # 3) TECHNICAL INDICATORS
+    # 3) TECHNICAL INDICATORS (daily only, want week/month/quarter bestaan niet meer)
     # =========================================================
     "fetch_technical_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
         "schedule": crontab(hour=0, minute=10),
     },
-    # ❌ deze bestaan (nog) niet meer → weghalen of later toevoegen
-    # "fetch_technical_week": ...
-    # "fetch_technical_month": ...
-    # "fetch_technical_quarter": ...
 
     # =========================================================
-    # 4) BTC PRICE HISTORY (al hierboven gefixt)
+    # 4) BTC PRICE HISTORY (juiste task-naam!)
     # =========================================================
-    # "update_btc_history" staat al boven
+    "update_btc_history": {
+        "task": "backend.celery_task.btc_price_history_task.update_btc_history",
+        "schedule": crontab(hour=1, minute=10),
+    },
 
     # =========================================================
-    # 5) AI AGENTS (MACRO → MARKET → TECHNICAL → MASTER)
+    # 5) AI AGENTS — MACRO → MARKET → TECHNICAL → MASTER SCORE
     # =========================================================
     "generate_macro_insight": {
         "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
@@ -115,22 +112,13 @@ celery_app.conf.beat_schedule = {
     # =========================================================
     # 6) SETUP AGENT
     # =========================================================
-    # ✅ we gebruiken nu de wrapper-task in setup_task.py
     "run_setup_agent_daily": {
         "task": "backend.celery_task.setup_task.run_setup_agent_daily",
         "schedule": crontab(hour=3, minute=50),
     },
 
     # =========================================================
-    # 7) STRATEGY AGENT (alleen analyse, geen generatie)
-    # =========================================================
-    "analyze_strategy_ai": {
-        "task": "backend.ai_agents.strategy_ai_agent.analyze_strategy_ai",
-        "schedule": crontab(hour=4, minute=0),
-    },
-
-    # =========================================================
-    # 8) DAILY SCORES TASK
+    # 7) DAILY SCORES
     # =========================================================
     "store_daily_scores": {
         "task": "backend.celery_task.store_daily_scores_task.store_daily_scores_task",
@@ -138,19 +126,15 @@ celery_app.conf.beat_schedule = {
     },
 
     # =========================================================
-    # 9) DAILY REPORTS
+    # 8) DAILY REPORT (alles-in-1 task!)
     # =========================================================
-    # ✅ jouw huidige generate_daily_report doet ALLES
     "generate_daily_report": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
         "schedule": crontab(hour=5, minute=0),
     },
-    # deze twee kun je weghalen als je geen losse tasks meer hebt:
-    # "generate_daily_report_pdf": ...
-    # "send_daily_report_email": ...
 
     # =========================================================
-    # 10) WEEK/MONTH/QUARTER REPORTS
+    # 9) WEEK / MONTH / QUARTER REPORTS
     # =========================================================
     "generate_weekly_report": {
         "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
@@ -165,3 +149,37 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=1, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
     },
 }
+
+logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
+
+# =========================================================
+# 📌 FORCE IMPORTS — zodat Beat alle tasks ziet
+# =========================================================
+try:
+    import backend.celery_task.market_task
+    import backend.celery_task.macro_task
+    import backend.celery_task.technical_task
+    import backend.celery_task.btc_price_history_task
+    import backend.celery_task.daily_report_task
+    import backend.celery_task.weekly_report_task
+    import backend.celery_task.monthly_report_task
+    import backend.celery_task.quarterly_report_task
+    import backend.celery_task.store_daily_scores_task
+    import backend.celery_task.setup_task
+
+    import backend.ai_agents.macro_ai_agent
+    import backend.ai_agents.market_ai_agent
+    import backend.ai_agents.technical_ai_agent
+    import backend.ai_agents.report_ai_agent
+    import backend.ai_agents.score_ai_agent
+    import backend.ai_agents.setup_ai_agent
+    import backend.ai_agents.strategy_ai_agent
+
+    logger.info("✅ Forced task imports succesvol geladen!")
+except Exception as e:
+    logger.error(f"❌ Fout bij laden van tasks: {e}")
+
+# =========================================================
+# EXPOSE APP
+# =========================================================
+app = celery_app
