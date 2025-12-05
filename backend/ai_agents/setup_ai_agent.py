@@ -48,11 +48,12 @@ def score_overlap(value, min_v, max_v):
     return round(100 - (dist / max_dist * 100))
 
 
+
 # ===================================================================
-# 🤖 HOOFDFUNCTIE — ACTIVE SETUP FINDER
+# 🤖 MAIN SETUP AGENT — **NOW USER-AWARE**
 # ===================================================================
-def run_setup_agent(asset="BTC"):
-    logger.info("🤖 Setup-Agent gestart...")
+def run_setup_agent(asset="BTC", user_id: int | None = None):
+    logger.info(f"🤖 Setup-Agent gestart (user_id={user_id})...")
 
     conn = get_db_connection()
     if not conn:
@@ -61,15 +62,24 @@ def run_setup_agent(asset="BTC"):
 
     try:
         # ---------------------------------------------------------------
-        # 1️⃣ SYSTEEM SCORES VAN VANDAAG
+        # 1️⃣ SYSTEEM SCORES VAN VANDAAG (USER SPECIFIC)
         # ---------------------------------------------------------------
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT macro_score, technical_score, market_score
-                FROM daily_scores
-                WHERE report_date = CURRENT_DATE
-                LIMIT 1;
-            """)
+            if user_id:
+                cur.execute("""
+                    SELECT macro_score, technical_score, market_score
+                    FROM daily_scores
+                    WHERE report_date = CURRENT_DATE AND user_id = %s
+                    LIMIT 1;
+                """, (user_id,))
+            else:
+                cur.execute("""
+                    SELECT macro_score, technical_score, market_score
+                    FROM daily_scores
+                    WHERE report_date = CURRENT_DATE
+                    LIMIT 1;
+                """)
+
             row = cur.fetchone()
 
         if not row:
@@ -82,21 +92,36 @@ def run_setup_agent(asset="BTC"):
         market_score = to_float(market_score)
 
         # ---------------------------------------------------------------
-        # 2️⃣ SETUPS OPHALEN
+        # 2️⃣ SETUPS OPHALEN (user-specific)
         # ---------------------------------------------------------------
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT 
-                    id, name, symbol,
-                    min_macro_score, max_macro_score,
-                    min_technical_score, max_technical_score,
-                    min_market_score, max_market_score,
-                    explanation, action, strategy_type,
-                    dynamic_investment, created_at
-                FROM setups
-                WHERE symbol = %s
-                ORDER BY created_at DESC;
-            """, (asset,))
+            if user_id:
+                cur.execute("""
+                    SELECT 
+                        id, name, symbol,
+                        min_macro_score, max_macro_score,
+                        min_technical_score, max_technical_score,
+                        min_market_score, max_market_score,
+                        explanation, action, strategy_type,
+                        dynamic_investment, created_at
+                    FROM setups
+                    WHERE symbol = %s AND user_id = %s
+                    ORDER BY created_at DESC;
+                """, (asset, user_id))
+            else:
+                cur.execute("""
+                    SELECT 
+                        id, name, symbol,
+                        min_macro_score, max_macro_score,
+                        min_technical_score, max_technical_score,
+                        min_market_score, max_market_score,
+                        explanation, action, strategy_type,
+                        dynamic_investment, created_at
+                    FROM setups
+                    WHERE symbol = %s
+                    ORDER BY created_at DESC;
+                """, (asset,))
+
             setups = cur.fetchall()
 
         if not setups:
@@ -176,31 +201,58 @@ Geef één zin waarom deze match {total_match}/100 scoort.
             })
 
             # -----------------------------------------------------------
-            # 4️⃣ Opslaan in daily_setup_scores — FIXED JSONB
+            # 4️⃣ Opslaan in daily_setup_scores — **USER-AWARE**
             # -----------------------------------------------------------
             with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO daily_setup_scores 
-                        (setup_id, report_date, score, is_active, explanation, breakdown)
-                    VALUES (%s, CURRENT_DATE, %s, %s, %s, %s::jsonb)
-                    ON CONFLICT (setup_id, report_date)
-                    DO UPDATE SET 
-                        score = EXCLUDED.score,
-                        is_active = EXCLUDED.is_active,
-                        explanation = EXCLUDED.explanation,
-                        breakdown = EXCLUDED.breakdown,
-                        created_at = NOW();
-                """, (
-                    setup_id,
-                    total_match,
-                    active,
-                    ai_comment,
-                    json.dumps({
-                        "macro_match": macro_match,
-                        "technical_match": tech_match,
-                        "market_match": market_match
-                    })
-                ))
+                if user_id:
+                    cur.execute("""
+                        INSERT INTO daily_setup_scores 
+                            (setup_id, user_id, report_date, score, is_active, explanation, breakdown)
+                        VALUES (%s, %s, CURRENT_DATE, %s, %s, %s, %s::jsonb)
+                        ON CONFLICT (setup_id, user_id, report_date)
+                        DO UPDATE SET 
+                            score = EXCLUDED.score,
+                            is_active = EXCLUDED.is_active,
+                            explanation = EXCLUDED.explanation,
+                            breakdown = EXCLUDED.breakdown,
+                            created_at = NOW();
+                    """, (
+                        setup_id,
+                        user_id,
+                        total_match,
+                        active,
+                        ai_comment,
+                        json.dumps({
+                            "macro_match": macro_match,
+                            "technical_match": tech_match,
+                            "market_match": market_match
+                        })
+                    ))
+                else:
+                    # backward compatibility
+                    cur.execute("""
+                        INSERT INTO daily_setup_scores 
+                            (setup_id, report_date, score, is_active, explanation, breakdown)
+                        VALUES (%s, CURRENT_DATE, %s, %s, %s, %s::jsonb)
+                        ON CONFLICT (setup_id, report_date)
+                        DO UPDATE SET 
+                            score = EXCLUDED.score,
+                            is_active = EXCLUDED.is_active,
+                            explanation = EXCLUDED.explanation,
+                            breakdown = EXCLUDED.breakdown,
+                            created_at = NOW();
+                    """, (
+                        setup_id,
+                        total_match,
+                        active,
+                        ai_comment,
+                        json.dumps({
+                            "macro_match": macro_match,
+                            "technical_match": tech_match,
+                            "market_match": market_match
+                        })
+                    ))
+
 
         # ---------------------------------------------------------------
         # 5️⃣ BEST VAN DE DAG MARKEREN
@@ -211,14 +263,22 @@ Geef één zin waarom deze match {total_match}/100 scoort.
                     r["best_of_day"] = True
 
             with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE daily_setup_scores
-                    SET is_best = TRUE
-                    WHERE setup_id = %s AND report_date = CURRENT_DATE;
-                """, (best_setup["setup_id"],))
+                if user_id:
+                    cur.execute("""
+                        UPDATE daily_setup_scores
+                        SET is_best = TRUE
+                        WHERE setup_id = %s AND user_id = %s AND report_date = CURRENT_DATE;
+                    """, (best_setup["setup_id"], user_id))
+                else:
+                    cur.execute("""
+                        UPDATE daily_setup_scores
+                        SET is_best = TRUE
+                        WHERE setup_id = %s AND report_date = CURRENT_DATE;
+                    """, (best_setup["setup_id"],))
+
 
         # ---------------------------------------------------------------
-        # 6️⃣ SAMENVATTING OPSLAAN — ai_category_insights
+        # 6️⃣ SAMENVATTING OPSLAAN — ai_category_insights (USER-AWARE)
         # ---------------------------------------------------------------
         if results:
             avg_score = round(sum(r["match_score"] for r in results) / len(results), 2)
@@ -264,31 +324,55 @@ Geef één zin waarom deze match {total_match}/100 scoort.
             ]
 
             with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO ai_category_insights
-                        (category, avg_score, trend, bias, risk, summary, top_signals)
-                    VALUES ('setup', %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (category, date)
-                    DO UPDATE SET
-                        avg_score   = EXCLUDED.avg_score,
-                        trend       = EXCLUDED.trend,
-                        bias        = EXCLUDED.bias,
-                        risk        = EXCLUDED.risk,
-                        summary     = EXCLUDED.summary,
-                        top_signals = EXCLUDED.top_signals,
-                        created_at  = NOW();
-                """, (
-                    avg_score,
-                    trend,
-                    bias,
-                    risk,
-                    summary,
-                    json.dumps(top_signals),
-                ))
+                if user_id:
+                    cur.execute("""
+                        INSERT INTO ai_category_insights
+                            (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
+                        VALUES ('setup', %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (category, user_id, date)
+                        DO UPDATE SET
+                            avg_score   = EXCLUDED.avg_score,
+                            trend       = EXCLUDED.trend,
+                            bias        = EXCLUDED.bias,
+                            risk        = EXCLUDED.risk,
+                            summary     = EXCLUDED.summary,
+                            top_signals = EXCLUDED.top_signals,
+                            created_at  = NOW();
+                    """, (
+                        user_id,
+                        avg_score,
+                        trend,
+                        bias,
+                        risk,
+                        summary,
+                        json.dumps(top_signals),
+                    ))
+                else:
+                    cur.execute("""
+                        INSERT INTO ai_category_insights
+                            (category, avg_score, trend, bias, risk, summary, top_signals)
+                        VALUES ('setup', %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (category, date)
+                        DO UPDATE SET
+                            avg_score   = EXCLUDED.avg_score,
+                            trend       = EXCLUDED.trend,
+                            bias        = EXCLUDED.bias,
+                            risk        = EXCLUDED.risk,
+                            summary     = EXCLUDED.summary,
+                            top_signals = EXCLUDED.top_signals,
+                            created_at  = NOW();
+                    """, (
+                        avg_score,
+                        trend,
+                        bias,
+                        risk,
+                        summary,
+                        json.dumps(top_signals),
+                    ))
 
         conn.commit()
 
-        logger.info("✅ Setup-Agent voltooid.")
+        logger.info("✅ Setup-Agent voltooid (user-aware).")
         return {"active_setup": best_setup, "all_setups": results}
 
     except Exception:
@@ -299,11 +383,12 @@ Geef één zin waarom deze match {total_match}/100 scoort.
         conn.close()
 
 
+
 # ===================================================================
-# 🧠 UITLEG GENERATOR
+# 🧠 UITLEG GENERATOR — now **user-aware**
 # ===================================================================
-def generate_setup_explanation(setup_id: int):
-    logger.info(f"🧠 Setup-uitleg genereren voor {setup_id}...")
+def generate_setup_explanation(setup_id: int, user_id: int | None = None):
+    logger.info(f"🧠 Setup-uitleg genereren voor {setup_id} (user_id={user_id})...")
 
     conn = get_db_connection()
     if not conn:
@@ -311,14 +396,25 @@ def generate_setup_explanation(setup_id: int):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT name, symbol, trend, timeframe,
-                       min_macro_score, max_macro_score,
-                       min_technical_score, max_technical_score,
-                       min_market_score, max_market_score
-                FROM setups
-                WHERE id = %s;
-            """, (setup_id,))
+            if user_id:
+                cur.execute("""
+                    SELECT name, symbol, trend, timeframe,
+                           min_macro_score, max_macro_score,
+                           min_technical_score, max_technical_score,
+                           min_market_score, max_market_score
+                    FROM setups
+                    WHERE id = %s AND user_id = %s;
+                """, (setup_id, user_id))
+            else:
+                cur.execute("""
+                    SELECT name, symbol, trend, timeframe,
+                           min_macro_score, max_macro_score,
+                           min_technical_score, max_technical_score,
+                           min_market_score, max_market_score
+                    FROM setups
+                    WHERE id = %s;
+                """, (setup_id,))
+
             row = cur.fetchone()
 
         if not row:
@@ -352,11 +448,18 @@ Geef maximaal 3 zinnen.
         explanation = ask_gpt_text(prompt)
 
         with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE setups
-                SET explanation = %s
-                WHERE id = %s;
-            """, (explanation, setup_id))
+            if user_id:
+                cur.execute("""
+                    UPDATE setups
+                    SET explanation = %s
+                    WHERE id = %s AND user_id = %s;
+                """, (explanation, setup_id, user_id))
+            else:
+                cur.execute("""
+                    UPDATE setups
+                    SET explanation = %s
+                    WHERE id = %s;
+                """, (explanation, setup_id))
 
         conn.commit()
         return explanation
