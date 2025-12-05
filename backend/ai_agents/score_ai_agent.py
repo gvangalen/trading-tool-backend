@@ -19,10 +19,9 @@ CATEGORIES = ["macro", "market", "technical", "setup", "strategy", "master"]
 
 
 # ============================================================
-# ⚙️ Helper: Decimal → float converter (FIX)
+# ⚙️ Decimal → float converter
 # ============================================================
 def convert_decimal(obj):
-    """Recursively convert Decimal objects into float so json.dumps never crashes."""
     if isinstance(obj, Decimal):
         return float(obj)
     if isinstance(obj, dict):
@@ -32,9 +31,6 @@ def convert_decimal(obj):
     return obj
 
 
-# ============================================================
-# Helper safe_json
-# ============================================================
 def safe_json(obj, fallback):
     if isinstance(obj, dict):
         return obj
@@ -49,7 +45,7 @@ def safe_json(obj, fallback):
 # ============================================================
 # 📥 1. Insights ophalen → ai_category_insights
 # ============================================================
-def fetch_today_insights(conn):
+def fetch_today_insights(conn, user_id=None):
     insights = {}
     today = datetime.utcnow().date()
     lookback = [today, today - timedelta(days=1), today - timedelta(days=2)]
@@ -59,12 +55,20 @@ def fetch_today_insights(conn):
             result = None
 
             for d in lookback:
-                cur.execute("""
-                    SELECT category, avg_score, trend, bias, risk, summary, top_signals
-                    FROM ai_category_insights
-                    WHERE category = %s AND date = %s
-                    LIMIT 1;
-                """, (cat, d))
+                if user_id:
+                    cur.execute("""
+                        SELECT category, avg_score, trend, bias, risk, summary, top_signals
+                        FROM ai_category_insights
+                        WHERE category = %s AND user_id = %s AND date = %s
+                        LIMIT 1;
+                    """, (cat, user_id, d))
+                else:
+                    cur.execute("""
+                        SELECT category, avg_score, trend, bias, risk, summary, top_signals
+                        FROM ai_category_insights
+                        WHERE category = %s AND date = %s
+                        LIMIT 1;
+                    """, (cat, d))
 
                 row = cur.fetchone()
                 if row:
@@ -87,24 +91,31 @@ def fetch_today_insights(conn):
 
 
 # ============================================================
-# 📊 2. Numerieke context uit daily_scores
+# 📊 2. Numerieke context uit daily_scores + ai_reflections
 # ============================================================
-def fetch_numeric_scores(conn):
-    numeric = {
-        "daily_scores": {},
-        "ai_reflections": {},
-    }
+def fetch_numeric_scores(conn, user_id=None):
+    numeric = {"daily_scores": {}, "ai_reflections": {}}
 
     with conn.cursor() as cur:
-        # 🔥 daily_scores gebruikt report_date
-        cur.execute("""
-            SELECT macro_score, market_score, technical_score, setup_score
-            FROM daily_scores
-            WHERE report_date = CURRENT_DATE
-            LIMIT 1;
-        """)
-        row = cur.fetchone()
+        # ---------------------------
+        # daily_scores ophalen
+        # ---------------------------
+        if user_id:
+            cur.execute("""
+                SELECT macro_score, market_score, technical_score, setup_score
+                FROM daily_scores
+                WHERE report_date = CURRENT_DATE AND user_id = %s
+                LIMIT 1;
+            """, (user_id,))
+        else:
+            cur.execute("""
+                SELECT macro_score, market_score, technical_score, setup_score
+                FROM daily_scores
+                WHERE report_date = CURRENT_DATE
+                LIMIT 1;
+            """)
 
+        row = cur.fetchone()
         if row:
             numeric["daily_scores"] = {
                 "macro": row[0],
@@ -113,15 +124,27 @@ def fetch_numeric_scores(conn):
                 "setup": row[3],
             }
 
-        # 🔥 ai_reflections gebruikt date
-        cur.execute("""
-            SELECT category,
-                   ROUND(AVG(COALESCE(ai_score, 0))::numeric, 1),
-                   ROUND(AVG(COALESCE(compliance, 0))::numeric, 1)
-            FROM ai_reflections
-            WHERE date = CURRENT_DATE
-            GROUP BY category;
-        """)
+        # ---------------------------
+        # ai_reflections aggregatie
+        # ---------------------------
+        if user_id:
+            cur.execute("""
+                SELECT category,
+                       ROUND(AVG(COALESCE(ai_score, 0))::numeric, 1),
+                       ROUND(AVG(COALESCE(compliance, 0))::numeric, 1)
+                FROM ai_reflections
+                WHERE date = CURRENT_DATE AND user_id = %s
+                GROUP BY category;
+            """, (user_id,))
+        else:
+            cur.execute("""
+                SELECT category,
+                       ROUND(AVG(COALESCE(ai_score, 0))::numeric, 1),
+                       ROUND(AVG(COALESCE(compliance, 0))::numeric, 1)
+                FROM ai_reflections
+                WHERE date = CURRENT_DATE
+                GROUP BY category;
+            """)
 
         for cat, ai_score, comp in cur.fetchall() or []:
             numeric["ai_reflections"][cat] = {
@@ -129,7 +152,7 @@ def fetch_numeric_scores(conn):
                 "avg_compliance": float(comp),
             }
 
-    return convert_decimal(numeric)  # JSON-safe
+    return convert_decimal(numeric)
 
 
 # ============================================================
@@ -137,7 +160,7 @@ def fetch_numeric_scores(conn):
 # ============================================================
 def build_prompt(insights, numeric):
 
-    def format_block(cat):
+    def block(cat):
         i = insights.get(cat)
         if not i:
             return f"[{cat}] — GEEN DATA"
@@ -148,13 +171,11 @@ def build_prompt(insights, numeric):
             f"signals: {sigs}"
         )
 
-    data_text = "\n".join(format_block(cat) for cat in CATEGORIES)
-
+    text = "\n".join(block(cat) for cat in CATEGORIES)
     numeric_json = json.dumps(numeric, indent=2, ensure_ascii=False)
 
     return f"""
-Je bent de MASTER Orchestrator AI voor trading. 
-Combineer macro, market, technical, setup, strategy, master in één totaalbeeld.
+Je bent de MASTER Orchestrator AI voor trading.
 
 Antwoord ALLEEN met geldige JSON:
 
@@ -184,7 +205,7 @@ Antwoord ALLEEN met geldige JSON:
 }}
 
 === INPUT DATA ===
-{data_text}
+{text}
 
 === NUMBERS ===
 {numeric_json}
@@ -194,7 +215,7 @@ Antwoord ALLEEN met geldige JSON:
 # ============================================================
 # 💾 4. Opslaan → ai_category_insights (categorie: 'master')
 # ============================================================
-def store_master_result(conn, result):
+def store_master_result(conn, result, user_id=None):
     if not isinstance(result, dict):
         logger.error("❌ Geen geldige JSON van AI.")
         return
@@ -208,33 +229,57 @@ def store_master_result(conn, result):
     }
 
     with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO ai_category_insights
-                (category, avg_score, trend, bias, risk, summary, top_signals)
-            VALUES ('master', %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (category, date)
-            DO UPDATE SET
-                avg_score = EXCLUDED.avg_score,
-                trend = EXCLUDED.trend,
-                bias = EXCLUDED.bias,
-                risk = EXCLUDED.risk,
-                summary = EXCLUDED.summary,
-                top_signals = EXCLUDED.top_signals,
-                created_at = NOW();
-        """, (
-            result.get("master_score"),
-            result.get("master_trend"),
-            result.get("master_bias"),
-            result.get("master_risk"),
-            result.get("summary"),
-            json.dumps(meta, ensure_ascii=False),
-        ))
+        if user_id:
+            cur.execute("""
+                INSERT INTO ai_category_insights
+                    (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
+                VALUES ('master', %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (category, user_id, date)
+                DO UPDATE SET
+                    avg_score = EXCLUDED.avg_score,
+                    trend = EXCLUDED.trend,
+                    bias = EXCLUDED.bias,
+                    risk = EXCLUDED.risk,
+                    summary = EXCLUDED.summary,
+                    top_signals = EXCLUDED.top_signals,
+                    created_at = NOW();
+            """, (
+                user_id,
+                result.get("master_score"),
+                result.get("master_trend"),
+                result.get("master_bias"),
+                result.get("master_risk"),
+                result.get("summary"),
+                json.dumps(meta, ensure_ascii=False),
+            ))
+        else:
+            cur.execute("""
+                INSERT INTO ai_category_insights
+                    (category, avg_score, trend, bias, risk, summary, top_signals)
+                VALUES ('master', %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (category, date)
+                DO UPDATE SET
+                    avg_score = EXCLUDED.avg_score,
+                    trend = EXCLUDED.trend,
+                    bias = EXCLUDED.bias,
+                    risk = EXCLUDED.risk,
+                    summary = EXCLUDED.summary,
+                    top_signals = EXCLUDED.top_signals,
+                    created_at = NOW();
+            """, (
+                result.get("master_score"),
+                result.get("master_trend"),
+                result.get("master_bias"),
+                result.get("master_risk"),
+                result.get("summary"),
+                json.dumps(meta, ensure_ascii=False),
+            ))
 
 
 # ============================================================
-# 🕗 FIX: daily_scores vullen voordat master draait
+# 🕗 daily_scores vullen — nu per user
 # ============================================================
-def store_daily_scores(conn, insights):
+def store_daily_scores(conn, insights, user_id=None):
     macro = insights.get("macro", {}).get("avg_score")
     market = insights.get("market", {}).get("avg_score")
     technical = insights.get("technical", {}).get("avg_score")
@@ -248,29 +293,55 @@ def store_daily_scores(conn, insights):
         return
 
     with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO daily_scores
-                (report_date, macro_score, market_score, technical_score,
-                 macro_interpretation, market_interpretation, technical_interpretation,
-                 setup_score, macro_top_contributors, market_top_contributors, technical_top_contributors)
-            VALUES (
-                CURRENT_DATE, %s, %s, %s,
-                %s, %s, %s,
-                NULL, '[]', '[]', '[]'
-            )
-            ON CONFLICT (report_date)
-            DO UPDATE SET
-                macro_score = EXCLUDED.macro_score,
-                market_score = EXCLUDED.market_score,
-                technical_score = EXCLUDED.technical_score,
-                macro_interpretation = EXCLUDED.macro_interpretation,
-                market_interpretation = EXCLUDED.market_interpretation,
-                technical_interpretation = EXCLUDED.technical_interpretation,
-                updated_at = NOW();
-        """, (
-            macro, market, technical,
-            macro_sum, market_sum, tech_sum,
-        ))
+        if user_id:
+            cur.execute("""
+                INSERT INTO daily_scores
+                    (report_date, user_id, macro_score, market_score, technical_score,
+                     macro_interpretation, market_interpretation, technical_interpretation,
+                     setup_score, macro_top_contributors, market_top_contributors, technical_top_contributors)
+                VALUES (
+                    CURRENT_DATE, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    NULL, '[]', '[]', '[]'
+                )
+                ON CONFLICT (report_date, user_id)
+                DO UPDATE SET
+                    macro_score = EXCLUDED.macro_score,
+                    market_score = EXCLUDED.market_score,
+                    technical_score = EXCLUDED.technical_score,
+                    macro_interpretation = EXCLUDED.macro_interpretation,
+                    market_interpretation = EXCLUDED.market_interpretation,
+                    technical_interpretation = EXCLUDED.technical_interpretation,
+                    updated_at = NOW();
+            """, (
+                user_id,
+                macro, market, technical,
+                macro_sum, market_sum, tech_sum,
+            ))
+        else:
+            cur.execute("""
+                INSERT INTO daily_scores
+                    (report_date, macro_score, market_score, technical_score,
+                     macro_interpretation, market_interpretation, technical_interpretation,
+                     setup_score, macro_top_contributors, market_top_contributors, technical_top_contributors)
+                VALUES (
+                    CURRENT_DATE, %s, %s, %s,
+                    %s, %s, %s,
+                    NULL, '[]', '[]', '[]'
+                )
+                ON CONFLICT (report_date)
+                DO UPDATE SET
+                    macro_score = EXCLUDED.macro_score,
+                    market_score = EXCLUDED.market_score,
+                    technical_score = EXCLUDED.technical_score,
+                    macro_interpretation = EXCLUDED.macro_interpretation,
+                    market_interpretation = EXCLUDED.market_interpretation,
+                    technical_interpretation = EXCLUDED.technical_interpretation,
+                    updated_at = NOW();
+            """, (
+                macro, market, technical,
+                macro_sum, market_sum, tech_sum,
+            ))
 
     logger.info("💾 daily_scores succesvol opgeslagen.")
 
@@ -279,8 +350,8 @@ def store_daily_scores(conn, insights):
 # 🚀 5. Celery task — orchestrator
 # ============================================================
 @shared_task(name="backend.ai_agents.score_ai_agent.generate_master_score")
-def generate_master_score():
-    logger.info("🧠 Start MASTER Score AI...")
+def generate_master_score(user_id=None):
+    logger.info(f"🧠 Start MASTER Score AI (user_id={user_id})...")
 
     conn = get_db_connection()
     if not conn:
@@ -288,25 +359,25 @@ def generate_master_score():
         return
 
     try:
-        # 1️⃣ Insights ophalen
-        insights = fetch_today_insights(conn)
+        # 1️⃣ Alle insights ophalen (per gebruiker)
+        insights = fetch_today_insights(conn, user_id=user_id)
 
-        # 2️⃣ daily_scores vullen
-        store_daily_scores(conn, insights)
+        # 2️⃣ daily_scores opslaan (per gebruiker)
+        store_daily_scores(conn, insights, user_id=user_id)
 
-        # 3️⃣ Numerieke context
-        numeric = fetch_numeric_scores(conn)
+        # 3️⃣ Numerieke context ophalen (per gebruiker)
+        numeric = fetch_numeric_scores(conn, user_id=user_id)
 
-        # 4️⃣ Prompt bouwen
+        # 4️⃣ Master prompt genereren
         prompt = build_prompt(insights, numeric)
 
-        # 5️⃣ AI call
+        # 5️⃣ AI aanroepen
         result = ask_gpt(prompt)
 
-        # 6️⃣ Opslaan master
-        store_master_result(conn, result)
-        conn.commit()
+        # 6️⃣ Master opslaan (per gebruiker)
+        store_master_result(conn, result, user_id=user_id)
 
+        conn.commit()
         logger.info("✅ Master score opgeslagen.")
 
     except Exception:
