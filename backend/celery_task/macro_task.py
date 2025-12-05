@@ -33,10 +33,10 @@ def safe_request(url, params=None):
 
 
 # =====================================================
-# 📡 Indicatoren ophalen uit database
+# 📡 Indicatoren ophalen uit database (user-specifiek)
 # =====================================================
-def get_active_macro_indicators():
-    """Haalt alle actieve macro-indicatoren op uit de database."""
+def get_active_macro_indicators(user_id: int):
+    """Haalt alle actieve macro-indicatoren op uit de database voor een specifieke user."""
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding.")
@@ -47,10 +47,15 @@ def get_active_macro_indicators():
             cur.execute("""
                 SELECT id, name, source, link
                 FROM indicators
-                WHERE category = 'macro' AND active = TRUE
-            """)
+                WHERE category = 'macro' 
+                  AND active = TRUE
+                  AND user_id = %s
+            """, (user_id,))
             rows = cur.fetchall()
-            return [{"id": r[0], "name": r[1], "source": r[2], "link": r[3]} for r in rows]
+            return [
+                {"id": r[0], "name": r[1], "source": r[2], "link": r[3]}
+                for r in rows
+            ]
     except Exception as e:
         logger.error(f"❌ Fout bij ophalen macro-indicatoren: {e}")
         return []
@@ -59,19 +64,22 @@ def get_active_macro_indicators():
 
 
 # =====================================================
-# 📅 Check of al verwerkt vandaag
+# 📅 Check of al verwerkt vandaag (user-specifiek)
 # =====================================================
-def already_fetched_today(indicator_name: str) -> bool:
-    """Controleert of indicator vandaag al is opgeslagen in de database."""
+def already_fetched_today(indicator_name: str, user_id: int) -> bool:
+    """Controleert of indicator vandaag al is opgeslagen in de database voor deze user."""
     conn = get_db_connection()
     if not conn:
         return False
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT 1 FROM macro_data
-                WHERE name = %s AND DATE(timestamp) = CURRENT_DATE
-            """, (indicator_name,))
+                SELECT 1 
+                FROM macro_data
+                WHERE name = %s 
+                  AND user_id = %s
+                  AND DATE(timestamp) = CURRENT_DATE
+            """, (indicator_name, user_id))
             return cur.fetchone() is not None
     except Exception as e:
         logger.error(f"⚠️ Fout bij controleren bestaande macro-data: {e}")
@@ -129,10 +137,13 @@ def fetch_value_from_source(indicator: dict):
 
 
 # =====================================================
-# 💾 Opslaan in macro_data
+# 💾 Opslaan in macro_data (user-specifiek)
 # =====================================================
-def store_macro_score_db(payload: dict):
-    """Slaat de macro-score op in de database (altijd nieuwe rij per dag)."""
+def store_macro_score_db(payload: dict, user_id: int):
+    """
+    Slaat de macro-score op in de database (altijd nieuwe rij per dag),
+    gekoppeld aan een specifieke user.
+    """
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding bij macro-opslag.")
@@ -141,9 +152,11 @@ def store_macro_score_db(payload: dict):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO macro_data (name, value, trend, interpretation, action, score, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                INSERT INTO macro_data 
+                    (user_id, name, value, trend, interpretation, action, score, timestamp)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
             """, (
+                user_id,
                 payload.get("name"),
                 payload.get("value"),
                 payload.get("trend"),
@@ -152,7 +165,7 @@ def store_macro_score_db(payload: dict):
                 payload.get("score"),
             ))
         conn.commit()
-        logger.info(f"💾 Nieuw record toegevoegd voor {payload.get('name')}")
+        logger.info(f"💾 Nieuw record toegevoegd voor {payload.get('name')} (user_id={user_id})")
     except Exception as e:
         logger.error(f"❌ Fout bij opslaan macro-score: {e}")
         logger.error(traceback.format_exc())
@@ -161,25 +174,28 @@ def store_macro_score_db(payload: dict):
 
 
 # =====================================================
-# 🧠 Hoofdfunctie
+# 🧠 Hoofdfunctie (user-specifiek)
 # =====================================================
-def fetch_and_process_macro():
-    """Haal alle macro-indicatoren op en sla nieuwe rijen per dag op."""
-    logger.info("🚀 Start macro-data verwerking...")
+def fetch_and_process_macro(user_id: int):
+    """
+    Haat alle macro-indicatoren op en sla nieuwe rijen per dag op
+    voor een specifieke user.
+    """
+    logger.info(f"🚀 Start macro-data verwerking voor user_id={user_id}...")
 
-    indicators = get_active_macro_indicators()
+    indicators = get_active_macro_indicators(user_id=user_id)
     if not indicators:
-        logger.warning("⚠️ Geen macro-indicatoren gevonden in DB.")
+        logger.warning(f"⚠️ Geen macro-indicatoren gevonden in DB voor user_id={user_id}.")
         return
 
     for item in indicators:
         name = item["name"]
 
-        if already_fetched_today(name):
-            logger.info(f"⏩ {name} is vandaag al verwerkt, overslaan.")
+        if already_fetched_today(name, user_id=user_id):
+            logger.info(f"⏩ {name} is vandaag al verwerkt voor user {user_id}, overslaan.")
             continue
 
-        logger.info(f"➡️ Verwerk macro-indicator: {name}")
+        logger.info(f"➡️ Verwerk macro-indicator: {name} (user_id={user_id})")
 
         try:
             value = fetch_value_from_source(item)
@@ -187,6 +203,7 @@ def fetch_and_process_macro():
                 logger.warning(f"⚠️ Geen waarde opgehaald voor {name}")
                 continue
 
+            # Scoring is globaal op basis van regels; indicatornaam wordt direct meegegeven
             score_info = generate_scores_db("macro", {name: value})
             result = score_info["scores"].get(name) if score_info and "scores" in score_info else None
             if not result:
@@ -201,19 +218,19 @@ def fetch_and_process_macro():
                 "interpretation": result.get("interpretation", "–"),
                 "action": result.get("action", "–"),
             }
-            store_macro_score_db(payload)
+            store_macro_score_db(payload, user_id=user_id)
 
         except Exception as e:
-            logger.error(f"❌ Fout bij {name}: {e}")
+            logger.error(f"❌ Fout bij {name} (user_id={user_id}): {e}")
             logger.error(traceback.format_exc())
 
-    logger.info("✅ Alle macro-indicatoren succesvol verwerkt.")
+    logger.info(f"✅ Alle macro-indicatoren succesvol verwerkt voor user_id={user_id}.")
 
 
 # =====================================================
-# 🚀 Celery-taak
+# 🚀 Celery-taak (user-specifiek)
 # =====================================================
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
-def fetch_macro_data():
-    """Dagelijkse taak: haalt macrodata op en slaat nieuwe rijen op."""
-    fetch_and_process_macro()
+def fetch_macro_data(user_id: int):
+    """Dagelijkse taak: haalt macrodata op en slaat nieuwe rijen op voor één user."""
+    fetch_and_process_macro(user_id=user_id)
