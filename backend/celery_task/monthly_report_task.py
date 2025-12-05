@@ -32,10 +32,10 @@ def avg(values):
 
 
 # =====================================================
-# 📅 Weekly reports ophalen (laatste 31 dagen)
+# 📅 Weekly reports ophalen (laatste 31 dagen, PER USER)
 # =====================================================
 
-def fetch_weekly_reports_for_month():
+def fetch_weekly_reports_for_month(user_id: int):
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding bij ophalen weekly reports.")
@@ -55,10 +55,12 @@ def fetch_weekly_reports_for_month():
                        market_score
                 FROM weekly_reports
                 WHERE report_date >= %s
+                  AND user_id = %s
                 ORDER BY report_date ASC
-            """, (start_date,))
+            """, (start_date, user_id))
+
             results = cur.fetchall()
-            logger.info(f"📊 {len(results)} weekly reports gevonden in laatste 31 dagen.")
+            logger.info(f"📊 {len(results)} weekly reports gevonden in laatste 31 dagen (user {user_id}).")
             return results
 
     except Exception as e:
@@ -69,10 +71,10 @@ def fetch_weekly_reports_for_month():
 
 
 # =====================================================
-# 💾 Opslaan in database
+# 💾 Opslaan in database — PER USER
 # =====================================================
 
-def save_monthly_report_to_db(date, report_data):
+def save_monthly_report_to_db(date, report_data, user_id: int):
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding beschikbaar.")
@@ -83,6 +85,7 @@ def save_monthly_report_to_db(date, report_data):
             cur.execute("""
                 INSERT INTO monthly_reports (
                     report_date,
+                    user_id,
                     summary,
                     best_setup,
                     biggest_mistake,
@@ -92,8 +95,10 @@ def save_monthly_report_to_db(date, report_data):
                     technical_score,
                     setup_score,
                     market_score
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (report_date) DO UPDATE SET
+                ) VALUES (%s, %s,
+                          %s, %s, %s, %s, %s,
+                          %s, %s, %s, %s)
+                ON CONFLICT (report_date, user_id) DO UPDATE SET
                     summary = EXCLUDED.summary,
                     best_setup = EXCLUDED.best_setup,
                     biggest_mistake = EXCLUDED.biggest_mistake,
@@ -105,6 +110,7 @@ def save_monthly_report_to_db(date, report_data):
                     market_score = EXCLUDED.market_score
             """, (
                 date,
+                user_id,
                 report_data.get("summary"),
                 report_data.get("best_setup"),
                 report_data.get("biggest_mistake"),
@@ -117,7 +123,7 @@ def save_monthly_report_to_db(date, report_data):
             ))
 
             conn.commit()
-            logger.info(f"✅ Maandrapport succesvol opgeslagen of bijgewerkt ({date})")
+            logger.info(f"✅ Maandrapport succesvol opgeslagen / bijgewerkt ({date}, user={user_id})")
             return True
 
     except Exception as e:
@@ -128,18 +134,21 @@ def save_monthly_report_to_db(date, report_data):
 
 
 # =====================================================
-# 🚀 Hoofd Celery-task
+# 🚀 Hoofd Celery-task — PER USER
 # =====================================================
 
 @shared_task(name="backend.celery_task.monthly_report_task.generate_monthly_report")
-def generate_monthly_report():
-    logger.info("📆 Start genereren maandrapport...")
+def generate_monthly_report(user_id: int):
+    """
+    Genereert een maandrapport voor één gebruiker.
+    """
+    logger.info(f"📆 Start genereren maandrapport voor user_id={user_id}...")
 
-    # 1️⃣ Weekly reports ophalen
-    weekly_reports = fetch_weekly_reports_for_month()
+    # 1️⃣ Ophalen weekly reports (per maand / per user)
+    weekly_reports = fetch_weekly_reports_for_month(user_id=user_id)
     if not weekly_reports:
-        logger.warning("⚠️ Geen weekly reports beschikbaar voor deze maand.")
-        return {"status": "no_data"}
+        logger.warning(f"⚠️ Geen weekly reports beschikbaar voor maandrapport (user={user_id}).")
+        return {"status": "no_data", "user_id": user_id}
 
     today = datetime.now(timezone("UTC")).date()
 
@@ -148,47 +157,48 @@ def generate_monthly_report():
         [f"{r[0]}:\n{sanitize_field(r[1])}" for r in weekly_reports]
     )
 
-    macro_scores = [r[2] for r in weekly_reports]
+    macro_scores     = [r[2] for r in weekly_reports]
     technical_scores = [r[3] for r in weekly_reports]
-    setup_scores = [r[4] for r in weekly_reports]
-    market_scores = [r[5] for r in weekly_reports]
+    setup_scores     = [r[4] for r in weekly_reports]
+    market_scores    = [r[5] for r in weekly_reports]
 
     report_data = {
         "summary": sanitize_field(month_summary),
         "best_setup": "Setup B werkte meerdere keren goed op momentum reversal.",
-        "biggest_mistake": "Verkeerde inschatting van macro-data tijdens FOMC-week zorgde voor verlies.",
+        "biggest_mistake": "Foutieve macro-interpretatie tijdens FOMC-week veroorzaakte verlies.",
         "ai_reflection": (
-            "De maand toonde hoge volatiliteit met sterke bullish ondertoon. "
-            "Het combineren van technische breakouts met macro-data leverde de beste resultaten op. "
-            "Toekomstige optimalisatie ligt in nauwkeurigere exit-strategieën en setupfiltering bij low volume."
+            "Deze maand kende sterke volatiliteit met een bullish bias. "
+            "Breakouts gecombineerd met macro-ondersteuning werkten goed. "
+            "Verbeterpunten liggen in risk management en volume-gebaseerde filtering."
         ),
-        "outlook": "Volgende maand mogelijk consolidatie na sterke stijging – waakzaam voor omslag macro.",
+        "outlook": "Volgende maand kans op consolidatie. Macro blijft bepalend voor trendrichting.",
         "macro_score": avg(macro_scores),
         "technical_score": avg(technical_scores),
         "setup_score": avg(setup_scores),
         "market_score": avg(market_scores),
     }
 
-    # 3️⃣ JSON-backup
+    # 3️⃣ JSON-backup per user
     try:
-        backup_dir = "backend/backups"
+        backup_dir = "backend/backups/monthly"
         os.makedirs(backup_dir, exist_ok=True)
-        backup_path = os.path.join(backup_dir, f"monthly_report_{today}.json")
+        backup_path = os.path.join(backup_dir, f"monthly_report_{today}_u{user_id}.json")
         with open(backup_path, "w") as f:
             json.dump(report_data, f, indent=2, ensure_ascii=False)
         logger.info(f"🧾 Backup opgeslagen: {backup_path}")
     except Exception as e:
         logger.warning(f"⚠️ Backup JSON maken mislukt: {e}")
 
-    # 4️⃣ Opslaan in database
-    success = save_monthly_report_to_db(today, report_data)
+    # 4️⃣ Opslaan in database (per user)
+    success = save_monthly_report_to_db(today, report_data, user_id=user_id)
 
     status = "ok" if success else "db_failed"
-    logger.info(f"🏁 Maandrapport afgerond: {status.upper()} ({today})")
+    logger.info(f"🏁 Maandrapport afgerond ({today}) voor user {user_id} → {status.upper()}")
 
     return {
         "status": status,
         "date": str(today),
+        "user_id": user_id,
         "records": len(weekly_reports),
-        "report_data": report_data
+        "report_data": report_data,
     }
