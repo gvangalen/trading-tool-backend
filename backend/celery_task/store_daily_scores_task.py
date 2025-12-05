@@ -29,7 +29,7 @@ def best_match(setups, scores):
         try:
             low = float(low)
             high = float(high)
-        except:
+        except Exception:
             low, high = 0, 100
 
         if val < low:
@@ -79,14 +79,15 @@ def best_match(setups, scores):
     return best, candidates
 
 
-
 # =========================================================
-# 🧠 DAGELIJKSE SCORE TASK
+# 🧠 DAGELIJKSE SCORE TASK (USER-SPECIFIEK)
 # =========================================================
 @shared_task(name="backend.celery_task.store_daily_scores_task.store_daily_scores_task")
-def store_daily_scores_task():
-
-    logger.info("🧠 Dagelijkse scoreberekening gestart...")
+def store_daily_scores_task(user_id: int):
+    """
+    Slaat daily_scores + beste setup op voor een specifieke user.
+    """
+    logger.info(f"🧠 Dagelijkse scoreberekening gestart voor user_id={user_id}...")
 
     conn = get_db_connection()
     if not conn:
@@ -97,23 +98,28 @@ def store_daily_scores_task():
 
     try:
         # =====================================================
-        # 1️⃣ SCORES OPHALEN (MACRO + TECH + MARKET)
+        # 1️⃣ SCORES OPHALEN (MACRO + TECH + MARKET + SETUP)
         # =====================================================
-        scores = get_scores_for_symbol(include_metadata=True)
+        try:
+            scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
+        except TypeError:
+            # fallback als oude signatuur nog actief zou zijn
+            scores = get_scores_for_symbol(include_metadata=True)
 
         if not scores:
-            logger.error("❌ Geen scores beschikbaar — stop task")
+            logger.error(f"❌ Geen scores beschikbaar voor user_id={user_id} — stop task")
             return
 
-        logger.info(f"📊 DB-scores:\n{json.dumps(scores, indent=2)}")
+        logger.info(f"📊 DB-scores voor user_id={user_id}:\n{json.dumps(scores, indent=2)}")
 
         # =====================================================
-        # 2️⃣ OPSLAAN IN daily_scores
+        # 2️⃣ OPSLAAN IN daily_scores (USER-SPECIFIEK)
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO daily_scores (
                     report_date,
+                    user_id,
 
                     macro_score,
                     macro_interpretation,
@@ -131,11 +137,12 @@ def store_daily_scores_task():
                     setup_interpretation,
                     setup_top_contributors
                 )
-                VALUES (%s, %s, %s, %s,
+                VALUES (%s, %s,
+                        %s, %s, %s,
                         %s, %s, %s,
                         %s, %s, %s,
                         %s, %s, %s)
-                ON CONFLICT (report_date) DO UPDATE SET
+                ON CONFLICT (report_date, user_id) DO UPDATE SET
                     macro_score = EXCLUDED.macro_score,
                     macro_interpretation = EXCLUDED.macro_interpretation,
                     macro_top_contributors = EXCLUDED.macro_top_contributors,
@@ -153,43 +160,48 @@ def store_daily_scores_task():
                     setup_top_contributors = EXCLUDED.setup_top_contributors
             """, (
                 today,
+                user_id,
 
                 float(scores["macro_score"]),
-                scores["macro_interpretation"],
-                json.dumps(scores["macro_top_contributors"]),
+                scores.get("macro_interpretation", ""),
+                json.dumps(scores.get("macro_top_contributors", [])),
 
                 float(scores["technical_score"]),
-                scores["technical_interpretation"],
-                json.dumps(scores["technical_top_contributors"]),
+                scores.get("technical_interpretation", ""),
+                json.dumps(scores.get("technical_top_contributors", [])),
 
                 float(scores["market_score"]),
-                scores["market_interpretation"],
-                json.dumps(scores["market_top_contributors"]),
+                scores.get("market_interpretation", ""),
+                json.dumps(scores.get("market_top_contributors", [])),
 
-                float(scores["setup_score"]),
+                float(scores.get("setup_score", 0)),
                 "Op basis van rule-engine",
                 json.dumps(scores.get("setup_top_contributors", [])),
             ))
 
         # =====================================================
-        # 3️⃣ SETUP MATCHING via BEST MATCH
+        # 3️⃣ SETUP MATCHING via BEST MATCH (USER-SPECIFIEK)
         # =====================================================
-        setups = get_all_setups()
+        # Voor nu nemen we setups voor BTC; eventueel uitbreiden naar andere symbols
+        setups = get_all_setups(symbol="BTC", user_id=user_id)
         best, candidates = best_match(setups, scores)
 
-        # Alle setups van vandaag eerst inactief maken
+        # Alle setups van vandaag voor deze user eerst inactief maken
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE daily_setup_scores
                 SET is_active = false
                 WHERE report_date = %s
-            """, (today,))
+                  AND user_id = %s
+            """, (today, user_id))
 
         if best:
             s = best["setup"]
-            logger.info(f"🎯 Beste setup: {s['name']} (distance={best['total_dist']})")
+            logger.info(
+                f"🎯 Beste setup voor user_id={user_id}: "
+                f"{s['name']} (distance={best['total_dist']})"
+            )
 
-            # Breakdown opslaan
             breakdown = {
                 "macro_dist": best["macro_dist"],
                 "tech_dist": best["tech_dist"],
@@ -197,35 +209,36 @@ def store_daily_scores_task():
                 "total_dist": best["total_dist"]
             }
 
-            # Beste setup opslaan in daily_setup_scores
+            # Beste setup opslaan in daily_setup_scores (USER-SPECIFIEK)
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO daily_setup_scores 
-                        (setup_id, report_date, score, explanation, breakdown, is_active)
-                    VALUES (%s, %s, %s, %s, %s, true)
-                    ON CONFLICT (report_date, setup_id) DO UPDATE SET
+                        (user_id, setup_id, report_date, score, explanation, breakdown, is_active)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, true)
+                    ON CONFLICT (user_id, report_date, setup_id) DO UPDATE SET
                         score = EXCLUDED.score,
                         explanation = EXCLUDED.explanation,
                         breakdown = EXCLUDED.breakdown,
-                        is_active = true
+                        is_active = EXCLUDED.is_active
                 """, (
+                    user_id,
                     s["id"],
                     today,
-                    float(scores["setup_score"]),
+                    float(scores.get("setup_score", 0)),
                     s.get("explanation", ""),
                     json.dumps(breakdown),
                 ))
 
         else:
-            logger.warning("⚠️ Geen enkele setup gevonden — dit zou nooit moeten gebeuren")
+            logger.warning(f"⚠️ Geen enkele setup gevonden voor user_id={user_id}.")
 
         conn.commit()
-        logger.info("✅ Dagelijkse scores + beste setup opgeslagen.")
+        logger.info(f"✅ Dagelijkse scores + beste setup opgeslagen voor user_id={user_id}.")
 
     except Exception as e:
-        logger.error(f"❌ Fout bij daily score task: {e}", exc_info=True)
+        logger.error(f"❌ Fout bij daily score task voor user_id={user_id}: {e}", exc_info=True)
         conn.rollback()
 
     finally:
         conn.close()
-        logger.info("🔒 Verbinding gesloten")
+        logger.info(f"🔒 Verbinding gesloten voor user_id={user_id}")
