@@ -1,5 +1,6 @@
 import os
 import logging
+import json
 from datetime import datetime
 from celery import shared_task
 from dotenv import load_dotenv
@@ -16,11 +17,18 @@ load_dotenv()
 
 
 # =====================================================
-# 🧾 Dagrapport genereren (DB- + AI-agent gedreven)
+# 🧾 Dagrapport genereren (DB- + AI-agent gedreven, per user)
 # =====================================================
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
-def generate_daily_report():
-    logger.info("🔄 Dagrapport-task gestart")
+def generate_daily_report(user_id: int):
+    """
+    Genereert een dagelijks rapport voor een specifieke user (user_id).
+    - Haalt data en AI-insights op via report_ai_agent
+    - Slaat alles op in daily_reports (per user)
+    - Maakt een PDF
+    - Verstuurd optioneel een e-mail
+    """
+    logger.info(f"🔄 Dagrapport-task gestart voor user_id={user_id}")
 
     today = datetime.now().date()
     conn = get_db_connection()
@@ -32,9 +40,9 @@ def generate_daily_report():
     try:
         cursor = conn.cursor()
 
-        # 1️⃣ AI-rapport genereren (haalt zelf actuele data/scores/AI-insights uit DB)
+        # 1️⃣ AI-rapport genereren (haalt zelf actuele data/scores/AI-insights uit DB, per user)
         logger.info("🧠 Rapportgeneratie gestart...")
-        full_report = generate_daily_report_sections("BTC")
+        full_report = generate_daily_report_sections(symbol="BTC", user_id=user_id)
         if not isinstance(full_report, dict):
             logger.error("❌ Ongeldige rapportstructuur (geen dict). Afgebroken.")
             return
@@ -55,29 +63,49 @@ def generate_daily_report():
         # AI Master Score-bundel (komt uit score_ai_agent / ai_report_utils)
         ai_master = full_report.get("ai_master_score", {}) or {}
 
-        ai_master_score   = _to_float(ai_master.get("score")) if ai_master.get("score") is not None else None
+        # Zowel nieuwe ('avg_score') als oude ('score') key ondersteunen
+        raw_master_score = ai_master.get("avg_score")
+        if raw_master_score is None:
+            raw_master_score = ai_master.get("score")
+
+        ai_master_score   = _to_float(raw_master_score) if raw_master_score is not None else None
         ai_master_trend   = ai_master.get("trend")
         ai_master_bias    = ai_master.get("bias")
         ai_master_risk    = ai_master.get("risk")
         ai_master_outlook = ai_master.get("outlook")
         ai_master_summary = ai_master.get("summary")
 
-        # 2️⃣ Rapport opslaan in daily_reports (upsert op report_date)
-        logger.info(f"💾 Dagrapport opslaan in daily_reports voor {today}")
+        # 2️⃣ Rapport opslaan in daily_reports (upsert op report_date + user_id)
+        logger.info(f"💾 Dagrapport opslaan in daily_reports voor {today}, user_id={user_id}")
         cursor.execute(
             """
             INSERT INTO daily_reports (
-                report_date, btc_summary, macro_summary,
-                setup_checklist, priorities, wyckoff_analysis,
-                recommendations, conclusion, outlook,
-                macro_score, technical_score, setup_score, market_score,
-                ai_master_score, ai_master_trend, ai_master_bias,
-                ai_master_risk, ai_master_outlook, ai_master_summary
+                report_date,
+                user_id,
+                btc_summary,
+                macro_summary,
+                setup_checklist,
+                priorities,
+                wyckoff_analysis,
+                recommendations,
+                conclusion,
+                outlook,
+                macro_score,
+                technical_score,
+                setup_score,
+                market_score,
+                ai_master_score,
+                ai_master_trend,
+                ai_master_bias,
+                ai_master_risk,
+                ai_master_outlook,
+                ai_master_summary
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+            VALUES (%s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (report_date) DO UPDATE
+            ON CONFLICT (report_date, user_id) DO UPDATE
             SET btc_summary       = EXCLUDED.btc_summary,
                 macro_summary     = EXCLUDED.macro_summary,
                 setup_checklist   = EXCLUDED.setup_checklist,
@@ -99,6 +127,7 @@ def generate_daily_report():
             """,
             (
                 today,
+                user_id,
                 full_report.get("btc_summary", "") or "",
                 full_report.get("macro_summary", "") or "",
                 full_report.get("setup_checklist", "") or "",
@@ -121,11 +150,14 @@ def generate_daily_report():
         )
         conn.commit()
 
-        # 3️⃣ Laatste rij ophalen voor PDF
-        cursor.execute("SELECT * FROM daily_reports WHERE report_date = %s LIMIT 1;", (today,))
+        # 3️⃣ Laatste rij ophalen voor PDF (per user)
+        cursor.execute(
+            "SELECT * FROM daily_reports WHERE report_date = %s AND user_id = %s LIMIT 1;",
+            (today, user_id)
+        )
         row = cursor.fetchone()
         if not row:
-            logger.warning(f"⚠️ Geen rapport gevonden voor PDF voor {today}")
+            logger.warning(f"⚠️ Geen rapport gevonden voor PDF voor {today}, user_id={user_id}")
             return
 
         cols = [desc[0] for desc in cursor.description]
@@ -142,7 +174,7 @@ def generate_daily_report():
 
         pdf_dir = os.path.join("static", "pdf", "daily")
         os.makedirs(pdf_dir, exist_ok=True)
-        pdf_path = os.path.join(pdf_dir, f"daily_{today}.pdf")
+        pdf_path = os.path.join(pdf_dir, f"daily_{today}_u{user_id}.pdf")
 
         try:
             if hasattr(pdf_bytes, "getbuffer"):
@@ -167,20 +199,21 @@ def generate_daily_report():
         subject_ms = f" | AI {int(ms)}" if isinstance(ms, (int, float)) else ""
 
         try:
-            subject = f"📈 BTC Daily Report – {today}{subject_ms}"
+            subject = f"📈 BTC Daily Report – {today}{subject_ms} (user {user_id})"
             body = (
                 f"Hierbij het automatisch gegenereerde dagelijkse Bitcoin rapport voor {today}.\n\n"
                 f"Huidige prijs: ${price} | Volume: {volume} | 24u verandering: {change_24h}%\n"
-                f"AI Master Score: {ms} ({mtrend})\n\n"
+                f"AI Master Score: {ms} ({mtrend})\n"
+                f"User ID: {user_id}\n\n"
                 "Bekijk de samenvatting, Wyckoff-analyse en strategieën in de bijlage."
             )
             send_email_with_attachment(subject, body, pdf_path)
-            logger.info(f"📤 Dagrapport verzonden via e-mail ({pdf_path})")
+            logger.info(f"📤 Dagrapport verzonden via e-mail ({pdf_path}) voor user_id={user_id}")
         except Exception as e:
             logger.error(f"❌ Fout bij verzenden van e-mail: {e}", exc_info=True)
 
     except Exception as e:
-        logger.error(f"❌ Fout tijdens rapportgeneratie: {e}", exc_info=True)
+        logger.error(f"❌ Fout tijdens rapportgeneratie voor user_id={user_id}: {e}", exc_info=True)
         if conn:
             conn.rollback()
     finally:
@@ -190,4 +223,4 @@ def generate_daily_report():
         except Exception:
             pass
         conn.close()
-        logger.info(f"✅ Dagrapport voltooid voor {today}")
+        logger.info(f"✅ Dagrapport voltooid voor {today}, user_id={user_id}")
