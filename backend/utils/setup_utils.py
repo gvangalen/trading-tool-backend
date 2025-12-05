@@ -1,17 +1,23 @@
-from backend.utils.db import get_db_connection
-from datetime import date
 import logging
+from datetime import date
+from backend.utils.db import get_db_connection
 
 logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# ✅ Alle setups ophalen (MODERNE STRUCTUUR)
+# 🔥 1. Alle setups ophalen (USER-SPECIFIEK)
 # =========================================================
-def get_all_setups(symbol: str = "BTC"):
+def get_all_setups(symbol: str = "BTC", user_id: int = None):
     """
-    Haalt alle setups op voor het opgegeven symbool volgens de nieuwe structuur.
+    Haalt ALLE setups op voor een gebruiker + symbool.
+    Zonder user_id → geen resultaten (veiligheidsredenen).
     """
+
+    if user_id is None:
+        logger.error("❌ get_all_setups() zonder user_id aangeroepen — blokkeren!")
+        return []
+
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding bij get_all_setups()")
@@ -36,8 +42,9 @@ def get_all_setups(symbol: str = "BTC"):
                     created_at
                 FROM setups
                 WHERE symbol = %s
+                AND user_id = %s
                 ORDER BY created_at DESC
-            """, (symbol,))
+            """, (symbol, user_id))
 
             rows = cur.fetchall()
 
@@ -59,7 +66,7 @@ def get_all_setups(symbol: str = "BTC"):
                 "created_at": r[12],
             })
 
-        logger.info(f"📦 {len(setups)} setups opgehaald voor {symbol}")
+        logger.info(f"📦 {len(setups)} setups opgehaald voor {symbol} (user {user_id})")
         return setups
 
     except Exception as e:
@@ -71,16 +78,20 @@ def get_all_setups(symbol: str = "BTC"):
 
 
 # =========================================================
-# ✅ Laatste setup + daily score ophalen
+# 🔥 2. Laatste setup + daily score ophalen (USER-SPECIFIEK)
 # =========================================================
-def get_latest_setup_for_symbol(symbol: str = "BTC"):
+def get_latest_setup_for_symbol(symbol: str = "BTC", user_id: int = None):
     """
-    Haalt de meest recente setup op voor het opgegeven symbool,
-    inclusief de daily score uit daily_setup_scores (via report_date).
+    Haalt de meest recente setup voor een gebruiker op + de daily setup score.
     """
+
+    if user_id is None:
+        logger.error("❌ get_latest_setup_for_symbol() zonder user_id — blokkeren.")
+        return None
+
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding bij get_latest_setup_for_symbol")
+        logger.error("❌ Geen DB-verbinding bij get_latest_setup_for_symbol()")
         return None
 
     try:
@@ -96,17 +107,19 @@ def get_latest_setup_for_symbol(symbol: str = "BTC"):
                     s.created_at
                 FROM setups s
                 LEFT JOIN daily_setup_scores ds
-                       ON s.id = ds.setup_id 
-                      AND ds.report_date = %s
+                    ON s.id = ds.setup_id
+                   AND ds.report_date = %s
+                   AND ds.user_id = %s
                 WHERE s.symbol = %s
+                AND s.user_id = %s
                 ORDER BY s.created_at DESC
                 LIMIT 1
-            """, (date.today(), symbol))
+            """, (date.today(), user_id, symbol, user_id))
 
             row = cur.fetchone()
 
         if not row:
-            logger.info(f"⚠️ Geen setup gevonden voor {symbol}")
+            logger.info(f"⚠️ Geen setup gevonden voor {symbol} (user {user_id})")
             return None
 
         return {
