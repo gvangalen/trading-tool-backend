@@ -9,10 +9,11 @@ from backend.utils.openai_client import ask_gpt  # JSON-engine
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
 # ===================================================================
-# 📡 Laad AI-insights (macro/market/technical/setup/strategy zelf)
+# 📡 Laad AI-insights (macro/market/technical/setup/strategy)
 # ===================================================================
-def load_ai_insights():
+def load_ai_insights(user_id: int | None):
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen database in load_ai_insights")
@@ -22,17 +23,29 @@ def load_ai_insights():
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT category, avg_score, trend, bias, risk, summary, top_signals,
-                       date, created_at
-                FROM ai_category_insights
-                WHERE date >= (CURRENT_DATE - INTERVAL '1 day')
-                ORDER BY date DESC, created_at DESC;
-            """)
+            if user_id:
+                cur.execute("""
+                    SELECT category, avg_score, trend, bias, risk, summary, top_signals,
+                           date, created_at
+                    FROM ai_category_insights
+                    WHERE user_id = %s
+                      AND date >= (CURRENT_DATE - INTERVAL '1 day')
+                    ORDER BY date DESC, created_at DESC;
+                """, (user_id,))
+            else:
+                # backwards compatible
+                cur.execute("""
+                    SELECT category, avg_score, trend, bias, risk, summary, top_signals,
+                           date, created_at
+                    FROM ai_category_insights
+                    WHERE date >= (CURRENT_DATE - INTERVAL '1 day')
+                    ORDER BY date DESC, created_at DESC;
+                """)
+
             rows = cur.fetchall()
 
-        # → Pak de meest recente per categorie
-        for cat, avg, trend, bias, risk, summary, ts, d, created_at in rows:
+        # → Pak per categorie de nieuwste entry
+        for cat, avg, trend, bias, risk, summary, top_signals, d, created_at in rows:
             if cat in insights:
                 continue
             insights[cat] = {
@@ -41,9 +54,9 @@ def load_ai_insights():
                 "bias": bias,
                 "risk": risk,
                 "summary": summary,
-                "top_signals": ts,
+                "top_signals": top_signals,
                 "date": d.isoformat() if hasattr(d, "isoformat") else str(d),
-                "created_at": created_at.isoformat() if isinstance(created_at, datetime) else None,
+                "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else None,
             }
 
         return insights
@@ -58,63 +71,40 @@ def load_ai_insights():
 
 
 # ===================================================================
-# 🎯 AI — Analyseer bestaande strategieën
+# 🎯 AI analyseert bestaande strategieën
 # ===================================================================
 def analyze_strategies(strategies: list, ai_context: dict):
     """
     AI analyseert ALLEEN — maakt GEEN nieuwe strategieën.
-
-    AI-output structuur:
-    {
-      "avg_score": 68,
-      "trend": "Bullish",
-      "bias": "Kansen",
-      "risk": "Gemiddeld",
-      "summary": "Korte analyse",
-      "top_signals": [
-          {"name": "...", "entry": "..."},
-          ...
-      ]
-    }
     """
     prompt = f"""
 Je bent een professionele trading-analist.
 
-Analyseer onderstaande strategieën. 
+Analyseer deze strategieën. 
 MAAK GEEN NIEUWE STRATEGIEËN.
 
-Output alleen geldige JSON.
-
----
-
-📌 Context uit andere AI-agents:
+Context:
 {json.dumps(ai_context, indent=2)}
 
----
-
-📌 Bestaande strategieën:
+Strategieën:
 {json.dumps(strategies, indent=2)}
 
 ---
 
-🎯 Maak een analyse met dit JSON formaat:
+JSON format:
 
 {{
   "avg_score": 0-100,
   "trend": "Bullish | Bearish | Neutraal",
   "bias": "Kansen | Afwachten | Risico",
   "risk": "Laag | Gemiddeld | Hoog",
-  "summary": "Korte tekst over de strategieën van vandaag",
+  "summary": "Korte tekst",
   "top_signals": [
     {{"name": "", "reason": ""}}
   ]
 }}
-
-BELANGRIJK:
-- Gebruik alleen JSON.
-- GEEN strategieën genereren.
 """
-    response = ask_gpt(prompt, system_role="Je bent een crypto-strategie analist en gebruikt ONLY JSON.")
+    response = ask_gpt(prompt, system_role="Je bent een crypto-strategie analist. ALLEEN geldige JSON.")
 
     if not isinstance(response, dict):
         logger.error("❌ Ongeldige JSON in analyse")
@@ -125,11 +115,11 @@ BELANGRIJK:
 
 
 # ===================================================================
-# 🕒 CELERY TASK — Strategy ANALYSE OPSLAAN
+# 🕒 CELERY TASK — Strategy AI (USER-AWARE!!)
 # ===================================================================
 @shared_task(name="backend.ai_agents.strategy_ai_agent.analyze_strategy_ai")
-def analyze_strategy_ai():
-    logger.info("🧠 Start Strategy ANALYSE AI Agent...")
+def analyze_strategy_ai(user_id: int | None = None):
+    logger.info(f"🧠 Start Strategy ANALYSE AI Agent (user_id={user_id})")
 
     conn = get_db_connection()
     if not conn:
@@ -138,18 +128,30 @@ def analyze_strategy_ai():
 
     try:
         # -----------------------------------------------------------------
-        # 1️⃣ BESTAANDE STRATEGIEËN OPHALEN (NIET AANPASSEN!)
+        # 1️⃣ STRATEGIEËN OPHALEN (user-specifiek)
         # -----------------------------------------------------------------
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, setup_id, entry, target, stop_loss, explanation, risk_profile, created_at
-                FROM strategies
-                ORDER BY created_at DESC;
-            """)
+            if user_id:
+                cur.execute("""
+                    SELECT id, setup_id, entry, target, stop_loss, explanation, 
+                           risk_profile, created_at
+                    FROM strategies
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC;
+                """, (user_id,))
+            else:
+                # backwards compatible (oude globale tool)
+                cur.execute("""
+                    SELECT id, setup_id, entry, target, stop_loss, explanation,
+                           risk_profile, created_at
+                    FROM strategies
+                    ORDER BY created_at DESC;
+                """)
+
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning("⚠️ Geen strategieën gevonden.")
+            logger.warning(f"⚠️ Geen strategieën gevonden (user_id={user_id})")
             return
 
         strategies = []
@@ -162,13 +164,17 @@ def analyze_strategy_ai():
                 "stop_loss": sl,
                 "risk_reward": risk,
                 "explanation": expl,
-                "created_at": created_at.isoformat() if created_at else None
+                "created_at": created_at.isoformat() if created_at else None,
             })
 
         # -----------------------------------------------------------------
-        # 2️⃣ LAAT AI STRATEGIEËN ANALYSEREN
+        # 2️⃣ AI CONTEXT LADEN (macro/market/technical/setup/strategy)
         # -----------------------------------------------------------------
-        ai_context = load_ai_insights()
+        ai_context = load_ai_insights(user_id=user_id)
+
+        # -----------------------------------------------------------------
+        # 3️⃣ AI laat strategieën analyseren
+        # -----------------------------------------------------------------
         analysis = analyze_strategies(strategies, ai_context)
 
         if not analysis:
@@ -176,34 +182,59 @@ def analyze_strategy_ai():
             return
 
         # -----------------------------------------------------------------
-        # 3️⃣ OPSLAAN ALS AI-INSIGHT (category = 'strategy')
+        # 4️⃣ OPSLAAN in ai_category_insights (PER USER!)
         # -----------------------------------------------------------------
         with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO ai_category_insights
-                    (category, avg_score, trend, bias, risk, summary, top_signals)
-                VALUES ('strategy', %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (category, date)
-                DO UPDATE SET
-                    avg_score   = EXCLUDED.avg_score,
-                    trend       = EXCLUDED.trend,
-                    bias        = EXCLUDED.bias,
-                    risk        = EXCLUDED.risk,
-                    summary     = EXCLUDED.summary,
-                    top_signals = EXCLUDED.top_signals,
-                    created_at  = NOW();
-            """, (
-                analysis.get("avg_score"),
-                analysis.get("trend"),
-                analysis.get("bias"),
-                analysis.get("risk"),
-                analysis.get("summary"),
-                json.dumps(analysis.get("top_signals", [])),
-            ))
+            if user_id:
+                cur.execute("""
+                    INSERT INTO ai_category_insights
+                        (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
+                    VALUES ('strategy', %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (category, user_id, date)
+                    DO UPDATE SET
+                        avg_score   = EXCLUDED.avg_score,
+                        trend       = EXCLUDED.trend,
+                        bias        = EXCLUDED.bias,
+                        risk        = EXCLUDED.risk,
+                        summary     = EXCLUDED.summary,
+                        top_signals = EXCLUDED.top_signals,
+                        created_at  = NOW();
+                """, (
+                    user_id,
+                    analysis.get("avg_score"),
+                    analysis.get("trend"),
+                    analysis.get("bias"),
+                    analysis.get("risk"),
+                    analysis.get("summary"),
+                    json.dumps(analysis.get("top_signals", [])),
+                ))
+            else:
+                # fallback oude stijl
+                cur.execute("""
+                    INSERT INTO ai_category_insights
+                        (category, avg_score, trend, bias, risk, summary, top_signals)
+                    VALUES ('strategy', %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (category, date)
+                    DO UPDATE SET
+                        avg_score   = EXCLUDED.avg_score,
+                        trend       = EXCLUDED.trend,
+                        bias        = EXCLUDED.bias,
+                        risk        = EXCLUDED.risk,
+                        summary     = EXCLUDED.summary,
+                        top_signals = EXCLUDED.top_signals,
+                        created_at  = NOW();
+                """, (
+                    analysis.get("avg_score"),
+                    analysis.get("trend"),
+                    analysis.get("bias"),
+                    analysis.get("risk"),
+                    analysis.get("summary"),
+                    json.dumps(analysis.get("top_signals", [])),
+                ))
 
         conn.commit()
 
-        logger.info("📊 Strategy AI-analyse opgeslagen.")
+        logger.info(f"📊 Strategy AI-analyse opgeslagen voor user_id={user_id}")
 
     except Exception as e:
         logger.error(f"❌ Strategy Analyse AI fout: {e}", exc_info=True)
