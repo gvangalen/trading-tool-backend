@@ -35,7 +35,7 @@ def normalize_indicator_name(name: str) -> str:
     return NAME_ALIASES.get(normalized, normalized)
 
 # =========================================================
-# 🎯 Score regel ophalen uit database
+# 🎯 Score regel ophalen uit database (GEEN user-id nodig → config is globaal)
 # =========================================================
 def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> Optional[dict]:
     conn = get_db_connection()
@@ -90,22 +90,25 @@ def load_market_indicators(conn):
         cur.execute("SELECT DISTINCT indicator FROM market_indicator_rules;")
         return [r[0] for r in cur.fetchall()]
 
-def load_market_raw_data(conn):
+def load_market_raw_data(conn, user_id: int):
+    """
+    Haal BTC market-data op MAAR user-specific (market_data heeft user_id!)
+    """
     with conn.cursor() as cur:
         cur.execute("""
             SELECT price, volume, change_24h
             FROM market_data
-            WHERE symbol='BTC'
+            WHERE symbol='BTC' AND user_id=%s
             ORDER BY timestamp DESC LIMIT 1;
-        """)
+        """, (user_id,))
         snapshot = cur.fetchone()
 
         cur.execute("""
             SELECT open, high, low, close, change
             FROM market_data_7d
-            WHERE symbol='BTC'
+            WHERE symbol='BTC' AND user_id=%s
             ORDER BY date DESC LIMIT 1;
-        """)
+        """, (user_id,))
         ohlc = cur.fetchone()
 
     return snapshot, ohlc
@@ -143,9 +146,15 @@ def extract_market_data(rule_indicators, snapshot, ohlc):
     return data
 
 # =========================================================
-# 🔢 Scoregenerator
+# 🔢 Scoregenerator (USES USER DATA)
 # =========================================================
-def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None):
+def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None, user_id: int = None):
+    """
+    Belangrijk: user_id is verplicht voor MACRO, TECHNICAL en MARKET
+    """
+    if user_id is None:
+        raise ValueError("❌ generate_scores_db(): user_id is verplicht!")
+
     # MARKET special case
     if category == "market":
         conn = get_db_connection()
@@ -154,7 +163,7 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None):
 
         try:
             rule_indicators = load_market_indicators(conn)
-            snapshot, ohlc = load_market_raw_data(conn)
+            snapshot, ohlc = load_market_raw_data(conn, user_id)
             data = extract_market_data(rule_indicators, snapshot, ohlc)
         finally:
             conn.close()
@@ -172,8 +181,9 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None):
                     cur.execute("""
                         SELECT DISTINCT ON (name) name, value
                         FROM macro_data
+                        WHERE user_id=%s
                         ORDER BY name, timestamp DESC;
-                    """)
+                    """, (user_id,))
                     rows = cur.fetchall()
                     data = {normalize_indicator_name(r[0]): float(r[1]) for r in rows}
 
@@ -181,16 +191,18 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None):
                     cur.execute("""
                         SELECT DISTINCT ON (indicator) indicator, value
                         FROM technical_indicators
+                        WHERE user_id=%s
                         ORDER BY indicator, timestamp DESC;
-                    """)
+                    """, (user_id,))
                     rows = cur.fetchall()
                     data = {normalize_indicator_name(r[0]): float(r[1]) for r in rows}
+
         finally:
             conn.close()
 
-    # Geen data → exit
+    # Geen data → fallback
     if not data:
-        return {"scores": {}, "total_score": 0}
+        return {"scores": {}, "total_score": 10}
 
     scores = {}
     total_score = 0
@@ -218,9 +230,19 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None):
     return {"scores": scores, "total_score": avg_score}
 
 # =========================================================
-# 🔗 Combined scores
+# 🔗 Combined scores (user-specific)
 # =========================================================
-def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
+def get_scores_for_symbol(user_id: int, include_metadata: bool = False) -> Dict[str, Any]:
+    """
+    Centrale functie die ALLE 4 categorieën combineert:
+    - macro
+    - technical
+    - market
+    - setup_score (macro+technical / 2 voorlopig)
+    """
+
+    if user_id is None:
+        raise ValueError("❌ get_scores_for_symbol(): user_id is verplicht")
 
     conn = get_db_connection()
     if not conn:
@@ -229,23 +251,27 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
     try:
         with conn.cursor() as cur:
 
+            # MACRO
             cur.execute("""
                 SELECT DISTINCT ON (name) name, value
                 FROM macro_data
+                WHERE user_id=%s
                 ORDER BY name, timestamp DESC;
-            """)
+            """, (user_id,))
             macro_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall()}
 
+            # TECHNICAL
             cur.execute("""
                 SELECT DISTINCT ON (indicator) indicator, value
                 FROM technical_indicators
+                WHERE user_id=%s
                 ORDER BY indicator, timestamp DESC;
-            """)
+            """, (user_id,))
             technical_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall()}
 
-        macro_scores = generate_scores_db("macro", macro_data)
-        tech_scores = generate_scores_db("technical", technical_data)
-        market_scores = generate_scores_db("market")
+        macro_scores = generate_scores_db("macro", macro_data, user_id=user_id)
+        tech_scores = generate_scores_db("technical", technical_data, user_id=user_id)
+        market_scores = generate_scores_db("market", user_id=user_id)
 
         macro_avg = macro_scores["total_score"]
         tech_avg = tech_scores["total_score"]
@@ -284,5 +310,6 @@ def get_scores_for_symbol(include_metadata: bool = False) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"❌ Error in get_scores_for_symbol(): {e}", exc_info=True)
         return {}
+
     finally:
         conn.close()
