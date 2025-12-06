@@ -13,7 +13,7 @@ from backend.utils.auth_utils import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    get_current_user,      # ✅ DE ENIGE GEBRUIKTE AUTH FUNCTIE
+    get_current_user,      # ✅ centrale authenticator
 )
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class RegisterRequest(BaseModel):
     last_name: Optional[str] = None
     email: EmailStr
     password: str
-    role: Optional[str] = None   # NIET ingelezen, maar blijft voor schema
+    role: Optional[str] = None   # wordt genegeerd, rol komt server-side
 
 
 class UserOut(BaseModel):
@@ -96,7 +96,10 @@ def _get_user_by_email(email: str) -> Optional[dict]:
 def register_user(body: RegisterRequest):
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(500, "Geen databaseverbinding")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Geen databaseverbinding",
+        )
 
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM users")
@@ -111,13 +114,15 @@ def register_user(body: RegisterRequest):
                 VALUES (%s, %s, %s, TRUE, %s, %s)
                 RETURNING id, email, role, is_active, first_name, last_name
             """, (body.email, password_hash, role, body.first_name, body.last_name))
-
             row = cur.fetchone()
             conn.commit()
-
         except Exception as e:
             conn.rollback()
-            raise HTTPException(400, "Gebruiker aanmaken mislukt") from e
+            logger.exception("❌ Error bij register_user")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Gebruiker aanmaken mislukt (bestaat hij al?)",
+            ) from e
 
     return UserOut(
         id=row[0],
@@ -137,23 +142,31 @@ def register_user(body: RegisterRequest):
 def login(body: LoginRequest, response: Response):
     user = _get_user_by_email(body.email)
     if not user or not user["is_active"]:
-        raise HTTPException(401, "Onjuiste inloggegevens")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Onjuiste inloggegevens",
+        )
 
     if not verify_password(body.password, user["password_hash"]):
-        raise HTTPException(401, "Onjuiste inloggegevens")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Onjuiste inloggegevens",
+        )
 
     payload = {"sub": str(user["id"]), "role": user["role"]}
     access_token = create_access_token(payload)
     refresh_token = create_refresh_token(payload)
 
-    # Cookies zetten
+    # 🔐 Cookies zetten — CROSS-ORIGIN vriendelijk
+    # Let op: je draait nu via HTTP, daarom secure=False.
+    # In productie met HTTPS: secure=True verplicht maken.
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=False,         # ⚠️ In productie: True
-        samesite="lax",
-        max_age=3600,
+        secure=False,        # ⚠️ bij HTTPS → True
+        samesite="none",     # ✅ nodig voor frontend ≠ backend origin
+        max_age=60 * 60,
         path="/",
     )
 
@@ -161,9 +174,9 @@ def login(body: LoginRequest, response: Response):
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=3600 * 24 * 7,
+        secure=False,        # ⚠️ bij HTTPS → True
+        samesite="none",     # ✅ idem
+        max_age=60 * 60 * 24 * 7,
         path="/",
     )
 
@@ -175,7 +188,16 @@ def login(body: LoginRequest, response: Response):
         )
         conn.commit()
 
-    return {"success": True, "user": user}
+    return {
+        "success": True,
+        "user": {
+            "id": user["id"],
+            "email": user["email"],
+            "role": user["role"],
+            "first_name": user["first_name"],
+            "last_name": user["last_name"],
+        },
+    }
 
 
 # =========================================
@@ -184,7 +206,7 @@ def login(body: LoginRequest, response: Response):
 
 @router.post("/logout")
 def logout(response: Response):
-    response = JSONResponse({"success": True})
+    response = JSONResponse({"success": True, "message": "Uitgelogd"})
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
     return response
@@ -195,39 +217,57 @@ def logout(response: Response):
 # =========================================
 
 @router.post("/refresh")
-def refresh_token(response: Response, refresh_token: Optional[str] = Cookie(default=None)):
+def refresh_token(
+    response: Response,
+    refresh_token: Optional[str] = Cookie(default=None, alias="refresh_token"),
+):
     if not refresh_token:
-        raise HTTPException(401, "Geen refresh token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Geen refresh token",
+        )
 
     try:
         payload = decode_token(refresh_token)
-    except:
-        raise HTTPException(401, "Ongeldige refresh token")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Ongeldige of verlopen refresh token",
+        )
 
     if payload.get("type") != "refresh":
-        raise HTTPException(401, "Onjuist token type")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Onjuist token type",
+        )
 
-    user = _get_user_by_id(int(payload.get("sub")))
-    if not user:
-        raise HTTPException(401, "Gebruiker niet gevonden")
+    user_id = payload.get("sub")
+    user = _get_user_by_id(int(user_id)) if user_id else None
+    if not user or not user["is_active"]:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Gebruiker niet actief of bestaat niet",
+        )
 
-    new_access = create_access_token({"sub": str(user["id"]), "role": user["role"]})
+    new_payload = {"sub": str(user["id"]), "role": user["role"]}
+    access_token = create_access_token(new_payload)
 
     response = JSONResponse({"success": True})
     response.set_cookie(
         key="access_token",
-        value=new_access,
+        value=access_token,
         httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=3600,
-        path="/"
+        secure=False,        # ⚠️ bij HTTPS → True
+        samesite="none",     # ✅ idem
+        max_age=60 * 60,
+        path="/",
     )
+
     return response
 
 
 # =========================================
-# 🧑 CURRENT USER
+# 🙋‍♂️ CURRENT USER
 # =========================================
 
 @router.get("/me", response_model=UserOut)
