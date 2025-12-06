@@ -1,23 +1,15 @@
 import requests
 import logging
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import calculate_score_from_rules  # blijft als helper
+from backend.utils.scoring_utils import calculate_score_from_rules
 
 logger = logging.getLogger(__name__)
 
+
 # =====================================================
-# 🌐 Waarde ophalen van macro-indicator
+# 🌐 Macro waarde ophalen
 # =====================================================
 async def fetch_macro_value(name: str, source: str = None, link: str = None):
-    """
-    Haalt actuele waarde op van een macro-indicator via de data_url uit de DB.
-    Ondersteunt o.a.:
-      - Fear & Greed Index (alternative.me)
-      - BTC Dominance (CoinGecko)
-      - S&P500, VIX, Oil (Yahoo Finance)
-      - Interest / Inflation (FRED API)
-      - DXY (TradingView, beperkt)
-    """
     try:
         if not link:
             logger.warning(f"⚠️ Geen link opgegeven voor '{name}'")
@@ -28,7 +20,7 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
         resp.raise_for_status()
         data = resp.json()
 
-        # === 1️⃣ Fear & Greed Index
+        # === Fear & Greed Index
         if "alternative" in (source or "").lower():
             try:
                 v = data.get("data", [{}])[0].get("value")
@@ -37,7 +29,7 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
             except Exception:
                 pass
 
-        # === 2️⃣ BTC Dominance (CoinGecko)
+        # === BTC Dominance (CoinGecko)
         if "coingecko" in (source or "").lower():
             try:
                 v = data.get("data", {}).get("market_cap_percentage", {}).get("btc")
@@ -46,7 +38,7 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
             except Exception:
                 pass
 
-        # === 3️⃣ Yahoo Finance (S&P500, VIX, Oil)
+        # === Yahoo Finance: S&P500, VIX, Oil
         if "yahoo" in (source or "").lower():
             try:
                 result = data.get("chart", {}).get("result", [{}])[0]
@@ -57,7 +49,7 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
             except Exception:
                 pass
 
-        # === 4️⃣ FRED API (Interest rate / Inflation)
+        # === FRED: Interest / Inflation
         if "fred" in (source or "").lower():
             try:
                 obs = data.get("observations", [])
@@ -68,32 +60,18 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
             except Exception:
                 pass
 
-        # === 5️⃣ TradingView – geen publieke API
+        # === TradingView (geen API)
         if "tradingview" in (source or "").lower():
-            logger.warning(f"⚠️ TradingView API is niet publiek – geen waarde opgehaald voor '{name}'")
+            logger.warning(f"⚠️ TradingView API niet publiek → '{name}' niet opgehaald.")
             return None
 
-        # === 6️⃣ Fallbacks
+        # === Generic fallback
         if isinstance(data, dict):
-            if "price" in data:
-                return {"value": float(data["price"])}
-            if "value" in data:
-                return {"value": float(data["value"])}
-            if "data" in data and isinstance(data["data"], dict):
-                v = data["data"].get("value") or data["data"].get("price")
-                if v:
-                    return {"value": float(v)}
+            for key in ["value", "price"]:
+                if key in data:
+                    return {"value": float(data[key])}
 
-        if isinstance(data, list) and len(data) > 0:
-            first = data[0]
-            if isinstance(first, (int, float)):
-                return {"value": float(first)}
-            if isinstance(first, dict):
-                v = first.get("value") or first.get("price")
-                if v:
-                    return {"value": float(v)}
-
-        logger.warning(f"⚠️ Geen waarde gevonden voor '{name}' in response: {str(data)[:200]}")
+        logger.warning(f"⚠️ Geen waarde gevonden voor macro '{name}': {str(data)[:200]}")
         return None
 
     except Exception as e:
@@ -102,10 +80,13 @@ async def fetch_macro_value(name: str, source: str = None, link: str = None):
 
 
 # =====================================================
-# 📊 Interpretatie via DB-scoreregels
+# 🧠 Macro interpretatie via DB (per user!)
 # =====================================================
-def interpret_macro_indicator(name: str, value: float) -> dict | None:
-    """Vertaal macro-indicatorwaarde naar score, trend, interpretatie en actie via DB-regels."""
+def interpret_macro_indicator(name: str, value: float, user_id: int) -> dict | None:
+    """
+    Score, trend, interpretatie, actie via macro_indicator_rules per gebruiker.
+    """
+
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding bij interpretatie macro-indicator.")
@@ -117,12 +98,16 @@ def interpret_macro_indicator(name: str, value: float) -> dict | None:
                 SELECT range_min, range_max, score, trend, interpretation, action
                 FROM macro_indicator_rules
                 WHERE indicator = %s
+                  AND user_id = %s
                 ORDER BY range_min ASC;
-            """, (name,))
+            """, (name, user_id))
+
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning(f"⚠️ Geen regels gevonden voor macro-indicator '{name}'")
+            logger.warning(
+                f"⚠️ Geen scoreregels gevonden voor macro-indicator '{name}' (user_id={user_id})"
+            )
             return None
 
         rules = [
@@ -137,11 +122,12 @@ def interpret_macro_indicator(name: str, value: float) -> dict | None:
             for r in rows
         ]
 
-        # ✅ Bereken juiste regel via helper
+        # Score bepalen via helper
         return calculate_score_from_rules(value, rules)
 
     except Exception as e:
-        logger.error(f"❌ Fout bij interpretatie '{name}': {e}", exc_info=True)
+        logger.error(f"❌ Fout bij interpretatie macro '{name}': {e}", exc_info=True)
         return None
+
     finally:
         conn.close()
