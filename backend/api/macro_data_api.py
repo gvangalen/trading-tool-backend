@@ -4,20 +4,16 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request, Depends
 
 from dotenv import load_dotenv
-from backend.utils.db import get_db_connection
-from backend.auth.dependencies import get_current_user   # ⬅️ USER INJECTIE (BELANGRIJK!)
 
-# =====================================
-# 🌍 ENV + LOGGING
-# =====================================
+from backend.utils.db import get_db_connection
+from backend.utils.auth_utils import get_current_user   # ✅ CORRECTE IMPORT
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
 
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path)
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-router = APIRouter()
 logger.info("🚀 macro_data_api.py geladen – user_id-systeem actief.")
 
 
