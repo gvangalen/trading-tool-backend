@@ -122,7 +122,7 @@ def register_user(body: RegisterRequest):
 
 
 # =========================================================
-# 🔐 LOGIN
+# 🔐 LOGIN — FIXED COOKIE CONFIG
 # =========================================================
 
 @router.post("/login")
@@ -139,14 +139,15 @@ def login(body: LoginRequest, response: Response):
     refresh_token = create_refresh_token(payload)
 
     # =====================================================
-    # 🔥 FIX: Browsers blokkeren samesite=None op HTTP
-    # Daarom gebruiken we tijdelijk:
-    #    samesite="lax"
+    # ⭐ COOKIE FIX
+    # Geen Domain → cookie hoort bij 143.47.186.148:5002
+    # samesite="none" werkt met cross-port requests
+    # secure=False want HTTP
     # =====================================================
     cookie_settings = dict(
         httponly=True,
-        secure=False,       # Voor HTTP. Bij HTTPS → True
-        samesite="lax",     # 🔥 FIX
+        secure=False,
+        samesite="none",
         path="/",
     )
 
@@ -187,7 +188,7 @@ def logout(response: Response):
 
 
 # =========================================================
-# 🔁 REFRESH TOKEN
+# 🔁 REFRESH — FIXED COOKIE CONFIG
 # =========================================================
 
 @router.post("/refresh")
@@ -212,21 +213,25 @@ def refresh_token(
 
     new_access = create_access_token({"sub": str(user["id"]), "role": user["role"]})
 
+    cookie_settings = dict(
+        httponly=True,
+        secure=False,
+        samesite="none",
+        path="/",
+    )
+
     response = JSONResponse({"success": True})
     response.set_cookie(
         key="access_token",
         value=new_access,
-        httponly=True,
-        secure=False,
-        samesite="lax",    # FIX
         max_age=3600,
-        path="/",
+        **cookie_settings
     )
     return response
 
 
 # =========================================================
-# 👤 /me — moet user opnieuw ophalen
+# 👤 /me — haalt user uit JWT + DB
 # =========================================================
 
 @router.get("/me", response_model=UserOut)
