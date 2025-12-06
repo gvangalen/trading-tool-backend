@@ -41,8 +41,7 @@ def create_token(
     token_type: str = "access",
 ) -> str:
     """
-    data: bijv. {"sub": user_id}
-    token_type: "access" of "refresh"
+    data: bijv {"sub": user_id, "role": "..."}
     """
     to_encode = data.copy()
     to_encode["type"] = token_type
@@ -71,26 +70,26 @@ def create_refresh_token(data: Dict[str, Any]) -> str:
 
 def decode_token(token: str) -> Dict[str, Any]:
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError as e:
         raise ValueError(f"Invalid token: {e}")
 
 
 # =========================================
-# 🔑 Nieuw: Correcte user-auth via cookies
+# 🔑 Unified get_current_user (cookie-based)
+# =========================================
+#
+# Dit is de ENIGE juiste functie die ALLE API-bestanden moeten gebruiken.
+# Geen ?user_id hacks meer, geen dubbele versies.
+# Next.js stuurt cookies automatisch met credentials: "include"
+#
 # =========================================
 
-async def get_current_user(request: Request):
+async def get_current_user(request: Request) -> dict:
     """
-    Haalt een geldige JWT access token uit 'access_token' cookie.
-    Decodet token, haalt user_id uit 'sub', en geeft {"id": user_id} terug.
-
-    Werkt 100% correct met Next.js wanneer fetch() gebruikt:
-        credentials: "include"
+    Leest de JWT access token uit HttpOnly cookie 'access_token'.
+    Valideert token. Returned minimaal: {"id": int}
     """
-
-    # 1️⃣ Token ophalen uit cookies
     token = request.cookies.get("access_token")
 
     if not token:
@@ -99,7 +98,7 @@ async def get_current_user(request: Request):
             detail="Missing access token",
         )
 
-    # 2️⃣ JWT decoderen
+    # JWT decoderen
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
@@ -108,14 +107,14 @@ async def get_current_user(request: Request):
             detail="Invalid or expired token",
         )
 
-    # 3️⃣ Token type check
+    # Type check
     if payload.get("type") != "access":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token type",
         )
 
-    # 4️⃣ User ID ophalen
+    # User ID ophalen
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(
@@ -123,5 +122,4 @@ async def get_current_user(request: Request):
             detail="Token missing user_id",
         )
 
-    # 5️⃣ Return value (optioneel: haal volledige user uit DB)
     return {"id": int(user_id)}
