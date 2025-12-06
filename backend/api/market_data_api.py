@@ -8,7 +8,7 @@ import httpx
 
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_scores_for_symbol
-from backend.routes.auth_api import get_current_user  # ⬅️ user ophalen uit cookie/JWT
+from backend.utils.auth_utils import get_current_user  # ✅ user uit JWT/cookie
 
 # =========================================================
 # ⚙️ Router setup
