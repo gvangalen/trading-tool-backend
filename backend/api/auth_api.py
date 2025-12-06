@@ -221,7 +221,7 @@ def login(body: LoginRequest, response: Response):
     access_token = create_access_token(payload)
     refresh_token = create_refresh_token(payload)
 
-    # Cookies zetten (HttpOnly)
+    # Cookies zetten (HttpOnly) – GLOBAL PATH
     response.set_cookie(
         key="access_token",
         value=access_token,
@@ -229,6 +229,7 @@ def login(body: LoginRequest, response: Response):
         secure=False,    # 🔴 in productie → True
         samesite="lax",
         max_age=60 * 60,  # 1 uur
+        path="/",         # ✅ cookie ook voor /api/...
     )
 
     response.set_cookie(
@@ -238,6 +239,7 @@ def login(body: LoginRequest, response: Response):
         secure=False,    # 🔴 in productie → True
         samesite="lax",
         max_age=60 * 60 * 24 * 7,  # 7 dagen
+        path="/",         # ✅ global
     )
 
     # last_login_at updaten
@@ -269,8 +271,8 @@ def login(body: LoginRequest, response: Response):
 def logout(response: Response):
     # altijd succes, ook als er geen cookies zijn
     response = JSONResponse({"success": True, "message": "Uitgelogd"})
-    response.delete_cookie("access_token")
-    response.delete_cookie("refresh_token")
+    response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/")
     return response
 
 
@@ -322,6 +324,7 @@ def refresh_token(
         secure=False,  # 🔴 in productie: True
         samesite="lax",
         max_age=60 * 60,
+        path="/",      # ✅ global
     )
 
     return response
