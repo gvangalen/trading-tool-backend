@@ -55,7 +55,7 @@ def fetch_today_insights(conn, user_id=None):
             result = None
 
             for d in lookback:
-                if user_id:
+                if user_id is not None:
                     cur.execute("""
                         SELECT category, avg_score, trend, bias, risk, summary, top_signals
                         FROM ai_category_insights
@@ -63,6 +63,7 @@ def fetch_today_insights(conn, user_id=None):
                         LIMIT 1;
                     """, (cat, user_id, d))
                 else:
+                    # Fallback mode (zou niet meer gebruikt worden)
                     cur.execute("""
                         SELECT category, avg_score, trend, bias, risk, summary, top_signals
                         FROM ai_category_insights
@@ -97,10 +98,8 @@ def fetch_numeric_scores(conn, user_id=None):
     numeric = {"daily_scores": {}, "ai_reflections": {}}
 
     with conn.cursor() as cur:
-        # ---------------------------
         # daily_scores ophalen
-        # ---------------------------
-        if user_id:
+        if user_id is not None:
             cur.execute("""
                 SELECT macro_score, market_score, technical_score, setup_score
                 FROM daily_scores
@@ -108,6 +107,7 @@ def fetch_numeric_scores(conn, user_id=None):
                 LIMIT 1;
             """, (user_id,))
         else:
+            # Only for legacy mode (should be avoided)
             cur.execute("""
                 SELECT macro_score, market_score, technical_score, setup_score
                 FROM daily_scores
@@ -124,10 +124,8 @@ def fetch_numeric_scores(conn, user_id=None):
                 "setup": row[3],
             }
 
-        # ---------------------------
         # ai_reflections aggregatie
-        # ---------------------------
-        if user_id:
+        if user_id is not None:
             cur.execute("""
                 SELECT category,
                        ROUND(AVG(COALESCE(ai_score, 0))::numeric, 1),
@@ -229,51 +227,28 @@ def store_master_result(conn, result, user_id=None):
     }
 
     with conn.cursor() as cur:
-        if user_id:
-            cur.execute("""
-                INSERT INTO ai_category_insights
-                    (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
-                VALUES ('master', %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (category, user_id, date)
-                DO UPDATE SET
-                    avg_score = EXCLUDED.avg_score,
-                    trend = EXCLUDED.trend,
-                    bias = EXCLUDED.bias,
-                    risk = EXCLUDED.risk,
-                    summary = EXCLUDED.summary,
-                    top_signals = EXCLUDED.top_signals,
-                    created_at = NOW();
-            """, (
-                user_id,
-                result.get("master_score"),
-                result.get("master_trend"),
-                result.get("master_bias"),
-                result.get("master_risk"),
-                result.get("summary"),
-                json.dumps(meta, ensure_ascii=False),
-            ))
-        else:
-            cur.execute("""
-                INSERT INTO ai_category_insights
-                    (category, avg_score, trend, bias, risk, summary, top_signals)
-                VALUES ('master', %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (category, date)
-                DO UPDATE SET
-                    avg_score = EXCLUDED.avg_score,
-                    trend = EXCLUDED.trend,
-                    bias = EXCLUDED.bias,
-                    risk = EXCLUDED.risk,
-                    summary = EXCLUDED.summary,
-                    top_signals = EXCLUDED.top_signals,
-                    created_at = NOW();
-            """, (
-                result.get("master_score"),
-                result.get("master_trend"),
-                result.get("master_bias"),
-                result.get("master_risk"),
-                result.get("summary"),
-                json.dumps(meta, ensure_ascii=False),
-            ))
+        cur.execute("""
+            INSERT INTO ai_category_insights
+                (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
+            VALUES ('master', %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, category, date)
+            DO UPDATE SET
+                avg_score = EXCLUDED.avg_score,
+                trend = EXCLUDED.trend,
+                bias = EXCLUDED.bias,
+                risk = EXCLUDED.risk,
+                summary = EXCLUDED.summary,
+                top_signals = EXCLUDED.top_signals,
+                created_at = NOW();
+        """, (
+            user_id,
+            result.get("master_score"),
+            result.get("master_trend"),
+            result.get("master_bias"),
+            result.get("master_risk"),
+            result.get("summary"),
+            json.dumps(meta, ensure_ascii=False),
+        ))
 
 
 # ============================================================
@@ -289,69 +264,85 @@ def store_daily_scores(conn, insights, user_id=None):
     tech_sum = insights.get("technical", {}).get("summary")
 
     if macro is None or market is None or technical is None:
-        logger.error("❌ daily_scores NIET opgeslagen — ontbrekende AI categorieën.")
+        logger.error(f"❌ daily_scores NIET opgeslagen — ontbrekende AI categorieën voor user_id={user_id}.")
         return
 
     with conn.cursor() as cur:
-        if user_id:
-            cur.execute("""
-                INSERT INTO daily_scores
-                    (report_date, user_id, macro_score, market_score, technical_score,
-                     macro_interpretation, market_interpretation, technical_interpretation,
-                     setup_score, macro_top_contributors, market_top_contributors, technical_top_contributors)
-                VALUES (
-                    CURRENT_DATE, %s, %s, %s, %s,
-                    %s, %s, %s,
-                    NULL, '[]', '[]', '[]'
-                )
-                ON CONFLICT (report_date, user_id)
-                DO UPDATE SET
-                    macro_score = EXCLUDED.macro_score,
-                    market_score = EXCLUDED.market_score,
-                    technical_score = EXCLUDED.technical_score,
-                    macro_interpretation = EXCLUDED.macro_interpretation,
-                    market_interpretation = EXCLUDED.market_interpretation,
-                    technical_interpretation = EXCLUDED.technical_interpretation,
-                    updated_at = NOW();
-            """, (
-                user_id,
-                macro, market, technical,
-                macro_sum, market_sum, tech_sum,
-            ))
-        else:
-            cur.execute("""
-                INSERT INTO daily_scores
-                    (report_date, macro_score, market_score, technical_score,
-                     macro_interpretation, market_interpretation, technical_interpretation,
-                     setup_score, macro_top_contributors, market_top_contributors, technical_top_contributors)
-                VALUES (
-                    CURRENT_DATE, %s, %s, %s,
-                    %s, %s, %s,
-                    NULL, '[]', '[]', '[]'
-                )
-                ON CONFLICT (report_date)
-                DO UPDATE SET
-                    macro_score = EXCLUDED.macro_score,
-                    market_score = EXCLUDED.market_score,
-                    technical_score = EXCLUDED.technical_score,
-                    macro_interpretation = EXCLUDED.macro_interpretation,
-                    market_interpretation = EXCLUDED.market_interpretation,
-                    technical_interpretation = EXCLUDED.technical_interpretation,
-                    updated_at = NOW();
-            """, (
-                macro, market, technical,
-                macro_sum, market_sum, tech_sum,
-            ))
+        cur.execute("""
+            INSERT INTO daily_scores
+                (report_date, user_id, macro_score, market_score, technical_score,
+                 macro_interpretation, market_interpretation, technical_interpretation,
+                 setup_score, macro_top_contributors, market_top_contributors, technical_top_contributors)
+            VALUES (
+                CURRENT_DATE, %s, %s, %s, %s,
+                %s, %s, %s,
+                NULL, '[]', '[]', '[]'
+            )
+            ON CONFLICT (report_date, user_id)
+            DO UPDATE SET
+                macro_score = EXCLUDED.macro_score,
+                market_score = EXCLUDED.market_score,
+                technical_score = EXCLUDED.technical_score,
+                macro_interpretation = EXCLUDED.macro_interpretation,
+                market_interpretation = EXCLUDED.market_interpretation,
+                technical_interpretation = EXCLUDED.technical_interpretation,
+                updated_at = NOW();
+        """, (
+            user_id,
+            macro, market, technical,
+            macro_sum, market_sum, tech_sum,
+        ))
 
-    logger.info("💾 daily_scores succesvol opgeslagen.")
+    logger.info(f"💾 daily_scores opgeslagen voor user_id={user_id}.")
 
 
 # ============================================================
-# 🚀 5. Celery task — orchestrator
+# 🚀 Multi-user helper functie
+# ============================================================
+def generate_master_score_for_user(user_id):
+    logger.info(f"🧩 MASTER Orchestrator voor user_id={user_id}")
+
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen DB-verbinding.")
+        return
+
+    try:
+        # 1️⃣ Insights ophalen
+        insights = fetch_today_insights(conn, user_id=user_id)
+
+        # 2️⃣ daily_scores opslaan
+        store_daily_scores(conn, insights, user_id=user_id)
+
+        # 3️⃣ Numerieke context
+        numeric = fetch_numeric_scores(conn, user_id=user_id)
+
+        # 4️⃣ Prompt
+        prompt = build_prompt(insights, numeric)
+
+        # 5️⃣ AI aanroepen
+        result = ask_gpt(prompt)
+
+        # 6️⃣ Opslaan master category
+        store_master_result(conn, result, user_id=user_id)
+
+        conn.commit()
+        logger.info(f"✅ Master score opgeslagen voor user_id={user_id}")
+
+    except Exception:
+        logger.error(f"❌ Crash in master-score voor user_id={user_id}:")
+        logger.error(traceback.format_exc())
+
+    finally:
+        conn.close()
+
+
+# ============================================================
+# 🚀 Celery task — draait nu voor ALLE users
 # ============================================================
 @shared_task(name="backend.ai_agents.score_ai_agent.generate_master_score")
-def generate_master_score(user_id=None):
-    logger.info(f"🧠 Start MASTER Score AI (user_id={user_id})...")
+def generate_master_score():
+    logger.info("🧠 Start MASTER Score AI — MULTI USER MODE...")
 
     conn = get_db_connection()
     if not conn:
@@ -359,30 +350,16 @@ def generate_master_score(user_id=None):
         return
 
     try:
-        # 1️⃣ Alle insights ophalen (per gebruiker)
-        insights = fetch_today_insights(conn, user_id=user_id)
+        # 🔎 Haal alle users op
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users;")
+            users = [row[0] for row in cur.fetchall()]
 
-        # 2️⃣ daily_scores opslaan (per gebruiker)
-        store_daily_scores(conn, insights, user_id=user_id)
-
-        # 3️⃣ Numerieke context ophalen (per gebruiker)
-        numeric = fetch_numeric_scores(conn, user_id=user_id)
-
-        # 4️⃣ Master prompt genereren
-        prompt = build_prompt(insights, numeric)
-
-        # 5️⃣ AI aanroepen
-        result = ask_gpt(prompt)
-
-        # 6️⃣ Master opslaan (per gebruiker)
-        store_master_result(conn, result, user_id=user_id)
-
-        conn.commit()
-        logger.info("✅ Master score opgeslagen.")
-
-    except Exception:
-        logger.error("❌ Score orchestrator crash:")
-        logger.error(traceback.format_exc())
+        logger.info(f"👥 {len(users)} gebruikers gevonden. Genereren per user...")
 
     finally:
         conn.close()
+
+    # 🚀 Voor elke user master-score draaien
+    for user_id in users:
+        generate_master_score_for_user(user_id)
