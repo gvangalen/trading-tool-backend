@@ -44,8 +44,7 @@ celery_app.conf.timezone = "UTC"
 
 
 # =========================================================
-# 🕒 BEAT SCHEDULE — VOLLEDIGE PIPELINE
-# LET OP: alle task-namen komen exact overeen met @shared_task(name="...")
+# 🕒 BEAT SCHEDULE — User-specific FIXES
 # =========================================================
 celery_app.conf.beat_schedule = {
 
@@ -55,6 +54,7 @@ celery_app.conf.beat_schedule = {
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
         "schedule": crontab(minute="*/15"),
+        "kwargs": {"user_id": 1},   # 🔥 FIX
     },
     "save_market_data_daily": {
         "task": "backend.celery_task.market_task.save_market_data_daily",
@@ -71,18 +71,20 @@ celery_app.conf.beat_schedule = {
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
         "schedule": crontab(hour=0, minute=12),
+        "kwargs": {"user_id": 1},  # 🔥 FIX
     },
 
     # =========================================================
-    # 3) TECHNICAL INDICATORS (daily only, want week/month/quarter bestaan niet meer)
+    # 3) TECHNICAL INDICATORS
     # =========================================================
     "fetch_technical_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
         "schedule": crontab(hour=0, minute=10),
+        "kwargs": {"user_id": 1},  # 🔥 FIX
     },
 
     # =========================================================
-    # 4) BTC PRICE HISTORY (juiste task-naam!)
+    # 4) BTC PRICE HISTORY
     # =========================================================
     "update_btc_history": {
         "task": "backend.celery_task.btc_price_history_task.update_btc_history",
@@ -90,7 +92,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =========================================================
-    # 5) AI AGENTS — MACRO → MARKET → TECHNICAL → MASTER SCORE
+    # 5) AI AGENTS
     # =========================================================
     "generate_macro_insight": {
         "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
@@ -123,18 +125,20 @@ celery_app.conf.beat_schedule = {
     "store_daily_scores": {
         "task": "backend.celery_task.store_daily_scores_task.store_daily_scores_task",
         "schedule": crontab(hour=4, minute=30),
+        "kwargs": {"user_id": 1},  # 🔥 FIX
     },
 
     # =========================================================
-    # 8) DAILY REPORT (alles-in-1 task!)
+    # 8) DAILY REPORT
     # =========================================================
     "generate_daily_report": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
         "schedule": crontab(hour=5, minute=0),
+        "kwargs": {"user_id": 1},  # 🔥 FIX
     },
 
     # =========================================================
-    # 9) WEEK / MONTH / QUARTER REPORTS
+    # 9) WEEKLY / MONTHLY / QUARTERLY REPORTS
     # =========================================================
     "generate_weekly_report": {
         "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
@@ -153,7 +157,7 @@ celery_app.conf.beat_schedule = {
 logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
 
 # =========================================================
-# 📌 FORCE IMPORTS — zodat Beat alle tasks ziet
+# 📌 FORCE IMPORTS
 # =========================================================
 try:
     import backend.celery_task.market_task
