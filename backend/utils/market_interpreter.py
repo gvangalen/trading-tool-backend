@@ -1,12 +1,9 @@
 import logging
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import select_rule_for_value  # ✅ nieuwe engine
+from backend.utils.scoring_utils import get_score_rule_from_db, normalize_indicator_name
 
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# 🔄 Mapping API-namen → DB-indicatornamen
-# ============================================================
 MARKET_INDICATOR_MAP = {
     "price": "btc_price",
     "change_24h": "btc_change_24h",
@@ -17,63 +14,20 @@ MARKET_INDICATOR_MAP = {
 }
 
 
-# ============================================================
-# 🧠 MARKET INDICATOR INTERPRETATIE VIA DB
-# ============================================================
 def interpret_market_indicator(indicator: str, value: float, user_id: int):
-    """
-    Interpreteert een market-indicator (per user):
-    - haalt regels uit market_indicator_rules
-    - bepaalt juiste regel via select_rule_for_value()
-    - retourneert {score, trend, interpretation, action}
-    """
-
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Geen DB-verbinding bij interpret_market_indicator")
-        return None
-
     try:
-        # Zet API-naam om naar DB-indicatornaam
-        name = MARKET_INDICATOR_MAP.get(indicator, indicator)
+        normalized = MARKET_INDICATOR_MAP.get(indicator, indicator)
+        normalized = normalize_indicator_name(normalized)
 
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT range_min, range_max, score, trend, interpretation, action
-                FROM market_indicator_rules
-                WHERE indicator = %s
-                  AND user_id = %s
-                ORDER BY range_min ASC
-            """, (name, user_id))
+        rule = get_score_rule_from_db("market", normalized, value)
 
-            rows = cur.fetchall()
-
-        if not rows:
-            logger.warning(
-                f"⚠️ Geen market rules gevonden voor '{name}' (user_id={user_id})"
-            )
-            return None
-
-        # Scoreregels structureren
-        rules = [
-            {
-                "range_min": float(r[0]),
-                "range_max": float(r[1]),
-                "score": int(r[2]),
-                "trend": r[3],
-                "interpretation": r[4],
-                "action": r[5],
-            }
-            for r in rows
-        ]
-
-        # Selecteer juiste scoreregel
-        rule = select_rule_for_value(value, rules)
         if not rule:
-            logger.warning(
-                f"⚠️ Geen passende regel voor '{name}' (value={value}, user_id={user_id})"
-            )
-            return None
+            return {
+                "score": 50,
+                "trend": "neutral",
+                "interpretation": "Geen scoreregel gevonden",
+                "action": "–",
+            }
 
         return {
             "score": rule["score"],
@@ -83,8 +37,5 @@ def interpret_market_indicator(indicator: str, value: float, user_id: int):
         }
 
     except Exception as e:
-        logger.error(f"❌ Market interpretatie error voor '{indicator}': {e}", exc_info=True)
+        logger.error(f"❌ interpret_market_indicator fout: {e}", exc_info=True)
         return None
-
-    finally:
-        conn.close()
