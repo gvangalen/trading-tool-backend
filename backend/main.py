@@ -9,14 +9,20 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.routing import APIRoute
 from dotenv import load_dotenv
 
-# .env inladen
+# ------------------------------------------------------------
+# 📌 .env laden
+# ------------------------------------------------------------
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path)
 
-# Rootpad toevoegen
+# ------------------------------------------------------------
+# 📌 Root path toevoegen
+# ------------------------------------------------------------
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Logging
+# ------------------------------------------------------------
+# 📌 Logging setup
+# ------------------------------------------------------------
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -24,14 +30,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# FastAPI app
+# ------------------------------------------------------------
+# 🚀 FastAPI app
+# ------------------------------------------------------------
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
-# CORS
+# ------------------------------------------------------------
+# 🌍 CORS — FIX: frontend & backend origins compleet gemaakt
+# ------------------------------------------------------------
 allow_origins = [
+    # Local development
     "http://localhost:3000",
+    "http://localhost:5002",
+
+    # Server frontend
     "http://143.47.186.148",
     "http://143.47.186.148:3000",
+
+    # ❗ BELANGRIJK: backend origin zelf (anders geen cookies!)
+    "http://143.47.186.148:5002",
+    "https://143.47.186.148",
+    "https://143.47.186.148:3000",
+    "https://143.47.186.148:5002",
 ]
 
 app.add_middleware(
@@ -42,12 +62,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static files
+# ------------------------------------------------------------
+# 📂 Static files map
+# ------------------------------------------------------------
 app.mount("/static", StaticFiles(directory="backend/static"), name="static")
 
 
 # ============================================================
-# 🔧 Helper: veilig routers includen
+# 🔧 Helper: veilig dynamisch routers includen
 # ============================================================
 def safe_include(import_path, name=""):
     try:
@@ -74,17 +96,17 @@ safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
 
 # ============================================================
-# 🧠 AI AGENTS (NIEUW)
+# 🧠 AI AGENTS ROUTER
 # ============================================================
 safe_include("backend.api.agents_api", "agents_api")
 
 # ============================================================
-# 🔐 AUTHENTICATIE (JUISTE PAD)
+# 🔐 AUTHENTICATIE ROUTER (juiste volgorde)
 # ============================================================
 safe_include("backend.api.auth_api", "auth_api")
 
 # ============================================================
-# ➕ Extra (legacy)
+# 🗂 Extra legacy routes
 # ============================================================
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
@@ -99,7 +121,7 @@ def health_check():
 
 
 # ============================================================
-# 🔍 Debug routes
+# 📋 Debug listing van alle routes
 # ============================================================
 print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
 for route in app.routes:
