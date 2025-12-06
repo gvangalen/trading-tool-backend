@@ -9,9 +9,7 @@ from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
 
 # Celery task
-from backend.celery_task.strategy_task import (
-    generate_strategie_voor_setup as generate_strategy_task
-)
+from backend.celery_task.strategy_task import generate_for_setup as generate_strategy_task
 
 # Standard library
 import json
