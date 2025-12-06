@@ -17,28 +17,40 @@ MARKET_INDICATOR_MAP = {
 }
 
 
-def interpret_market_indicator(name: str, value: float) -> dict | None:
-    """Vertaal market-indicatorwaarde via scoreregels in DB."""
+def interpret_market_indicator(name: str, value: float, user_id: int) -> dict | None:
+    """
+    Vertaal market-indicatorwaarde via scoreregels in DB, PER GEBRUIKER.
+
+    - name: logische naam zoals 'price', 'change_24h', 'volume'
+    - value: numerieke waarde van de indicator
+    - user_id: huidige gebruiker voor wie de scoreregels gelden
+    """
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding bij interpretatie market-indicator.")
         return None
 
     try:
-        # 🔄 Gebruik mapping
+        # 🔄 Gebruik mapping zodat API keys naar DB indicator-namen gaan
         indicator_name = MARKET_INDICATOR_MAP.get(name, name)
 
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT range_min, range_max, score, trend, interpretation, action
                 FROM market_indicator_rules
                 WHERE indicator = %s
+                  AND user_id = %s
                 ORDER BY range_min ASC
-            """, (indicator_name,))
+                """,
+                (indicator_name, user_id),
+            )
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning(f"⚠️ Geen market rules voor indicator '{indicator_name}'")
+            logger.warning(
+                f"⚠️ Geen market rules voor indicator '{indicator_name}' (user_id={user_id})"
+            )
             return None
 
         rules = [
@@ -48,11 +60,12 @@ def interpret_market_indicator(name: str, value: float) -> dict | None:
                 "score": r[2],
                 "trend": r[3],
                 "interpretation": r[4],
-                "action": r[5]
+                "action": r[5],
             }
             for r in rows
         ]
 
+        # 🔢 Gebruik generieke helper voor juiste regel
         return calculate_score_from_rules(value, rules)
 
     except Exception as e:
