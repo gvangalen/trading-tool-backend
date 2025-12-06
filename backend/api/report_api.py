@@ -3,6 +3,7 @@ print("🟢 report_api wordt geladen ✅")
 import logging
 import os
 from datetime import datetime
+
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import FileResponse
 
@@ -13,7 +14,7 @@ from backend.celery_task.daily_report_task import generate_daily_report
 from backend.celery_task.weekly_report_task import generate_weekly_report
 from backend.celery_task.monthly_report_task import generate_monthly_report
 from backend.celery_task.quarterly_report_task import generate_quarterly_report
-from backend.utils.auth_utils import get_current_user  # 🔐 user uit token
+from backend.utils.auth_utils import get_current_user  # ✅ centrale user helper
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
