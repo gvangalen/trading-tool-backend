@@ -1,22 +1,22 @@
 print("✅ strategy_api.py geladen!")
 
-# FastAPI
 from fastapi import APIRouter, HTTPException, Request, Query, Depends
 from fastapi.responses import StreamingResponse
+
+# Init router (zonder prefix!)
+router = APIRouter()
 
 # Database & Auth
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
 
-# Celery task
+# Celery
 from backend.celery_task.strategy_task import generate_for_setup as generate_strategy_task
 
-# Standard library
 import json
 import csv
 import io
 import logging
-
 # =====================================================================
 # 🌱 1. CREATE STRATEGY (user-specific)
 # =====================================================================
