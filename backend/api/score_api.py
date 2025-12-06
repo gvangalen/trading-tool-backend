@@ -1,14 +1,15 @@
 import logging
+from datetime import date
+
 from fastapi import APIRouter, HTTPException, Depends
 import psycopg2.extras
-from datetime import date
 
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import (
     generate_scores_db,
     get_scores_for_symbol,
 )
-from backend.utils.auth_utils import get_current_user   # 🔐 USER SUPPORT
+from backend.utils.auth_utils import get_current_user   # ✅ juiste huidige import
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
