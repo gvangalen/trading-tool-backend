@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Cookie, status
+from fastapi import APIRouter, Depends, HTTPException, Response, Cookie
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 
@@ -13,16 +13,15 @@ from backend.utils.auth_utils import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    get_current_user,        # ✅ centrale authenticator
+    get_current_user,      # 🔥 centrale authenticator
 )
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 # =========================================================
-# 🔢 Pydantic SCHEMAS
+# 🔢 SCHEMAS
 # =========================================================
 
 class LoginRequest(BaseModel):
@@ -35,7 +34,6 @@ class RegisterRequest(BaseModel):
     last_name: Optional[str] = None
     email: EmailStr
     password: str
-    role: Optional[str] = None  # wordt genegeerd; rol wordt server-side bepaald
 
 
 class UserOut(BaseModel):
@@ -48,10 +46,10 @@ class UserOut(BaseModel):
 
 
 # =========================================================
-# 🔎 Helper functies
+# 🔎 HELPERS
 # =========================================================
 
-def _row_to_user(row) -> Optional[dict]:
+def _row_to_user(row):
     if not row:
         return None
     return {
@@ -65,7 +63,7 @@ def _row_to_user(row) -> Optional[dict]:
     }
 
 
-def _get_user_by_id(user_id: int) -> Optional[dict]:
+def _get_user_by_id(user_id: int):
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute("""
@@ -73,11 +71,10 @@ def _get_user_by_id(user_id: int) -> Optional[dict]:
             FROM users
             WHERE id = %s
         """, (user_id,))
-        row = cur.fetchone()
-    return _row_to_user(row)
+        return _row_to_user(cur.fetchone())
 
 
-def _get_user_by_email(email: str) -> Optional[dict]:
+def _get_user_by_email(email: str):
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute("""
@@ -85,12 +82,11 @@ def _get_user_by_email(email: str) -> Optional[dict]:
             FROM users
             WHERE email = %s
         """, (email,))
-        row = cur.fetchone()
-    return _row_to_user(row)
+        return _row_to_user(cur.fetchone())
 
 
 # =========================================================
-# 🧪 REGISTER ENDPOINT
+# 🧪 REGISTER
 # =========================================================
 
 @router.post("/register", response_model=UserOut)
@@ -100,7 +96,6 @@ def register_user(body: RegisterRequest):
         raise HTTPException(500, "Geen databaseverbinding")
 
     with conn.cursor() as cur:
-        # Bepaal rol op basis van eerste user
         cur.execute("SELECT COUNT(*) FROM users")
         (count,) = cur.fetchone()
         role = "admin" if count == 0 else "user"
@@ -118,20 +113,16 @@ def register_user(body: RegisterRequest):
         except Exception as e:
             conn.rollback()
             logger.exception("❌ register_user error")
-            raise HTTPException(400, "Gebruiker bestaat al of foutieve invoer") from e
+            raise HTTPException(400, "Gebruiker bestaat al") from e
 
     return UserOut(
-        id=row[0],
-        email=row[1],
-        role=row[2],
-        is_active=row[3],
-        first_name=row[4],
-        last_name=row[5],
+        id=row[0], email=row[1], role=row[2],
+        is_active=row[3], first_name=row[4], last_name=row[5]
     )
 
 
 # =========================================================
-# 🔐 LOGIN ENDPOINT
+# 🔐 LOGIN
 # =========================================================
 
 @router.post("/login")
@@ -147,31 +138,28 @@ def login(body: LoginRequest, response: Response):
     access_token = create_access_token(payload)
     refresh_token = create_refresh_token(payload)
 
-    # Cookies plaatsen — browser-vriendelijk
-    response.set_cookie(
-        key="access_token",
-        value=access_token,
+    # =====================================================
+    # 🔥 FIX: Browsers blokkeren samesite=None op HTTP
+    # Daarom gebruiken we tijdelijk:
+    #    samesite="lax"
+    # =====================================================
+    cookie_settings = dict(
         httponly=True,
-        secure=False,      # In productie → True (HTTPS)
-        samesite="none",   # nodig bij cross-origin requests
-        max_age=60 * 60,
+        secure=False,       # Voor HTTP. Bij HTTPS → True
+        samesite="lax",     # 🔥 FIX
         path="/",
     )
 
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=False,
-        samesite="none",
-        max_age=60 * 60 * 24 * 7,
-        path="/",
-    )
+    response.set_cookie("access_token", access_token, max_age=3600, **cookie_settings)
+    response.set_cookie("refresh_token", refresh_token, max_age=3600*24*7, **cookie_settings)
 
     # Update last_login_at
     conn = get_db_connection()
     with conn.cursor() as cur:
-        cur.execute("UPDATE users SET last_login_at=%s WHERE id=%s", (datetime.utcnow(), user["id"]))
+        cur.execute(
+            "UPDATE users SET last_login_at=%s WHERE id=%s",
+            (datetime.utcnow(), user["id"])
+        )
         conn.commit()
 
     return {
@@ -182,17 +170,17 @@ def login(body: LoginRequest, response: Response):
             "role": user["role"],
             "first_name": user["first_name"],
             "last_name": user["last_name"],
-        },
+        }
     }
 
 
 # =========================================================
-# 🚪 LOGOUT ENDPOINT
+# 🚪 LOGOUT
 # =========================================================
 
 @router.post("/logout")
 def logout(response: Response):
-    response = JSONResponse({"success": True, "message": "Uitgelogd"})
+    response = JSONResponse({"success": True})
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
     return response
@@ -205,24 +193,23 @@ def logout(response: Response):
 @router.post("/refresh")
 def refresh_token(
     response: Response,
-    refresh_token: Optional[str] = Cookie(default=None, alias="refresh_token"),
+    refresh_token: Optional[str] = Cookie(default=None)
 ):
     if not refresh_token:
-        raise HTTPException(401, "Geen refresh token aanwezig")
+        raise HTTPException(401, "Geen refresh token")
 
     try:
         payload = decode_token(refresh_token)
     except ValueError:
-        raise HTTPException(401, "Refresh token ongeldig of verlopen")
+        raise HTTPException(401, "Invalid refresh token")
 
     if payload.get("type") != "refresh":
-        raise HTTPException(401, "Onjuist token type voor refresh")
+        raise HTTPException(401, "Incorrect token type")
 
     user = _get_user_by_id(int(payload["sub"]))
-    if not user or not user["is_active"]:
-        raise HTTPException(401, "Gebruiker bestaat niet of is inactief")
+    if not user:
+        raise HTTPException(404, "Gebruiker niet gevonden")
 
-    # Nieuw access token genereren
     new_access = create_access_token({"sub": str(user["id"]), "role": user["role"]})
 
     response = JSONResponse({"success": True})
@@ -231,24 +218,19 @@ def refresh_token(
         value=new_access,
         httponly=True,
         secure=False,
-        samesite="none",
-        max_age=60 * 60,
+        samesite="lax",    # FIX
+        max_age=3600,
         path="/",
     )
-
     return response
 
 
 # =========================================================
-# 🙋‍♂️ /me → GECORRIGEERDE ENDPOINT
+# 👤 /me — moet user opnieuw ophalen
 # =========================================================
 
 @router.get("/me", response_model=UserOut)
 async def get_me(current_user: dict = Depends(get_current_user)):
-    """
-    current_user bevat ALLEEN {"id": ...}
-    → daarom moeten we de volledige user opnieuw ophalen uit de DB
-    """
 
     user = _get_user_by_id(current_user["id"])
     if not user:
@@ -259,6 +241,6 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         email=user["email"],
         role=user["role"],
         is_active=user["is_active"],
-        first_name=user.get("first_name"),
-        last_name=user.get("last_name"),
+        first_name=user["first_name"],
+        last_name=user["last_name"],
     )
