@@ -1,95 +1,114 @@
-import requests
 import logging
+import requests
+
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import calculate_score_from_rules
+from backend.utils.scoring_utils import select_rule_for_value  # ✅ Nieuwe engine
 
 logger = logging.getLogger(__name__)
 
 
-# =====================================================
-# 🌐 Macro waarde ophalen
-# =====================================================
-async def fetch_macro_value(name: str, source: str = None, link: str = None):
-    try:
-        if not link:
-            logger.warning(f"⚠️ Geen link opgegeven voor '{name}'")
-            return None
+# ============================================================
+# 🌐 Macro waarde ophalen via externe API
+# ============================================================
+def fetch_macro_value(name: str, source: str = None, link: str = None):
+    """
+    Haalt de ruwe waarde op van een macro-indicator.
+    Consistente logica voor alle macro-indicatoren.
+    """
 
-        logger.info(f"🌐 Ophalen macro indicator '{name}' via {source} → {link}")
+    if not link:
+        logger.warning(f"⚠️ Geen link opgegeven voor macro-indicator '{name}'")
+        return None
+
+    logger.info(f"🌐 Fetch macro '{name}' via {source} → {link}")
+
+    try:
         resp = requests.get(link, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-
-        # === Fear & Greed Index
-        if "alternative" in (source or "").lower():
-            try:
-                v = data.get("data", [{}])[0].get("value")
-                if v is not None:
-                    return {"value": float(v)}
-            except Exception:
-                pass
-
-        # === BTC Dominance (CoinGecko)
-        if "coingecko" in (source or "").lower():
-            try:
-                v = data.get("data", {}).get("market_cap_percentage", {}).get("btc")
-                if v is not None:
-                    return {"value": float(v)}
-            except Exception:
-                pass
-
-        # === Yahoo Finance: S&P500, VIX, Oil
-        if "yahoo" in (source or "").lower():
-            try:
-                result = data.get("chart", {}).get("result", [{}])[0]
-                meta = result.get("meta", {})
-                v = meta.get("regularMarketPrice")
-                if v is not None:
-                    return {"value": float(v)}
-            except Exception:
-                pass
-
-        # === FRED: Interest / Inflation
-        if "fred" in (source or "").lower():
-            try:
-                obs = data.get("observations", [])
-                if obs:
-                    v = obs[-1].get("value")
-                    if v is not None:
-                        return {"value": float(v)}
-            except Exception:
-                pass
-
-        # === TradingView (geen API)
-        if "tradingview" in (source or "").lower():
-            logger.warning(f"⚠️ TradingView API niet publiek → '{name}' niet opgehaald.")
-            return None
-
-        # === Generic fallback
-        if isinstance(data, dict):
-            for key in ["value", "price"]:
-                if key in data:
-                    return {"value": float(data[key])}
-
-        logger.warning(f"⚠️ Geen waarde gevonden voor macro '{name}': {str(data)[:200]}")
-        return None
-
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen macro-waarde voor '{name}': {e}", exc_info=True)
+        logger.error(f"❌ Macro fetch error voor '{name}': {e}", exc_info=True)
         return None
 
+    source = (source or "").lower()
 
-# =====================================================
-# 🧠 Macro interpretatie via DB (per user!)
-# =====================================================
-def interpret_macro_indicator(name: str, value: float, user_id: int) -> dict | None:
+    # ------------------------------------------------------------
+    # 1) Fear & Greed Index (Alternative.me)
+    # ------------------------------------------------------------
+    if "alternative" in source or "feargreed" in link.lower():
+        try:
+            v = data["data"][0]["value"]
+            return {"value": float(v)}
+        except Exception:
+            logger.warning(f"⚠️ Fear&Greed parse error voor '{name}'")
+
+    # ------------------------------------------------------------
+    # 2) CoinGecko BTC Dominance
+    # ------------------------------------------------------------
+    if "coingecko" in source:
+        try:
+            v = data["data"]["market_cap_percentage"]["btc"]
+            return {"value": float(v)}
+        except Exception:
+            logger.warning(f"⚠️ Fout bij parse van CoinGecko BTC dominance voor '{name}'")
+
+    # ------------------------------------------------------------
+    # 3) Yahoo Finance (S&P500, VIX, etc.)
+    # ------------------------------------------------------------
+    if "yahoo" in source:
+        try:
+            result = data["chart"]["result"][0]
+            meta = result["meta"]
+            return {"value": float(meta["regularMarketPrice"])}
+        except Exception:
+            logger.warning(f"⚠️ Yahoo Finance parse error voor '{name}'")
+
+    # ------------------------------------------------------------
+    # 4) FRED macro data (inflatie, rente)
+    # ------------------------------------------------------------
+    if "fred" in source:
+        try:
+            obs = data.get("observations", [])
+            if obs:
+                v = obs[-1].get("value")
+                if v not in [None, ".", ""]:
+                    return {"value": float(v)}
+        except Exception:
+            logger.warning(f"⚠️ FRED parse error voor '{name}'")
+
+    # ------------------------------------------------------------
+    # 5) Fallback: neem 'value' key of herkenbare keys
+    # ------------------------------------------------------------
+    if isinstance(data, dict):
+        for key in ["value", "price", "index"]:
+            if key in data:
+                try:
+                    return {"value": float(data[key])}
+                except Exception:
+                    pass
+
+    logger.warning(f"⚠️ Onbekend macroformaat voor '{name}': {str(data)[:200]}")
+    return None
+
+
+# ============================================================
+# 🧠 Macro indicator interpretatie via DB-regels (per user)
+# ============================================================
+def interpret_macro_indicator(name: str, value: float, user_id: int):
     """
-    Score, trend, interpretatie, actie via macro_indicator_rules per gebruiker.
+    Vertaalt een ruwe macrowaarde naar:
+    - score (10–100)
+    - trend
+    - interpretation
+    - action
+
+    Op basis van user-specifieke regels in:
+    ▶ macro_indicator_rules (indicator, range_min, range_max, score, trend, interpretation, action)
     """
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding bij interpretatie macro-indicator.")
+        logger.error("❌ Geen DB-verbinding bij interpret_macro_indicator")
         return None
 
     try:
@@ -106,27 +125,40 @@ def interpret_macro_indicator(name: str, value: float, user_id: int) -> dict | N
 
         if not rows:
             logger.warning(
-                f"⚠️ Geen scoreregels gevonden voor macro-indicator '{name}' (user_id={user_id})"
+                f"⚠️ Geen macro rules gevonden voor '{name}' (user_id={user_id})"
             )
             return None
 
+        # Bouw scoreregels
         rules = [
             {
-                "range_min": r[0],
-                "range_max": r[1],
-                "score": r[2],
+                "range_min": float(r[0]),
+                "range_max": float(r[1]),
+                "score": int(r[2]),
                 "trend": r[3],
                 "interpretation": r[4],
-                "action": r[5]
+                "action": r[5],
             }
             for r in rows
         ]
 
-        # Score bepalen via helper
-        return calculate_score_from_rules(value, rules)
+        # Selecteer passende regel
+        rule = select_rule_for_value(value, rules)
+        if not rule:
+            logger.warning(
+                f"⚠️ Geen passende macro rule voor '{name}' (value={value}, user_id={user_id})"
+            )
+            return None
+
+        return {
+            "score": rule["score"],
+            "trend": rule["trend"],
+            "interpretation": rule["interpretation"],
+            "action": rule["action"],
+        }
 
     except Exception as e:
-        logger.error(f"❌ Fout bij interpretatie macro '{name}': {e}", exc_info=True)
+        logger.error(f"❌ Macro interpret error voor '{name}': {e}", exc_info=True)
         return None
 
     finally:
