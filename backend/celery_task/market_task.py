@@ -10,6 +10,7 @@ from collections import defaultdict
 # Eigen imports
 from backend.utils.db import get_db_connection
 from backend.celery_task.btc_price_history_task import update_btc_history  # blijft beschikbaar
+from backend.utils.market_interpreter import interpret_market_indicator  # ✅ centrale interpretatie
 
 # === Config ===
 TIMEOUT = 10
@@ -129,6 +130,34 @@ def store_market_data_db(symbol, price, volume, change_24h):
 
 
 # =====================================================
+# 🧮 Helper: indicator → waarde (op basis van RAW)
+# =====================================================
+def resolve_market_value(indicator_name: str, price: float, volume: float, change_24h: float):
+    """
+    Koppelt een indicatornaam aan de juiste ruwe waarde.
+
+    Voorbeelden:
+    - btc_change_24h   → change_24h
+    - volume_strength  → volume
+    - price_trend      → price
+    - volatility       → abs(change_24h)
+    """
+    name = indicator_name.lower()
+
+    if name == "btc_change_24h":
+        return change_24h
+    if name == "volume_strength":
+        return volume
+    if name == "price_trend":
+        return price
+    if name == "volatility":
+        return abs(change_24h)
+
+    # fallback: None → wordt geskipt
+    return None
+
+
+# =====================================================
 # 📊 Market Scoring (per USER)
 # =====================================================
 def apply_market_scoring(user_id: int):
@@ -136,9 +165,9 @@ def apply_market_scoring(user_id: int):
     Zet de RAW market_data om naar indicator-scores per user
     in market_data_indicators.
 
-    Vereist dat:
-    - indicators(category='market', user_id=...) bestaat
-    - market_indicator_rules(indicator, user_id, ...) bestaat
+    Gebruikt:
+    - indicators(category='market', user_id=...)
+    - market_indicator_rules(indicator, user_id, ...) via interpret_market_indicator()
     """
     conn = get_db_connection()
 
@@ -165,7 +194,7 @@ def apply_market_scoring(user_id: int):
             cur.execute("""
                 DELETE FROM market_data_indicators
                 WHERE DATE(timestamp) = CURRENT_DATE
-                AND user_id = %s
+                  AND user_id = %s
             """, (user_id,))
 
             # MARKET indicators ophalen per user
@@ -179,34 +208,24 @@ def apply_market_scoring(user_id: int):
             indicators = [r[0] for r in cur.fetchall()]
 
             for ind in indicators:
-
-                # juiste raw waarde
-                if ind == "btc_change_24h":
-                    value = change_24h
-                elif ind == "volume_strength":
-                    value = volume
-                elif ind == "price_trend":
-                    value = price
-                elif ind == "volatility":
-                    value = abs(change_24h)
-                else:
+                # 1️⃣ juiste ruwe waarde bepalen
+                value = resolve_market_value(ind, price, volume, change_24h)
+                if value is None:
+                    logger.warning(f"⚠️ Geen waarde voor market-indicator '{ind}' (user_id={user_id})")
                     continue
 
-                # scoreregels ophalen per user
-                cur.execute("""
-                    SELECT range_min, range_max, score, trend, interpretation, action
-                    FROM market_indicator_rules
-                    WHERE indicator=%s AND user_id=%s
-                    ORDER BY range_min ASC
-                """, (ind, user_id))
-                rules = cur.fetchall()
-
-                rule = next((r for r in rules if r[0] <= value < r[1]), None)
-                if not rule:
+                # 2️⃣ interpretatie + score via centrale helper (DB rules)
+                interpretation = interpret_market_indicator(ind, value, user_id)
+                if not interpretation:
+                    logger.warning(f"⚠️ Geen interpretatie voor market-indicator '{ind}' (user_id={user_id})")
                     continue
 
-                range_min, range_max, score, trend, interp, action = rule
+                score = interpretation.get("score", 50)
+                trend = interpretation.get("trend", "")
+                interp = interpretation.get("interpretation", "")
+                action = interpretation.get("action", "")
 
+                # 3️⃣ opslaan in market_data_indicators
                 cur.execute("""
                     INSERT INTO market_data_indicators
                         (user_id, name, value, trend, interpretation, action, score, timestamp)
