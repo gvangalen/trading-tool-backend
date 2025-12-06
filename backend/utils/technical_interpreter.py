@@ -2,10 +2,7 @@ import logging
 import requests
 
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import (
-    normalize_indicator_name,
-    select_rule_for_value,            # ✅ nieuwe engine
-)
+from backend.utils.scoring_utils import normalize_indicator_name
 
 logger = logging.getLogger(__name__)
 
@@ -67,16 +64,16 @@ def fetch_technical_value(name: str, source: str = None, link: str = None):
                     ratio = closes[-1] / ma
                     return {"value": round(ratio, 4)}
 
-            # Volume
+            # Volume (laatste 10 candles)
             if "volume" in name.lower():
                 return {"value": sum(volumes[-10:])}
 
-            # Close
+            # Laatste close
             if name.lower() == "close":
                 return {"value": closes[-1]}
 
         # ---------------------------------------------------------
-        # Andere API’s
+        # 📌 Fallback API’s
         # ---------------------------------------------------------
         if isinstance(data, dict):
             for key in ["value", "close", "price"]:
@@ -89,7 +86,7 @@ def fetch_technical_value(name: str, source: str = None, link: str = None):
                 if key in last:
                     return {"value": float(last[key])}
 
-        logger.warning(f"⚠️ Geen bruikbare data: {str(data)[:120]}")
+        logger.warning(f"⚠️ Geen bruikbare data: {str(data)[:150]}")
         return None
 
     except Exception as e:
@@ -97,13 +94,15 @@ def fetch_technical_value(name: str, source: str = None, link: str = None):
         return None
 
 
-
 # =========================================================
 # 🧠 SCOREREGELS VIA DATABASE (PER USER)
 # =========================================================
 def interpret_technical_indicator_db(indicator: str, value: float, user_id: int):
     """
-    Nieuwe veilige scoring op basis van DB-regels + select_rule_for_value()
+    Nieuwe, zuivere interpretatielaag:
+    - Normaliseert indicatornaam
+    - Haalt user-specifieke scoreregels op
+    - Matcht via min/max ranges
     """
 
     conn = get_db_connection()
@@ -112,7 +111,7 @@ def interpret_technical_indicator_db(indicator: str, value: float, user_id: int)
         return None
 
     try:
-        indicator = normalize_indicator_name(indicator)  # ❗ belangrijk
+        indicator = normalize_indicator_name(indicator)
 
         with conn.cursor() as cur:
             cur.execute("""
@@ -128,31 +127,23 @@ def interpret_technical_indicator_db(indicator: str, value: float, user_id: int)
             logger.warning(f"⚠️ Geen scoreregels gevonden voor '{indicator}' (user_id={user_id})")
             return None
 
-        # Structureren
-        rules = [
-            {
-                "range_min": float(r[0]) if r[0] is not None else None,
-                "range_max": float(r[1]) if r[1] is not None else None,
-                "score": int(r[2]),
-                "trend": r[3],
-                "interpretation": r[4],
-                "action": r[5],
-            }
-            for r in rows
-        ]
+        # Ranges doorlopen
+        for (min_v, max_v, score, trend, interp, act) in rows:
+            if (min_v is None or value >= min_v) and (max_v is None or value < max_v):
+                return {
+                    "score": score,
+                    "trend": trend,
+                    "interpretation": interp,
+                    "action": act,
+                }
 
-        # Gebruik de universele scoring engine
-        matched = select_rule_for_value(value, rules)
-
-        if not matched:
-            return {
-                "score": 50,
-                "interpretation": "Geen matchende scoreregel",
-                "action": "–",
-                "trend": "neutral",
-            }
-
-        return matched
+        # Geen match → neutrale fallback
+        return {
+            "score": 50,
+            "trend": "neutral",
+            "interpretation": "Geen matchende scoreregel",
+            "action": "–"
+        }
 
     except Exception as e:
         logger.error(f"❌ interpret_technical_indicator_db fout: {e}", exc_info=True)
@@ -160,19 +151,3 @@ def interpret_technical_indicator_db(indicator: str, value: float, user_id: int)
 
     finally:
         conn.close()
-
-
-
-# =========================================================
-# 🧹 LEGACY — NIET MEER GEBRUIKT
-# =========================================================
-def interpret_technical_indicator(name: str, value: float):
-    normalized = normalize_indicator_name(name)
-    return {
-        "indicator": normalized,
-        "value": value,
-        "score": 50,
-        "trend": "",
-        "interpretation": "Legacy function — niet meer in gebruik",
-        "action": ""
-    }
