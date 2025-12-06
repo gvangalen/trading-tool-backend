@@ -1,8 +1,10 @@
 import logging
 import requests
-from backend.utils.scoring_utils import get_score_rule_from_db, normalize_indicator_name
+from backend.utils.db import get_db_connection
+from backend.utils.scoring_utils import normalize_indicator_name
 
 logger = logging.getLogger(__name__)
+
 
 # =========================================================
 # 📈 RSI Berekening
@@ -28,15 +30,11 @@ def calculate_rsi(closes, period=14):
 
 
 # =========================================================
-# 🌐 Technische data ophalen
+# 🌐 Technische indicator waarde ophalen
 # =========================================================
 def fetch_technical_value(name: str, source: str = None, link: str = None):
     """
-    Haalt technische indicator op:
-    - RSI
-    - MA200 (met juiste RATIO!)
-    - Volume
-    - Close waarde
+    RSI, MA200 (ratio!), Volume, Close etc.
     """
 
     try:
@@ -51,25 +49,22 @@ def fetch_technical_value(name: str, source: str = None, link: str = None):
         data = resp.json()
 
         # ---------------------------------------------------------
-        # 📌 Binance klines (standaard in jouw tool)
+        # 📌 Binance klines — jouw standaard datasource
         # ---------------------------------------------------------
         if "binance" in link.lower() and isinstance(data, list):
 
-            closes = [float(k[4]) for k in data if isinstance(k, list) and len(k) >= 5]
-            volumes = [float(k[5]) for k in data if isinstance(k, list) and len(k) >= 6]
+            closes = [float(k[4]) for k in data]
+            volumes = [float(k[5]) for k in data]
 
             # -----------------------------------------------------
-            # 1️⃣ RSI
+            # RSI
             # -----------------------------------------------------
             if "rsi" in name.lower():
                 value = calculate_rsi(closes)
                 return {"value": value}
 
             # -----------------------------------------------------
-            # 2️⃣ MA200 → RETURN RATIO voor DB score rules!
-            #
-            #   ratio = close / MA200
-            #
+            # MA200 → ratio close / MA200
             # -----------------------------------------------------
             if "ma_200" in name.lower() or name.lower() == "ma200":
                 if len(closes) >= 200:
@@ -79,19 +74,19 @@ def fetch_technical_value(name: str, source: str = None, link: str = None):
                     return {"value": round(ratio, 4)}
 
             # -----------------------------------------------------
-            # 3️⃣ Volume (laatste 10 candles)
+            # Volume (laatste 10 candles)
             # -----------------------------------------------------
             if "volume" in name.lower():
                 return {"value": sum(volumes[-10:])}
 
             # -----------------------------------------------------
-            # 4️⃣ Close prijs
+            # Close price
             # -----------------------------------------------------
             if name.lower() == "close":
-                return {"value": float(closes[-1])}
+                return {"value": closes[-1]}
 
         # ---------------------------------------------------------
-        # 📌 Andere API's (fallback)
+        # Andere API's (fallback)
         # ---------------------------------------------------------
         if isinstance(data, dict):
             for key in ["value", "close", "price"]:
@@ -113,46 +108,79 @@ def fetch_technical_value(name: str, source: str = None, link: str = None):
         return None
 
 
+
 # =========================================================
-# 📊 Interpretatie via DB-regels
+# 🧠 NIEUW: interpretatie via SCOREREGELS IN DB (per user)
+# =========================================================
+def interpret_technical_indicator_db(indicator: str, value: float, user_id: int):
+    """
+    Gebruikt scoreregels uit `technical_indicator_rules` (per gebruiker).
+    Zo werkt jouw nieuwe systeem!
+    """
+
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen DB-verbinding bij interpretatie.")
+        return None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT range_min, range_max, score, interpretation, action, trend
+                FROM technical_indicator_rules
+                WHERE indicator = %s AND user_id = %s
+                ORDER BY range_min ASC
+            """, (indicator, user_id))
+
+            rows = cur.fetchall()
+
+        if not rows:
+            logger.warning(f"⚠️ Geen scoreregels gevonden voor '{indicator}' (user_id={user_id})")
+            return None
+
+        # ---------------------------------------------------------
+        # Zoek de passende scoreregel
+        # ---------------------------------------------------------
+        for (min_v, max_v, score, interp, act, trend) in rows:
+            if (min_v is None or value >= min_v) and (max_v is None or value < max_v):
+                return {
+                    "score": score,
+                    "interpretation": interp,
+                    "action": act,
+                    "trend": trend,
+                }
+
+        # Geen match → fallback
+        return {
+            "score": 50,
+            "interpretation": "Geen matchende scoreregel",
+            "action": "–",
+            "trend": "neutral",
+        }
+
+    except Exception as e:
+        logger.error(f"❌ interpret_technical_indicator_db fout: {e}")
+        return None
+
+    finally:
+        conn.close()
+
+
+
+# =========================================================
+# LEGACY FUNCTIE — alleen als fallback (niet meer gebruikt)
 # =========================================================
 def interpret_technical_indicator(name: str, value: float):
     """
-    Combineert waarde + scoreregels in DB:
-    - score
-    - trend
-    - interpretation
-    - action
+    Deze oude functie werkt niet met users.
+    Je Celery-task gebruikt deze niet meer.
     """
-
-    if value is None:
-        return {
-            "indicator": name,
-            "value": None,
-            "score": 10,
-            "trend": "",
-            "interpretation": "Geen data",
-            "action": ""
-        }
-
     normalized = normalize_indicator_name(name)
-    rule = get_score_rule_from_db("technical", normalized, value)
-
-    if not rule:
-        return {
-            "indicator": normalized,
-            "value": value,
-            "score": 10,
-            "trend": "",
-            "interpretation": "Geen scoreregels gevonden",
-            "action": ""
-        }
-
     return {
         "indicator": normalized,
         "value": value,
-        "score": rule["score"],
-        "trend": rule["trend"],
-        "interpretation": rule["interpretation"],
-        "action": rule["action"]
+        "score": 50,
+        "trend": "",
+        "interpretation": "Legacy function — niet meer in gebruik",
+        "action": ""
     }
