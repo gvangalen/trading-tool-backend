@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any
 
 from jose import jwt, JWTError
 from passlib.context import CryptContext
-from fastapi import Request, HTTPException, status  # ✅ nieuw
+from fastapi import Request, HTTPException, status
 
 # =========================================
 # 🔐 Config
@@ -20,7 +20,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # =========================================
-# 🔑 Password helpers
+# 🧂 Password helpers
 # =========================================
 
 def hash_password(password: str) -> str:
@@ -32,7 +32,7 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
 
 
 # =========================================
-# 🧾 JWT helpers
+# 🎫 JWT helpers
 # =========================================
 
 def create_token(
@@ -41,7 +41,7 @@ def create_token(
     token_type: str = "access",
 ) -> str:
     """
-    data: bijv. {"sub": user_id, "role": "admin"}
+    data: bijv. {"sub": user_id}
     token_type: "access" of "refresh"
     """
     to_encode = data.copy()
@@ -78,39 +78,50 @@ def decode_token(token: str) -> Dict[str, Any]:
 
 
 # =========================================
-# 🔙 Backwards compatible helper
-#    voor routes die get_current_user gebruiken
+# 🔑 Nieuw: Correcte user-auth via cookies
 # =========================================
 
 async def get_current_user(request: Request):
     """
-    Backwards compatible helper zodat oude imports blijven werken.
+    Haalt een geldige JWT access token uit 'access_token' cookie.
+    Decodet token, haalt user_id uit 'sub', en geeft {"id": user_id} terug.
 
-    Voor nu:
-    - leest `user_id` uit de query (?user_id=...)
-    - geeft een simpel user-object terug: {"id": <user_id>}
-
-    Later kun je dit makkelijk aanpassen om:
-    - user_id uit JWT / cookies te halen, of
-    - de volledige user uit de database op te zoeken.
+    Werkt 100% correct met Next.js wanneer fetch() gebruikt:
+        credentials: "include"
     """
 
-    user_id = request.query_params.get("user_id")
+    # 1️⃣ Token ophalen uit cookies
+    token = request.cookies.get("access_token")
 
-    if not user_id:
-        # Geen user_id mee → beschouwen als niet ingelogd
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
+            detail="Missing access token",
         )
 
+    # 2️⃣ JWT decoderen
     try:
-        uid = int(user_id)
-    except ValueError:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid user_id",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
         )
 
-    # Voor nu alleen id teruggeven; meer velden kun je later toevoegen
-    return {"id": uid}
+    # 3️⃣ Token type check
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type",
+        )
+
+    # 4️⃣ User ID ophalen
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token missing user_id",
+        )
+
+    # 5️⃣ Return value (optioneel: haal volledige user uit DB)
+    return {"id": int(user_id)}
