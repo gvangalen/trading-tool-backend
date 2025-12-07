@@ -35,7 +35,7 @@ def normalize_indicator_name(name: str) -> str:
     return NAME_ALIASES.get(normalized, normalized)
 
 # =========================================================
-# 🎯 Score regel ophalen uit database (GEEN user-id nodig → config is globaal)
+# 🎯 Score regel ophalen uit database (GEEN user-id nodig)
 # =========================================================
 def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> Optional[dict]:
     conn = get_db_connection()
@@ -83,32 +83,32 @@ def get_score_rule_from_db(category: str, indicator_name: str, value: float) -> 
         conn.close()
 
 # =========================================================
-# 🔥 MARKET: Dynamische indicatoren + ruwe data
+# 🔥 MARKET DATA LAADFUNCTIES (GEEN user_id!)
 # =========================================================
 def load_market_indicators(conn):
     with conn.cursor() as cur:
         cur.execute("SELECT DISTINCT indicator FROM market_indicator_rules;")
         return [r[0] for r in cur.fetchall()]
 
-def load_market_raw_data(conn, user_id: int):
+def load_market_raw_data(conn):
     """
-    Haal BTC market-data op MAAR user-specific (market_data heeft user_id!)
+    Market data is globaal — GEEN user_id in database
     """
     with conn.cursor() as cur:
         cur.execute("""
             SELECT price, volume, change_24h
             FROM market_data
-            WHERE symbol='BTC' AND user_id=%s
+            WHERE symbol='BTC'
             ORDER BY timestamp DESC LIMIT 1;
-        """, (user_id,))
+        """)
         snapshot = cur.fetchone()
 
         cur.execute("""
             SELECT open, high, low, close, change
             FROM market_data_7d
-            WHERE symbol='BTC' AND user_id=%s
+            WHERE symbol='BTC'
             ORDER BY date DESC LIMIT 1;
-        """, (user_id,))
+        """)
         ohlc = cur.fetchone()
 
     return snapshot, ohlc
@@ -146,34 +146,35 @@ def extract_market_data(rule_indicators, snapshot, ohlc):
     return data
 
 # =========================================================
-# 🔢 Scoregenerator (USES USER DATA)
+# 🔢 Scoregenerator
 # =========================================================
 def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None, user_id: int = None):
     """
-    Belangrijk: user_id is verplicht voor MACRO, TECHNICAL en MARKET
+    Score engine — user_id verplicht voor macro & technical
+    Market gebruikt GEEN user_id!
     """
-    if user_id is None:
-        raise ValueError("❌ generate_scores_db(): user_id is verplicht!")
+    if category != "market" and user_id is None:
+        raise ValueError("❌ generate_scores_db(): user_id is verplicht voor macro/technical!")
 
-    # MARKET special case
+    # MARKET (globaal)
     if category == "market":
         conn = get_db_connection()
         if not conn:
-            return {"scores": {}, "total_score": 0}
+            return {"scores": {}, "total_score": 10}
 
         try:
             rule_indicators = load_market_indicators(conn)
-            snapshot, ohlc = load_market_raw_data(conn, user_id)
+            snapshot, ohlc = load_market_raw_data(conn)
             data = extract_market_data(rule_indicators, snapshot, ohlc)
         finally:
             conn.close()
 
-    # MACRO / TECHNICAL autodata
+    # MACRO / TECHNICAL → user-specific data
     elif data is None:
         data = {}
         conn = get_db_connection()
         if not conn:
-            return {"scores": {}, "total_score": 0}
+            return {"scores": {}, "total_score": 10}
 
         try:
             with conn.cursor() as cur:
@@ -200,7 +201,7 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None, u
         finally:
             conn.close()
 
-    # Geen data → fallback
+    # Geen data → minimale score (10)
     if not data:
         return {"scores": {}, "total_score": 10}
 
@@ -234,11 +235,11 @@ def generate_scores_db(category: str, data: Optional[Dict[str, float]] = None, u
 # =========================================================
 def get_scores_for_symbol(user_id: int, include_metadata: bool = False) -> Dict[str, Any]:
     """
-    Centrale functie die ALLE 4 categorieën combineert:
+    Combineert scores:
     - macro
     - technical
-    - market
-    - setup_score (macro+technical / 2 voorlopig)
+    - market (globaal)
+    - setup score (macro+technical gemiddelde)
     """
 
     if user_id is None:
@@ -269,14 +270,14 @@ def get_scores_for_symbol(user_id: int, include_metadata: bool = False) -> Dict[
             """, (user_id,))
             technical_data = {normalize_indicator_name(r[0]): float(r[1]) for r in cur.fetchall()}
 
+        # Scores
         macro_scores = generate_scores_db("macro", macro_data, user_id=user_id)
         tech_scores = generate_scores_db("technical", technical_data, user_id=user_id)
-        market_scores = generate_scores_db("market", user_id=user_id)
+        market_scores = generate_scores_db("market")
 
         macro_avg = macro_scores["total_score"]
         tech_avg = tech_scores["total_score"]
         market_avg = market_scores["total_score"]
-
         setup_score = round((macro_avg + tech_avg) / 2)
 
         result = {
@@ -286,6 +287,7 @@ def get_scores_for_symbol(user_id: int, include_metadata: bool = False) -> Dict[
             "setup_score": setup_score,
         }
 
+        # Metadata voor dashboard → optioneel
         if include_metadata:
             def top(scores_dict):
                 if "scores" not in scores_dict:
