@@ -331,7 +331,7 @@ def get_latest_btc_price(current_user: dict = Depends(get_current_user)):
 
 
 # =========================================================
-# GET /market_data/interpreted — interpretatie + score (per user)
+# GET /market_data/interpreted — ***UPDATED VERSION***
 # =========================================================
 @router.get("/market_data/interpreted")
 async def fetch_interpreted_data(current_user: dict = Depends(get_current_user)):
@@ -356,7 +356,7 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
 
         symbol, price, change, volume, timestamp = row
 
-        # ⬇️ score voor deze user ophalen
+        # ⬇️ Global MARKET score ophalen (maar wel user-id nodig om macro/tech/setups te combineren)
         scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
 
         return {
@@ -365,10 +365,18 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
             "price": float(price),
             "change_24h": float(change),
             "volume": float(volume),
+
+            # 📌 MARKET SCORE IS GLOBAAL (niet user-specific)
             "score": scores.get("market_score", 0),
-            "trend": "–",
-            "interpretation": scores.get("market_interpretation", ""),
-            "action": "Geen actie",
+
+            # 📌 Top contributors zijn nu netjes zichtbaar
+            "top_contributors": scores.get("market_top_contributors", []),
+
+            # 📌 Interpretatie van de scoreregels
+            "interpretation": scores.get("market_interpretation", "Geen interpretatie"),
+
+            # 📌 MARKET heeft normaal geen acties – dit blijft zo
+            "action": "Geen actie (market-score is globaal)",
         }
 
     except Exception as e:
