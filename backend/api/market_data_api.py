@@ -8,7 +8,7 @@ import httpx
 
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_scores_for_symbol
-from backend.utils.auth_utils import get_current_user  # ✅ user uit JWT/cookie
+from backend.utils.auth_utils import get_current_user  # alleen voor interpreted endpoint
 
 # =========================================================
 # ⚙️ Router setup
@@ -50,17 +50,16 @@ MARKET_RAW_ENDPOINTS = get_market_raw_endpoints()
 
 
 # =========================================================
-# 📅 GET /market_data/day — DAGTABEL (per user)
+# 📅 GET /market_data/day — DAGTABEL (GLOBAAL)
 # =========================================================
 @router.get("/market_data/day")
-async def get_latest_market_day_data(current_user: dict = Depends(get_current_user)):
+async def get_latest_market_day_data():
     """
-    Haalt de meest recente market-indicatoren op voor de ingelogde user.
+    Haalt de meest recente market-indicatoren op (globaal).
     Eerst vandaag, anders fallback naar laatste beschikbare dag.
+    GEEN user_id filter meer.
     """
     logger.info("📄 [market/day] Ophalen market-dagdata (met fallback)...")
-
-    user_id = current_user["id"]
 
     conn = get_db_connection()
     if not conn:
@@ -73,22 +72,20 @@ async def get_latest_market_day_data(current_user: dict = Depends(get_current_us
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM market_data_indicators
                 WHERE DATE(timestamp) = CURRENT_DATE
-                  AND user_id = %s
                 ORDER BY timestamp DESC;
-            """, (user_id,))
+            """)
             rows = cur.fetchall()
 
-            # 2️⃣ FALLBACK naar meest recente dag voor deze user
+            # 2️⃣ FALLBACK naar meest recente dag (globaal)
             if not rows:
                 logger.warning("⚠️ Geen market-data voor vandaag — fallback gebruiken.")
 
                 cur.execute("""
                     SELECT timestamp
                     FROM market_data_indicators
-                    WHERE user_id = %s
                     ORDER BY timestamp DESC
                     LIMIT 1;
-                """, (user_id,))
+                """)
                 last = cur.fetchone()
 
                 if not last:
@@ -100,9 +97,8 @@ async def get_latest_market_day_data(current_user: dict = Depends(get_current_us
                     SELECT name, value, trend, interpretation, action, score, timestamp
                     FROM market_data_indicators
                     WHERE DATE(timestamp) = %s
-                      AND user_id = %s
                     ORDER BY timestamp DESC;
-                """, (fallback_date, user_id))
+                """, (fallback_date,))
                 rows = cur.fetchall()
 
         return [
@@ -205,15 +201,12 @@ def get_market_indicator_rules(name: str):
 
 
 # =========================================================
-# GET /market_data/list — ruwe BTC data (per user)
+# GET /market_data/list — ruwe BTC data (GLOBAAL)
 # =========================================================
 @router.get("/market_data/list")
 async def list_market_data(
     since_minutes: int = Query(default=1440),
-    current_user: dict = Depends(get_current_user),
 ):
-    user_id = current_user["id"]
-
     try:
         conn = get_db_connection()
         cur = conn.cursor()
@@ -222,9 +215,8 @@ async def list_market_data(
             SELECT id, symbol, price, open, high, low, change_24h, volume, timestamp
             FROM market_data
             WHERE timestamp >= %s
-              AND user_id = %s
             ORDER BY timestamp DESC
-        """, (time_threshold, user_id))
+        """, (time_threshold,))
         rows = cur.fetchall()
         conn.close()
 
@@ -305,22 +297,19 @@ async def fill_btc_7day_data():
 
 
 # =========================================================
-# GET /market_data/btc/latest  (per user)
+# GET /market_data/btc/latest  (GLOBAAL)
 # =========================================================
 @router.get("/market_data/btc/latest")
-def get_latest_btc_price(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-
+def get_latest_btc_price():
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute("""
             SELECT id, symbol, price, change_24h, volume, timestamp
             FROM market_data
             WHERE symbol = 'BTC'
-              AND user_id = %s
             ORDER BY timestamp DESC
             LIMIT 1
-        """, (user_id,))
+        """)
         row = cur.fetchone()
 
         if not row:
@@ -331,10 +320,15 @@ def get_latest_btc_price(current_user: dict = Depends(get_current_user)):
 
 
 # =========================================================
-# GET /market_data/interpreted — ***UPDATED VERSION***
+# GET /market_data/interpreted — interpretatie + score
 # =========================================================
 @router.get("/market_data/interpreted")
 async def fetch_interpreted_data(current_user: dict = Depends(get_current_user)):
+    """
+    Market-data interpretatie:
+    - Ruwe BTC data is GLOBAAL (geen user_id in DB)
+    - Score & uitleg komen uit ai_scores / ai_master_score (per user)
+    """
     user_id = current_user["id"]
 
     try:
@@ -344,10 +338,9 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
             SELECT symbol, price, change_24h, volume, timestamp
             FROM market_data
             WHERE symbol = 'BTC'
-              AND user_id = %s
             ORDER BY timestamp DESC
             LIMIT 1
-        """, (user_id,))
+        """)
         row = cur.fetchone()
         conn.close()
 
@@ -356,7 +349,8 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
 
         symbol, price, change, volume, timestamp = row
 
-        # ⬇️ Global MARKET score ophalen (maar wel user-id nodig om macro/tech/setups te combineren)
+        # ⬇️ Global MARKET score ophalen, maar wél user-id nodig
+        # om macro/technical/setup scores te combineren
         scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
 
         return {
@@ -366,16 +360,9 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
             "change_24h": float(change),
             "volume": float(volume),
 
-            # 📌 MARKET SCORE IS GLOBAAL (niet user-specific)
             "score": scores.get("market_score", 0),
-
-            # 📌 Top contributors zijn nu netjes zichtbaar
             "top_contributors": scores.get("market_top_contributors", []),
-
-            # 📌 Interpretatie van de scoreregels
             "interpretation": scores.get("market_interpretation", "Geen interpretatie"),
-
-            # 📌 MARKET heeft normaal geen acties – dit blijft zo
             "action": "Geen actie (market-score is globaal)",
         }
 
