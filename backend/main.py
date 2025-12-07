@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
 # ------------------------------------------------------------
-# 🌍 CORS — FIX: frontend & backend origins compleet gemaakt
+# 🌍 CORS — volledig correct voor cookies
 # ------------------------------------------------------------
 allow_origins = [
     # Local development
@@ -47,7 +47,7 @@ allow_origins = [
     "http://143.47.186.148",
     "http://143.47.186.148:3000",
 
-    # ❗ BELANGRIJK: backend origin zelf (anders geen cookies!)
+    # Backend origin zelf (NODIG VOOR COOKIES)
     "http://143.47.186.148:5002",
     "https://143.47.186.148",
     "https://143.47.186.148:3000",
@@ -57,21 +57,21 @@ allow_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
-    allow_origin_regex=".*", 
-    allow_credentials=True,
+    allow_origin_regex=".*",
+    allow_credentials=True,   # ⭐ cookies TOEGESTAAN
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ------------------------------------------------------------
-# 📂 Static files map
+# 📂 Static files
 # ------------------------------------------------------------
 app.mount("/static", StaticFiles(directory="backend/static"), name="static")
 
 
-# ============================================================
-# 🔧 Helper: veilig dynamisch routers includen
-# ============================================================
+# ==================================================================
+# 🔧 Helper: veilig routers includen (1 centrale plek, OPTIE A)
+# ==================================================================
 def safe_include(import_path, name=""):
     try:
         module = importlib.import_module(import_path)
@@ -82,9 +82,9 @@ def safe_include(import_path, name=""):
         traceback.print_exc()
 
 
-# ============================================================
-# 📦 BASIS ROUTERS
-# ============================================================
+# ==================================================================
+# 📦 BASIS ROUTERS (volgorde maakt niet uit behalve auth)
+# ==================================================================
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
@@ -95,35 +95,32 @@ safe_include("backend.api.sidebar_api", "sidebar_api")
 safe_include("backend.api.onboarding_api", "onboarding_api")
 safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
-
-# ============================================================
-# 🧠 AI AGENTS ROUTER
-# ============================================================
 safe_include("backend.api.agents_api", "agents_api")
 
-# ============================================================
-# 🔐 AUTHENTICATIE ROUTER (juiste volgorde)
-# ============================================================
+# ==================================================================
+# 🔐 AUTHENTICATIE ROUTER (optie A → prefix komt alleen uit main.py)
+# ==================================================================
 safe_include("backend.api.auth_api", "auth_api")
 
-# ============================================================
-# 🗂 Extra legacy routes
-# ============================================================
+
+# ==================================================================
+# 🗂 Legacy routes
+# ==================================================================
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
 
 
-# ============================================================
+# ==================================================================
 # 👨‍⚕️ Health check
-# ============================================================
+# ==================================================================
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API is running"}
 
 
-# ============================================================
-# 📋 Debug listing van alle routes
-# ============================================================
+# ==================================================================
+# 🧭 Debug: lijst ALLE routes
+# ==================================================================
 print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
 for route in app.routes:
     if isinstance(route, APIRoute):
