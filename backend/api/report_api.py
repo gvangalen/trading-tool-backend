@@ -1,11 +1,11 @@
 print("🟢 report_api wordt geladen ✅")
 
 import logging
-import os
 from datetime import datetime
+import os
 
 from fastapi import APIRouter, HTTPException, Query, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 
 from backend.utils.db import get_db_connection
 from backend.utils.pdf_generator import generate_pdf_report
@@ -22,33 +22,36 @@ logging.basicConfig(level=logging.INFO)
 
 
 # ======================================================
-# 📄 PDF export helper — nu user-specifiek
+# 📄 PDF export helper — volledig in-memory
 # ======================================================
 def export_pdf(report_type: str, report: dict, date: str, user_id: int):
     """
-    Maak een PDF-bestand aan in static/pdf/<type>/ en geef FileResponse terug.
-    Bestandsnaam bevat nu ook user_id zodat meerdere users
-    niet elkaars rapport-bestanden overschrijven.
+    Maak een PDF-bestand in memory en stuur het als download naar de client.
+    Geen bestanden meer op disk → geen opschoonproblemen.
+    Bestandsnaam bevat user_id zodat het duidelijk is voor de gebruiker.
     """
-    # 📁 Folder per report-type
-    pdf_dir = os.path.join("static", "pdf", report_type)
-    os.makedirs(pdf_dir, exist_ok=True)
-
-    # 📄 Bestandsnaam met user_id
+    # Bestandsnaam voor de download
     filename = f"{report_type}_report_user_{user_id}_{date}.pdf"
-    pdf_path = os.path.join(pdf_dir, filename)
 
-    # 🛠️ PDF genereren (in memory) en opslaan
-    pdf_buffer = generate_pdf_report(report, report_type=report_type, save_to_disk=False)
-    with open(pdf_path, "wb") as f:
-        f.write(pdf_buffer.getbuffer())
+    # PDF genereren (BytesIO) – save_to_disk=False om geen extra IO te doen
+    pdf_buffer = generate_pdf_report(
+        report,
+        report_type=report_type,
+        save_to_disk=False,
+    )
+    pdf_buffer.seek(0)
 
-    logger.info(f"[export_pdf] ✅ PDF opgeslagen op: {pdf_path}")
+    logger.info(f"[export_pdf] ✅ PDF gegenereerd voor user={user_id}, type={report_type}, date={date}")
 
-    return FileResponse(
-        pdf_path,
+    # StreamingResponse zodat de browser het direct als download krijgt
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    }
+
+    return StreamingResponse(
+        pdf_buffer,
         media_type="application/pdf",
-        filename=filename
+        headers=headers,
     )
 
 
@@ -70,7 +73,7 @@ async def get_daily_latest(current_user: dict = Depends(get_current_user)):
                 ORDER BY report_date DESC
                 LIMIT 1;
                 """,
-                (user_id,)
+                (user_id,),
             )
             row = cur.fetchone()
             if not row:
@@ -84,7 +87,7 @@ async def get_daily_latest(current_user: dict = Depends(get_current_user)):
 @router.get("/report/daily/by-date")
 async def get_daily_by_date(
     date: str = Query(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     try:
@@ -102,13 +105,13 @@ async def get_daily_by_date(
                 WHERE report_date = %s AND user_id = %s
                 LIMIT 1;
                 """,
-                (parsed_date, user_id)
+                (parsed_date, user_id),
             )
             row = cur.fetchone()
             if not row:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Geen dagelijks rapport gevonden voor {parsed_date}"
+                    detail=f"Geen dagelijks rapport gevonden voor {parsed_date}",
                 )
             cols = [desc[0] for desc in cur.description]
             return dict(zip(cols, row))
@@ -118,8 +121,12 @@ async def get_daily_by_date(
 
 @router.get("/report/daily/history")
 async def get_daily_report_history(
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
+    """
+    Geeft de laatste 10 daily-report datums terug voor de user.
+    Bij geen data: gewoon [] (geen 404), zodat de frontend geen errors gooit.
+    """
     logger.info("🚀 Daily report history endpoint aangeroepen")
     user_id = current_user["id"]
     conn = get_db_connection()
@@ -134,41 +141,60 @@ async def get_daily_report_history(
                 ORDER BY report_date DESC
                 LIMIT 10;
                 """,
-                (user_id,)
+                (user_id,),
             )
             rows = cur.fetchall()
-            logger.info(f"🧪 Gevonden {len(rows)} daily reports voor user {user_id}: {rows}")
-            if not rows:
-                raise HTTPException(status_code=404, detail="Geen daily reports gevonden.")
+            logger.info(f"🧪 Gevonden {len(rows)} daily reports voor user {user_id}")
             return [r[0].isoformat() for r in rows]
     finally:
         conn.close()
 
 
-@router.post("/report/daily/generate")
-async def generate_daily(current_user: dict = Depends(get_current_user)):
+@router.post("/report/daily/preview")
+async def preview_daily_report(current_user: dict = Depends(get_current_user)):
     """
     Genereert een daily report *preview* via de AI-agent (zonder in DB op te slaan).
-    Voor het echte opslaan gebruik je de Celery-task `generate_daily_report` elders.
+    Handig voor een snelle check in de UI.
     """
     user_id = current_user["id"]
     try:
-        # 💡 Zorg dat generate_daily_report_sections(user_id=...) ondersteunt
-        report = generate_daily_report_sections(user_id=user_id)
+        # Idealiter ondersteunt deze functie user_id
+        try:
+            report = generate_daily_report_sections(user_id=user_id)
+        except TypeError:
+            # Backwards compat als de functie nog geen user_id accepteert
+            report = generate_daily_report_sections()
+
         return {
             "status": "ok",
             "generated_at": datetime.utcnow().isoformat(),
             "user_id": user_id,
             "report": report,
         }
-    except TypeError:
-        # Backwards compat: als functie nog geen user_id kent
-        report = generate_daily_report_sections()
+    except Exception as e:
+        logger.exception("[/report/daily/preview] Fout:")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/report/daily/generate")
+async def generate_daily(current_user: dict = Depends(get_current_user)):
+    """
+    Start Celery-task voor het *echte* daily report voor deze user.
+    Dit rapport wordt in de database opgeslagen.
+    """
+    user_id = current_user["id"]
+    try:
+        # Idealiter accepteert de Celery-task user_id
+        try:
+            task = generate_daily_report.delay(user_id=user_id)
+        except TypeError:
+            # Backwards compat zonder user_id in signature
+            task = generate_daily_report.delay()
+
         return {
-            "status": "ok",
-            "generated_at": datetime.utcnow().isoformat(),
+            "message": "Daily report taak gestart",
+            "task_id": task.id,
             "user_id": user_id,
-            "report": report,
         }
     except Exception as e:
         logger.exception("[/report/daily/generate] Fout:")
@@ -178,7 +204,7 @@ async def generate_daily(current_user: dict = Depends(get_current_user)):
 @router.get("/report/daily/export/pdf")
 async def export_daily_pdf(
     date: str = Query(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     try:
@@ -196,7 +222,7 @@ async def export_daily_pdf(
                 WHERE report_date = %s AND user_id = %s
                 LIMIT 1;
                 """,
-                (parsed_date, user_id)
+                (parsed_date, user_id),
             )
             row = cur.fetchone()
             if not row:
@@ -227,7 +253,7 @@ async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
                 ORDER BY report_date DESC
                 LIMIT 1;
                 """,
-                (user_id,)
+                (user_id,),
             )
             row = cur.fetchone()
             if not row:
@@ -241,7 +267,7 @@ async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
 @router.get("/report/weekly/by-date")
 async def get_weekly_by_date(
     date: str = Query(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     try:
@@ -259,13 +285,13 @@ async def get_weekly_by_date(
                 WHERE report_date = %s AND user_id = %s
                 LIMIT 1;
                 """,
-                (parsed_date, user_id)
+                (parsed_date, user_id),
             )
             row = cur.fetchone()
             if not row:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Geen weekrapport gevonden voor {parsed_date}"
+                    detail=f"Geen weekrapport gevonden voor {parsed_date}",
                 )
             cols = [desc[0] for desc in cur.description]
             return dict(zip(cols, row))
@@ -275,7 +301,7 @@ async def get_weekly_by_date(
 
 @router.get("/report/weekly/history")
 async def get_weekly_report_history(
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     logger.info("🚀 Weekly report history endpoint aangeroepen")
     user_id = current_user["id"]
@@ -291,12 +317,10 @@ async def get_weekly_report_history(
                 ORDER BY report_date DESC
                 LIMIT 10;
                 """,
-                (user_id,)
+                (user_id,),
             )
             rows = cur.fetchall()
-            logger.info(f"🧪 Gevonden {len(rows)} weekly reports voor user {user_id}: {rows}")
-            if not rows:
-                raise HTTPException(status_code=404, detail="Geen weekly reports gevonden.")
+            logger.info(f"🧪 Gevonden {len(rows)} weekly reports voor user {user_id}")
             return [row[0].isoformat() for row in rows]
     finally:
         conn.close()
@@ -309,22 +333,25 @@ async def generate_weekly(current_user: dict = Depends(get_current_user)):
     """
     user_id = current_user["id"]
     try:
-        task = generate_weekly_report.delay(user_id=user_id)
-        return {"message": "Weekrapport taak gestart", "task_id": task.id, "user_id": user_id}
-    except TypeError:
-        # Backwards compat: taak kent nog geen user_id
-        task = generate_weekly_report.delay()
+        try:
+            task = generate_weekly_report.delay(user_id=user_id)
+        except TypeError:
+            task = generate_weekly_report.delay()
+
         return {
-            "message": "Weekrapport taak gestart (zonder user_id in task)",
+            "message": "Weekrapport taak gestart",
             "task_id": task.id,
             "user_id": user_id,
         }
+    except Exception as e:
+        logger.exception("[/report/weekly/generate] Fout:")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/report/weekly/export/pdf")
 async def export_weekly_pdf(
     date: str = Query(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     try:
@@ -342,7 +369,7 @@ async def export_weekly_pdf(
                 WHERE report_date = %s AND user_id = %s
                 LIMIT 1;
                 """,
-                (parsed_date, user_id)
+                (parsed_date, user_id),
             )
             row = cur.fetchone()
             if not row:
@@ -372,7 +399,7 @@ async def get_monthly_latest(current_user: dict = Depends(get_current_user)):
                 ORDER BY report_date DESC
                 LIMIT 1;
                 """,
-                (user_id,)
+                (user_id,),
             )
             row = cur.fetchone()
             if not row:
@@ -386,7 +413,7 @@ async def get_monthly_latest(current_user: dict = Depends(get_current_user)):
 @router.get("/report/monthly/by-date")
 async def get_monthly_by_date(
     date: str = Query(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     try:
@@ -404,13 +431,13 @@ async def get_monthly_by_date(
                 WHERE report_date = %s AND user_id = %s
                 LIMIT 1;
                 """,
-                (parsed_date, user_id)
+                (parsed_date, user_id),
             )
             row = cur.fetchone()
             if not row:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Geen maandrapport gevonden voor {parsed_date}"
+                    detail=f"Geen maandrapport gevonden voor {parsed_date}",
                 )
             cols = [desc[0] for desc in cur.description]
             return dict(zip(cols, row))
@@ -420,7 +447,7 @@ async def get_monthly_by_date(
 
 @router.get("/report/monthly/history")
 async def get_monthly_report_history(
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     logger.info("🚀 Monthly report history endpoint aangeroepen")
     user_id = current_user["id"]
@@ -436,12 +463,10 @@ async def get_monthly_report_history(
                 ORDER BY report_date DESC
                 LIMIT 10;
                 """,
-                (user_id,)
+                (user_id,),
             )
             rows = cur.fetchall()
-            logger.info(f"🧪 Gevonden {len(rows)} monthly reports voor user {user_id}: {rows}")
-            if not rows:
-                raise HTTPException(status_code=404, detail="Geen monthly reports gevonden.")
+            logger.info(f"🧪 Gevonden {len(rows)} monthly reports voor user {user_id}")
             return [row[0].isoformat() for row in rows]
     finally:
         conn.close()
@@ -451,21 +476,25 @@ async def get_monthly_report_history(
 async def generate_monthly(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     try:
-        task = generate_monthly_report.delay(user_id=user_id)
-        return {"message": "Maandrapport taak gestart", "task_id": task.id, "user_id": user_id}
-    except TypeError:
-        task = generate_monthly_report.delay()
+        try:
+            task = generate_monthly_report.delay(user_id=user_id)
+        except TypeError:
+            task = generate_monthly_report.delay()
+
         return {
-            "message": "Maandrapport taak gestart (zonder user_id in task)",
+            "message": "Maandrapport taak gestart",
             "task_id": task.id,
             "user_id": user_id,
         }
+    except Exception as e:
+        logger.exception("[/report/monthly/generate] Fout:")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/report/monthly/export/pdf")
 async def export_monthly_pdf(
     date: str = Query(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     try:
@@ -483,7 +512,7 @@ async def export_monthly_pdf(
                 WHERE report_date = %s AND user_id = %s
                 LIMIT 1;
                 """,
-                (parsed_date, user_id)
+                (parsed_date, user_id),
             )
             row = cur.fetchone()
             if not row:
@@ -513,7 +542,7 @@ async def get_quarterly_latest(current_user: dict = Depends(get_current_user)):
                 ORDER BY report_date DESC
                 LIMIT 1;
                 """,
-                (user_id,)
+                (user_id,),
             )
             row = cur.fetchone()
             if not row:
@@ -527,7 +556,7 @@ async def get_quarterly_latest(current_user: dict = Depends(get_current_user)):
 @router.get("/report/quarterly/by-date")
 async def get_quarterly_by_date(
     date: str = Query(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     try:
@@ -545,13 +574,13 @@ async def get_quarterly_by_date(
                 WHERE report_date = %s AND user_id = %s
                 LIMIT 1;
                 """,
-                (parsed_date, user_id)
+                (parsed_date, user_id),
             )
             row = cur.fetchone()
             if not row:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Geen kwartaalrapport gevonden voor {parsed_date}"
+                    detail=f"Geen kwartaalrapport gevonden voor {parsed_date}",
                 )
             cols = [desc[0] for desc in cur.description]
             return dict(zip(cols, row))
@@ -561,7 +590,7 @@ async def get_quarterly_by_date(
 
 @router.get("/report/quarterly/history")
 async def get_quarterly_report_history(
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     logger.info("🚀 Quarterly report history endpoint aangeroepen")
     user_id = current_user["id"]
@@ -577,12 +606,10 @@ async def get_quarterly_report_history(
                 ORDER BY report_date DESC
                 LIMIT 10;
                 """,
-                (user_id,)
+                (user_id,),
             )
             rows = cur.fetchall()
-            logger.info(f"🧪 Gevonden {len(rows)} quarterly reports voor user {user_id}: {rows}")
-            if not rows:
-                raise HTTPException(status_code=404, detail="Geen quarterly reports gevonden.")
+            logger.info(f"🧪 Gevonden {len(rows)} quarterly reports voor user {user_id}")
             return [row[0].isoformat() for row in rows]
     finally:
         conn.close()
@@ -592,21 +619,25 @@ async def get_quarterly_report_history(
 async def generate_quarterly(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     try:
-        task = generate_quarterly_report.delay(user_id=user_id)
-        return {"message": "Kwartaalrapport taak gestart", "task_id": task.id, "user_id": user_id}
-    except TypeError:
-        task = generate_quarterly_report.delay()
+        try:
+            task = generate_quarterly_report.delay(user_id=user_id)
+        except TypeError:
+            task = generate_quarterly_report.delay()
+
         return {
-            "message": "Kwartaalrapport taak gestart (zonder user_id in task)",
+            "message": "Kwartaalrapport taak gestart",
             "task_id": task.id,
             "user_id": user_id,
         }
+    except Exception as e:
+        logger.exception("[/report/quarterly/generate] Fout:")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/report/quarterly/export/pdf")
 async def export_quarterly_pdf(
     date: str = Query(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     try:
@@ -624,7 +655,7 @@ async def export_quarterly_pdf(
                 WHERE report_date = %s AND user_id = %s
                 LIMIT 1;
                 """,
-                (parsed_date, user_id)
+                (parsed_date, user_id),
             )
             row = cur.fetchone()
             if not row:
