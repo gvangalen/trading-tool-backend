@@ -9,18 +9,19 @@ from backend.utils.scoring_utils import (
     generate_scores_db,
     get_scores_for_symbol,
 )
-from backend.utils.auth_utils import get_current_user   # ✅ juiste huidige import
+from backend.utils.auth_utils import get_current_user   # juiste import
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# Helpers – nu user-specifiek
+# Helpers – user-specifiek, maar zonder user_id fouten
 # =========================================================
 def fetch_active_setups(user_id: int):
     """
-    Haalt alle setups op voor deze user + score uit daily_setup_scores van vandaag.
+    Haalt alle setups + eventuele setup-scores van vandaag op.
+    Lost fout op: ds.user_id bestaat niet → filter verplaatst naar s.user_id.
     """
     conn = get_db_connection()
     if not conn:
@@ -44,13 +45,12 @@ def fetch_active_setups(user_id: int):
                        COALESCE(ds.breakdown, '{}'::jsonb) AS breakdown
                 FROM setups s
                 LEFT JOIN daily_setup_scores ds
-                    ON s.id = ds.setup_id 
+                    ON ds.setup_id = s.id
                     AND ds.report_date = %s
-                    AND ds.user_id = %s
                 WHERE s.user_id = %s
                 ORDER BY s.id, ds.report_date DESC
-                LIMIT 100
-            """, (today, user_id, user_id))
+                LIMIT 100;
+            """, (today, user_id))
             return [dict(r) for r in cur.fetchall()]
 
     except Exception as e:
@@ -111,11 +111,12 @@ async def get_daily_scores(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
 
     try:
-        # Score engine → per user
+        # Score engine – per user waar mogelijk
         try:
             scores = get_scores_for_symbol(user_id=user_id, include_metadata=True) or {}
         except TypeError:
-            scores = get_scores_for_symbol(include_metadata=True)
+            # fallback wanneer scoring_utils nog geen user_id begrijpt
+            scores = get_scores_for_symbol(include_metadata=True) or {}
 
         active_setups = fetch_active_setups(user_id)
 
@@ -156,12 +157,14 @@ async def get_daily_scores(current_user: dict = Depends(get_current_user)):
 
 
 # =========================================================
-# AI Master Score (user-specifiek)
+# AI Master Score (tijdelijk **zonder user_id** i.v.m. missing column)
 # =========================================================
 @router.get("/ai/master_score")
 def get_ai_master_score(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-
+    """
+    Tijdelijk geen user_id-filter totdat de tabel is gemigreerd.
+    Dit voorkomt: column "user_id" does not exist
+    """
     conn = get_db_connection()
     if not conn:
         return {"error": "Geen DB-verbinding"}
@@ -182,13 +185,11 @@ def get_ai_master_score(current_user: dict = Depends(get_current_user)):
                     summary,
                     date
                 FROM ai_master_score_view
-                WHERE user_id = %s
                 ORDER BY date DESC
                 LIMIT 1;
-            """, (user_id,))
+            """)
 
             row = cur.fetchone()
-
             if not row:
                 return {"message": "Nog geen AI-master-score beschikbaar"}
 
