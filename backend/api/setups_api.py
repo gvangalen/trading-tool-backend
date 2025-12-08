@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Query, Depends
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
+from backend.api.onboarding_api import mark_step_completed   # ⭐ Onboarding integratie
 from datetime import datetime
 import logging
 from backend.ai_agents.setup_ai_agent import generate_setup_explanation
@@ -134,6 +135,9 @@ async def save_setup(
             cur.execute(query, params)
             conn.commit()
 
+        # ⭐ ONBOARDING — setup onderdeel voltooid
+        mark_step_completed(conn, user_id, "setup")
+
         return {"status": "success", "message": "Setup opgeslagen"}
 
     finally:
@@ -173,6 +177,9 @@ async def get_setups(
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
 
+        # ⭐ ONBOARDING — gebruiker gebruikt setup functionaliteit
+        mark_step_completed(conn, user_id, "setup")
+
         return format_setup_rows(rows)
 
     finally:
@@ -202,6 +209,8 @@ async def get_dca_setups(
             )
             rows = cur.fetchall()
 
+        mark_step_completed(conn, user_id, "setup")
+
         return format_setup_rows(rows)
 
     finally:
@@ -223,7 +232,6 @@ async def update_setup(
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            # Check ownership
             cur.execute(
                 "SELECT id FROM setups WHERE id=%s AND user_id=%s",
                 (setup_id, user_id),
@@ -278,6 +286,8 @@ async def update_setup(
 
             conn.commit()
 
+        mark_step_completed(conn, user_id, "setup")
+
         return {"message": "Setup bijgewerkt"}
 
     finally:
@@ -310,6 +320,8 @@ async def delete_setup(
             )
             conn.commit()
 
+        mark_step_completed(conn, user_id, "setup")
+
         return {"message": "Setup verwijderd"}
 
     finally:
@@ -337,6 +349,8 @@ async def check_name(
                 (name, user_id),
             )
             exists = cur.fetchone()[0] > 0
+
+        mark_step_completed(conn, user_id, "setup")
 
         return {"exists": exists}
 
@@ -380,6 +394,8 @@ async def get_top_setups(
             )
             rows = cur.fetchall()
 
+        mark_step_completed(conn, user_id, "setup")
+
         return format_setup_rows(rows)
 
     finally:
@@ -411,6 +427,8 @@ async def get_setup_by_id(
         if not row:
             raise HTTPException(404, "Setup niet gevonden")
 
+        mark_step_completed(conn, user_id, "setup")
+
         return format_setup_rows([row])[0]
 
     finally:
@@ -441,6 +459,8 @@ async def last_setup(
 
         if not row:
             return {"setup": None}
+
+        mark_step_completed(conn, user_id, "setup")
 
         return {"setup": format_setup_rows([row])[0]}
 
@@ -494,6 +514,8 @@ async def get_active_setup(
         if not row:
             return {"active": None}
 
+        mark_step_completed(conn, user_id, "setup")
+
         (
             setup_id,
             score,
@@ -519,7 +541,7 @@ async def get_active_setup(
                 "name": name,
                 "symbol": symbol,
                 "timeframe": timeframe,
-                "trend": trend,
+                    "trend": trend,
                 "strategy_type": strategy_type,
                 "min_investment": min_inv,
                 "dynamic_investment": dyn_inv,
