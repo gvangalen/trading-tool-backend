@@ -93,8 +93,8 @@ def _get_user_by_email(email: str):
 
 COOKIE_SETTINGS = dict(
     httponly=True,
-    secure=False,   # True zodra je HTTPS hebt
-    samesite="lax",
+    secure=True,          # vereist bij HTTPS
+    samesite="none",      # vereist bij cross-origin
     path="/",
 )
 
