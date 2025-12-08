@@ -3,12 +3,15 @@ print("✅ strategy_api.py geladen!")
 from fastapi import APIRouter, HTTPException, Request, Query, Depends
 from fastapi.responses import StreamingResponse
 
-# Init router (zonder prefix!)
+# Init router
 router = APIRouter()
 
 # Database & Auth
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
+
+# ⭐ Onboarding
+from backend.api.onboarding_api import mark_step_completed
 
 # Celery
 from backend.celery_task.strategy_task import generate_for_setup as generate_strategy_task
@@ -17,6 +20,8 @@ import json
 import csv
 import io
 import logging
+
+
 # =====================================================================
 # 🌱 1. CREATE STRATEGY (user-specific)
 # =====================================================================
@@ -30,19 +35,14 @@ async def save_strategy(
     try:
         data = await request.json()
 
-        # ---------------------------------------------------
-        # Strategy type validation
-        # ---------------------------------------------------
         strategy_type = data.get("strategy_type", "").lower()
         if strategy_type not in ["manual", "trading", "dca"]:
             raise HTTPException(
-                status_code=400,
-                detail=f"Onbekend strategy_type '{strategy_type}'. Gebruik 'manual', 'trading' of 'dca'."
+                400,
+                f"Onbekend strategy_type '{strategy_type}'. Gebruik 'manual', 'trading' of 'dca'."
             )
 
-        # ---------------------------------------------------
-        # Verplichte velden
-        # ---------------------------------------------------
+        # Required
         required_base = ["setup_id"]
         required_map = {
             "manual": ["entry", "targets", "stop_loss"],
@@ -53,20 +53,17 @@ async def save_strategy(
 
         for f in required_fields:
             if f not in data or data.get(f) in [None, "", []]:
-                raise HTTPException(status_code=400, detail=f"Veld '{f}' is verplicht.")
+                raise HTTPException(400, f"Veld '{f}' is verplicht.")
 
         setup_id = int(data["setup_id"])
 
-        # ---------------------------------------------------
-        # DB
-        # ---------------------------------------------------
         conn = get_db_connection()
         if not conn:
-            raise HTTPException(status_code=500, detail="Geen databaseverbinding")
+            raise HTTPException(500, "Geen databaseverbinding")
 
         with conn.cursor() as cur:
 
-            # Only allow strategy for setups belonging to this user
+            # User owns setup?
             cur.execute("""
                 SELECT id FROM setups 
                 WHERE id = %s AND user_id = %s
@@ -74,7 +71,7 @@ async def save_strategy(
             if not cur.fetchone():
                 raise HTTPException(403, "Setup behoort niet tot deze gebruiker.")
 
-            # Check existing strategy for this setup & type
+            # bestaat strategie?
             cur.execute("""
                 SELECT id FROM strategies 
                 WHERE setup_id = %s AND strategy_type = %s AND user_id = %s
@@ -82,9 +79,6 @@ async def save_strategy(
             if cur.fetchone():
                 raise HTTPException(409, "Strategie bestaat al voor deze setup.")
 
-            # ------------------------------
-            # Autotags
-            # ------------------------------
             keywords = ["breakout", "scalp", "swing", "reversal", "dca"]
             combined_text = (
                 (data.get("setup_name", "") + " " +
@@ -95,14 +89,13 @@ async def save_strategy(
             found_tags = [k for k in keywords if k in combined_text]
             data["tags"] = list(set(data.get("tags", []) + found_tags))
 
-            # Defaults
+            # Default values
             data.setdefault("favorite", False)
             data.setdefault("origin", strategy_type.upper())
             data.setdefault("ai_reason", "")
             data["strategy_type"] = strategy_type
             data["user_id"] = user_id
 
-            # Targets fix
             if "targets" in data and not isinstance(data["targets"], list):
                 data["targets"] = [data["targets"]]
 
@@ -113,7 +106,6 @@ async def save_strategy(
             stop_loss_val = "" if strategy_type == "dca" else str(data.get("stop_loss", ""))
             risk_profile_val = data.get("risk_profile", None)
 
-            # Insert
             cur.execute("""
                 INSERT INTO strategies 
                 (setup_id, entry, target, stop_loss, explanation, risk_profile, 
@@ -136,6 +128,9 @@ async def save_strategy(
             strategy_id = cur.fetchone()[0]
             conn.commit()
 
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
+
         return {"message": "✅ Strategie opgeslagen", "id": strategy_id}
 
     except HTTPException:
@@ -144,8 +139,10 @@ async def save_strategy(
         logger.error(f"[save_strategy] ❌ {e}")
         raise HTTPException(500, "Interne fout bij opslaan strategie.")
 
+
+
 # =====================================================================
-# 🧪 2. QUERY STRATEGIES (user-specific)
+# 🧪 2. QUERY STRATEGIES
 # =====================================================================
 @router.post("/strategies/query")
 async def query_strategies(
@@ -189,13 +186,18 @@ async def query_strategies(
             s["id"] = id_
             result.append(s)
 
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
+
         return result
 
     finally:
         conn.close()
 
+
+
 # =====================================================================
-# 🤖 3. GENERATE STRATEGY VIA CELERY (user-specific)
+# 🤖 3. GENERATE STRATEGY VIA CELERY
 # =====================================================================
 @router.post("/strategies/generate/{setup_id}")
 async def generate_strategy_for_setup(
@@ -214,8 +216,7 @@ async def generate_strategy_for_setup(
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, name, symbol, timeframe 
-                FROM setups 
+                SELECT id FROM setups 
                 WHERE id = %s AND user_id = %s
             """, (setup_id, user_id))
             row = cur.fetchone()
@@ -223,20 +224,25 @@ async def generate_strategy_for_setup(
         if not row:
             raise HTTPException(404, "Setup niet gevonden of niet van gebruiker")
 
-        # Start Celery job per user
+        # Start Celery
         task = generate_strategy_task.delay(
             setup_id=setup_id,
             overwrite=overwrite,
             user_id=user_id
         )
 
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
+
         return {"message": "⏳ Strategie wordt gegenereerd", "task_id": task.id}
 
     finally:
         conn.close()
 
+
+
 # =====================================================================
-# ✏ 4. UPDATE STRATEGY (user-specific)
+# ✏ 4. UPDATE STRATEGY
 # =====================================================================
 @router.put("/strategies/{strategy_id}")
 async def update_strategy(
@@ -253,8 +259,6 @@ async def update_strategy(
 
     try:
         with conn.cursor() as cur:
-
-            # Validate ownership
             cur.execute("""
                 SELECT data FROM strategies 
                 WHERE id = %s AND user_id = %s
@@ -262,7 +266,7 @@ async def update_strategy(
             row = cur.fetchone()
 
             if not row:
-                raise HTTPException(404, "Strategie niet gevonden of niet jouw strategie")
+                raise HTTPException(404, "Strategie niet gevonden")
 
             strategy_data = row[0]
 
@@ -280,13 +284,18 @@ async def update_strategy(
 
             conn.commit()
 
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
+
         return {"message": "✅ Strategie bijgewerkt"}
 
     finally:
         conn.close()
 
+
+
 # =====================================================================
-# 🗑 5. DELETE (user-specific)
+# 🗑 5. DELETE STRATEGY
 # =====================================================================
 @router.delete("/strategies/{strategy_id}")
 async def delete_strategy(
@@ -295,8 +304,6 @@ async def delete_strategy(
 ):
     user_id = current_user["id"]
     conn = get_db_connection()
-    if not conn:
-        raise HTTPException(500, "Geen databaseverbinding")
 
     try:
         with conn.cursor() as cur:
@@ -309,13 +316,19 @@ async def delete_strategy(
                 raise HTTPException(404, "Strategie niet gevonden")
 
         conn.commit()
+
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
+
         return {"message": "🗑 Strategie verwijderd"}
 
     finally:
         conn.close()
 
+
+
 # =====================================================================
-# ⭐ FAVORITE TOGGLE (user-specific)
+# ⭐ FAVORITE TOGGLE
 # =====================================================================
 @router.patch("/strategies/{strategy_id}/favorite")
 async def toggle_favorite(
@@ -346,13 +359,18 @@ async def toggle_favorite(
             """, (json.dumps(data), strategy_id))
             conn.commit()
 
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
+
         return {"favorite": data["favorite"]}
 
     finally:
         conn.close()
 
+
+
 # =====================================================================
-# 🔎 FILTER (user-specific)
+# 🔎 FILTER STRATEGIES
 # =====================================================================
 @router.post("/strategies/filter")
 async def filter_strategies(
@@ -361,56 +379,57 @@ async def filter_strategies(
 ):
     user_id = current_user["id"]
     filters = await request.json()
-    symbol = filters.get("symbol")
-    timeframe = filters.get("timeframe")
-    tag = filters.get("tag")
-    min_score = filters.get("min_score")
 
     conn = get_db_connection()
     try:
         query = "SELECT id, data FROM strategies WHERE user_id = %s"
         params = [user_id]
 
-        if symbol:
+        if filters.get("symbol"):
             query += " AND data->>'symbol' = %s"
-            params.append(symbol)
+            params.append(filters["symbol"])
 
-        if timeframe:
+        if filters.get("timeframe"):
             query += " AND data->>'timeframe' = %s"
-            params.append(timeframe)
+            params.append(filters["timeframe"])
 
-        if tag:
+        if filters.get("tag"):
             query += " AND %s = ANY(data->'tags')"
-            params.append(tag)
+            params.append(filters["tag"])
 
-        if min_score is not None:
+        if filters.get("min_score") is not None:
             query += " AND (data->>'score')::float >= %s"
-            params.append(min_score)
+            params.append(filters["min_score"])
 
         with conn.cursor() as cur:
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
 
         out = []
-        for (id_, s) in rows:
+        for id_, s in rows:
             s["id"] = id_
             out.append(s)
+
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
 
         return out
 
     finally:
         conn.close()
 
+
+
 # =====================================================================
-# 📤 EXPORT (user-specific)
+# 📤 EXPORT CSV
 # =====================================================================
 @router.get("/strategies/export")
 async def export_strategies(
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
-    conn = get_db_connection()
 
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -439,6 +458,9 @@ async def export_strategies(
 
         output.seek(0)
 
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
+
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
@@ -448,8 +470,10 @@ async def export_strategies(
     finally:
         conn.close()
 
+
+
 # =====================================================================
-# 🔥 GET STRATEGY BY SETUP + TYPE (user-specific)
+# 🔥 GET STRATEGY BY SETUP (user-specific)
 # =====================================================================
 @router.get("/strategies/by_setup/{setup_id}")
 async def get_strategy_by_setup(
@@ -458,8 +482,8 @@ async def get_strategy_by_setup(
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
-    conn = get_db_connection()
 
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             query = """
@@ -475,9 +499,12 @@ async def get_strategy_by_setup(
                 params.append(strategy_type)
 
             query += " ORDER BY created_at DESC LIMIT 1"
-            cur.execute(query, tuple(params))
 
+            cur.execute(query, tuple(params))
             row = cur.fetchone()
+
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
 
         if not row:
             return {"exists": False}
@@ -490,16 +517,18 @@ async def get_strategy_by_setup(
     finally:
         conn.close()
 
+
+
 # =====================================================================
-# 🔚 LAATSTE STRATEGIE (user-specific)
+# 🔚 LAATSTE STRATEGIE
 # =====================================================================
 @router.get("/strategies/last")
 async def get_last_strategy(
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
-    conn = get_db_connection()
 
+    conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -510,6 +539,9 @@ async def get_last_strategy(
                 LIMIT 1
             """, (user_id,))
             row = cur.fetchone()
+
+        # ⭐ ONBOARDING
+        mark_step_completed(conn, user_id, "strategy")
 
         if not row:
             return {"message": "Geen strategieën gevonden"}
