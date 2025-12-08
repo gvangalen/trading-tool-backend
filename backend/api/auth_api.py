@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Cookie
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 
@@ -13,18 +13,18 @@ from backend.utils.auth_utils import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    get_current_user,    # centrale JWT authenticator
+    get_current_user,   # ⬅️ JWT uit Authorization header
 )
 
 # =========================================================
-# ⚙️ Router (GEEN prefix hier!)
+# ⚙️ Router
 # =========================================================
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
 # =========================================================
-# 📦 SCHEMAS
+# 📦 Request & Response Models
 # =========================================================
 
 class LoginRequest(BaseModel):
@@ -49,7 +49,7 @@ class UserOut(BaseModel):
 
 
 # =========================================================
-# 🔧 HELPERS
+# 🔧 Helpers
 # =========================================================
 
 def _row_to_user(row):
@@ -98,7 +98,12 @@ def register_user(body: RegisterRequest):
     if not conn:
         raise HTTPException(500, "Geen databaseverbinding")
 
+    # Duplicate email check
+    if _get_user_by_email(body.email):
+        raise HTTPException(400, "E-mail bestaat al")
+
     with conn.cursor() as cur:
+        # eerste gebruiker wordt admin
         cur.execute("SELECT COUNT(*) FROM users")
         (count,) = cur.fetchone()
         role = "admin" if count == 0 else "user"
@@ -115,35 +120,26 @@ def register_user(body: RegisterRequest):
             row = cur.fetchone()
             conn.commit()
 
-        except Exception as e:
+        except Exception:
             conn.rollback()
-            logger.exception("❌ register_user error")
-            raise HTTPException(400, "Gebruiker bestaat al") from e
+            raise HTTPException(400, "Gebruiker kan niet worden aangemaakt")
 
     return UserOut(
-        id=row[0], email=row[1], role=row[2],
-        is_active=row[3], first_name=row[4], last_name=row[5]
+        id=row[0],
+        email=row[1],
+        role=row[2],
+        is_active=row[3],
+        first_name=row[4],
+        last_name=row[5]
     )
 
 
 # =========================================================
-# 🍪 COOKIE SETTINGS
-# =========================================================
-
-COOKIE_SETTINGS = dict(
-    httponly=True,
-    secure=False,       # moet False zolang je HTTP gebruikt
-    samesite="lax",     # None werkt niet op HTTP → wordt geblokkeerd
-    path="/",
-)
-
-
-# =========================================================
-# 🔐 LOGIN
+# 🔐 LOGIN  (Bearer-only)
 # =========================================================
 
 @router.post("/auth/login")
-def login(body: LoginRequest, response: Response):
+def login(body: LoginRequest):
     user = _get_user_by_email(body.email)
 
     if not user or not user["is_active"]:
@@ -153,12 +149,9 @@ def login(body: LoginRequest, response: Response):
         raise HTTPException(401, "Onjuiste inloggegevens")
 
     payload = {"sub": str(user["id"]), "role": user["role"]}
+
     access_token = create_access_token(payload)
     refresh_token = create_refresh_token(payload)
-
-    # Cookies zetten
-    response.set_cookie("access_token", access_token, max_age=3600, **COOKIE_SETTINGS)
-    response.set_cookie("refresh_token", refresh_token, max_age=3600 * 24 * 7, **COOKIE_SETTINGS)
 
     # Update last_login
     conn = get_db_connection()
@@ -171,6 +164,8 @@ def login(body: LoginRequest, response: Response):
 
     return {
         "success": True,
+        "access_token": access_token,     # ⬅️ Frontend bewaart dit zelf
+        "refresh_token": refresh_token,   # ⬅️ Bewaren in localStorage
         "user": {
             "id": user["id"],
             "email": user["email"],
@@ -182,36 +177,22 @@ def login(body: LoginRequest, response: Response):
 
 
 # =========================================================
-# 🚪 LOGOUT
-# =========================================================
-
-@router.post("/auth/logout")
-def logout(response: Response):
-    response = JSONResponse({"success": True})
-    response.delete_cookie("access_token", path="/")
-    response.delete_cookie("refresh_token", path="/")
-    return response
-
-
-# =========================================================
-# 🔁 REFRESH TOKEN
+# 🔁 Refresh Token (Bearer)
 # =========================================================
 
 @router.post("/auth/refresh")
-def refresh_token(
-    response: Response,
-    refresh_token: Optional[str] = Cookie(default=None),
-):
+def refresh_token(body: dict):
+    refresh_token = body.get("refresh_token")
     if not refresh_token:
-        raise HTTPException(401, "Geen refresh token")
+        raise HTTPException(401, "Geen refresh token aangeleverd")
 
     try:
         payload = decode_token(refresh_token)
     except ValueError:
-        raise HTTPException(401, "Invalid refresh token")
+        raise HTTPException(401, "Refresh token ongeldig")
 
     if payload.get("type") != "refresh":
-        raise HTTPException(401, "Incorrect token type")
+        raise HTTPException(401, "Verkeerd token type")
 
     user = _get_user_by_id(int(payload["sub"]))
     if not user:
@@ -219,14 +200,11 @@ def refresh_token(
 
     new_access = create_access_token({"sub": str(user["id"]), "role": user["role"]})
 
-    response = JSONResponse({"success": True})
-    response.set_cookie("access_token", new_access, max_age=3600, **COOKIE_SETTINGS)
-
-    return response
+    return {"success": True, "access_token": new_access}
 
 
 # =========================================================
-# 👤 /me — user-info vanuit JWT
+# 👤 /auth/me — haalt user uit Authorization Bearer token
 # =========================================================
 
 @router.get("/auth/me", response_model=UserOut)
