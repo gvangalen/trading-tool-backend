@@ -6,7 +6,6 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from fastapi import Request, HTTPException, status
 
-
 # =========================================================
 # 🔐 CONFIG
 # =========================================================
@@ -38,7 +37,7 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
 
 def create_token(
     data: Dict[str, Any],
-    expires_delta: Optional[timedelta],
+    expires_delta: timedelta,
     token_type: str = "access",
 ) -> str:
 
@@ -73,34 +72,23 @@ def decode_token(token: str) -> Dict[str, Any]:
 
 
 # =========================================================
-# 🔑 GET CURRENT USER (BEARER TOKEN VERSION)
+# 🔑 GET CURRENT USER (COOKIE-BASED)
 # =========================================================
 #
-# Deze methode:
-#   ✓ leest "Authorization: Bearer <token>"
-#   ✓ valideert token
-#   ✓ controleert type == access
-#   ✓ geeft {"id": <user_id>}
-#
-# Alle API endpoints gebruiken deze via Depends(get_current_user)
+#   ✓ Leest HttpOnly cookie: "access_token"
+#   ✓ Geen Authorization headers
+#   ✓ Perfect voor jouw Next.js credentials: "include"
 #
 # =========================================================
 
 async def get_current_user(request: Request) -> dict:
-    """
-    JWT uit Authorization-header halen:
-        Authorization: Bearer eyJhbGciOi...
-    """
+    token = request.cookies.get("access_token")
 
-    auth_header = request.headers.get("Authorization")
-
-    if not auth_header or not auth_header.startswith("Bearer "):
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid Authorization header",
+            detail="Missing access token in cookies",
         )
-
-    token = auth_header.split(" ")[1].strip()
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
