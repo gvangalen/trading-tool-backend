@@ -21,12 +21,11 @@ load_dotenv(dotenv_path=dotenv_path)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # ------------------------------------------------------------
-# 📌 Logging setup
+# 📌 Logging
 # ------------------------------------------------------------
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
 )
 logger = logging.getLogger(__name__)
 
@@ -36,29 +35,32 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
 # ------------------------------------------------------------
-# 🌍 CORS — volledig correct voor cookies
+# 🌍 CORS — volledig correct voor COOKIE-BASED AUTH
 # ------------------------------------------------------------
+# ❗ allow_origins mag NIET "*" zijn bij cookies.
+# ❗ allow_origin_regex mag NIET meer gebruikt worden (breekt cookies)
+# ❗ credentials=True verplicht dat origins EXACT overeenkomen.
+
 allow_origins = [
-    # Local development
     "http://localhost:3000",
-    "http://localhost:5002",
+    "http://127.0.0.1:3000",
 
-    # Server frontend
+    # FRONTEND PROD (poort 80)
     "http://143.47.186.148",
-    "http://143.47.186.148:3000",
-
-    # Backend origin zelf (NODIG VOOR COOKIES)
-    "http://143.47.186.148:5002",
     "https://143.47.186.148",
+
+    # eventueel: als frontend op andere poorten draait
+    "http://143.47.186.148:3000",
     "https://143.47.186.148:3000",
-    "https://143.47.186.148:5002",
+
+    # backend zelf (nodig voor cookies bij local testing)
+    "http://143.47.186.148:5002",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_origin_regex=".*",
-    allow_credentials=True,   # ⭐ cookies toegestaan
+    allow_origins=allow_origins,        # ❗ GEEN "*" en GEEN regex
+    allow_credentials=True,            # ⭐ cookies toestaan
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -91,15 +93,13 @@ def safe_include(import_path, name=""):
 # ==================================================================
 safe_include("backend.api.auth_api", "auth_api")
 
-
 # ==================================================================
-# 🎯 ONBOARDING MOET KOMEN NA AUTH
+# 🎯 ONBOARDING (na auth)
 # ==================================================================
 safe_include("backend.api.onboarding_api", "onboarding_api")
 
-
 # ==================================================================
-# 📦 ANDERE API's (op volgorde van afhankelijkheid)
+# 📦 Andere API's
 # ==================================================================
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
@@ -117,14 +117,12 @@ safe_include("backend.api.agents_api", "agents_api")
 safe_include("backend.routes.trades_routes", "trades_routes")
 safe_include("backend.routes.report_routes", "report_routes")
 
-
 # ==================================================================
 # 👨‍⚕️ Health check
 # ==================================================================
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "message": "API is running"}
-
 
 # ==================================================================
 # 🧭 Debug: lijst ALLE routes
