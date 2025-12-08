@@ -58,7 +58,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_origin_regex=".*",
-    allow_credentials=True,   # ⭐ cookies TOEGESTAAN
+    allow_credentials=True,   # ⭐ cookies toegestaan
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -70,38 +70,46 @@ app.mount("/static", StaticFiles(directory="backend/static"), name="static")
 
 
 # ==================================================================
-# 🔧 Helper: veilig routers includen (1 centrale plek, OPTIE A)
+# 🔧 Helper: veilig routers includen
 # ==================================================================
 def safe_include(import_path, name=""):
+    """
+    Laadt een router dynamisch en prefix't deze automatisch met /api.
+    Safe loading: breekt de API niet als 1 module failt.
+    """
     try:
         module = importlib.import_module(import_path)
         app.include_router(module.router, prefix="/api")
         logger.info(f"✅ Router geladen: {name or import_path}")
     except Exception as e:
-        logger.warning(f"❌ Router FOUT: {name or import_path} — {e}")
+        logger.error(f"❌ Router FOUT bij laden van {name or import_path}: {e}")
         traceback.print_exc()
 
 
 # ==================================================================
-# 📦 BASIS ROUTERS (volgorde maakt niet uit behalve auth)
+# 🔐 AUTH MOET ALTIJD EERST
+# ==================================================================
+safe_include("backend.api.auth_api", "auth_api")
+
+
+# ==================================================================
+# 🎯 ONBOARDING MOET KOMEN NA AUTH
+# ==================================================================
+safe_include("backend.api.onboarding_api", "onboarding_api")
+
+
+# ==================================================================
+# 📦 ANDERE API's (op volgorde van afhankelijkheid)
 # ==================================================================
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
 safe_include("backend.api.technical_data_api", "technical_data_api")
 safe_include("backend.api.setups_api", "setups_api")
-safe_include("backend.api.dashboard_api", "dashboard_api")
-safe_include("backend.api.report_api", "report_api")
-safe_include("backend.api.sidebar_api", "sidebar_api")
-safe_include("backend.api.onboarding_api", "onboarding_api")
-safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.strategy_api", "strategy_api")
+safe_include("backend.api.score_api", "score_api")
+safe_include("backend.api.dashboard_api", "dashboard_api")
+safe_include("backend.api.sidebar_api", "sidebar_api")
 safe_include("backend.api.agents_api", "agents_api")
-
-# ==================================================================
-# 🔐 AUTHENTICATIE ROUTER (optie A → prefix komt alleen uit main.py)
-# ==================================================================
-safe_include("backend.api.auth_api", "auth_api")
-
 
 # ==================================================================
 # 🗂 Legacy routes
