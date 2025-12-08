@@ -13,7 +13,7 @@ from backend.utils.auth_utils import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    get_current_user,   # ⬅️ leest JWT uit access_token-cookie
+    get_current_user,
 )
 
 # =========================================================
@@ -23,7 +23,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # =========================================================
-# 📦 Request & Response Models
+# 📦 Models
 # =========================================================
 
 class LoginRequest(BaseModel):
@@ -88,13 +88,13 @@ def _get_user_by_email(email: str):
 
 
 # =========================================================
-# 🍪 COOKIE SETTINGS
+# 🍪 COOKIE SETTINGS (WERKT OP HTTP!)
 # =========================================================
 
 COOKIE_SETTINGS = dict(
     httponly=True,
-    secure=True,          # vereist bij HTTPS
-    samesite="none",      # vereist bij cross-origin
+    secure=False,        # MUST BE FALSE op 143.47.186.148 zonder HTTPS
+    samesite="none",     # Cross-origin support (3000 → 5002)
     path="/",
 )
 
@@ -114,7 +114,6 @@ def register_user(body: RegisterRequest):
         raise HTTPException(400, "E-mail bestaat al")
 
     with conn.cursor() as cur:
-        # eerste gebruiker wordt admin
         cur.execute("SELECT COUNT(*) FROM users")
         (count,) = cur.fetchone()
         role = "admin" if count == 0 else "user"
@@ -145,7 +144,7 @@ def register_user(body: RegisterRequest):
 
 
 # =========================================================
-# 🔐 LOGIN  (cookies)
+# 🔐 LOGIN (cookies!)
 # =========================================================
 
 @router.post("/auth/login")
@@ -163,21 +162,21 @@ def login(body: LoginRequest, response: Response):
     access_token = create_access_token(payload)
     refresh_token = create_refresh_token(payload)
 
-    # ✅ Cookies zetten
+    # Cookies plaatsen
     response.set_cookie(
         "access_token",
         access_token,
-        max_age=60 * 60,   # 1 uur
+        max_age=60 * 60,
         **COOKIE_SETTINGS,
     )
     response.set_cookie(
         "refresh_token",
         refresh_token,
-        max_age=60 * 60 * 24 * 7,  # 7 dagen
+        max_age=60 * 60 * 24 * 7,
         **COOKIE_SETTINGS,
     )
 
-    # Update last_login
+    # Update login timestamp
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute(
@@ -199,14 +198,11 @@ def login(body: LoginRequest, response: Response):
 
 
 # =========================================================
-# 🔁 REFRESH TOKEN (cookies)
+# 🔁 REFRESH TOKEN
 # =========================================================
 
 @router.post("/auth/refresh")
-def refresh_token(
-    response: Response,
-    refresh_token: Optional[str] = Cookie(default=None),
-):
+def refresh_token(response: Response, refresh_token: Optional[str] = Cookie(default=None)):
     if not refresh_token:
         raise HTTPException(401, "Geen refresh token")
 
@@ -247,7 +243,7 @@ def logout(response: Response):
 
 
 # =========================================================
-# 👤 /auth/me — via cookie-JWT
+# 👤 AUTH / ME
 # =========================================================
 
 @router.get("/auth/me", response_model=UserOut)
