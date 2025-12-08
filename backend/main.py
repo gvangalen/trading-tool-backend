@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 # 📌 Logging
 # ------------------------------------------------------------
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -35,32 +35,33 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Market Dashboard API", version="1.0")
 
 # ------------------------------------------------------------
-# 🌍 CORS — volledig correct voor COOKIE-BASED AUTH
+# 🌍 CORS — correct voor COOKIE-AUTH met Next.js + FastAPI
 # ------------------------------------------------------------
-# ❗ allow_origins mag NIET "*" zijn bij cookies.
-# ❗ allow_origin_regex mag NIET meer gebruikt worden (breekt cookies)
-# ❗ credentials=True verplicht dat origins EXACT overeenkomen.
+
+# ⭐ BELANGRIJK:
+# - allow_origins mag NIET "*" zijn met cookies
+# - origins moeten exact overeenkomen
+# - credentials=True verplicht
+# - secure cookies werken NIET op HTTP → secure=False in cookies is correct
 
 allow_origins = [
+    # Local dev
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 
-    # FRONTEND PROD (poort 80)
+    # Production frontend
     "http://143.47.186.148",
-    "https://143.47.186.148",
-
-    # eventueel: als frontend op andere poorten draait
     "http://143.47.186.148:3000",
-    "https://143.47.186.148:3000",
 
-    # backend zelf (nodig voor cookies bij local testing)
-    "http://143.47.186.148:5002",
+    # Indien HTTPS wordt geactiveerd later
+    "https://143.47.186.148",
+    "https://143.47.186.148:3000",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,        # ❗ GEEN "*" en GEEN regex
-    allow_credentials=True,            # ⭐ cookies toestaan
+    allow_origins=allow_origins,
+    allow_credentials=True,     # ⭐ Cookies toestaan
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -72,34 +73,30 @@ app.mount("/static", StaticFiles(directory="backend/static"), name="static")
 
 
 # ==================================================================
-# 🔧 Helper: veilig routers includen
+# 🔧 Veilig routers includen
 # ==================================================================
-def safe_include(import_path, name=""):
-    """
-    Laadt een router dynamisch en prefix't deze automatisch met /api.
-    Safe loading: breekt de API niet als 1 module failt.
-    """
+def safe_include(import_path: str, name: str = ""):
     try:
         module = importlib.import_module(import_path)
         app.include_router(module.router, prefix="/api")
         logger.info(f"✅ Router geladen: {name or import_path}")
     except Exception as e:
-        logger.error(f"❌ Router FOUT bij laden van {name or import_path}: {e}")
+        logger.error(f"❌ Router FOUT bij {name or import_path}: {e}")
         traceback.print_exc()
 
 
 # ==================================================================
-# 🔐 AUTH MOET ALTIJD EERST
+# 🔐 AUTH — ALTIJD EERST LADEN
 # ==================================================================
 safe_include("backend.api.auth_api", "auth_api")
 
 # ==================================================================
-# 🎯 ONBOARDING (na auth)
+# 🎯 ONBOARDING
 # ==================================================================
 safe_include("backend.api.onboarding_api", "onboarding_api")
 
 # ==================================================================
-# 📦 Andere API's
+# 📦 Overige API's
 # ==================================================================
 safe_include("backend.api.market_data_api", "market_data_api")
 safe_include("backend.api.macro_data_api", "macro_data_api")
@@ -124,15 +121,13 @@ safe_include("backend.routes.report_routes", "report_routes")
 def health_check():
     return {"status": "ok", "message": "API is running"}
 
+
 # ==================================================================
-# 🧭 Debug: lijst ALLE routes
+# 🧭 Debug: toon alle routes bij boot
 # ==================================================================
-print("\n🚦 Alle geregistreerde routes en HTTP-methodes:")
+print("\n--------------------------------------------------")
+print("🚦 Geregistreerde API-routes:")
 for route in app.routes:
     if isinstance(route, APIRoute):
         print(f"{route.path} - methods: {route.methods}")
-    else:
-        print(f"{route.path} - <non-API route>")
-print()
-
-print("🔍 ASSETS_JSON uit .env:", os.getenv("ASSETS_JSON"))
+print("--------------------------------------------------\n")
