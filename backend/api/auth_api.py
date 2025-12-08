@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response, Cookie
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
 
@@ -13,7 +13,9 @@ from backend.utils.auth_utils import (
     create_access_token,
     create_refresh_token,
     decode_token,
-    get_current_user,   # ⬅️ JWT uit Authorization header
+    get_current_user,   # ⬅️ leest JWT uit HttpOnly cookie (zie auth_utils)
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    REFRESH_TOKEN_EXPIRE_DAYS,
 )
 
 # =========================================================
@@ -21,6 +23,17 @@ from backend.utils.auth_utils import (
 # =========================================================
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# Cookie namen + settings
+ACCESS_COOKIE_NAME = "access_token"
+REFRESH_COOKIE_NAME = "refresh_token"
+
+COOKIE_SETTINGS = dict(
+    httponly=True,
+    secure=False,       # in productie op True zetten (https)
+    samesite="lax",
+    path="/",
+)
 
 
 # =========================================================
@@ -122,6 +135,7 @@ def register_user(body: RegisterRequest):
 
         except Exception:
             conn.rollback()
+            logger.exception("❌ register_user error")
             raise HTTPException(400, "Gebruiker kan niet worden aangemaakt")
 
     return UserOut(
@@ -130,16 +144,16 @@ def register_user(body: RegisterRequest):
         role=row[2],
         is_active=row[3],
         first_name=row[4],
-        last_name=row[5]
+        last_name=row[5],
     )
 
 
 # =========================================================
-# 🔐 LOGIN  (Bearer-only)
+# 🔐 LOGIN  (cookies zetten)
 # =========================================================
 
 @router.post("/auth/login")
-def login(body: LoginRequest):
+def login(body: LoginRequest, response: Response):
     user = _get_user_by_email(body.email)
 
     if not user or not user["is_active"]:
@@ -153,38 +167,66 @@ def login(body: LoginRequest):
     access_token = create_access_token(payload)
     refresh_token = create_refresh_token(payload)
 
-    # Update last_login
+    # Cookies zetten
+    response.set_cookie(
+        ACCESS_COOKIE_NAME,
+        access_token,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        **COOKIE_SETTINGS,
+    )
+
+    response.set_cookie(
+        REFRESH_COOKIE_NAME,
+        refresh_token,
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        **COOKIE_SETTINGS,
+    )
+
+    # last_login bijwerken
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE users SET last_login_at=%s WHERE id=%s",
-            (datetime.utcnow(), user["id"])
+            (datetime.utcnow(), user["id"]),
         )
         conn.commit()
 
+    # tokens zitten in cookies, maar we sturen user-object terug voor de frontend
     return {
         "success": True,
-        "access_token": access_token,     # ⬅️ Frontend bewaart dit zelf
-        "refresh_token": refresh_token,   # ⬅️ Bewaren in localStorage
         "user": {
             "id": user["id"],
             "email": user["email"],
             "role": user["role"],
             "first_name": user["first_name"],
             "last_name": user["last_name"],
-        }
+        },
     }
 
 
 # =========================================================
-# 🔁 Refresh Token (Bearer)
+# 🚪 LOGOUT — cookies leegmaken
+# =========================================================
+
+@router.post("/auth/logout")
+def logout(response: Response):
+    res = JSONResponse({"success": True})
+    res.delete_cookie(ACCESS_COOKIE_NAME, path="/")
+    res.delete_cookie(REFRESH_COOKIE_NAME, path="/")
+    return res
+
+
+# =========================================================
+# 🔁 REFRESH TOKEN — leest refresh cookie
 # =========================================================
 
 @router.post("/auth/refresh")
-def refresh_token(body: dict):
-    refresh_token = body.get("refresh_token")
+def refresh_token(
+    response: Response,
+    refresh_token: Optional[str] = Cookie(default=None, alias=REFRESH_COOKIE_NAME),
+):
     if not refresh_token:
-        raise HTTPException(401, "Geen refresh token aangeleverd")
+        raise HTTPException(401, "Geen refresh token")
 
     try:
         payload = decode_token(refresh_token)
@@ -200,16 +242,23 @@ def refresh_token(body: dict):
 
     new_access = create_access_token({"sub": str(user["id"]), "role": user["role"]})
 
-    return {"success": True, "access_token": new_access}
+    res = JSONResponse({"success": True})
+    res.set_cookie(
+        ACCESS_COOKIE_NAME,
+        new_access,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        **COOKIE_SETTINGS,
+    )
+
+    return res
 
 
 # =========================================================
-# 👤 /auth/me — haalt user uit Authorization Bearer token
+# 👤 /auth/me — haalt user uit cookie-JWT via get_current_user
 # =========================================================
 
 @router.get("/auth/me", response_model=UserOut)
 async def get_me(current_user: dict = Depends(get_current_user)):
-
     user = _get_user_by_id(current_user["id"])
     if not user:
         raise HTTPException(404, "Gebruiker niet gevonden")
