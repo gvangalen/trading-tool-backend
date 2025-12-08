@@ -6,7 +6,10 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from dotenv import load_dotenv
 
 from backend.utils.db import get_db_connection
-from backend.utils.auth_utils import get_current_user   # ✅ CORRECTE IMPORT
+from backend.utils.auth_utils import get_current_user
+
+# ⭐ Onboarding helper importeren
+from backend.api.onboarding_api import mark_step_completed  
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -14,7 +17,7 @@ router = APIRouter()
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path)
 
-logger.info("🚀 macro_data_api.py geladen – user_id-systeem actief.")
+logger.info("🚀 macro_data_api.py geladen – user_id-systeem + onboarding actief.")
 
 
 # =====================================
@@ -28,15 +31,16 @@ def get_db_cursor():
 
 
 # =====================================
-# ➕ Macro-indicator opslaan (met user_id)
+# ➕ Macro-indicator opslaan (met user_id + onboarding update)
 # =====================================
 @router.post("/macro_data")
 async def add_macro_indicator(request: Request, current_user: dict = Depends(get_current_user)):
     """
     ➕ Voeg macro-data toe voor deze gebruiker.
-    Nu 100% persoonlijk door user_id.
+    Onboarding wordt automatisch bijgewerkt → macro stap = voltooid.
     """
-    logger.info(f"📅 [add] Macro opslaan voor user_id={current_user['id']}...")
+    user_id = current_user["id"]
+    logger.info(f"📅 [add] Macro opslaan voor user_id={user_id}...")
 
     data = await request.json()
     name = data.get("name")
@@ -75,7 +79,6 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
             if not result:
                 raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'")
 
-            # Flexibel resultaatformat
             if isinstance(result, dict):
                 if "value" in result:
                     value = float(result["value"])
@@ -97,13 +100,25 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
         interpretation = score_info.get("interpretation", "–")
         action = score_info.get("action", "–")
 
-        # Opslaan met user_id
+        # Opslaan
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO macro_data (name, value, trend, interpretation, action, score, timestamp, user_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (name, value, trend, interpretation, action, score, datetime.utcnow(), current_user["id"]))
+            """, (
+                name,
+                value,
+                trend,
+                interpretation,
+                action,
+                score,
+                datetime.utcnow(),
+                user_id
+            ))
             conn.commit()
+
+        # ⭐ ONBOARDING: macro step automatisch markeren
+        mark_step_completed(conn, user_id, "macro")
 
         return {
             "message": f"Indicator '{name}' opgeslagen.",
@@ -117,6 +132,7 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
     except Exception as e:
         logger.error(f"❌ Macro save error: {e}")
         raise HTTPException(status_code=500, detail=f"Fout bij opslaan macro data: {e}")
+
     finally:
         conn.close()
 
@@ -126,7 +142,7 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
 # =====================================
 @router.get("/macro_data")
 async def get_macro_indicators(current_user: dict = Depends(get_current_user)):
-    logger.info(f"📄 [get] Macro-data ophalen voor user_id={current_user['id']}")
+    logger.info(f"📄 [get] Macro-data voor user_id={current_user['id']}")
 
     conn, cur = get_db_cursor()
     try:
@@ -154,7 +170,6 @@ async def get_macro_indicators(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Macro data ophalen mislukt.")
     finally:
         conn.close()
-
 
 # =====================================
 # 📆 Macro dagdata ophalen
