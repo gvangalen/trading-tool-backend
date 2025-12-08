@@ -8,24 +8,23 @@ import httpx
 
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import get_scores_for_symbol
-from backend.utils.auth_utils import get_current_user  # alleen voor interpreted endpoint
+from backend.utils.auth_utils import get_current_user
+
+# ⭐ Onboarding helper importeren
+from backend.api.onboarding_api import mark_step_completed  
 
 # =========================================================
 # ⚙️ Router setup
 # =========================================================
 router = APIRouter()
 logger = logging.getLogger(__name__)
-logger.info("🚀 market_data_api.py geladen – alle market-data routes actief.")
+logger.info("🚀 market_data_api.py geladen – alle market-data routes actief + onboarding.")
 
 
 # =========================================================
 # 🔄 Dynamisch laden van API endpoints uit database (RAW)
 # =========================================================
 def get_market_raw_endpoints():
-    """
-    Haalt ALLE market_raw endpoints uit de database.
-    LET OP: GEEN filter op active – raw endpoints zijn altijd nodig.
-    """
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
@@ -50,16 +49,14 @@ MARKET_RAW_ENDPOINTS = get_market_raw_endpoints()
 
 
 # =========================================================
-# 📅 GET /market_data/day — DAGTABEL (GLOBAAL)
+# 📅 GET /market_data/day — DAGTABEL (globaal)
 # =========================================================
 @router.get("/market_data/day")
 async def get_latest_market_day_data():
     """
-    Haalt de meest recente market-indicatoren op (globaal).
-    Eerst vandaag, anders fallback naar laatste beschikbare dag.
-    GEEN user_id filter meer.
+    Marktdata is globaal, dus GEEN user_id.
     """
-    logger.info("📄 [market/day] Ophalen market-dagdata (met fallback)...")
+    logger.info("📄 [market/day] Ophalen market-dagdata...")
 
     conn = get_db_connection()
     if not conn:
@@ -67,7 +64,6 @@ async def get_latest_market_day_data():
 
     try:
         with conn.cursor() as cur:
-            # 1️⃣ Eerst vandaag proberen
             cur.execute("""
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM market_data_indicators
@@ -76,9 +72,8 @@ async def get_latest_market_day_data():
             """)
             rows = cur.fetchall()
 
-            # 2️⃣ FALLBACK naar meest recente dag (globaal)
             if not rows:
-                logger.warning("⚠️ Geen market-data voor vandaag — fallback gebruiken.")
+                logger.warning("⚠️ Geen market-data vandaag — fallback...")
 
                 cur.execute("""
                     SELECT timestamp
@@ -87,7 +82,6 @@ async def get_latest_market_day_data():
                     LIMIT 1;
                 """)
                 last = cur.fetchone()
-
                 if not last:
                     return []
 
@@ -103,20 +97,13 @@ async def get_latest_market_day_data():
 
         return [
             {
-                "name": r[0],
-                "value": r[1],
-                "trend": r[2],
-                "interpretation": r[3],
-                "action": r[4],
+                "name": r[0], "value": r[1], "trend": r[2],
+                "interpretation": r[3], "action": r[4],
                 "score": r[5],
                 "timestamp": r[6].isoformat() if r[6] else None
             }
             for r in rows
         ]
-
-    except Exception as e:
-        logger.error(f"❌ [market/day] Fout bij ophalen market dagdata: {e}")
-        raise HTTPException(status_code=500, detail="❌ Ophalen market dagdata mislukt.")
 
     finally:
         conn.close()
@@ -320,14 +307,12 @@ def get_latest_btc_price():
 
 
 # =========================================================
-# GET /market_data/interpreted — interpretatie + score
+# GET /market_data/interpreted — USER-SPECIFIC onboarding stap!
 # =========================================================
 @router.get("/market_data/interpreted")
 async def fetch_interpreted_data(current_user: dict = Depends(get_current_user)):
     """
-    Market-data interpretatie:
-    - Ruwe BTC data is GLOBAAL (geen user_id in DB)
-    - Score & uitleg komen uit ai_scores / ai_master_score (per user)
+    User gebruikt de markt-dataset → onboarding stap “market” mag automatisch afgerond worden.
     """
     user_id = current_user["id"]
 
@@ -345,13 +330,15 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
         conn.close()
 
         if not row:
-            raise HTTPException(404, "Geen BTC data gevonden")
+            raise HTTPException(404, "Geen BTC data gevonden.")
 
         symbol, price, change, volume, timestamp = row
 
-        # ⬇️ Global MARKET score ophalen, maar wél user-id nodig
-        # om macro/technical/setup scores te combineren
+        # ⭐ USER SCORE combinatie ophalen (macro/technical/setup/market)
         scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
+
+        # ⭐ ONBOARDING AUTO-COMPLETE
+        mark_step_completed(get_db_connection(), user_id, "market")
 
         return {
             "symbol": symbol,
@@ -363,12 +350,12 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
             "score": scores.get("market_score", 0),
             "top_contributors": scores.get("market_top_contributors", []),
             "interpretation": scores.get("market_interpretation", "Geen interpretatie"),
-            "action": "Geen actie (market-score is globaal)",
+            "action": "Market-score is globaal, advies is informatief."
         }
 
     except Exception as e:
-        logger.error(f"❌ [interpreted] Fout bij interpretatie: {e}")
-        raise HTTPException(500, "❌ Interpretatiefout via scoring_util.")
+        logger.error(f"❌ [interpreted] Fout: {e}")
+        raise HTTPException(500, "❌ Interpretatiefout.")
 
 
 # =========================================================
@@ -616,15 +603,12 @@ async def save_forward_returns(data: list[dict]):
 
 
 # =========================================================
-# POST /market/add_indicator — indicator activeren voor dag-analyse
-# (globale config)
+# POST /market/add_indicator — onboarding event!
 # =========================================================
 @router.post("/market/add_indicator")
-def add_market_indicator(payload: dict):
+def add_market_indicator(payload: dict, current_user: dict = Depends(get_current_user)):
     """
-    Indicator activeren voor dag-analyse:
-    - Werkt alleen op category = 'market'
-    - RAW data + scoring worden door de Celery-task gedaan
+    User activeert een indicator → onboarding stap 'market' mag compleet.
     """
     name = payload.get("indicator")
     if not name:
@@ -634,38 +618,35 @@ def add_market_indicator(payload: dict):
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # 1️⃣ Bestaat indicator in indicators?
         cur.execute("""
             SELECT name FROM indicators 
             WHERE name = %s AND category = 'market'
         """, (name,))
         if not cur.fetchone():
             conn.close()
-            raise HTTPException(404, f"Indicator '{name}' bestaat niet in indicators.")
+            raise HTTPException(404, f"Indicator '{name}' bestaat niet.")
 
-        # 2️⃣ Heeft indicator scoreregels?
         cur.execute("""
             SELECT 1 FROM market_indicator_rules WHERE indicator = %s LIMIT 1
         """, (name,))
         if not cur.fetchone():
             conn.close()
-            raise HTTPException(400, "Deze indicator heeft nog geen scoreregels.")
+            raise HTTPException(400, "Indicator heeft geen scoreregels.")
 
-        # 3️⃣ Indicator activeren (active = true)
         cur.execute("""
             UPDATE indicators
             SET active = TRUE
             WHERE name = %s
         """, (name,))
-
         conn.commit()
-        conn.close()
 
-        return {"status": "ok", "message": f"Indicator '{name}' is toegevoegd aan de market-analyse."}
+        # ⭐ ONBOARDING MARKEREN
+        mark_step_completed(conn, current_user["id"], "market")
+
+        return {"status": "ok", "message": f"Indicator '{name}' geactiveerd."}
 
     except Exception as e:
         raise HTTPException(500, str(e))
-
 
 # =========================================================
 # DELETE /market/delete_indicator/{name} — indicator deactiveren
