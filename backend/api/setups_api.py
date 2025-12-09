@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Query, Depends
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
-from backend.api.onboarding_api import mark_step_completed   # ⭐ Only used for POST/PATCH/DELETE
+from backend.api.onboarding_api import mark_step_completed
 from datetime import datetime
 import logging
 from backend.ai_agents.setup_ai_agent import generate_setup_explanation
@@ -11,51 +11,67 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# ============================================================
+# 🧩 Helper — SAFE formatter voor setups (nooit meer index errors)
+# ============================================================
+def format_setup_rows(rows, cursor=None):
+    """
+    Future-proof formatter die automatisch kolomnamen koppelt aan waarden.
+    Werkt met SELECT *, ongeacht kolomvolgorde.
+    """
+
+    # 1️⃣ Kolomnamen ophalen
+    if cursor is None or cursor.description is None:
+        raise RuntimeError("Cursor metadata is vereist voor format_setup_rows()")
+
+    columns = [col[0] for col in cursor.description]
+
+    formatted = []
+    for row in rows:
+        item = dict(zip(columns, row))
+
+        # created_at netjes omzetten
+        created_at = item.get("created_at")
+        if hasattr(created_at, "isoformat"):
+            created_at = created_at.isoformat()
+
+        formatted.append({
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "symbol": item.get("symbol"),
+            "timeframe": item.get("timeframe"),
+            "account_type": item.get("account_type"),
+            "strategy_type": item.get("strategy_type"),
+            "min_investment": item.get("min_investment"),
+            "dynamic_investment": item.get("dynamic_investment"),
+            "tags": item.get("tags"),
+            "trend": item.get("trend"),
+            "score_logic": item.get("score_logic"),
+            "favorite": item.get("favorite"),
+            "explanation": item.get("explanation"),
+            "description": item.get("description"),
+            "action": item.get("action"),
+            "category": item.get("category"),
+
+            "min_macro_score": item.get("min_macro_score"),
+            "max_macro_score": item.get("max_macro_score"),
+            "min_technical_score": item.get("min_technical_score"),
+            "max_technical_score": item.get("max_technical_score"),
+            "min_market_score": item.get("min_market_score"),
+            "max_market_score": item.get("max_market_score"),
+
+            "created_at": created_at,
+            "user_id": item.get("user_id"),
+        })
+
+    return formatted
+
 
 # ============================================================
-# 🧩 Helper — row formatter
-# ============================================================
-def format_setup_rows(rows):
-    return [
-        {
-            "id": r[0],
-            "name": r[1],
-            "symbol": r[2],
-            "timeframe": r[3],
-            "account_type": r[4],
-            "strategy_type": r[5],
-            "min_investment": r[6],
-            "dynamic_investment": r[7],
-            "tags": r[8],
-            "trend": r[9],
-            "score_logic": r[10],
-            "favorite": r[11],
-            "explanation": r[12],
-            "description": r[13],
-            "action": r[14],
-            "category": r[15],
-            "min_macro_score": r[16],
-            "max_macro_score": r[17],
-            "min_technical_score": r[18],
-            "max_technical_score": r[19],
-            "min_market_score": r[20],
-            "max_market_score": r[21],
-            "created_at": r[22].isoformat() if r[22] else None,
-            "user_id": r[23],
-        }
-        for r in rows
-    ]
-
-
-# ============================================================
-# 1️⃣ Setup aanmaken — USER SPECIFIC
-# ⭐ ONBOARDING ACTIEF
+# 1️⃣ Setup aanmaken
 # ============================================================
 @router.post("/setups")
-async def save_setup(
-    request: Request,
-    current_user: dict = Depends(get_current_user),
-):
+async def save_setup(request: Request, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     data = await request.json()
 
@@ -68,9 +84,9 @@ async def save_setup(
 
     # min/max validation
     for cat in ["macro", "technical", "market"]:
-        min_val = data.get(f"min_{cat}_score")
-        max_val = data.get(f"max_{cat}_score")
-        if min_val and max_val and int(min_val) > int(max_val):
+        mn = data.get(f"min_{cat}_score")
+        mx = data.get(f"max_{cat}_score")
+        if mn and mx and int(mn) > int(mx):
             raise HTTPException(400, f"min_{cat}_score mag niet hoger zijn dan max_{cat}_score")
 
     conn = get_db_connection()
@@ -105,7 +121,7 @@ async def save_setup(
                         %s,%s,%s,%s,%s,%s,%s,%s,%s)
             """
 
-            params = (
+            cur.execute(query, (
                 data["name"],
                 data["symbol"],
                 data.get("timeframe"),
@@ -129,14 +145,11 @@ async def save_setup(
                 data.get("max_market_score"),
                 datetime.utcnow(),
                 user_id,
-            )
+            ))
 
-            cur.execute(query, params)
             conn.commit()
 
-        # ⭐ ONBOARDING — setup linked
         mark_step_completed(conn, user_id, "setup")
-
         return {"status": "success", "message": "Setup opgeslagen"}
 
     finally:
@@ -144,8 +157,7 @@ async def save_setup(
 
 
 # ============================================================
-# 2️⃣ Alle setups ophalen — USER SPECIFIC
-# ❌ GEEN ONBOARDING HIER
+# 2️⃣ Alle setups ophalen
 # ============================================================
 @router.get("/setups")
 async def get_setups(
@@ -178,21 +190,18 @@ async def get_setups(
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
 
-        return format_setup_rows(rows)
+            return format_setup_rows(rows, cur)
 
     finally:
         conn.close()
 
 
-
 # ============================================================
-# 3️⃣ DCA setups — user specific
-# ❌ GEEN ONBOARDING
+# 3️⃣ DCA setups
 # ============================================================
 @router.get("/setups/dca")
 async def get_dca_setups(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-
     conn = get_db_connection()
 
     try:
@@ -203,18 +212,16 @@ async def get_dca_setups(current_user: dict = Depends(get_current_user)):
                 AND user_id = %s
                 ORDER BY created_at DESC
             """, (user_id,))
-            rows = cur.fetchall()
 
-        return format_setup_rows(rows)
+            rows = cur.fetchall()
+            return format_setup_rows(rows, cur)
 
     finally:
         conn.close()
 
 
-
 # ============================================================
 # 4️⃣ Setup bijwerken
-# ⭐ ONBOARDING ACTIEF
 # ============================================================
 @router.patch("/setups/{setup_id}")
 async def update_setup(
@@ -224,15 +231,12 @@ async def update_setup(
 ):
     user_id = current_user["id"]
     data = await request.json()
-
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-
-            cur.execute("""
-                SELECT id FROM setups WHERE id=%s AND user_id=%s
-            """, (setup_id, user_id))
+            cur.execute("SELECT id FROM setups WHERE id=%s AND user_id=%s",
+                        (setup_id, user_id))
 
             if not cur.fetchone():
                 raise HTTPException(403, "Setup behoort niet tot deze gebruiker")
@@ -252,50 +256,44 @@ async def update_setup(
                     min_market_score=%s, max_market_score=%s,
                     last_validated=%s
                 WHERE id=%s AND user_id=%s
-            """,
-                (
-                    data.get("name"),
-                    data.get("symbol"),
-                    data.get("timeframe"),
-                    data.get("account_type"),
-                    data.get("strategy_type"),
-                    data.get("min_investment"),
-                    data.get("dynamic_investment"),
-                    tags,
-                    data.get("trend"),
-                    data.get("score_logic"),
-                    data.get("favorite"),
-                    data.get("explanation"),
-                    data.get("description"),
-                    data.get("action"),
-                    data.get("category"),
-                    data.get("min_macro_score"),
-                    data.get("max_macro_score"),
-                    data.get("min_technical_score"),
-                    data.get("max_technical_score"),
-                    data.get("min_market_score"),
-                    data.get("max_market_score"),
-                    datetime.utcnow(),
-                    setup_id,
-                    user_id,
-                )
-            )
+            """, (
+                data.get("name"),
+                data.get("symbol"),
+                data.get("timeframe"),
+                data.get("account_type"),
+                data.get("strategy_type"),
+                data.get("min_investment"),
+                data.get("dynamic_investment"),
+                tags,
+                data.get("trend"),
+                data.get("score_logic"),
+                data.get("favorite"),
+                data.get("explanation"),
+                data.get("description"),
+                data.get("action"),
+                data.get("category"),
+                data.get("min_macro_score"),
+                data.get("max_macro_score"),
+                data.get("min_technical_score"),
+                data.get("max_technical_score"),
+                data.get("min_market_score"),
+                data.get("max_market_score"),
+                datetime.utcnow(),
+                setup_id,
+                user_id,
+            ))
 
             conn.commit()
 
-        # ⭐ ONBOARDING
         mark_step_completed(conn, user_id, "setup")
-
         return {"message": "Setup bijgewerkt"}
 
     finally:
         conn.close()
 
 
-
 # ============================================================
 # 5️⃣ Setup verwijderen
-# ⭐ ONBOARDING ACTIEF
 # ============================================================
 @router.delete("/setups/{setup_id}")
 async def delete_setup(
@@ -308,40 +306,30 @@ async def delete_setup(
     try:
         with conn.cursor() as cur:
 
-            cur.execute("""
-                SELECT id FROM setups WHERE id=%s AND user_id=%s
-            """, (setup_id, user_id))
+            cur.execute("SELECT id FROM setups WHERE id=%s AND user_id=%s",
+                        (setup_id, user_id))
 
             if not cur.fetchone():
                 raise HTTPException(404, "Setup niet gevonden")
 
-            cur.execute("""
-                DELETE FROM setups WHERE id=%s AND user_id=%s
-            """, (setup_id, user_id))
+            cur.execute("DELETE FROM setups WHERE id=%s AND user_id=%s",
+                        (setup_id, user_id))
 
             conn.commit()
 
-        # ⭐ ONBOARDING
         mark_step_completed(conn, user_id, "setup")
-
         return {"message": "Setup verwijderd"}
 
     finally:
         conn.close()
 
 
-
 # ============================================================
-# 6️⃣ Naamcheck — alleen lezen
-# ❌ GEEN ONBOARDING
+# 6️⃣ Naamcheck
 # ============================================================
 @router.get("/setups/check_name/{name}")
-async def check_name(
-    name: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def check_name(name: str, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-
     conn = get_db_connection()
 
     try:
@@ -359,30 +347,20 @@ async def check_name(
         conn.close()
 
 
-
 # ============================================================
-# 7️⃣ AI Explanation (alleen lezen)
-# ❌ GEEN ONBOARDING
+# 7️⃣ AI Explanation
 # ============================================================
 @router.post("/setups/explanation/{setup_id}")
-async def ai_explanation(
-    setup_id: int,
-    current_user: dict = Depends(get_current_user)
-):
+async def ai_explanation(setup_id: int, current_user: dict = Depends(get_current_user)):
     explanation = generate_setup_explanation(setup_id, current_user["id"])
     return {"explanation": explanation}
 
 
-
 # ============================================================
-# 8️⃣ Top setups — alleen lezen
-# ❌ GEEN ONBOARDING
+# 8️⃣ Top setups
 # ============================================================
 @router.get("/setups/top")
-async def get_top_setups(
-    limit: int = 3,
-    current_user: dict = Depends(get_current_user)
-):
+async def get_top_setups(limit: int = 3, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     conn = get_db_connection()
 
@@ -396,23 +374,17 @@ async def get_top_setups(
             """, (user_id, limit))
 
             rows = cur.fetchall()
-
-        return format_setup_rows(rows)
+            return format_setup_rows(rows, cur)
 
     finally:
         conn.close()
 
 
-
 # ============================================================
 # 9️⃣ Eén setup ophalen
-# ❌ GEEN ONBOARDING
 # ============================================================
 @router.get("/setups/{setup_id}")
-async def get_setup_by_id(
-    setup_id: int,
-    current_user: dict = Depends(get_current_user)
-):
+async def get_setup_by_id(setup_id: int, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     conn = get_db_connection()
 
@@ -425,24 +397,20 @@ async def get_setup_by_id(
 
             row = cur.fetchone()
 
-        if not row:
-            raise HTTPException(404, "Setup niet gevonden")
+            if not row:
+                raise HTTPException(404, "Setup niet gevonden")
 
-        return format_setup_rows([row])[0]
+            return format_setup_rows([row], cur)[0]
 
     finally:
         conn.close()
 
 
-
 # ============================================================
-# 🔟 Laatste setup — alleen lezen
-# ❌ GEEN ONBOARDING
+# 🔟 Laatste setup
 # ============================================================
 @router.get("/setups/last")
-async def last_setup(
-    current_user: dict = Depends(get_current_user)
-):
+async def last_setup(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     conn = get_db_connection()
 
@@ -456,26 +424,21 @@ async def last_setup(
 
             row = cur.fetchone()
 
-        if not row:
-            return {"setup": None}
+            if not row:
+                return {"setup": None}
 
-        return {"setup": format_setup_rows([row])[0]}
+            return {"setup": format_setup_rows([row], cur)[0]}
 
     finally:
         conn.close()
 
 
-
 # ============================================================
-# 🔥 Active setup — alleen lezen
-# ❌ GEEN ONBOARDING
+# 🔥 Active setup (beste score van vandaag)
 # ============================================================
 @router.get("/setups/active")
-async def get_active_setup(
-    current_user: dict = Depends(get_current_user)
-):
+async def get_active_setup(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-
     conn = get_db_connection()
 
     try:
