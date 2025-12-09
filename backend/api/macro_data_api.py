@@ -59,7 +59,7 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
         # ------------------------------
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT source, data_url
+                SELECT source, link
                 FROM indicators
                 WHERE LOWER(name) = LOWER(%s)
                   AND category = 'macro'
