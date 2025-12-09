@@ -57,12 +57,13 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
         # Indicator ophalen uit configuratietabel
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT source, data_url
+                SELECT source, link
                 FROM indicators
                 WHERE LOWER(name) = LOWER(%s)
                   AND category = 'macro'
                   AND active = TRUE;
             """, (name,))
+
             indicator_info = cur.fetchone()
 
             if not indicator_info:
@@ -71,11 +72,12 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
                     detail=f"Indicator '{name}' bestaat niet of is inactief."
                 )
 
-            source, data_url = indicator_info
+            source, data_url = indicator_info   # link -> data_url
 
         # Waarde bepalen
         if "value" in data:
             value = float(data["value"])
+
         else:
             from backend.utils.macro_interpreter import fetch_macro_value
             result = await fetch_macro_value(name, source=source, link=data_url)
