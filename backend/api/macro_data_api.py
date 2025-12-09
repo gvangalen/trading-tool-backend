@@ -54,16 +54,17 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
         raise HTTPException(status_code=500, detail="❌ DB niet beschikbaar.")
 
     try:
-        # Indicator ophalen uit configuratietabel
+        # ------------------------------
+        # 1️⃣ Indicatorconfig ophalen
+        # ------------------------------
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT source, link
+                SELECT source, data_url
                 FROM indicators
                 WHERE LOWER(name) = LOWER(%s)
                   AND category = 'macro'
                   AND active = TRUE;
             """, (name,))
-
             indicator_info = cur.fetchone()
 
             if not indicator_info:
@@ -72,18 +73,22 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
                     detail=f"Indicator '{name}' bestaat niet of is inactief."
                 )
 
-            source, data_url = indicator_info   # link -> data_url
+            source, data_url = indicator_info
 
-        # Waarde bepalen
+        # ------------------------------
+        # 2️⃣ Waarde bepalen
+        # ------------------------------
         if "value" in data:
             value = float(data["value"])
 
         else:
             from backend.utils.macro_interpreter import fetch_macro_value
-            result = await fetch_macro_value(name, source=source, link=data_url)
+
+            # ❗ BELANGRIJK → GEEN await!
+            result = fetch_macro_value(name=name, source=source, link=data_url)
 
             if not result:
-                raise HTTPException(status_code=500, detail=f"❌ Geen waarde ontvangen voor '{name}'")
+                raise HTTPException(500, f"❌ Geen waarde voor '{name}' ontvangen.")
 
             if isinstance(result, dict):
                 if "value" in result:
@@ -94,13 +99,14 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
                     value = float(result["result"])
                 else:
                     raise HTTPException(
-                        status_code=500,
-                        detail=f"❌ Kan waarde niet parsen: {result}"
+                        500, f"❌ Kan waarde niet parsen uit response: {result}"
                     )
             else:
                 value = float(result)
 
-        # Score berekenen via DB-config
+        # ------------------------------
+        # 3️⃣ Score berekenen
+        # ------------------------------
         from backend.utils.scoring_utils import generate_scores_db
         score_info = generate_scores_db(name, value)
 
@@ -109,7 +115,9 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
         interpretation = score_info.get("interpretation", "–")
         action = score_info.get("action", "–")
 
-        # Opslaan in macro_data (per user)
+        # ------------------------------
+        # 4️⃣ Wegschrijven naar DB
+        # ------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO macro_data (
@@ -127,9 +135,12 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
                 datetime.utcnow(),
                 user_id
             ))
-            conn.commit()
 
-        # ⭐ ONBOARDING: macro step automatisch markeren
+        conn.commit()
+
+        # ------------------------------
+        # 5️⃣ Onboarding stap voltooien
+        # ------------------------------
         mark_step_completed(conn, user_id, "macro")
 
         return {
