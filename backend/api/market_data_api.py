@@ -18,7 +18,7 @@ from backend.api.onboarding_api import mark_step_completed
 # =========================================================
 router = APIRouter()
 logger = logging.getLogger(__name__)
-logger.info("🚀 market_data_api.py geladen – alle market-data routes actief + onboarding.")
+logger.info("🚀 market_data_api.py geladen – alle market-data routes actief + onboarding alleen bij POST/add_indicator.")
 
 
 # =========================================================
@@ -307,12 +307,13 @@ def get_latest_btc_price():
 
 
 # =========================================================
-# GET /market_data/interpreted — USER-SPECIFIC onboarding stap!
+# GET /market_data/interpreted — GEEN ONBOARDING MEER
 # =========================================================
 @router.get("/market_data/interpreted")
 async def fetch_interpreted_data(current_user: dict = Depends(get_current_user)):
     """
-    User gebruikt de markt-dataset → onboarding stap “market” mag automatisch afgerond worden.
+    User krijgt interpretatie op basis van scores, maar er wordt
+    GEEN onboarding-stap meer gemarkeerd.
     """
     user_id = current_user["id"]
 
@@ -334,11 +335,8 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
 
         symbol, price, change, volume, timestamp = row
 
-        # ⭐ USER SCORE combinatie ophalen (macro/technical/setup/market)
+        # USER SCORE combinatie ophalen (macro/technical/setup/market)
         scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
-
-        # ⭐ ONBOARDING AUTO-COMPLETE
-        mark_step_completed(get_db_connection(), user_id, "market")
 
         return {
             "symbol": symbol,
@@ -609,6 +607,7 @@ async def save_forward_returns(data: list[dict]):
 def add_market_indicator(payload: dict, current_user: dict = Depends(get_current_user)):
     """
     User activeert een indicator → onboarding stap 'market' mag compleet.
+    👉 Dit is de ENIGE plek waar mark_step_completed wordt aangeroepen.
     """
     name = payload.get("indicator")
     if not name:
@@ -640,13 +639,14 @@ def add_market_indicator(payload: dict, current_user: dict = Depends(get_current
         """, (name,))
         conn.commit()
 
-        # ⭐ ONBOARDING MARKEREN
+        # ⭐ ONBOARDING MARKEREN — ENIGE PLEK
         mark_step_completed(conn, current_user["id"], "market")
 
         return {"status": "ok", "message": f"Indicator '{name}' geactiveerd."}
 
     except Exception as e:
         raise HTTPException(500, str(e))
+
 
 # =========================================================
 # DELETE /market/delete_indicator/{name} — indicator deactiveren
