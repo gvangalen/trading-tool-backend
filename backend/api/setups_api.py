@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Query, Depends
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
-from backend.api.onboarding_api import mark_step_completed   # ⭐ Onboarding integratie
+from backend.api.onboarding_api import mark_step_completed   # ⭐ Only used for POST/PATCH/DELETE
 from datetime import datetime
 import logging
 from backend.ai_agents.setup_ai_agent import generate_setup_explanation
@@ -49,6 +49,7 @@ def format_setup_rows(rows):
 
 # ============================================================
 # 1️⃣ Setup aanmaken — USER SPECIFIC
+# ⭐ ONBOARDING ACTIEF
 # ============================================================
 @router.post("/setups")
 async def save_setup(
@@ -77,13 +78,11 @@ async def save_setup(
     try:
         with conn.cursor() as cur:
             # Duplicate check per user
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT id FROM setups 
                 WHERE name = %s AND symbol = %s AND user_id = %s
-                """,
-                (data["name"], data["symbol"], user_id),
-            )
+            """, (data["name"], data["symbol"], user_id))
+
             if cur.fetchone():
                 raise HTTPException(409, "Setup met deze naam bestaat al voor deze gebruiker")
 
@@ -135,7 +134,7 @@ async def save_setup(
             cur.execute(query, params)
             conn.commit()
 
-        # ⭐ ONBOARDING — setup onderdeel voltooid
+        # ⭐ ONBOARDING — setup linked
         mark_step_completed(conn, user_id, "setup")
 
         return {"status": "success", "message": "Setup opgeslagen"}
@@ -146,16 +145,18 @@ async def save_setup(
 
 # ============================================================
 # 2️⃣ Alle setups ophalen — USER SPECIFIC
+# ❌ GEEN ONBOARDING HIER
 # ============================================================
 @router.get("/setups")
 async def get_setups(
     strategy_type: Optional[str] = Query(None),
     exclude_strategy_type: Optional[str] = Query(None),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
 
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
             query = """
@@ -177,39 +178,32 @@ async def get_setups(
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
 
-        # ⭐ ONBOARDING — gebruiker gebruikt setup functionaliteit
-        mark_step_completed(conn, user_id, "setup")
-
         return format_setup_rows(rows)
 
     finally:
         conn.close()
 
 
+
 # ============================================================
-# 3️⃣ DCA setups – per user
+# 3️⃣ DCA setups — user specific
+# ❌ GEEN ONBOARDING
 # ============================================================
 @router.get("/setups/dca")
-async def get_dca_setups(
-    current_user: dict = Depends(get_current_user),
-):
+async def get_dca_setups(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
+
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT * FROM setups
                 WHERE LOWER(strategy_type) = 'dca'
                 AND user_id = %s
                 ORDER BY created_at DESC
-                """,
-                (user_id,),
-            )
+            """, (user_id,))
             rows = cur.fetchall()
-
-        mark_step_completed(conn, user_id, "setup")
 
         return format_setup_rows(rows)
 
@@ -217,25 +211,29 @@ async def get_dca_setups(
         conn.close()
 
 
+
 # ============================================================
-# 4️⃣ Setup bijwerken — alleen eigen setups
+# 4️⃣ Setup bijwerken
+# ⭐ ONBOARDING ACTIEF
 # ============================================================
 @router.patch("/setups/{setup_id}")
 async def update_setup(
     setup_id: int,
     request: Request,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
     data = await request.json()
 
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM setups WHERE id=%s AND user_id=%s",
-                (setup_id, user_id),
-            )
+
+            cur.execute("""
+                SELECT id FROM setups WHERE id=%s AND user_id=%s
+            """, (setup_id, user_id))
+
             if not cur.fetchone():
                 raise HTTPException(403, "Setup behoort niet tot deze gebruiker")
 
@@ -243,8 +241,7 @@ async def update_setup(
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",")]
 
-            cur.execute(
-                """
+            cur.execute("""
                 UPDATE setups SET
                     name=%s, symbol=%s, timeframe=%s, account_type=%s,
                     strategy_type=%s, min_investment=%s, dynamic_investment=%s,
@@ -255,7 +252,7 @@ async def update_setup(
                     min_market_score=%s, max_market_score=%s,
                     last_validated=%s
                 WHERE id=%s AND user_id=%s
-                """,
+            """,
                 (
                     data.get("name"),
                     data.get("symbol"),
@@ -281,11 +278,12 @@ async def update_setup(
                     datetime.utcnow(),
                     setup_id,
                     user_id,
-                ),
+                )
             )
 
             conn.commit()
 
+        # ⭐ ONBOARDING
         mark_step_completed(conn, user_id, "setup")
 
         return {"message": "Setup bijgewerkt"}
@@ -294,32 +292,36 @@ async def update_setup(
         conn.close()
 
 
+
 # ============================================================
 # 5️⃣ Setup verwijderen
+# ⭐ ONBOARDING ACTIEF
 # ============================================================
 @router.delete("/setups/{setup_id}")
 async def delete_setup(
     setup_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM setups WHERE id=%s AND user_id=%s",
-                (setup_id, user_id),
-            )
+
+            cur.execute("""
+                SELECT id FROM setups WHERE id=%s AND user_id=%s
+            """, (setup_id, user_id))
+
             if not cur.fetchone():
                 raise HTTPException(404, "Setup niet gevonden")
 
-            cur.execute(
-                "DELETE FROM setups WHERE id=%s AND user_id=%s",
-                (setup_id, user_id),
-            )
+            cur.execute("""
+                DELETE FROM setups WHERE id=%s AND user_id=%s
+            """, (setup_id, user_id))
+
             conn.commit()
 
+        # ⭐ ONBOARDING
         mark_step_completed(conn, user_id, "setup")
 
         return {"message": "Setup verwijderd"}
@@ -328,29 +330,28 @@ async def delete_setup(
         conn.close()
 
 
+
 # ============================================================
-# 6️⃣ Naamcheck — alleen binnen eigen account
+# 6️⃣ Naamcheck — alleen lezen
+# ❌ GEEN ONBOARDING
 # ============================================================
 @router.get("/setups/check_name/{name}")
 async def check_name(
     name: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
 
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM setups 
+            cur.execute("""
+                SELECT COUNT(*) FROM setups
                 WHERE name=%s AND user_id=%s
-                """,
-                (name, user_id),
-            )
-            exists = cur.fetchone()[0] > 0
+            """, (name, user_id))
 
-        mark_step_completed(conn, user_id, "setup")
+            exists = cur.fetchone()[0] > 0
 
         return {"exists": exists}
 
@@ -358,43 +359,43 @@ async def check_name(
         conn.close()
 
 
+
 # ============================================================
-# 7️⃣ AI EXPLANATION
+# 7️⃣ AI Explanation (alleen lezen)
+# ❌ GEEN ONBOARDING
 # ============================================================
 @router.post("/setups/explanation/{setup_id}")
 async def ai_explanation(
     setup_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user)
 ):
     explanation = generate_setup_explanation(setup_id, current_user["id"])
     return {"explanation": explanation}
 
 
+
 # ============================================================
-# 8️⃣ Top setups — per user
+# 8️⃣ Top setups — alleen lezen
+# ❌ GEEN ONBOARDING
 # ============================================================
 @router.get("/setups/top")
 async def get_top_setups(
     limit: int = 3,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT * FROM setups
                 WHERE user_id = %s
                 ORDER BY created_at DESC
                 LIMIT %s
-                """,
-                (user_id, limit),
-            )
-            rows = cur.fetchall()
+            """, (user_id, limit))
 
-        mark_step_completed(conn, user_id, "setup")
+            rows = cur.fetchall()
 
         return format_setup_rows(rows)
 
@@ -402,32 +403,30 @@ async def get_top_setups(
         conn.close()
 
 
+
 # ============================================================
-# 9️⃣ Eén setup ophalen — user-bound
+# 9️⃣ Eén setup ophalen
+# ❌ GEEN ONBOARDING
 # ============================================================
 @router.get("/setups/{setup_id}")
 async def get_setup_by_id(
     setup_id: int,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT * FROM setups
                 WHERE id = %s AND user_id = %s
-                """,
-                (setup_id, user_id),
-            )
+            """, (setup_id, user_id))
+
             row = cur.fetchone()
 
         if not row:
             raise HTTPException(404, "Setup niet gevonden")
-
-        mark_step_completed(conn, user_id, "setup")
 
         return format_setup_rows([row])[0]
 
@@ -435,32 +434,30 @@ async def get_setup_by_id(
         conn.close()
 
 
+
 # ============================================================
-# 🔟 Laatste setup — per user
+# 🔟 Laatste setup — alleen lezen
+# ❌ GEEN ONBOARDING
 # ============================================================
 @router.get("/setups/last")
 async def last_setup(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT * FROM setups
                 WHERE user_id = %s
                 ORDER BY created_at DESC LIMIT 1
-                """,
-                (user_id,),
-            )
+            """, (user_id,))
+
             row = cur.fetchone()
 
         if not row:
             return {"setup": None}
-
-        mark_step_completed(conn, user_id, "setup")
 
         return {"setup": format_setup_rows([row])[0]}
 
@@ -468,12 +465,14 @@ async def last_setup(
         conn.close()
 
 
+
 # ============================================================
-# 🔥 Active setup — per user
+# 🔥 Active setup — alleen lezen
+# ❌ GEEN ONBOARDING
 # ============================================================
 @router.get("/setups/active")
 async def get_active_setup(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
 
@@ -481,8 +480,7 @@ async def get_active_setup(
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT 
                     ds.setup_id,
                     ds.score,
@@ -505,16 +503,12 @@ async def get_active_setup(
                 AND s.user_id = %s
                 AND ds.is_best = TRUE
                 LIMIT 1
-                """,
-                (user_id, user_id),
-            )
+            """, (user_id, user_id))
 
             row = cur.fetchone()
 
         if not row:
             return {"active": None}
-
-        mark_step_completed(conn, user_id, "setup")
 
         (
             setup_id,
@@ -541,7 +535,7 @@ async def get_active_setup(
                 "name": name,
                 "symbol": symbol,
                 "timeframe": timeframe,
-                    "trend": trend,
+                "trend": trend,
                 "strategy_type": strategy_type,
                 "min_investment": min_inv,
                 "dynamic_investment": dyn_inv,
