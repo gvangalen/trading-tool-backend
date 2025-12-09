@@ -1,10 +1,9 @@
 import logging
-import requests
+import httpx
 
-from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import (
     normalize_indicator_name,
-    get_score_rule_from_db,   # ✅ WEL bestaand → gebruiken!
+    get_score_rule_from_db,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,38 +33,52 @@ def calculate_rsi(closes, period=14):
 
 
 # =========================================================
-# 🌐 Technische indicator waarde ophalen
+# 🌐 Technische indicator waarde ophalen (ASYNC)
 # =========================================================
-def fetch_technical_value(name: str, source: str = None, link: str = None):
+async def fetch_technical_value(name: str, source: str = None, link: str = None):
+    """
+    Async versie — voorkomt await errors.
+    Wordt aangeroepen via: result = await fetch_technical_value(...)
+    """
+
     try:
         if not link:
             logger.warning(f"⚠️ Geen link opgegeven voor '{name}'")
             return None
 
-        resp = requests.get(link, timeout=10)
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(link)
         resp.raise_for_status()
         data = resp.json()
 
-        # Binance candles
+        # -----------------------------------------
+        # 📊 Binance candles
+        # -----------------------------------------
         if "binance" in link.lower() and isinstance(data, list):
             closes = [float(k[4]) for k in data]
             volumes = [float(k[5]) for k in data]
 
+            # RSI
             if "rsi" in name.lower():
                 return {"value": calculate_rsi(closes)}
 
+            # MA200
             if "ma200" in name.lower() or "ma_200" in name.lower():
                 if len(closes) >= 200:
                     ma = sum(closes[-200:]) / 200
                     return {"value": closes[-1] / ma}
 
+            # Volume
             if "volume" in name.lower():
                 return {"value": sum(volumes[-10:])}
 
+            # Close value
             if name.lower() == "close":
                 return {"value": closes[-1]}
 
-        # Fallback JSON parsing
+        # -----------------------------------------
+        # 🧩 Fallback JSON parsing
+        # -----------------------------------------
         if isinstance(data, dict):
             for key in ("value", "close", "price"):
                 if key in data:
@@ -92,11 +105,9 @@ def interpret_technical_indicator_db(indicator: str, value: float, user_id: int)
     scoring_utils.get_score_rule_from_db() verwacht een CATEGORY.
     In dit geval: 'technical'
     """
-
     try:
         normalized = normalize_indicator_name(indicator)
 
-        # ⛓️ Gebruik je echte scoring engine
         rule = get_score_rule_from_db("technical", normalized, value)
 
         if not rule:
@@ -115,5 +126,8 @@ def interpret_technical_indicator_db(indicator: str, value: float, user_id: int)
         }
 
     except Exception as e:
-        logger.error(f"❌ interpret_technical_indicator_db fout: {e}", exc_info=True)
+        logger.error(
+            f"❌ interpret_technical_indicator_db fout: {e}",
+            exc_info=True
+        )
         return None
