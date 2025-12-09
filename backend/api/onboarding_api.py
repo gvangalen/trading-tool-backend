@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from backend.utils.db import get_db_connection
@@ -41,7 +41,7 @@ class StepRequest(BaseModel):
 
 
 # ================================================
-# HELPERS — LOGGING
+# HELPERS
 # ================================================
 def _ensure_steps_for_user(conn, user_id: int):
     logger.debug(f"🧩 _ensure_steps_for_user(user_id={user_id})")
@@ -97,9 +97,7 @@ def mark_step_completed(conn, user_id: int, step_key: str):
 
 
 # ================================================================
-# 🚀 **BELANGRIJKSTE FIX**
-# _get_data_presence checkt nu ALLEEN user-input tabellen
-# GEEN macro_data / market_data meer → onboarding werkt correct
+# PRESENCE CHECK — **ENIGE JUISTE VERSIE VOOR JOUW DATABASE**
 # ================================================================
 def _get_data_presence(conn, user_id: int) -> Dict[str, bool]:
     logger.debug(f"📊 _get_data_presence(user_id={user_id})")
@@ -108,27 +106,27 @@ def _get_data_presence(conn, user_id: int) -> Dict[str, bool]:
 
     with conn.cursor() as cur:
 
-        # ✔️ Setup: at least 1 setup
+        # ✔️ Setup check
         cur.execute("SELECT COUNT(*) FROM setups WHERE user_id = %s", (user_id,))
         presence["setup"] = cur.fetchone()[0] > 0
 
-        # ✔️ Technical: at least 1 user-added technical indicator
+        # ✔️ Technical indicators entered by user
         cur.execute("SELECT COUNT(*) FROM technical_indicators WHERE user_id = %s", (user_id,))
         presence["technical"] = cur.fetchone()[0] > 0
 
-        # ❗️ Macro onboarding must ONLY be based on macro_indicators from user
-        cur.execute("SELECT COUNT(*) FROM macro_indicators WHERE user_id = %s", (user_id,))
+        # ✔️ Macro: user must add macro indicators → macro_data is NOT correct
+        cur.execute("SELECT COUNT(*) FROM macro_indicator_rules WHERE user_id = %s", (user_id,))
         presence["macro"] = cur.fetchone()[0] > 0
 
-        # ❗️ Market onboarding must ONLY be based on market_indicators from user
-        cur.execute("SELECT COUNT(*) FROM market_indicators WHERE user_id = %s", (user_id,))
+        # ✔️ Market: user must add market indicators
+        cur.execute("SELECT COUNT(*) FROM market_indicator_rules WHERE user_id = %s", (user_id,))
         presence["market"] = cur.fetchone()[0] > 0
 
-        # ✔️ Strategy: at least 1 user strategy
+        # ✔️ Strategies exist?
         cur.execute("SELECT COUNT(*) FROM strategies WHERE user_id = %s", (user_id,))
         presence["strategy"] = cur.fetchone()[0] > 0
 
-    logger.debug(f"   → presence check (FIXED): {presence}")
+    logger.debug(f"   → presence check: {presence}")
     return presence
 
 
@@ -143,6 +141,7 @@ def _get_status_dict(conn, user_id: int):
             FROM onboarding_steps
             WHERE user_id = %s AND flow = %s
         """, (user_id, DEFAULT_FLOW))
+
         fetched = cur.fetchall()
 
     step_flags = {key: done for key, done in fetched}
@@ -152,7 +151,6 @@ def _get_status_dict(conn, user_id: int):
 
     status = {}
 
-    # Combine flags + presence
     for step in DEFAULT_STEPS:
         key = STEP_FLAG_MAP[step]
         status[key] = step_flags.get(step, False) or presence.get(step, False)
@@ -175,7 +173,6 @@ def get_onboarding_status(
     current_user=Depends(get_current_user)
 ):
     logger.info(f"📥 GET /onboarding/status by user={current_user['id']}")
-    logger.debug(f"   Cookies ontvangen: {request.cookies}")
     return _get_status_dict(conn, current_user["id"])
 
 
@@ -197,18 +194,18 @@ def finish_onboarding(
 ):
     logger.info(f"📥 POST /onboarding/finish user={current_user['id']}")
 
-    uid = current_user["id"]
     now = datetime.now(timezone.utc)
+    uid = current_user["id"]
 
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE onboarding_steps
-            SET completed = TRUE, completed_at = %s
+            SET completed = TRUE,
+                completed_at = %s
             WHERE user_id = %s AND flow = %s
         """, (now, uid, DEFAULT_FLOW))
 
     conn.commit()
-
     return _get_status_dict(conn, uid)
 
 
@@ -218,15 +215,16 @@ def reset_onboarding(
     current_user=Depends(get_current_user)
 ):
     logger.info(f"📥 POST /onboarding/reset user={current_user['id']}")
+
     uid = current_user["id"]
 
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE onboarding_steps
-            SET completed = FALSE, completed_at = NULL
+            SET completed = FALSE,
+                completed_at = NULL
             WHERE user_id = %s AND flow = %s
         """, (uid, DEFAULT_FLOW))
 
     conn.commit()
-
     return _get_status_dict(conn, uid)
