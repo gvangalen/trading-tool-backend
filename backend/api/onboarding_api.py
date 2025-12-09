@@ -41,7 +41,7 @@ class StepRequest(BaseModel):
 
 
 # ================================================
-# HELPERS — EXTRA LOGGING TOEGEVOEGD
+# HELPERS — LOGGING
 # ================================================
 def _ensure_steps_for_user(conn, user_id: int):
     logger.debug(f"🧩 _ensure_steps_for_user(user_id={user_id})")
@@ -96,28 +96,39 @@ def mark_step_completed(conn, user_id: int, step_key: str):
     logger.info(f"   → Step '{step_key}' gemarkeerd als voltooid.")
 
 
+# ================================================================
+# 🚀 **BELANGRIJKSTE FIX**
+# _get_data_presence checkt nu ALLEEN user-input tabellen
+# GEEN macro_data / market_data meer → onboarding werkt correct
+# ================================================================
 def _get_data_presence(conn, user_id: int) -> Dict[str, bool]:
     logger.debug(f"📊 _get_data_presence(user_id={user_id})")
 
     presence = {s: False for s in DEFAULT_STEPS}
 
     with conn.cursor() as cur:
+
+        # ✔️ Setup: at least 1 setup
         cur.execute("SELECT COUNT(*) FROM setups WHERE user_id = %s", (user_id,))
         presence["setup"] = cur.fetchone()[0] > 0
 
+        # ✔️ Technical: at least 1 user-added technical indicator
         cur.execute("SELECT COUNT(*) FROM technical_indicators WHERE user_id = %s", (user_id,))
         presence["technical"] = cur.fetchone()[0] > 0
 
-        cur.execute("SELECT COUNT(*) FROM macro_data WHERE user_id = %s", (user_id,))
+        # ❗️ Macro onboarding must ONLY be based on macro_indicators from user
+        cur.execute("SELECT COUNT(*) FROM macro_indicators WHERE user_id = %s", (user_id,))
         presence["macro"] = cur.fetchone()[0] > 0
 
-        cur.execute("SELECT COUNT(*) FROM market_data WHERE user_id = %s", (user_id,))
+        # ❗️ Market onboarding must ONLY be based on market_indicators from user
+        cur.execute("SELECT COUNT(*) FROM market_indicators WHERE user_id = %s", (user_id,))
         presence["market"] = cur.fetchone()[0] > 0
 
+        # ✔️ Strategy: at least 1 user strategy
         cur.execute("SELECT COUNT(*) FROM strategies WHERE user_id = %s", (user_id,))
         presence["strategy"] = cur.fetchone()[0] > 0
 
-    logger.debug(f"   → presence check: {presence}")
+    logger.debug(f"   → presence check (FIXED): {presence}")
     return presence
 
 
@@ -126,7 +137,6 @@ def _get_status_dict(conn, user_id: int):
 
     _ensure_steps_for_user(conn, user_id)
 
-    # Load onboarding flags
     with conn.cursor() as cur:
         cur.execute("""
             SELECT step_key, completed
@@ -142,20 +152,21 @@ def _get_status_dict(conn, user_id: int):
 
     status = {}
 
-    # Map naar frontend structuur
+    # Combine flags + presence
     for step in DEFAULT_STEPS:
         key = STEP_FLAG_MAP[step]
         status[key] = step_flags.get(step, False) or presence.get(step, False)
 
-    status["onboarding_complete"] = all(status[STEP_FLAG_MAP[s]] for s in DEFAULT_STEPS)
+    status["onboarding_complete"] = all(
+        status[STEP_FLAG_MAP[s]] for s in DEFAULT_STEPS
+    )
 
     logger.info(f"   → Status result = {status}")
-
     return status
 
 
 # ================================================
-# ENDPOINTS — NU MET EXTRA LOGGING
+# ROUTES
 # ================================================
 @router.get("/onboarding/status")
 def get_onboarding_status(
