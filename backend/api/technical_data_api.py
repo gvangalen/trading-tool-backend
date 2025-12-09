@@ -11,7 +11,7 @@ from backend.utils.scoring_utils import (
     normalize_indicator_name
 )
 
-# ⭐ Onboarding
+# ⭐ Onboarding – alleen gebruiken in POST (NIET in GET!)
 from backend.api.onboarding_api import mark_step_completed
 
 # =====================================
@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s")
 
 router = APIRouter()
-logger.info("🚀 technical_data_api.py geladen – nieuwe user-aware versie actief.")
+logger.info("🚀 technical_data_api.py geladen – user-aware & onboarding-safe.")
 
 
 # =====================================
@@ -47,12 +47,13 @@ def safe_fetchall(cur):
 
 
 # =====================================
-# GET — ALLE TECHNISCHE DATA (per user)
+# GET — ALLE TECHNISCHE DATA  (NO onboarding!)
 # =====================================
 @router.get("/technical_data")
 async def get_technical_data(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     conn, cur = get_db_cursor()
+
     try:
         cur.execute("""
             SELECT indicator, value, score, advies, uitleg, timestamp
@@ -62,9 +63,6 @@ async def get_technical_data(current_user: dict = Depends(get_current_user)):
             LIMIT 50;
         """, (user_id,))
         rows = safe_fetchall(cur)
-
-        # ⭐ ONBOARDING
-        mark_step_completed(conn, user_id, "technical")
 
         return [
             {
@@ -82,9 +80,9 @@ async def get_technical_data(current_user: dict = Depends(get_current_user)):
         conn.close()
 
 
-
 # =====================================
-# ➕ Technische indicator toevoegen
+# ➕ POST — Technische indicator toevoegen
+# ⭐ ENIGE plek waar onboarding mag worden completed!
 # =====================================
 @router.post("/technical_data")
 async def add_technical_indicator(
@@ -107,7 +105,7 @@ async def add_technical_indicator(
         raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
-        # config ophalen
+        # Config ophalen
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source, link
@@ -123,7 +121,7 @@ async def add_technical_indicator(
 
         source, link = cfg
 
-        # waarde ophalen via interpreter
+        # Interpreter gebruiken
         from backend.utils.technical_interpreter import fetch_technical_value
         result = fetch_technical_value(name=name, source=source, link=link)
         if not result:
@@ -131,7 +129,7 @@ async def add_technical_indicator(
 
         value = float(result["value"] if isinstance(result, dict) else result)
 
-        # score bepalen
+        # Scoring
         score_obj = get_score_rule_from_db("technical", name, value)
         if not score_obj:
             raise HTTPException(500, f"❌ Geen scoreregels voor '{name}'.")
@@ -140,7 +138,7 @@ async def add_technical_indicator(
         advies = score_obj["trend"]
         uitleg = score_obj["interpretation"]
 
-        # opslaan
+        # Opslaan
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_indicators
@@ -154,7 +152,7 @@ async def add_technical_indicator(
 
         conn.commit()
 
-        # ⭐ ONBOARDING
+        # ⭐ ONBOARDING (enige juiste plek)
         mark_step_completed(conn, user_id, "technical")
 
         return {
@@ -176,10 +174,11 @@ async def add_technical_indicator(
 
 
 # =====================================
-# 📅 DAY (per user)
+# 📅 DAY — GEEN ONBOARDING MEER!
 # =====================================
 @router.get("/technical_data/day")
 async def get_latest_day_data(current_user: dict = Depends(get_current_user)):
+
     user_id = current_user["id"]
     conn, cur = get_db_cursor()
 
@@ -193,10 +192,11 @@ async def get_latest_day_data(current_user: dict = Depends(get_current_user)):
         """, (user_id,))
         rows = safe_fetchall(cur)
 
-        # fallback
+        # Fallback: laatste dag
         if not rows:
             cur.execute("""
-                SELECT timestamp FROM technical_indicators
+                SELECT timestamp
+                FROM technical_indicators
                 WHERE user_id=%s
                 ORDER BY timestamp DESC LIMIT 1;
             """, (user_id,))
@@ -212,9 +212,6 @@ async def get_latest_day_data(current_user: dict = Depends(get_current_user)):
                     ORDER BY timestamp DESC;
                 """, (fallback_date, user_id))
                 rows = safe_fetchall(cur)
-
-        # ⭐ ONBOARDING
-        mark_step_completed(conn, user_id, "technical")
 
         return [
             {
@@ -234,7 +231,7 @@ async def get_latest_day_data(current_user: dict = Depends(get_current_user)):
 
 
 # =====================================
-# ⏳ WEEK
+# WEEK / MONTH / QUARTER — GEEN onboarding!
 # =====================================
 @router.get("/technical_data/week")
 async def get_technical_week_data(current_user: dict = Depends(get_current_user)):
@@ -260,9 +257,6 @@ async def get_technical_week_data(current_user: dict = Depends(get_current_user)
         """, (dagen, user_id))
         rows = safe_fetchall(cur)
 
-        # ⭐ ONBOARDING
-        mark_step_completed(conn, user_id, "technical")
-
         return [
             {
                 "indicator": r[0],
@@ -280,11 +274,9 @@ async def get_technical_week_data(current_user: dict = Depends(get_current_user)
 
 
 
-# =====================================
-# 📅 MONTH
-# =====================================
 @router.get("/technical_data/month")
 async def get_technical_month_data(current_user: dict = Depends(get_current_user)):
+
     user_id = current_user["id"]
     conn, cur = get_db_cursor()
 
@@ -307,9 +299,6 @@ async def get_technical_month_data(current_user: dict = Depends(get_current_user
         """, (weken, user_id))
         rows = safe_fetchall(cur)
 
-        # ⭐ ONBOARDING
-        mark_step_completed(conn, user_id, "technical")
-
         return [
             {
                 "indicator": r[0],
@@ -327,11 +316,9 @@ async def get_technical_month_data(current_user: dict = Depends(get_current_user
 
 
 
-# =====================================
-# 🗓 QUARTER
-# =====================================
 @router.get("/technical_data/quarter")
 async def get_technical_quarter_data(current_user: dict = Depends(get_current_user)):
+
     user_id = current_user["id"]
     conn, cur = get_db_cursor()
 
@@ -354,9 +341,6 @@ async def get_technical_quarter_data(current_user: dict = Depends(get_current_us
         """, (weken, user_id))
         rows = safe_fetchall(cur)
 
-        # ⭐ ONBOARDING
-        mark_step_completed(conn, user_id, "technical")
-
         return [
             {
                 "indicator": r[0],
@@ -375,7 +359,7 @@ async def get_technical_quarter_data(current_user: dict = Depends(get_current_us
 
 
 # =====================================
-# ❌ DELETE INDICATOR
+# DELETE → GEEN onboarding!
 # =====================================
 @router.delete("/technical_data/{indicator}")
 async def delete_technical_indicator(
@@ -394,9 +378,6 @@ async def delete_technical_indicator(
         deleted = cur.rowcount
         conn.commit()
 
-        # ⭐ ONBOARDING
-        mark_step_completed(conn, user_id, "technical")
-
         return {
             "message": f"Indicator '{indicator}' verwijderd.",
             "deleted_rows": deleted
@@ -408,10 +389,11 @@ async def delete_technical_indicator(
 
 
 # =====================================
-# 🎯 INDICATOR DROPDOWN (globaal)
+# DROPDOWN LISTS
 # =====================================
 @router.get("/technical/indicators")
 async def get_all_indicators():
+
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
@@ -432,11 +414,13 @@ async def get_all_indicators():
         conn.close()
 
 
+
 # =====================================
-# 🧠 SCORING RULES (globaal)
+# SCORING RULES
 # =====================================
 @router.get("/technical_indicator_rules/{indicator_name}")
 async def get_rules_for_indicator(indicator_name: str):
+
     conn, cur = get_db_cursor()
     try:
         cur.execute("""
