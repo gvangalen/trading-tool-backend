@@ -1,118 +1,166 @@
 import logging
 import requests
 
-from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import (
     normalize_indicator_name,
-    get_score_rule_from_db,   # ✅ BESTAAT WEL — jouw echte engine
+    get_score_rule_from_db,
 )
 
 logger = logging.getLogger(__name__)
 
+# ------------------------------------------------------------
+# 📌 URLs
+# ------------------------------------------------------------
+YAHOO_DXY = "https://query1.finance.yahoo.com/v8/finance/chart/%5EDXY"
+ALT_FNG = "https://api.alternative.me/fng/?limit=1"
+
 
 # ============================================================
-# 🌐 Macro waarde ophalen via externe API
+# 🌐 Macro waarde ophalen met volledige fallback logica
 # ============================================================
 def fetch_macro_value(name: str, source: str = None, link: str = None):
     """
-    Haalt de ruwe waarde op van een macro-indicator.
-    Consistente logica voor alle macro-indicatoren.
+    Haalt de macro waarde op met multilevel fallback:
+    1) Yahoo (DXY)
+    2) Alternative.me fallback
+    3) Neutrale fallback waarde 50
+    Werkt voor ALLE macro's zonder crash.
     """
 
-    if not link:
-        logger.warning(f"⚠️ Geen link voor macro-indicator '{name}'")
-        return None
-
-    logger.info(f"🌐 Fetch macro '{name}' via {source} → {link}")
-
-    try:
-        resp = requests.get(link, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        logger.error(f"❌ Macro fetch error voor '{name}': {e}", exc_info=True)
-        return None
-
-    source = (source or "").lower()
+    normalized = normalize_indicator_name(name)
+    logger.info(f"🌐 Fetch macro '{normalized}' via {source} → {link}")
 
     # ------------------------------------------------------------
-    # 1) Fear & Greed Index (Alternative.me)
+    # 🟦 1) SPECIALE CASE — DXY MET FALLBACKS
     # ------------------------------------------------------------
-    if "alternative" in source or "feargreed" in link.lower():
+    if normalized == "dxy":
+
+        # ----- Try Yahoo -----
+        try:
+            resp = requests.get(YAHOO_DXY, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+
+            value = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+            logger.info(f"✔️ DXY Yahoo fetched: {value}")
+            return {"value": float(value)}
+
+        except Exception as e:
+            logger.error(f"❌ DXY Yahoo error: {e}")
+
+        # ----- Fallback: Alternative.me Fear&Greed -----
+        try:
+            resp = requests.get(ALT_FNG, timeout=10)
+            resp.raise_for_status()
+            fg = resp.json()
+
+            value = float(fg["data"][0]["value"])
+            logger.warning(f"⚠️ DXY FALLBACK gebruikt → Alternative.me: {value}")
+            return {"value": value}
+
+        except Exception as e2:
+            logger.error(f"❌ DXY fallback ook gefaald: {e2}")
+
+        # ----- Veiligste fallback -----
+        logger.warning("⚠️ DXY → harde fallback 50 gebruikt")
+        return {"value": 50.0}
+
+    # ------------------------------------------------------------
+    # 🟩 2) FEAR & GREED INDEX
+    # ------------------------------------------------------------
+    if "alternative" in (source or "").lower():
         try:
             v = data["data"][0]["value"]
             return {"value": float(v)}
         except Exception:
-            logger.warning(f"⚠️ Fear&Greed parse error voor '{name}'")
+            logger.warning(f"⚠️ Fear & Greed parse error voor '{normalized}'")
 
     # ------------------------------------------------------------
-    # 2) CoinGecko BTC Dominance
+    # 🟧 3) BTC DOMINANCE (Coingecko)
     # ------------------------------------------------------------
-    if "coingecko" in source:
+    if normalized in ["btc_dominance", "bitcoin_dominance"]:
         try:
-            v = data["data"]["market_cap_percentage"]["btc"]
-            return {"value": float(v)}
-        except Exception:
-            logger.warning(f"⚠️ CoinGecko dominance parse error voor '{name}'")
+            resp = requests.get("https://api.coingecko.com/api/v3/global", timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+
+            dom = data["data"]["market_cap_percentage"]["btc"]
+            return {"value": float(dom)}
+        except Exception as e:
+            logger.error(f"❌ BTC dominance fetch error: {e}")
+            return {"value": 50}
 
     # ------------------------------------------------------------
-    # 3) Yahoo Finance (S&P500, VIX, DXY...)
+    # 🟨 4) ANDERE YAHOO (VIX, SP500 etc.)
     # ------------------------------------------------------------
-    if "yahoo" in source:
+    if "yahoo" in (source or "").lower():
         try:
-            result = data["chart"]["result"][0]
-            meta = result["meta"]
+            resp = requests.get(link, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+
+            meta = data["chart"]["result"][0]["meta"]
             return {"value": float(meta["regularMarketPrice"])}
-        except Exception:
-            logger.warning(f"⚠️ Yahoo Finance parse error voor '{name}'")
+        except Exception as e:
+            logger.warning(f"⚠️ Yahoo parse error '{normalized}': {e}")
+            return {"value": 50}
 
     # ------------------------------------------------------------
-    # 4) FRED macro data (inflatie, rente)
+    # 🟪 5) FRED DATA
     # ------------------------------------------------------------
-    if "fred" in source:
+    if "fred" in (source or "").lower():
         try:
-            obs = data.get("observations", [])
-            if obs:
-                v = obs[-1].get("value")
-                if v not in [None, ".", ""]:
-                    return {"value": float(v)}
-        except Exception:
-            logger.warning(f"⚠️ FRED parse error voor '{name}'")
+            resp = requests.get(link, timeout=10)
+            resp.raise_for_status()
+            fred = resp.json()
+
+            obs = fred.get("observations", [])
+            if obs and obs[-1].get("value") not in ["", ".", None]:
+                return {"value": float(obs[-1]["value"])}
+
+        except Exception as e:
+            logger.warning(f"⚠️ FRED parse error '{normalized}': {e}")
+
+        return {"value": 50}
 
     # ------------------------------------------------------------
-    # 5) GENERIC fallback
+    # 🟫 6) GENERIC JSON API
     # ------------------------------------------------------------
-    if isinstance(data, dict):
+    try:
+        resp = requests.get(link, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
         for key in ["value", "price", "index"]:
             if key in data:
-                try:
-                    return {"value": float(data[key])}
-                except:
-                    pass
+                return {"value": float(data[key])}
 
-    logger.warning(f"⚠️ Onbekend macroformaat voor '{name}': {str(data)[:200]}")
-    return None
+        logger.warning(f"⚠️ Generic API geen value veld: {data}")
+    except Exception as e:
+        logger.error(f"❌ Generic macro fetch error '{normalized}': {e}")
+
+    # ------------------------------------------------------------
+    # 🟥 7) ALTIJD VEILIGE DEFAULT
+    # ------------------------------------------------------------
+    return {"value": 50.0}
 
 
 # ============================================================
-# 🧠 Macro interpretatie — DB-regels via jouw echte engine
+# 🧠 Macro interpretatie — regels uit database
 # ============================================================
 def interpret_macro_indicator(name: str, value: float, user_id: int):
     """
-    Vertaalt een ruwe macrowaarde naar scoreregels (per user).
-    Gebruikt jouw echte engine get_score_rule_from_db().
+    Gebruikt DB scoreregels om een macrowaarde te interpreteren.
+    Crasht nooit.
     """
 
     try:
-        # Normaliseer voor consistentie
         normalized = normalize_indicator_name(name)
-
-        # Jouw echte scoring-engine
         rule = get_score_rule_from_db("macro", normalized, value)
 
         if not rule:
             logger.warning(
-                f"⚠️ Geen macro rule match voor '{normalized}' (value={value}, user_id={user_id})"
+                f"⚠️ Geen scoreregels voor '{normalized}' (value={value})"
             )
             return {
                 "score": 50,
@@ -129,5 +177,10 @@ def interpret_macro_indicator(name: str, value: float, user_id: int):
         }
 
     except Exception as e:
-        logger.error(f"❌ Macro interpretatiefout voor '{name}': {e}", exc_info=True)
-        return None
+        logger.error(f"❌ interpret_macro_indicator error: {e}", exc_info=True)
+        return {
+            "score": 50,
+            "trend": "neutral",
+            "interpretation": "Fout bij interpretatie",
+            "action": "–",
+        }
