@@ -95,7 +95,7 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
                     detail=f"❌ Geen waarde ontvangen voor '{name}'"
                 )
 
-            # Resultaat is soms dict, soms raw number
+            # Resultaat parsen (kan dict of raw zijn)
             if isinstance(result, dict):
                 if "value" in result:
                     value = float(result["value"])
@@ -112,24 +112,34 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
                 value = float(result)
 
         # -------------------------
-        # Scoring via DB (FIXED!)
+        # ⭐ Correcte scoring aanroep
+        # generate_scores_db(category, data_dict, user_id)
         # -------------------------
-        from backend.utils.scoring_utils import generate_scores_db
+        from backend.utils.scoring_utils import generate_scores_db, normalize_indicator_name
+
+        normalized = normalize_indicator_name(name)
 
         score_info = generate_scores_db(
-            indicator_name=name,
-            value=value,
-            user_id=user_id,     # ⭐ BELANGRIJK – verplicht!
-            category="macro"     # optioneel maar netjes
+            "macro",
+            {normalized: value},   # dict → verplicht voor jouw engine
+            user_id=user_id        # user_id verplicht voor macro/technical
         )
 
-        score = score_info.get("score", 10)
-        trend = score_info.get("trend", "–")
-        interpretation = score_info.get("interpretation", "–")
-        action = score_info.get("action", "–")
+        # Score object ophalen
+        rule = score_info["scores"].get(normalized)
+        if not rule:
+            raise HTTPException(
+                status_code=500,
+                detail=f"❌ Geen scoreregels gevonden voor '{name}'"
+            )
+
+        score = rule["score"]
+        trend = rule["trend"]
+        interpretation = rule["interpretation"]
+        action = rule["action"]
 
         # -------------------------
-        # Opslaan → macro_data
+        # Opslaan in macro_data
         # -------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -165,7 +175,7 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
         }
 
     except Exception as e:
-        logger.error(f"❌ Macro save error: {e}")
+        logger.error(f"❌ Macro save error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Fout bij opslaan macro data: {e}"
@@ -173,7 +183,6 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
 
     finally:
         conn.close()
-
 
 # =====================================
 # 📄 Macro data ophalen (met user_id)
