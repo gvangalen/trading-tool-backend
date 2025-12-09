@@ -17,7 +17,7 @@ router = APIRouter()
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path)
 
-logger.info("🚀 macro_data_api.py geladen – user_id-systeem + onboarding actief.")
+logger.info("🚀 macro_data_api.py geladen – user_id-systeem; onboarding alleen bij POST /macro_data.")
 
 
 # =====================================
@@ -32,6 +32,7 @@ def get_db_cursor():
 
 # =====================================
 # ➕ Macro-indicator opslaan (met user_id + onboarding update)
+# 👉 ENIGE plek waar onboarding 'macro' wordt gemarkeerd
 # =====================================
 @router.post("/macro_data")
 async def add_macro_indicator(request: Request, current_user: dict = Depends(get_current_user)):
@@ -53,19 +54,22 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
         raise HTTPException(status_code=500, detail="❌ DB niet beschikbaar.")
 
     try:
-        # Indicator ophalen
+        # Indicator ophalen uit configuratietabel
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source, data_url
                 FROM indicators
                 WHERE LOWER(name) = LOWER(%s)
-                AND category = 'macro'
-                AND active = TRUE;
+                  AND category = 'macro'
+                  AND active = TRUE;
             """, (name,))
             indicator_info = cur.fetchone()
 
             if not indicator_info:
-                raise HTTPException(status_code=404, detail=f"Indicator '{name}' bestaat niet of is inactief.")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Indicator '{name}' bestaat niet of is inactief."
+                )
 
             source, data_url = indicator_info
 
@@ -87,11 +91,14 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
                 elif "result" in result:
                     value = float(result["result"])
                 else:
-                    raise HTTPException(status_code=500, detail=f"❌ Kan waarde niet parsen: {result}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"❌ Kan waarde niet parsen: {result}"
+                    )
             else:
                 value = float(result)
 
-        # Score berekenen
+        # Score berekenen via DB-config
         from backend.utils.scoring_utils import generate_scores_db
         score_info = generate_scores_db(name, value)
 
@@ -100,10 +107,13 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
         interpretation = score_info.get("interpretation", "–")
         action = score_info.get("action", "–")
 
-        # Opslaan
+        # Opslaan in macro_data (per user)
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO macro_data (name, value, trend, interpretation, action, score, timestamp, user_id)
+                INSERT INTO macro_data (
+                    name, value, trend, interpretation, action,
+                    score, timestamp, user_id
+                )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 name,
@@ -131,7 +141,10 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
 
     except Exception as e:
         logger.error(f"❌ Macro save error: {e}")
-        raise HTTPException(status_code=500, detail=f"Fout bij opslaan macro data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fout bij opslaan macro data: {e}"
+        )
 
     finally:
         conn.close()
@@ -139,6 +152,7 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
 
 # =====================================
 # 📄 Macro data ophalen (met user_id)
+# ✅ GEEN onboarding hier
 # =====================================
 @router.get("/macro_data")
 async def get_macro_indicators(current_user: dict = Depends(get_current_user)):
@@ -158,9 +172,14 @@ async def get_macro_indicators(current_user: dict = Depends(get_current_user)):
 
         return [
             {
-                "id": r[0], "name": r[1], "value": r[2],
-                "trend": r[3], "interpretation": r[4], "action": r[5],
-                "score": r[6], "timestamp": r[7].isoformat() if r[7] else None
+                "id": r[0],
+                "name": r[1],
+                "value": r[2],
+                "trend": r[3],
+                "interpretation": r[4],
+                "action": r[5],
+                "score": r[6],
+                "timestamp": r[7].isoformat() if r[7] else None
             }
             for r in rows
         ]
@@ -171,20 +190,26 @@ async def get_macro_indicators(current_user: dict = Depends(get_current_user)):
     finally:
         conn.close()
 
+
 # =====================================
 # 📆 Macro dagdata ophalen
+# ✅ GEEN onboarding hier
 # =====================================
 @router.get("/macro_data/day")
 async def get_latest_macro_day_data(current_user: dict = Depends(get_current_user)):
     logger.info(f"📄 [get/day] Macro dagdata voor user_id={current_user['id']}")
     conn = get_db_connection()
 
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
+
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
-                WHERE user_id = %s AND DATE(timestamp) = CURRENT_DATE
+                WHERE user_id = %s
+                  AND DATE(timestamp) = CURRENT_DATE
                 ORDER BY timestamp DESC;
             """, (current_user["id"],))
 
@@ -196,7 +221,8 @@ async def get_latest_macro_day_data(current_user: dict = Depends(get_current_use
                     SELECT timestamp
                     FROM macro_data
                     WHERE user_id = %s
-                    ORDER BY timestamp DESC LIMIT 1;
+                    ORDER BY timestamp DESC
+                    LIMIT 1;
                 """, (current_user["id"],))
 
                 ts = cur.fetchone()
@@ -208,7 +234,8 @@ async def get_latest_macro_day_data(current_user: dict = Depends(get_current_use
                 cur.execute("""
                     SELECT name, value, trend, interpretation, action, score, timestamp
                     FROM macro_data
-                    WHERE user_id = %s AND DATE(timestamp) = %s
+                    WHERE user_id = %s
+                      AND DATE(timestamp) = %s
                     ORDER BY timestamp DESC;
                 """, (current_user["id"], fallback))
 
@@ -216,9 +243,13 @@ async def get_latest_macro_day_data(current_user: dict = Depends(get_current_use
 
         return [
             {
-                "name": r[0], "value": r[1], "trend": r[2],
-                "interpretation": r[3], "action": r[4],
-                "score": r[5], "timestamp": r[6].isoformat()
+                "name": r[0],
+                "value": r[1],
+                "trend": r[2],
+                "interpretation": r[3],
+                "action": r[4],
+                "score": r[5],
+                "timestamp": r[6].isoformat() if r[6] else None
             }
             for r in rows
         ]
@@ -232,10 +263,13 @@ async def get_latest_macro_day_data(current_user: dict = Depends(get_current_use
 
 # =====================================
 # 📅 Weekdata ophalen (user_id)
+# ✅ GEEN onboarding hier
 # =====================================
 @router.get("/macro_data/week")
 async def get_macro_week_data(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
         with conn.cursor() as cur:
@@ -254,7 +288,8 @@ async def get_macro_week_data(current_user: dict = Depends(get_current_user)):
             cur.execute("""
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
-                WHERE user_id = %s AND DATE(timestamp) = ANY(%s)
+                WHERE user_id = %s
+                  AND DATE(timestamp) = ANY(%s)
                 ORDER BY timestamp DESC;
             """, (current_user["id"], dagen))
 
@@ -268,8 +303,9 @@ async def get_macro_week_data(current_user: dict = Depends(get_current_user)):
                 "interpretation": r[3],
                 "action": r[4],
                 "score": r[5],
-                "timestamp": r[6].isoformat()
-            } for r in rows
+                "timestamp": r[6].isoformat() if r[6] else None
+            }
+            for r in rows
         ]
 
     finally:
@@ -278,10 +314,13 @@ async def get_macro_week_data(current_user: dict = Depends(get_current_user)):
 
 # =====================================
 # 📅 Maanddata ophalen (user_id)
+# ✅ GEEN onboarding hier
 # =====================================
 @router.get("/macro_data/month")
 async def get_macro_month_data(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
         with conn.cursor() as cur:
@@ -300,7 +339,8 @@ async def get_macro_month_data(current_user: dict = Depends(get_current_user)):
             cur.execute("""
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
-                WHERE user_id = %s AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
+                WHERE user_id = %s
+                  AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
                 ORDER BY timestamp DESC;
             """, (current_user["id"], weken))
 
@@ -308,10 +348,15 @@ async def get_macro_month_data(current_user: dict = Depends(get_current_user)):
 
         return [
             {
-                "indicator": r[0], "waarde": r[1], "trend": r[2],
-                "interpretation": r[3], "action": r[4],
-                "score": r[5], "timestamp": r[6].isoformat()
-            } for r in rows
+                "indicator": r[0],
+                "waarde": r[1],
+                "trend": r[2],
+                "interpretation": r[3],
+                "action": r[4],
+                "score": r[5],
+                "timestamp": r[6].isoformat() if r[6] else None
+            }
+            for r in rows
         ]
 
     finally:
@@ -320,10 +365,13 @@ async def get_macro_month_data(current_user: dict = Depends(get_current_user)):
 
 # =====================================
 # 📅 Kwartaaldata ophalen (user_id)
+# ✅ GEEN onboarding hier
 # =====================================
 @router.get("/macro_data/quarter")
 async def get_macro_quarter_data(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
         with conn.cursor() as cur:
@@ -342,7 +390,8 @@ async def get_macro_quarter_data(current_user: dict = Depends(get_current_user))
             cur.execute("""
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
-                WHERE user_id = %s AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
+                WHERE user_id = %s
+                  AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
                 ORDER BY timestamp DESC;
             """, (current_user["id"], weken))
 
@@ -350,10 +399,15 @@ async def get_macro_quarter_data(current_user: dict = Depends(get_current_user))
 
         return [
             {
-                "indicator": r[0], "waarde": r[1], "trend": r[2],
-                "interpretation": r[3], "action": r[4],
-                "score": r[5], "timestamp": r[6].isoformat()
-            } for r in rows
+                "indicator": r[0],
+                "waarde": r[1],
+                "trend": r[2],
+                "interpretation": r[3],
+                "action": r[4],
+                "score": r[5],
+                "timestamp": r[6].isoformat() if r[6] else None
+            }
+            for r in rows
         ]
 
     finally:
@@ -362,17 +416,21 @@ async def get_macro_quarter_data(current_user: dict = Depends(get_current_user))
 
 # ===========================================
 # 🔍 Dropdown lijst met macro indicatoren
+# ✅ GEEN onboarding hier
 # ===========================================
 @router.get("/macro/indicators")
 async def get_all_macro_indicators():
     conn = get_db_connection()
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name, display_name
                 FROM indicators
-                WHERE active = TRUE AND category = 'macro'
+                WHERE active = TRUE
+                  AND category = 'macro'
                 ORDER BY name;
             """)
             rows = cur.fetchall()
@@ -385,10 +443,13 @@ async def get_all_macro_indicators():
 
 # =====================================
 # 🔍 Scoreregels ophalen
+# ✅ GEEN onboarding hier
 # =====================================
 @router.get("/macro_indicator_rules/{indicator_name}")
 async def get_rules_for_macro_indicator(indicator_name: str):
     conn = get_db_connection()
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
         with conn.cursor() as cur:
@@ -403,9 +464,14 @@ async def get_rules_for_macro_indicator(indicator_name: str):
 
         return [
             {
-                "id": r[0], "indicator": r[1], "range_min": r[2],
-                "range_max": r[3], "score": r[4],
-                "trend": r[5], "interpretation": r[6], "action": r[7]
+                "id": r[0],
+                "indicator": r[1],
+                "range_min": r[2],
+                "range_max": r[3],
+                "score": r[4],
+                "trend": r[5],
+                "interpretation": r[6],
+                "action": r[7]
             }
             for r in rows
         ]
@@ -416,25 +482,38 @@ async def get_rules_for_macro_indicator(indicator_name: str):
 
 # =====================================
 # ❌ Verwijderen macro indicator
+# ✅ GEEN onboarding hier
 # =====================================
 @router.delete("/macro_data/{name}")
 async def delete_macro_indicator(name: str, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM macro_data WHERE name = %s AND user_id = %s",
-                        (name, current_user["id"]))
+            cur.execute(
+                "SELECT COUNT(*) FROM macro_data WHERE name = %s AND user_id = %s",
+                (name, current_user["id"]),
+            )
             count = cur.fetchone()[0]
 
             if count == 0:
-                raise HTTPException(status_code=404, detail=f"Indicator '{name}' niet gevonden voor deze gebruiker.")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Indicator '{name}' niet gevonden voor deze gebruiker."
+                )
 
-            cur.execute("DELETE FROM macro_data WHERE name = %s AND user_id = %s",
-                        (name, current_user["id"]))
+            cur.execute(
+                "DELETE FROM macro_data WHERE name = %s AND user_id = %s",
+                (name, current_user["id"]),
+            )
             conn.commit()
 
-        return {"message": f"Indicator '{name}' verwijderd.", "rows_deleted": count}
+        return {
+            "message": f"Indicator '{name}' verwijderd.",
+            "rows_deleted": count
+        }
 
     finally:
         conn.close()
