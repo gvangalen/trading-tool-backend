@@ -27,7 +27,7 @@ DEFAULT_STEPS: List[str] = [
     "strategy",
 ]
 
-STEP_FLAG_MAP: Dict[str, str] = {
+STEP_FLAG_MAP = {
     "setup": "has_setup",
     "technical": "has_technical",
     "macro": "has_macro",
@@ -52,21 +52,14 @@ def _ensure_steps_for_user(conn, user_id: int):
             FROM onboarding_steps
             WHERE user_id = %s AND flow = %s
         """, (user_id, DEFAULT_FLOW))
-
         existing = {row[0] for row in cur.fetchall()}
 
-    logger.debug(f"   → bestaande stappen: {existing}")
-
     missing = [s for s in DEFAULT_STEPS if s not in existing]
-    logger.debug(f"   → missende stappen: {missing}")
 
     if not missing:
         return
 
-    rows = [
-        (user_id, DEFAULT_FLOW, s, False, None, None)
-        for s in missing
-    ]
+    rows = [(user_id, DEFAULT_FLOW, s, False, None, None) for s in missing]
 
     with conn.cursor() as cur:
         cur.executemany("""
@@ -93,40 +86,46 @@ def mark_step_completed(conn, user_id: int, step_key: str):
         """, (now, user_id, DEFAULT_FLOW, step_key))
 
     conn.commit()
-    logger.info(f"   → Step '{step_key}' gemarkeerd als voltooid.")
 
 
 # ================================================================
-# PRESENCE CHECK — **ENIGE JUISTE VERSIE VOOR JOUW DATABASE**
+# PRESENCE CHECK — ENIGE CORRECTE VERSIE VOOR JOUW DATABASE
 # ================================================================
 def _get_data_presence(conn, user_id: int) -> Dict[str, bool]:
+    """
+    We check ALLEEN tabellen die echt user-input bevatten.
+    Macro_indicator_rules en market_indicator_rules hebben GEEN user_id — die mogen NOOIT gebruikt worden.
+    """
+
     logger.debug(f"📊 _get_data_presence(user_id={user_id})")
 
     presence = {s: False for s in DEFAULT_STEPS}
 
     with conn.cursor() as cur:
 
-        # ✔️ Setup check
+        # ✔️ Setup check — werkt goed
         cur.execute("SELECT COUNT(*) FROM setups WHERE user_id = %s", (user_id,))
         presence["setup"] = cur.fetchone()[0] > 0
 
-        # ✔️ Technical indicators entered by user
+        # ✔️ Technical indicators door gebruiker toegevoegd
         cur.execute("SELECT COUNT(*) FROM technical_indicators WHERE user_id = %s", (user_id,))
         presence["technical"] = cur.fetchone()[0] > 0
 
-        # ✔️ Macro: user must add macro indicators → macro_data is NOT correct
-        cur.execute("SELECT COUNT(*) FROM macro_indicator_rules WHERE user_id = %s", (user_id,))
+        # ✔️ Macro indicators door gebruiker
+        # (macro_data heeft user_id → correct)
+        cur.execute("SELECT COUNT(*) FROM macro_data WHERE user_id = %s", (user_id,))
         presence["macro"] = cur.fetchone()[0] > 0
 
-        # ✔️ Market: user must add market indicators
-        cur.execute("SELECT COUNT(*) FROM market_indicator_rules WHERE user_id = %s", (user_id,))
+        # ✔️ Market indicators door gebruiker
+        # (market_data_indicators heeft user_id → correct)
+        cur.execute("SELECT COUNT(*) FROM market_data_indicators WHERE user_id = %s", (user_id,))
         presence["market"] = cur.fetchone()[0] > 0
 
-        # ✔️ Strategies exist?
+        # ✔️ Strategieën door gebruiker toegevoegd
         cur.execute("SELECT COUNT(*) FROM strategies WHERE user_id = %s", (user_id,))
         presence["strategy"] = cur.fetchone()[0] > 0
 
-    logger.debug(f"   → presence check: {presence}")
+    logger.debug(f"   → presence FIXED = {presence}")
     return presence
 
 
@@ -141,19 +140,16 @@ def _get_status_dict(conn, user_id: int):
             FROM onboarding_steps
             WHERE user_id = %s AND flow = %s
         """, (user_id, DEFAULT_FLOW))
-
         fetched = cur.fetchall()
 
     step_flags = {key: done for key, done in fetched}
-    logger.debug(f"   → DB flags: {step_flags}")
 
     presence = _get_data_presence(conn, user_id)
 
     status = {}
-
     for step in DEFAULT_STEPS:
-        key = STEP_FLAG_MAP[step]
-        status[key] = step_flags.get(step, False) or presence.get(step, False)
+        flag = STEP_FLAG_MAP[step]
+        status[flag] = step_flags.get(step, False) or presence.get(step, False)
 
     status["onboarding_complete"] = all(
         status[STEP_FLAG_MAP[s]] for s in DEFAULT_STEPS
