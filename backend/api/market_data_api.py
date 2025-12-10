@@ -18,7 +18,9 @@ from backend.api.onboarding_api import mark_step_completed
 # =========================================================
 router = APIRouter()
 logger = logging.getLogger(__name__)
-logger.info("🚀 market_data_api.py geladen – alle market-data routes actief + onboarding alleen bij POST/add_indicator.")
+logger.info(
+    "🚀 market_data_api.py geladen – alle market-data routes actief + onboarding alleen bij POST/add_indicator."
+)
 
 
 # =========================================================
@@ -28,11 +30,13 @@ def get_market_raw_endpoints():
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT name, link
                 FROM indicators
                 WHERE category = 'market_raw'
-            """)
+            """
+            )
             result = {row[0]: row[1] for row in cur.fetchall()}
 
         conn.close()
@@ -49,14 +53,21 @@ MARKET_RAW_ENDPOINTS = get_market_raw_endpoints()
 
 
 # =========================================================
-# 📅 GET /market_data/day — DAGTABEL (globaal)
+# 📅 GET /market_data/day — DAGTABEL (nu user-aware)
 # =========================================================
 @router.get("/market_data/day")
-async def get_latest_market_day_data():
+async def get_latest_market_day_data(current_user: dict = Depends(get_current_user)):
     """
-    Marktdata is globaal, dus GEEN user_id.
+    Market-indicatoren uit market_data_indicators:
+
+    - Eerst wordt gekeken naar records van VANDAAG
+    - Gefilterd op:
+        user_id = huidige gebruiker  OF  user_id IS NULL (globale records)
+    - Als er geen data voor vandaag is:
+        fallback naar laatst beschikbare datum (zelfde filter)
     """
-    logger.info("📄 [market/day] Ophalen market-dagdata...")
+    user_id = current_user["id"]
+    logger.info("📄 [market/day] Ophalen market-dagdata (user-aware)...")
 
     conn = get_db_connection()
     if not conn:
@@ -64,43 +75,64 @@ async def get_latest_market_day_data():
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            # 1️⃣ Vandaag, user-specifiek + globale fallback (user_id IS NULL)
+            cur.execute(
+                """
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM market_data_indicators
                 WHERE DATE(timestamp) = CURRENT_DATE
+                  AND (user_id = %s OR user_id IS NULL)
                 ORDER BY timestamp DESC;
-            """)
+            """,
+                (user_id,),
+            )
             rows = cur.fetchall()
 
+            # 2️⃣ Fallback: laatste beschikbare datum (voor deze user of globale)
             if not rows:
-                logger.warning("⚠️ Geen market-data vandaag — fallback...")
+                logger.warning(
+                    "⚠️ Geen market-data vandaag (user / global) — fallback datum..."
+                )
 
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT timestamp
                     FROM market_data_indicators
+                    WHERE (user_id = %s OR user_id IS NULL)
                     ORDER BY timestamp DESC
                     LIMIT 1;
-                """)
+                """,
+                    (user_id,),
+                )
                 last = cur.fetchone()
                 if not last:
+                    # Helemaal geen data → lege lijst
                     return []
 
                 fallback_date = last[0].date()
 
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT name, value, trend, interpretation, action, score, timestamp
                     FROM market_data_indicators
                     WHERE DATE(timestamp) = %s
+                      AND (user_id = %s OR user_id IS NULL)
                     ORDER BY timestamp DESC;
-                """, (fallback_date,))
+                """,
+                    (fallback_date, user_id),
+                )
                 rows = cur.fetchall()
 
+        # 3️⃣ Normaliseren naar JSON response
         return [
             {
-                "name": r[0], "value": r[1], "trend": r[2],
-                "interpretation": r[3], "action": r[4],
+                "name": r[0],
+                "value": r[1],
+                "trend": r[2],
+                "interpretation": r[3],
+                "action": r[4],
                 "score": r[5],
-                "timestamp": r[6].isoformat() if r[6] else None
+                "timestamp": r[6].isoformat() if r[6] else None,
             }
             for r in rows
         ]
@@ -123,7 +155,8 @@ def get_market_indicator_names():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT i.name, i.display_name
             FROM indicators i
             JOIN market_indicator_rules r
@@ -131,13 +164,14 @@ def get_market_indicator_names():
             WHERE i.category = 'market'
             GROUP BY i.name, i.display_name
             ORDER BY i.display_name ASC;
-        """)
+        """
+        )
         rows = cur.fetchall()
         conn.close()
 
         return [
             {
-                "name": r[0],          # bv. 'btc_change_24h'
+                "name": r[0],  # bv. 'btc_change_24h'
                 "display_name": r[1],  # bv. 'BTC Change 24h'
             }
             for r in rows
@@ -161,12 +195,15 @@ def get_market_indicator_rules(name: str):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT range_min, range_max, score, trend, interpretation, action
             FROM market_indicator_rules
             WHERE indicator = %s
             ORDER BY range_min ASC;
-        """, (name,))
+        """,
+            (name,),
+        )
         rows = cur.fetchall()
         conn.close()
 
@@ -198,26 +235,32 @@ async def list_market_data(
         conn = get_db_connection()
         cur = conn.cursor()
         time_threshold = datetime.utcnow() - timedelta(minutes=since_minutes)
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, symbol, price, open, high, low, change_24h, volume, timestamp
             FROM market_data
             WHERE timestamp >= %s
             ORDER BY timestamp DESC
-        """, (time_threshold,))
+        """,
+            (time_threshold,),
+        )
         rows = cur.fetchall()
         conn.close()
 
-        return [{
-            "id": r[0],
-            "symbol": r[1],
-            "price": r[2],
-            "open": r[3],
-            "high": r[4],
-            "low": r[5],
-            "change_24h": r[6],
-            "volume": r[7],
-            "timestamp": r[8],
-        } for r in rows]
+        return [
+            {
+                "id": r[0],
+                "symbol": r[1],
+                "price": r[2],
+                "open": r[3],
+                "high": r[4],
+                "low": r[5],
+                "change_24h": r[6],
+                "volume": r[7],
+                "timestamp": r[8],
+            }
+            for r in rows
+        ]
     except Exception as e:
         logger.error(f"❌ [list] DB-fout: {e}")
         raise HTTPException(500, "❌ Kon marktdata niet ophalen.")
@@ -236,10 +279,12 @@ async def fill_btc_7day_data():
 
     try:
         coingecko_id = "bitcoin"
-        url_ohlc = f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc?vs_currency=usd&days=7"
+        url_ohlc = (
+            f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/ohlc?vs_currency=usd&days=7"
+        )
         url_volume = MARKET_RAW_ENDPOINTS.get(
             "btc_volume",
-            f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart?vs_currency=usd&days=7"
+            f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart?vs_currency=usd&days=7",
         )
 
         with httpx.Client(timeout=10.0) as client:
@@ -261,15 +306,18 @@ async def fill_btc_7day_data():
 
                 cur.execute(
                     "SELECT 1 FROM market_data_7d WHERE symbol = %s AND date = %s",
-                    ('BTC', date),
+                    ("BTC", date),
                 )
                 if cur.fetchone():
                     continue
 
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, volume, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                """, ('BTC', date, open_p, high_p, low_p, close_p, change, volume))
+                """,
+                    ("BTC", date, open_p, high_p, low_p, close_p, change, volume),
+                )
                 inserted += 1
 
         conn.commit()
@@ -290,19 +338,21 @@ async def fill_btc_7day_data():
 def get_latest_btc_price():
     conn = get_db_connection()
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, symbol, price, change_24h, volume, timestamp
             FROM market_data
             WHERE symbol = 'BTC'
             ORDER BY timestamp DESC
             LIMIT 1
-        """)
+        """
+        )
         row = cur.fetchone()
 
         if not row:
             raise HTTPException(404, "Geen BTC data gevonden")
 
-        keys = ['id', 'symbol', 'price', 'change_24h', 'volume', 'timestamp']
+        keys = ["id", "symbol", "price", "change_24h", "volume", "timestamp"]
         return dict(zip(keys, row))
 
 
@@ -320,13 +370,15 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT symbol, price, change_24h, volume, timestamp
             FROM market_data
             WHERE symbol = 'BTC'
             ORDER BY timestamp DESC
             LIMIT 1
-        """)
+        """
+        )
         row = cur.fetchone()
         conn.close()
 
@@ -344,11 +396,12 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
             "price": float(price),
             "change_24h": float(change),
             "volume": float(volume),
-
             "score": scores.get("market_score", 0),
             "top_contributors": scores.get("market_top_contributors", []),
-            "interpretation": scores.get("market_interpretation", "Geen interpretatie"),
-            "action": "Market-score is globaal, advies is informatief."
+            "interpretation": scores.get(
+                "market_interpretation", "Geen interpretatie"
+            ),
+            "action": "Market-score is globaal, advies is informatief.",
         }
 
     except Exception as e:
@@ -364,28 +417,33 @@ async def get_market_data_7d():
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, symbol, date, open, high, low, close, change, volume, created_at
                 FROM market_data_7d
                 WHERE symbol = 'BTC'
                 ORDER BY date DESC
                 LIMIT 7;
-            """)
+            """
+            )
             rows = cur.fetchall()
 
         rows.reverse()  # van oud → nieuw
-        return [{
-            "id": r[0],
-            "symbol": r[1],
-            "date": r[2].isoformat(),
-            "open": float(r[3]) if r[3] else None,
-            "high": float(r[4]) if r[4] else None,
-            "low": float(r[5]) if r[5] else None,
-            "close": float(r[6]) if r[6] else None,
-            "change": float(r[7]) if r[7] else None,
-            "volume": float(r[8]) if r[8] else None,
-            "created_at": r[9].isoformat() if r[9] else None,
-        } for r in rows]
+        return [
+            {
+                "id": r[0],
+                "symbol": r[1],
+                "date": r[2].isoformat(),
+                "open": float(r[3]) if r[3] else None,
+                "high": float(r[4]) if r[4] else None,
+                "low": float(r[5]) if r[5] else None,
+                "close": float(r[6]) if r[6] else None,
+                "change": float(r[7]) if r[7] else None,
+                "volume": float(r[8]) if r[8] else None,
+                "created_at": r[9].isoformat() if r[9] else None,
+            }
+            for r in rows
+        ]
 
     except Exception as e:
         logger.error(f"❌ [7d] Fout bij ophalen market_data_7d: {e}")
@@ -403,23 +461,30 @@ async def get_market_forward_returns():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, symbol, period, start_date, end_date, change, avg_daily, created_at
             FROM market_forward_returns
             WHERE symbol = 'BTC'
             ORDER BY period, start_date DESC
-        """)
+        """
+        )
         rows = cur.fetchall()
         conn.close()
 
-        return [{
-            "id": r[0], "symbol": r[1], "period": r[2],
-            "start": r[3].isoformat(),
-            "end": r[4].isoformat(),
-            "change": float(r[5]) if r[5] else None,
-            "avgDaily": float(r[6]) if r[6] else None,
-            "created_at": r[7].isoformat() if r[7] else None,
-        } for r in rows]
+        return [
+            {
+                "id": r[0],
+                "symbol": r[1],
+                "period": r[2],
+                "start": r[3].isoformat(),
+                "end": r[4].isoformat(),
+                "change": float(r[5]) if r[5] else None,
+                "avgDaily": float(r[6]) if r[6] else None,
+                "created_at": r[7].isoformat() if r[7] else None,
+            }
+            for r in rows
+        ]
 
     except Exception as e:
         logger.error(f"❌ [forward] Fout bij ophalen returns: {e}")
@@ -434,12 +499,14 @@ def get_week_returns():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT start_date, change
             FROM market_forward_returns
             WHERE symbol = 'BTC' AND period = '7d'
             ORDER BY start_date ASC
-        """)
+        """
+        )
         rows = cur.fetchall()
         conn.close()
 
@@ -462,12 +529,14 @@ def get_month_returns():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT start_date, change
             FROM market_forward_returns
             WHERE symbol = 'BTC' AND period = '30d'
             ORDER BY start_date ASC
-        """)
+        """
+        )
         rows = cur.fetchall()
         conn.close()
 
@@ -490,12 +559,14 @@ def get_quarter_returns():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT start_date, change
             FROM market_forward_returns
             WHERE symbol = 'BTC' AND period = '90d'
             ORDER BY start_date ASC
-        """)
+        """
+        )
         rows = cur.fetchall()
         conn.close()
 
@@ -518,12 +589,14 @@ def get_year_returns():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             SELECT start_date, change
             FROM market_forward_returns
             WHERE symbol = 'BTC' AND period = '365d'
             ORDER BY start_date ASC
-        """)
+        """
+        )
         rows = cur.fetchall()
         conn.close()
 
@@ -551,14 +624,22 @@ async def save_market_data_7d(data: list[dict]):
         cur = conn.cursor()
 
         for row in data:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO market_data_7d (symbol, date, open, high, low, close, change, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (symbol, date) DO NOTHING
-            """, (
-                row["symbol"], row["date"], row["open"], row["high"],
-                row["low"], row["close"], row["change"],
-            ))
+            """,
+                (
+                    row["symbol"],
+                    row["date"],
+                    row["open"],
+                    row["high"],
+                    row["low"],
+                    row["close"],
+                    row["change"],
+                ),
+            )
 
         conn.commit()
         conn.close()
@@ -582,14 +663,21 @@ async def save_forward_returns(data: list[dict]):
         cur = conn.cursor()
 
         for row in data:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO market_forward_returns (symbol, period, start_date, end_date, change, avg_daily, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT DO NOTHING
-            """, (
-                row["symbol"], row["period"], row["start_date"],
-                row["end_date"], row["change"], row["avg_daily"],
-            ))
+            """,
+                (
+                    row["symbol"],
+                    row["period"],
+                    row["start_date"],
+                    row["end_date"],
+                    row["change"],
+                    row["avg_daily"],
+                ),
+            )
 
         conn.commit()
         conn.close()
@@ -602,12 +690,19 @@ async def save_forward_returns(data: list[dict]):
 
 # =========================================================
 # POST /market/add_indicator — onboarding event!
+# (oude naam, zelfde route)
 # =========================================================
 @router.post("/market/add_indicator")
-def add_market_indicator(payload: dict, current_user: dict = Depends(get_current_user)):
+def add_market_indicator(
+    payload: dict, current_user: dict = Depends(get_current_user)
+):
     """
-    User activeert een indicator → onboarding stap 'market' mag compleet.
-    👉 Dit is de ENIGE plek waar mark_step_completed wordt aangeroepen.
+    User activeert een market-indicator → onboarding stap 'market' mag compleet.
+
+    👉 Belangrijk:
+      - We houden de OUDE route-naam /market/add_indicator
+      - Logica blijft: indicator in 'indicators' activeren + onboarding stap markeren
+      - De feitelijke waarden komen (nu nog) uit globale processen / tasks
     """
     name = payload.get("indicator")
     if not name:
@@ -617,29 +712,41 @@ def add_market_indicator(payload: dict, current_user: dict = Depends(get_current
         conn = get_db_connection()
         cur = conn.cursor()
 
-        cur.execute("""
+        # Bestaat deze indicator in de globale config?
+        cur.execute(
+            """
             SELECT name FROM indicators 
             WHERE name = %s AND category = 'market'
-        """, (name,))
+        """,
+            (name,),
+        )
         if not cur.fetchone():
             conn.close()
             raise HTTPException(404, f"Indicator '{name}' bestaat niet.")
 
-        cur.execute("""
+        # Heeft deze indicator scoreregels?
+        cur.execute(
+            """
             SELECT 1 FROM market_indicator_rules WHERE indicator = %s LIMIT 1
-        """, (name,))
+        """,
+            (name,),
+        )
         if not cur.fetchone():
             conn.close()
             raise HTTPException(400, "Indicator heeft geen scoreregels.")
 
-        cur.execute("""
+        # Activeren in globale tabel (blijft bestaan voor jobs)
+        cur.execute(
+            """
             UPDATE indicators
             SET active = TRUE
             WHERE name = %s
-        """, (name,))
+        """,
+            (name,),
+        )
         conn.commit()
 
-        # ⭐ ONBOARDING MARKEREN — ENIGE PLEK
+        # ⭐ ONBOARDING MARKEREN — ENIGE PLEK VOOR 'market'
         mark_step_completed(conn, current_user["id"], "market")
 
         return {"status": "ok", "message": f"Indicator '{name}' geactiveerd."}
@@ -658,25 +765,34 @@ def delete_market_indicator(name: str):
         cur = conn.cursor()
 
         # Bestaat hij wel?
-        cur.execute("""
+        cur.execute(
+            """
             SELECT name FROM indicators 
             WHERE name = %s AND category = 'market'
-        """, (name,))
+        """,
+            (name,),
+        )
         if not cur.fetchone():
             conn.close()
             raise HTTPException(404, f"Indicator '{name}' niet gevonden.")
 
         # Deactiveren
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE indicators
             SET active = FALSE
             WHERE name = %s
-        """, (name,))
+        """,
+            (name,),
+        )
 
         conn.commit()
         conn.close()
 
-        return {"status": "ok", "message": f"Indicator '{name}' is verwijderd uit de dag-analyse."}
+        return {
+            "status": "ok",
+            "message": f"Indicator '{name}' is verwijderd uit de dag-analyse.",
+        }
 
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -690,19 +806,18 @@ def get_active_market_indicators():
     try:
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT name, display_name
                 FROM indicators
                 WHERE category = 'market' AND active = TRUE
                 ORDER BY display_name ASC;
-            """)
+            """
+            )
             rows = cur.fetchall()
         conn.close()
 
-        return [
-            {"name": r[0], "display_name": r[1]}
-            for r in rows
-        ]
+        return [{"name": r[0], "display_name": r[1]} for r in rows]
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
