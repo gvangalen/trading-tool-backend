@@ -7,7 +7,10 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 import httpx
 
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import get_scores_for_symbol
+from backend.utils.scoring_utils import (
+    get_scores_for_symbol,
+    get_score_rule_from_db,   # 🔥 gebruikt voor market-indicator scoring
+)
 from backend.utils.auth_utils import get_current_user
 
 # ⭐ Onboarding helper importeren
@@ -19,7 +22,7 @@ from backend.api.onboarding_api import mark_step_completed
 router = APIRouter()
 logger = logging.getLogger(__name__)
 logger.info(
-    "🚀 market_data_api.py geladen – alle market-data routes actief + onboarding alleen bij POST/add_indicator."
+    "🚀 market_data_api.py geladen – globale market-data + user-based market_data_indicators + onboarding bij POST /market_data/indicator."
 )
 
 
@@ -53,90 +56,349 @@ MARKET_RAW_ENDPOINTS = get_market_raw_endpoints()
 
 
 # =========================================================
-# 📅 GET /market_data/day — DAGTABEL (nu user-aware)
+# 🧩 Helper — laatste globale BTC snapshot (price/change/volume)
 # =========================================================
-@router.get("/market_data/day")
-async def get_latest_market_day_data(current_user: dict = Depends(get_current_user)):
+def _get_latest_global_btc_snapshot(cur):
     """
-    Market-indicatoren uit market_data_indicators:
+    Haalt de laatste BTC rij op uit market_data (globale tabel).
+    Verwacht dat conn/cursor al open is.
+    """
+    cur.execute(
+        """
+        SELECT price, change_24h, volume, timestamp
+        FROM market_data
+        WHERE symbol = 'BTC'
+        ORDER BY timestamp DESC
+        LIMIT 1
+        """
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Geen globale BTC market_data gevonden.")
 
-    - Eerst wordt gekeken naar records van VANDAAG
-    - Gefilterd op:
-        user_id = huidige gebruiker  OF  user_id IS NULL (globale records)
-    - Als er geen data voor vandaag is:
-        fallback naar laatst beschikbare datum (zelfde filter)
+    price, change_24h, volume, ts = row
+    return {
+        "price": float(price) if price is not None else None,
+        "change_24h": float(change_24h) if change_24h is not None else None,
+        "volume": float(volume) if volume is not None else None,
+        "timestamp": ts,
+    }
+
+
+# =========================================================
+# 🆕 POST /market_data/indicator — user-indicator opslaan
+#    → gebruikt market_data_indicators (met user_id)
+#    → triggert onboarding stap 'market'
+# =========================================================
+@router.post("/market_data/indicator")
+def add_user_market_indicator(
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Slaat een MARKT-indicator op voor de huidige gebruiker in
+    de tabel market_data_indicators (met user_id).
+
+    Payload opties:
+      - { "indicator": "price" }
+        → waarde wordt gehaald uit globale market_data (BTC)
+      - { "indicator": "volume" }
+        → waarde uit globale market_data (BTC)
+      - { "indicator": "change_24h" }
+        → waarde uit globale market_data (BTC)
+      - { "indicator": "custom_name", "value": 123.45 }
+        → gebruikt aangeleverde value
+
+    Daarna:
+      - Score + trend + interpretatie + actie worden bepaald via
+        get_score_rule_from_db("market", indicator, value)
+      - Record wordt opgeslagen met user_id
+      - Onboarding-stap 'market' wordt gemarkeerd als completed
     """
     user_id = current_user["id"]
-    logger.info("📄 [market/day] Ophalen market-dagdata (user-aware)...")
+
+    raw_name = payload.get("indicator") or payload.get("name")
+    if not raw_name:
+        raise HTTPException(400, "❌ 'indicator' (of 'name') is verplicht.")
+
+    indicator = raw_name.strip()
+    if not indicator:
+        raise HTTPException(400, "❌ Indicator mag niet leeg zijn.")
+
+    # Kan direct value meekrijgen
+    value = payload.get("value", None)
 
     conn = get_db_connection()
     if not conn:
         raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
-        with conn.cursor() as cur:
-            # 1️⃣ Vandaag, user-specifiek + globale fallback (user_id IS NULL)
+        cur = conn.cursor()
+
+        # 🔹 Indien geen value meegegeven → haal uit globale BTC snapshot
+        if value is None:
+            snapshot = _get_latest_global_btc_snapshot(cur)
+            lname = indicator.lower()
+
+            if "price" in lname:
+                value = snapshot["price"]
+            elif "change" in lname:
+                value = snapshot["change_24h"]
+            elif "volume" in lname:
+                value = snapshot["volume"]
+            else:
+                raise HTTPException(
+                    400,
+                    "❌ Geen 'value' meegegeven en indicator kan niet automatisch "
+                    "worden gemapt op price/change_24h/volume.",
+                )
+
+        try:
+            value = float(value)
+        except Exception:
+            raise HTTPException(400, "❌ 'value' moet numeriek zijn.")
+
+        # 🔹 Scoreregel ophalen via centrale scoring engine
+        rule = get_score_rule_from_db("market", indicator, value)
+        if rule:
+            score = rule.get("score")
+            trend = rule.get("trend")
+            interpretation = rule.get("interpretation")
+            action = rule.get("action")
+        else:
+            score = None
+            trend = None
+            interpretation = "Geen scoreregel gevonden voor deze waarde."
+            action = None
+
+        # 🔹 Record opslaan per user
+        cur.execute(
+            """
+            INSERT INTO market_data_indicators
+                (name, value, trend, interpretation, action, score, user_id, timestamp)
+            VALUES (%s,%s,%s,%s,%s,%s,%s, NOW())
+            RETURNING id, timestamp;
+            """,
+            (indicator, value, trend, interpretation, action, score, user_id),
+        )
+        new_id, ts = cur.fetchone()
+
+        conn.commit()
+
+        # ⭐ Onboarding stap afronden (MARKET)
+        mark_step_completed(conn, user_id, "market")
+
+        return {
+            "id": new_id,
+            "name": indicator,
+            "value": value,
+            "score": score,
+            "trend": trend,
+            "interpretation": interpretation,
+            "action": action,
+            "timestamp": ts.isoformat() if ts else None,
+            "message": f"Market-indicator '{indicator}' opgeslagen voor user {user_id}.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [market_data/indicator] {e}", exc_info=True)
+        raise HTTPException(500, f"Fout bij opslaan market-indicator: {e}")
+    finally:
+        conn.close()
+
+
+# =========================================================
+# GET /market_data/indicators — alle user-indicatoren (history)
+# =========================================================
+@router.get("/market_data/indicators")
+def list_user_market_indicators(
+    limit: int = Query(200, ge=1, le=1000),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Haalt alle market_data_indicators op voor de huidige gebruiker.
+    Handig voor een uitgebreide tabel (history).
+    """
+    user_id = current_user["id"]
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, name, value, trend, interpretation, action, score, timestamp
+            FROM market_data_indicators
+            WHERE user_id = %s
+            ORDER BY timestamp DESC
+            LIMIT %s;
+            """,
+            (user_id, limit),
+        )
+        rows = cur.fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "value": float(r[2]) if r[2] is not None else None,
+                "trend": r[3],
+                "interpretation": r[4],
+                "action": r[5],
+                "score": float(r[6]) if r[6] is not None else None,
+                "timestamp": r[7].isoformat() if r[7] else None,
+            }
+            for r in rows
+        ]
+
+    except Exception as e:
+        logger.error(f"❌ [market_data/indicators] {e}", exc_info=True)
+        raise HTTPException(500, "Fout bij ophalen market-indicatoren.")
+    finally:
+        conn.close()
+
+
+# =========================================================
+# DELETE /market_data/indicator/{indicator_id} — user-indicator verwijderen
+# =========================================================
+@router.delete("/market_data/indicator/{indicator_id}")
+def delete_user_market_indicator(
+    indicator_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Verwijdert één entry uit market_data_indicators voor deze user.
+    """
+    user_id = current_user["id"]
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
+
+    try:
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            DELETE FROM market_data_indicators
+            WHERE id = %s AND user_id = %s
+            """,
+            (indicator_id, user_id),
+        )
+        deleted = cur.rowcount
+        conn.commit()
+
+        if deleted == 0:
+            raise HTTPException(404, "Indicator niet gevonden voor deze gebruiker.")
+
+        return {
+            "deleted": deleted,
+            "message": f"Indicator {indicator_id} verwijderd voor user {user_id}.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ [delete market_data/indicator] {e}", exc_info=True)
+        raise HTTPException(500, "Fout bij verwijderen market-indicator.")
+    finally:
+        conn.close()
+
+
+# =========================================================
+# 📅 GET /market_data/day — DAGTABEL (user-based)
+# =========================================================
+@router.get("/market_data/day")
+async def get_latest_market_day_data(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Market-indicatoren uit market_data_indicators, per USER:
+
+    - Eerst wordt gekeken naar records van VANDAAG
+      WHERE user_id = huidige gebruiker
+    - Als er geen data voor vandaag is:
+      fallback naar laatst beschikbare datum (voor die user)
+    """
+    user_id = current_user["id"]
+    logger.info("📄 [market/day] Ophalen market-dagdata (per user)...")
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(500, "❌ Geen databaseverbinding.")
+
+    try:
+        cur = conn.cursor()
+
+        # 1️⃣ Vandaag, user-specifiek
+        cur.execute(
+            """
+            SELECT name, value, trend, interpretation, action, score, timestamp
+            FROM market_data_indicators
+            WHERE DATE(timestamp) = CURRENT_DATE
+              AND user_id = %s
+            ORDER BY timestamp DESC;
+            """,
+            (user_id,),
+        )
+        rows = cur.fetchall()
+
+        # 2️⃣ Fallback: laatste beschikbare datum (voor deze user)
+        if not rows:
+            logger.warning(
+                "⚠️ Geen market-data vandaag voor deze user — fallback datum..."
+            )
+
+            cur.execute(
+                """
+                SELECT timestamp
+                FROM market_data_indicators
+                WHERE user_id = %s
+                ORDER BY timestamp DESC
+                LIMIT 1;
+                """,
+                (user_id,),
+            )
+            last = cur.fetchone()
+            if not last:
+                # Helemaal geen data → lege lijst
+                return []
+
+            fallback_date = last[0].date()
+
             cur.execute(
                 """
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM market_data_indicators
-                WHERE DATE(timestamp) = CURRENT_DATE
-                  AND (user_id = %s OR user_id IS NULL)
+                WHERE DATE(timestamp) = %s
+                  AND user_id = %s
                 ORDER BY timestamp DESC;
-            """,
-                (user_id,),
+                """,
+                (fallback_date, user_id),
             )
             rows = cur.fetchall()
-
-            # 2️⃣ Fallback: laatste beschikbare datum (voor deze user of globale)
-            if not rows:
-                logger.warning(
-                    "⚠️ Geen market-data vandaag (user / global) — fallback datum..."
-                )
-
-                cur.execute(
-                    """
-                    SELECT timestamp
-                    FROM market_data_indicators
-                    WHERE (user_id = %s OR user_id IS NULL)
-                    ORDER BY timestamp DESC
-                    LIMIT 1;
-                """,
-                    (user_id,),
-                )
-                last = cur.fetchone()
-                if not last:
-                    # Helemaal geen data → lege lijst
-                    return []
-
-                fallback_date = last[0].date()
-
-                cur.execute(
-                    """
-                    SELECT name, value, trend, interpretation, action, score, timestamp
-                    FROM market_data_indicators
-                    WHERE DATE(timestamp) = %s
-                      AND (user_id = %s OR user_id IS NULL)
-                    ORDER BY timestamp DESC;
-                """,
-                    (fallback_date, user_id),
-                )
-                rows = cur.fetchall()
 
         # 3️⃣ Normaliseren naar JSON response
         return [
             {
                 "name": r[0],
-                "value": r[1],
+                "value": float(r[1]) if r[1] is not None else None,
                 "trend": r[2],
                 "interpretation": r[3],
                 "action": r[4],
-                "score": r[5],
+                "score": float(r[5]) if r[5] is not None else None,
                 "timestamp": r[6].isoformat() if r[6] else None,
             }
             for r in rows
         ]
 
+    except Exception as e:
+        logger.error(f"❌ [market/day] {e}", exc_info=True)
+        raise HTTPException(500, "Fout bij ophalen market-dagdata.")
     finally:
         conn.close()
 
@@ -686,138 +948,3 @@ async def save_forward_returns(data: list[dict]):
     except Exception as e:
         logger.error(f"❌ [forward/save] {e}")
         raise HTTPException(500, "Fout bij opslaan forward returns.")
-
-
-# =========================================================
-# POST /market/add_indicator — onboarding event!
-# (oude naam, zelfde route)
-# =========================================================
-@router.post("/market/add_indicator")
-def add_market_indicator(
-    payload: dict, current_user: dict = Depends(get_current_user)
-):
-    """
-    User activeert een market-indicator → onboarding stap 'market' mag compleet.
-
-    👉 Belangrijk:
-      - We houden de OUDE route-naam /market/add_indicator
-      - Logica blijft: indicator in 'indicators' activeren + onboarding stap markeren
-      - De feitelijke waarden komen (nu nog) uit globale processen / tasks
-    """
-    name = payload.get("indicator")
-    if not name:
-        raise HTTPException(400, "Indicator naam ontbreekt.")
-
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Bestaat deze indicator in de globale config?
-        cur.execute(
-            """
-            SELECT name FROM indicators 
-            WHERE name = %s AND category = 'market'
-        """,
-            (name,),
-        )
-        if not cur.fetchone():
-            conn.close()
-            raise HTTPException(404, f"Indicator '{name}' bestaat niet.")
-
-        # Heeft deze indicator scoreregels?
-        cur.execute(
-            """
-            SELECT 1 FROM market_indicator_rules WHERE indicator = %s LIMIT 1
-        """,
-            (name,),
-        )
-        if not cur.fetchone():
-            conn.close()
-            raise HTTPException(400, "Indicator heeft geen scoreregels.")
-
-        # Activeren in globale tabel (blijft bestaan voor jobs)
-        cur.execute(
-            """
-            UPDATE indicators
-            SET active = TRUE
-            WHERE name = %s
-        """,
-            (name,),
-        )
-        conn.commit()
-
-        # ⭐ ONBOARDING MARKEREN — ENIGE PLEK VOOR 'market'
-        mark_step_completed(conn, current_user["id"], "market")
-
-        return {"status": "ok", "message": f"Indicator '{name}' geactiveerd."}
-
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-# =========================================================
-# DELETE /market/delete_indicator/{name} — indicator deactiveren
-# =========================================================
-@router.delete("/market/delete_indicator/{name}")
-def delete_market_indicator(name: str):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        # Bestaat hij wel?
-        cur.execute(
-            """
-            SELECT name FROM indicators 
-            WHERE name = %s AND category = 'market'
-        """,
-            (name,),
-        )
-        if not cur.fetchone():
-            conn.close()
-            raise HTTPException(404, f"Indicator '{name}' niet gevonden.")
-
-        # Deactiveren
-        cur.execute(
-            """
-            UPDATE indicators
-            SET active = FALSE
-            WHERE name = %s
-        """,
-            (name,),
-        )
-
-        conn.commit()
-        conn.close()
-
-        return {
-            "status": "ok",
-            "message": f"Indicator '{name}' is verwijderd uit de dag-analyse.",
-        }
-
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-# =========================================================
-# GET /market/active_indicators — lijst met actieve market indicators
-# =========================================================
-@router.get("/market/active_indicators")
-def get_active_market_indicators():
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT name, display_name
-                FROM indicators
-                WHERE category = 'market' AND active = TRUE
-                ORDER BY display_name ASC;
-            """
-            )
-            rows = cur.fetchall()
-        conn.close()
-
-        return [{"name": r[0], "display_name": r[1]} for r in rows]
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
