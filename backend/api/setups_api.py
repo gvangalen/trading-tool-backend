@@ -405,21 +405,47 @@ async def get_setup_by_id(setup_id: int, current_user: dict = Depends(get_curren
     finally:
         conn.close()
 
-
 # ============================================================
-# 🔟 Laatste setup
+# 🔟 Laatste setup (SAFE + ondersteunt optional setup_id)
 # ============================================================
 @router.get("/setups/last")
-async def last_setup(current_user: dict = Depends(get_current_user)):
+async def last_setup(
+    setup_id: Optional[int] = Query(None),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Veilig ophalen van de laatste setup.
+    - setup_id is optioneel
+    - Geen crashes meer bij lege / verkeerde waardes
+    """
+
     user_id = current_user["id"]
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
+
+            # 1️⃣ Als setup_id is meegegeven → fetch die ene setup
+            if setup_id:
+                cur.execute("""
+                    SELECT * FROM setups
+                    WHERE id = %s AND user_id = %s
+                    LIMIT 1
+                """, (setup_id, user_id))
+
+                row = cur.fetchone()
+
+                if not row:
+                    return {"setup": None}
+
+                return {"setup": format_setup_rows([row], cur)[0]}
+
+            # 2️⃣ Anders → pak de laatste setup van deze user
             cur.execute("""
                 SELECT * FROM setups
                 WHERE user_id = %s
-                ORDER BY created_at DESC LIMIT 1
+                ORDER BY created_at DESC
+                LIMIT 1
             """, (user_id,))
 
             row = cur.fetchone()
@@ -429,9 +455,12 @@ async def last_setup(current_user: dict = Depends(get_current_user)):
 
             return {"setup": format_setup_rows([row], cur)[0]}
 
+    except Exception as e:
+        # ⛑️ NOOIT meer een crash — fout altijd veilig teruggeven
+        return {"setup": None, "error": str(e)}
+
     finally:
         conn.close()
-
 
 # ============================================================
 # 🔥 Active setup (beste score van vandaag)
