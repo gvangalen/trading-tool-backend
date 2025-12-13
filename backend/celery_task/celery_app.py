@@ -170,6 +170,7 @@ try:
     import backend.celery_task.quarterly_report_task
     import backend.celery_task.store_daily_scores_task
     import backend.celery_task.setup_task
+    import backend.celery_task.onboarding_task
 
     import backend.ai_agents.macro_ai_agent
     import backend.ai_agents.market_ai_agent
