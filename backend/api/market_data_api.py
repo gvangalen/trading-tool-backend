@@ -95,26 +95,6 @@ def add_user_market_indicator(
     payload: dict,
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Slaat een MARKT-indicator op voor de huidige gebruiker in
-    de tabel market_data_indicators (met user_id).
-
-    Payload opties:
-      - { "indicator": "price" }
-        → waarde wordt gehaald uit globale market_data (BTC)
-      - { "indicator": "volume" }
-        → waarde uit globale market_data (BTC)
-      - { "indicator": "change_24h" }
-        → waarde uit globale market_data (BTC)
-      - { "indicator": "custom_name", "value": 123.45 }
-        → gebruikt aangeleverde value
-
-    Daarna:
-      - Score + trend + interpretatie + actie worden bepaald via
-        get_score_rule_from_db("market", indicator, value)
-      - Record wordt opgeslagen met user_id
-      - Onboarding-stap 'market' wordt gemarkeerd als completed
-    """
     user_id = current_user["id"]
 
     raw_name = payload.get("indicator") or payload.get("name")
@@ -125,8 +105,7 @@ def add_user_market_indicator(
     if not indicator:
         raise HTTPException(400, "❌ Indicator mag niet leeg zijn.")
 
-    # Kan direct value meekrijgen
-    value = payload.get("value", None)
+    value = payload.get("value")
 
     conn = get_db_connection()
     if not conn:
@@ -135,7 +114,28 @@ def add_user_market_indicator(
     try:
         cur = conn.cursor()
 
-        # 🔹 Indien geen value meegegeven → haal uit globale BTC snapshot
+        # =====================================================
+        # 🔒 DUPLICATE CHECK (BELANGRIJK)
+        # =====================================================
+        cur.execute(
+            """
+            SELECT 1
+            FROM market_data_indicators
+            WHERE name = %s AND user_id = %s
+            LIMIT 1
+            """,
+            (indicator, user_id),
+        )
+
+        if cur.fetchone():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Indicator '{indicator}' is al toegevoegd."
+            )
+
+        # =====================================================
+        # 📈 VALUE BEPALEN
+        # =====================================================
         if value is None:
             snapshot = _get_latest_global_btc_snapshot(cur)
             lname = indicator.lower()
@@ -158,7 +158,9 @@ def add_user_market_indicator(
         except Exception:
             raise HTTPException(400, "❌ 'value' moet numeriek zijn.")
 
-        # 🔹 Scoreregel ophalen via centrale scoring engine
+        # =====================================================
+        # 🧮 SCORE LOGICA
+        # =====================================================
         rule = get_score_rule_from_db("market", indicator, value)
         if rule:
             score = rule.get("score")
@@ -171,7 +173,9 @@ def add_user_market_indicator(
             interpretation = "Geen scoreregel gevonden voor deze waarde."
             action = None
 
-        # 🔹 Record opslaan per user
+        # =====================================================
+        # 💾 OPSLAAN
+        # =====================================================
         cur.execute(
             """
             INSERT INTO market_data_indicators
@@ -182,10 +186,9 @@ def add_user_market_indicator(
             (indicator, value, trend, interpretation, action, score, user_id),
         )
         new_id, ts = cur.fetchone()
-
         conn.commit()
 
-        # ⭐ Onboarding stap afronden (MARKET)
+        # ⭐ Onboarding stap afronden
         mark_step_completed(conn, user_id, "market")
 
         return {
@@ -197,17 +200,15 @@ def add_user_market_indicator(
             "interpretation": interpretation,
             "action": action,
             "timestamp": ts.isoformat() if ts else None,
-            "message": f"Market-indicator '{indicator}' opgeslagen voor user {user_id}.",
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"❌ [market_data/indicator] {e}", exc_info=True)
-        raise HTTPException(500, f"Fout bij opslaan market-indicator: {e}")
+        raise HTTPException(500, "Fout bij opslaan market-indicator.")
     finally:
         conn.close()
-
 
 # =========================================================
 # GET /market_data/indicators — alle user-indicatoren (history)
