@@ -4,11 +4,12 @@ from typing import Dict, List
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
+from celery import chain
 
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
 
-# 🔥 Celery kickstart imports (BESTAANDE TASKS)
+# 🔥 Celery tasks (BESTAAND)
 from backend.celery_task.daily_scores_task import calculate_daily_scores
 from backend.celery_task.daily_report_task import generate_daily_report
 
@@ -42,19 +43,28 @@ class StepRequest(BaseModel):
 
 
 # ======================================================
-# 🔥 Celery kickstart (V1 – éénmalig na onboarding)
+# 🔥 Celery kickstart (CHAINED – scores → report)
 # ======================================================
 def _kickstart_user_pipeline(user_id: int):
     """
-    Start éénmalig de score + report pipeline
-    na afronden onboarding (strategy).
+    Start éénmalig de volledige analyse pipeline
+    in de JUISTE volgorde:
+        1) scores
+        2) daily report + AI
     """
     try:
-        calculate_daily_scores.delay(user_id=user_id)
-        generate_daily_report.delay(user_id=user_id)
-        logger.info(f"🚀 Celery kickstart gestart voor user_id={user_id}")
+        chain(
+            calculate_daily_scores.s(user_id=user_id),
+            generate_daily_report.s(user_id=user_id),
+        ).delay()
+
+        logger.info(f"🚀 Celery pipeline (chain) gestart voor user_id={user_id}")
+
     except Exception as e:
-        logger.error(f"❌ Fout bij kickstart pipeline user_id={user_id}: {e}")
+        logger.error(
+            f"❌ Fout bij kickstart pipeline user_id={user_id}: {e}",
+            exc_info=True,
+        )
 
 
 # ======================================================
@@ -156,7 +166,7 @@ def complete_step(
     mark_step_completed(conn, uid, step)
     status = _get_status_dict(conn, uid)
 
-    # 🔥 V1 trigger: NA LAATSTE STAP (strategy)
+    # 🔥 Trigger ALLEEN bij laatste stap
     if step == "strategy" and status.get("onboarding_complete"):
         _kickstart_user_pipeline(uid)
 
@@ -174,13 +184,14 @@ def finish_onboarding(
     with conn.cursor() as cur:
         cur.execute("""
             UPDATE onboarding_steps
-            SET completed = TRUE, completed_at = %s
+            SET completed = TRUE,
+                completed_at = %s
             WHERE user_id = %s AND flow = %s
         """, (now, uid, DEFAULT_FLOW))
 
     conn.commit()
 
-    # 🔥 V1 trigger bij expliciete finish
+    # 🔥 Veilig: altijd chain starten bij expliciete finish
     _kickstart_user_pipeline(uid)
 
     return _get_status_dict(conn, uid)
