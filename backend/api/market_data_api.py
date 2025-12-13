@@ -263,15 +263,16 @@ def list_user_market_indicators(
 
 
 # =========================================================
-# DELETE /market_data/indicator/{indicator_id} — user-indicator verwijderen
+# DELETE /market_data/indicator/{indicator_name}
 # =========================================================
-@router.delete("/market_data/indicator/{indicator_id}")
+@router.delete("/market_data/indicator/{indicator_name}")
 def delete_user_market_indicator(
-    indicator_id: int,
+    indicator_name: str,
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Verwijdert één entry uit market_data_indicators voor deze user.
+    Verwijdert ALLE entries van deze market-indicator
+    voor de huidige gebruiker (op basis van naam).
     """
     user_id = current_user["id"]
 
@@ -285,19 +286,24 @@ def delete_user_market_indicator(
         cur.execute(
             """
             DELETE FROM market_data_indicators
-            WHERE id = %s AND user_id = %s
+            WHERE name = %s AND user_id = %s
             """,
-            (indicator_id, user_id),
+            (indicator_name, user_id),
         )
+
         deleted = cur.rowcount
         conn.commit()
 
         if deleted == 0:
-            raise HTTPException(404, "Indicator niet gevonden voor deze gebruiker.")
+            raise HTTPException(
+                404,
+                f"Indicator '{indicator_name}' niet gevonden voor deze gebruiker."
+            )
 
         return {
             "deleted": deleted,
-            "message": f"Indicator {indicator_id} verwijderd voor user {user_id}.",
+            "indicator": indicator_name,
+            "message": f"Indicator '{indicator_name}' verwijderd ({deleted} records).",
         }
 
     except HTTPException:
