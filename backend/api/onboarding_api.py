@@ -4,14 +4,9 @@ from typing import Dict, List
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
-from celery import chain
 
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
-
-# 🔥 Celery tasks (BESTAAND)
-from backend.celery_task.daily_scores_task import calculate_daily_scores
-from backend.celery_task.daily_report_task import generate_daily_report
 
 router = APIRouter()
 logger = logging.getLogger("onboarding")
@@ -43,22 +38,27 @@ class StepRequest(BaseModel):
 
 
 # ======================================================
-# 🔥 Celery kickstart (CHAINED – scores → report)
+# 🔥 Celery kickstart (LAZY IMPORTS – veilig)
 # ======================================================
 def _kickstart_user_pipeline(user_id: int):
     """
     Start éénmalig de volledige analyse pipeline
     in de JUISTE volgorde:
-        1) scores
+        1) daily scores
         2) daily report + AI
     """
     try:
+        # ⚠️ LAZY imports → voorkomt router-crash
+        from celery import chain
+        from backend.celery_task.daily_scores_task import calculate_daily_scores
+        from backend.celery_task.daily_report_task import generate_daily_report
+
         chain(
             calculate_daily_scores.s(user_id=user_id),
             generate_daily_report.s(user_id=user_id),
         ).delay()
 
-        logger.info(f"🚀 Celery pipeline (chain) gestart voor user_id={user_id}")
+        logger.info(f"🚀 Celery pipeline gestart voor user_id={user_id}")
 
     except Exception as e:
         logger.error(
@@ -72,26 +72,31 @@ def _kickstart_user_pipeline(user_id: int):
 # ======================================================
 def _ensure_steps_for_user(conn, user_id: int):
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT step_key FROM onboarding_steps
+        cur.execute(
+            """
+            SELECT step_key
+            FROM onboarding_steps
             WHERE user_id = %s AND flow = %s
-        """, (user_id, DEFAULT_FLOW))
-
+            """,
+            (user_id, DEFAULT_FLOW),
+        )
         existing = {row[0] for row in cur.fetchall()}
 
     missing = [s for s in DEFAULT_STEPS if s not in existing]
-
     if not missing:
         return
 
     rows = [(user_id, DEFAULT_FLOW, s, False, None, None) for s in missing]
 
     with conn.cursor() as cur:
-        cur.executemany("""
+        cur.executemany(
+            """
             INSERT INTO onboarding_steps
                 (user_id, flow, step_key, completed, completed_at, metadata)
             VALUES (%s, %s, %s, %s, %s, %s)
-        """, rows)
+            """,
+            rows,
+        )
 
     conn.commit()
 
@@ -103,12 +108,17 @@ def mark_step_completed(conn, user_id: int, step_key: str):
     now = datetime.now(timezone.utc)
 
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE onboarding_steps
             SET completed = TRUE,
                 completed_at = %s
-            WHERE user_id = %s AND flow = %s AND step_key = %s
-        """, (now, user_id, DEFAULT_FLOW, step_key))
+            WHERE user_id = %s
+              AND flow = %s
+              AND step_key = %s
+            """,
+            (now, user_id, DEFAULT_FLOW, step_key),
+        )
 
     conn.commit()
 
@@ -120,12 +130,14 @@ def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
     _ensure_steps_for_user(conn, user_id)
 
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT step_key, completed
             FROM onboarding_steps
             WHERE user_id = %s AND flow = %s
-        """, (user_id, DEFAULT_FLOW))
-
+            """,
+            (user_id, DEFAULT_FLOW),
+        )
         rows = cur.fetchall()
 
     flags = {step: done for step, done in rows}
@@ -149,7 +161,7 @@ def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
 def get_onboarding_status(
     request: Request,
     conn=Depends(get_db_connection),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
     return _get_status_dict(conn, current_user["id"])
 
@@ -158,7 +170,7 @@ def get_onboarding_status(
 def complete_step(
     payload: StepRequest,
     conn=Depends(get_db_connection),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
     uid = current_user["id"]
     step = payload.step
@@ -176,22 +188,25 @@ def complete_step(
 @router.post("/onboarding/finish")
 def finish_onboarding(
     conn=Depends(get_db_connection),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
     uid = current_user["id"]
     now = datetime.now(timezone.utc)
 
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE onboarding_steps
             SET completed = TRUE,
                 completed_at = %s
             WHERE user_id = %s AND flow = %s
-        """, (now, uid, DEFAULT_FLOW))
+            """,
+            (now, uid, DEFAULT_FLOW),
+        )
 
     conn.commit()
 
-    # 🔥 Veilig: altijd chain starten bij expliciete finish
+    # 🔥 Altijd pipeline starten bij expliciete finish
     _kickstart_user_pipeline(uid)
 
     return _get_status_dict(conn, uid)
@@ -200,17 +215,20 @@ def finish_onboarding(
 @router.post("/onboarding/reset")
 def reset_onboarding(
     conn=Depends(get_db_connection),
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
     uid = current_user["id"]
 
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(
+            """
             UPDATE onboarding_steps
             SET completed = FALSE,
                 completed_at = NULL
             WHERE user_id = %s AND flow = %s
-        """, (uid, DEFAULT_FLOW))
+            """,
+            (uid, DEFAULT_FLOW),
+        )
 
     conn.commit()
     return _get_status_dict(conn, uid)
