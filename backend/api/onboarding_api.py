@@ -8,6 +8,10 @@ from pydantic import BaseModel
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
 
+# 🔥 Celery kickstart imports (BESTAANDE TASKS)
+from backend.celery_task.daily_scores_task import calculate_daily_scores
+from backend.celery_task.daily_report_task import generate_daily_report
+
 router = APIRouter()
 logger = logging.getLogger("onboarding")
 
@@ -35,6 +39,22 @@ STEP_FLAG_MAP = {
 
 class StepRequest(BaseModel):
     step: str
+
+
+# ======================================================
+# 🔥 Celery kickstart (V1 – éénmalig na onboarding)
+# ======================================================
+def _kickstart_user_pipeline(user_id: int):
+    """
+    Start éénmalig de score + report pipeline
+    na afronden onboarding (strategy).
+    """
+    try:
+        calculate_daily_scores.delay(user_id=user_id)
+        generate_daily_report.delay(user_id=user_id)
+        logger.info(f"🚀 Celery kickstart gestart voor user_id={user_id}")
+    except Exception as e:
+        logger.error(f"❌ Fout bij kickstart pipeline user_id={user_id}: {e}")
 
 
 # ======================================================
@@ -84,7 +104,7 @@ def mark_step_completed(conn, user_id: int, step_key: str):
 
 
 # ======================================================
-# GET STATUS (alleen op basis van onboarding_steps)
+# GET STATUS
 # ======================================================
 def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
     _ensure_steps_for_user(conn, user_id)
@@ -130,8 +150,17 @@ def complete_step(
     conn=Depends(get_db_connection),
     current_user=Depends(get_current_user)
 ):
-    mark_step_completed(conn, current_user["id"], payload.step)
-    return _get_status_dict(conn, current_user["id"])
+    uid = current_user["id"]
+    step = payload.step
+
+    mark_step_completed(conn, uid, step)
+    status = _get_status_dict(conn, uid)
+
+    # 🔥 V1 trigger: NA LAATSTE STAP (strategy)
+    if step == "strategy" and status.get("onboarding_complete"):
+        _kickstart_user_pipeline(uid)
+
+    return status
 
 
 @router.post("/onboarding/finish")
@@ -139,8 +168,8 @@ def finish_onboarding(
     conn=Depends(get_db_connection),
     current_user=Depends(get_current_user)
 ):
-    now = datetime.now(timezone.utc)
     uid = current_user["id"]
+    now = datetime.now(timezone.utc)
 
     with conn.cursor() as cur:
         cur.execute("""
@@ -150,6 +179,10 @@ def finish_onboarding(
         """, (now, uid, DEFAULT_FLOW))
 
     conn.commit()
+
+    # 🔥 V1 trigger bij expliciete finish
+    _kickstart_user_pipeline(uid)
+
     return _get_status_dict(conn, uid)
 
 
