@@ -89,7 +89,10 @@ async def get_technical_data(current_user: dict = Depends(get_current_user)):
 # ➕ POST — Technische indicator toevoegen (ONBOARDING stap)
 # ===============================================================
 @router.post("/technical_data")
-async def add_technical_indicator(request: Request, current_user: dict = Depends(get_current_user)):
+async def add_technical_indicator(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     logger.info("📐 [add] Technische indicator toevoegen...")
 
     data = await request.json()
@@ -99,7 +102,7 @@ async def add_technical_indicator(request: Request, current_user: dict = Depends
     if not name_raw:
         raise HTTPException(400, "❌ 'indicator' is verplicht.")
 
-    # Normaliseren (rsi → RSI)
+    # 🔤 Normaliseren (rsi → RSI)
     name = normalize_indicator_name(name_raw)
 
     conn = get_db_connection()
@@ -107,64 +110,104 @@ async def add_technical_indicator(request: Request, current_user: dict = Depends
         raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
-        # ----------------------------------------------
+        # ======================================================
+        # 0️⃣ DUPLICATE CHECK (⭐ NIEUW)
+        # ======================================================
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT 1
+                FROM technical_indicators
+                WHERE LOWER(indicator) = LOWER(%s)
+                  AND user_id = %s
+                LIMIT 1;
+            """, (name, user_id))
+
+            if cur.fetchone():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Indicator '{name}' is al toegevoegd."
+                )
+
+        # ======================================================
         # 1️⃣ Indicatorconfig ophalen
-        # ----------------------------------------------
+        # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source, link
                 FROM indicators
                 WHERE LOWER(name)=LOWER(%s)
                   AND category='technical'
-                  AND active=TRUE
+                  AND active=TRUE;
             """, (name,))
             cfg = cur.fetchone()
 
         if not cfg:
-            raise HTTPException(404, f"Indicator '{name}' niet gevonden of niet actief.")
+            raise HTTPException(
+                status_code=404,
+                detail=f"Indicator '{name}' niet gevonden of niet actief."
+            )
 
         source, link = cfg
 
-        # ----------------------------------------------
-        # 2️⃣ Interpreter aanroepen (NOW async!)
-        # ----------------------------------------------
+        # ======================================================
+        # 2️⃣ Interpreter aanroepen (async)
+        # ======================================================
         from backend.utils.technical_interpreter import fetch_technical_value
 
-        result = await fetch_technical_value(name=name, source=source, link=link)
+        result = await fetch_technical_value(
+            name=name,
+            source=source,
+            link=link
+        )
+
         if not result:
-            raise HTTPException(500, f"❌ Geen waarde ontvangen voor '{name}'.")
+            raise HTTPException(
+                status_code=500,
+                detail=f"❌ Geen waarde ontvangen voor '{name}'."
+            )
 
         value = float(result["value"] if isinstance(result, dict) else result)
 
-        # ----------------------------------------------
+        # ======================================================
         # 3️⃣ Score bepalen via DB-rules
-        # ----------------------------------------------
+        # ======================================================
         score_obj = get_score_rule_from_db("technical", name, value)
         if not score_obj:
-            raise HTTPException(500, f"❌ Geen scoreregels gevonden voor '{name}'.")
+            raise HTTPException(
+                status_code=500,
+                detail=f"❌ Geen scoreregels gevonden voor '{name}'."
+            )
 
         score = score_obj["score"]
         advies = score_obj["trend"]
         uitleg = score_obj["interpretation"]
 
-        # ----------------------------------------------
+        # ======================================================
         # 4️⃣ Opslaan in DB
-        # ----------------------------------------------
+        # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO technical_indicators
                 (indicator, value, score, advies, uitleg, user_id, timestamp)
                 VALUES (%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id;
-            """, (name, value, score, advies, uitleg, user_id, datetime.utcnow()))
+            """, (
+                name,
+                value,
+                score,
+                advies,
+                uitleg,
+                user_id,
+                datetime.utcnow()
+            ))
 
             new_id = cur.fetchone()[0]
 
         conn.commit()
 
-        # ----------------------------------------------
-        # 5️⃣ Onboarding stap afvinken
-        # ----------------------------------------------
+        # ======================================================
+        # 5️⃣ Onboarding stap afronden (ALLEEN BIJ SUCCESS)
+        # ======================================================
         mark_step_completed(conn, user_id, "technical")
 
         return {
@@ -176,13 +219,19 @@ async def add_technical_indicator(request: Request, current_user: dict = Depends
             "uitleg": uitleg
         }
 
+    except HTTPException:
+        # 🔁 bewust doorgeven (409, 404, etc.)
+        raise
+
     except Exception as e:
-        logger.error(f"❌ [add_technical_indicator] {e}")
-        raise HTTPException(500, f"Fout bij toevoegen indicator: {e}")
+        logger.error(f"❌ [add_technical_indicator] {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fout bij toevoegen indicator: {e}"
+        )
 
     finally:
         conn.close()
-
 
 # ===============================================================
 # 📅 DAY — fallback + user filtering (GEEN onboarding)
