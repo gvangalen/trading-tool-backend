@@ -35,10 +35,14 @@ def get_db_cursor():
 # 👉 ENIGE plek waar onboarding 'macro' wordt gemarkeerd
 # =====================================
 @router.post("/macro_data")
-async def add_macro_indicator(request: Request, current_user: dict = Depends(get_current_user)):
+async def add_macro_indicator(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     """
     ➕ Voeg macro-data toe voor deze gebruiker.
-    Onboarding wordt automatisch bijgewerkt → macro stap = voltooid.
+    ❌ Blokkeert dubbele indicatoren per user (HTTP 409).
+    ⭐ Onboarding wordt alleen hier gemarkeerd.
     """
     user_id = current_user["id"]
     logger.info(f"📅 [add] Macro opslaan voor user_id={user_id}...")
@@ -49,17 +53,33 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
     if not name:
         raise HTTPException(status_code=400, detail="❌ 'name' veld is verplicht.")
 
-    # -------------------------
-    # DB connectie
-    # -------------------------
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="❌ DB niet beschikbaar.")
 
     try:
-        # -------------------------
+        # --------------------------------------------------
+        # ❌ DUPLICATE CHECK (CRUCIAAL)
+        # --------------------------------------------------
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM macro_data
+                WHERE name = %s AND user_id = %s
+                LIMIT 1;
+                """,
+                (name, user_id),
+            )
+            if cur.fetchone():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Indicator '{name}' is al toegevoegd voor deze gebruiker."
+                )
+
+        # --------------------------------------------------
         # Indicator config ophalen
-        # -------------------------
+        # --------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT source, link
@@ -78,24 +98,21 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
 
         source, link = indicator_info
 
-        # -------------------------
+        # --------------------------------------------------
         # Waarde ophalen
-        # -------------------------
+        # --------------------------------------------------
         if "value" in data:
             value = float(data["value"])
-
         else:
-            # macro_interpreter.fetch_macro_value() is NIET async → GEEN await!
             from backend.utils.macro_interpreter import fetch_macro_value
-            result = fetch_macro_value(name, source=source, link=link)
 
+            result = fetch_macro_value(name, source=source, link=link)
             if not result:
                 raise HTTPException(
                     status_code=500,
                     detail=f"❌ Geen waarde ontvangen voor '{name}'"
                 )
 
-            # Resultaat parsen (kan dict of raw zijn)
             if isinstance(result, dict):
                 if "value" in result:
                     value = float(result["value"])
@@ -111,21 +128,22 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
             else:
                 value = float(result)
 
-        # -------------------------
-        # ⭐ Correcte scoring aanroep
-        # generate_scores_db(category, data_dict, user_id)
-        # -------------------------
-        from backend.utils.scoring_utils import generate_scores_db, normalize_indicator_name
+        # --------------------------------------------------
+        # Scoring
+        # --------------------------------------------------
+        from backend.utils.scoring_utils import (
+            generate_scores_db,
+            normalize_indicator_name,
+        )
 
         normalized = normalize_indicator_name(name)
 
         score_info = generate_scores_db(
             "macro",
-            {normalized: value},   # dict → verplicht voor jouw engine
-            user_id=user_id        # user_id verplicht voor macro/technical
+            {normalized: value},
+            user_id=user_id
         )
 
-        # Score object ophalen
         rule = score_info["scores"].get(normalized)
         if not rule:
             raise HTTPException(
@@ -138,9 +156,9 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
         interpretation = rule["interpretation"]
         action = rule["action"]
 
-        # -------------------------
-        # Opslaan in macro_data
-        # -------------------------
+        # --------------------------------------------------
+        # Opslaan
+        # --------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO macro_data (
@@ -160,9 +178,9 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
             ))
             conn.commit()
 
-        # -------------------------
-        # Onboarding stap voltooien
-        # -------------------------
+        # --------------------------------------------------
+        # ⭐ Onboarding afronden
+        # --------------------------------------------------
         mark_step_completed(conn, user_id, "macro")
 
         return {
@@ -174,6 +192,9 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
             "action": action
         }
 
+    except HTTPException:
+        raise
+
     except Exception as e:
         logger.error(f"❌ Macro save error: {e}", exc_info=True)
         raise HTTPException(
@@ -183,7 +204,7 @@ async def add_macro_indicator(request: Request, current_user: dict = Depends(get
 
     finally:
         conn.close()
-
+        
 # =====================================
 # 📄 Macro data ophalen (met user_id)
 # ✅ GEEN onboarding hier
