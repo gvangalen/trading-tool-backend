@@ -11,9 +11,9 @@ from backend.utils.auth_utils import get_current_user
 router = APIRouter()
 logger = logging.getLogger("onboarding")
 
-# ----------------------------------------------
+# ======================================================
 # Onboarding flow definities
-# ----------------------------------------------
+# ======================================================
 DEFAULT_FLOW = "default"
 
 DEFAULT_STEPS: List[str] = [
@@ -38,37 +38,28 @@ class StepRequest(BaseModel):
 
 
 # ======================================================
-# 🔥 Celery kickstart (LAZY IMPORTS – veilig)
+# 🔥 Celery kickstart — VIA ONBOARDING TASK (VEILIG)
 # ======================================================
 def _kickstart_user_pipeline(user_id: int):
     """
-    Start éénmalig de volledige analyse pipeline
-    in de JUISTE volgorde:
-        1) daily scores
-        2) daily report + AI
+    Triggert exact ÉÉN onboarding task.
+    Alle zware logica zit in Celery, niet in de API.
     """
     try:
-        # ⚠️ LAZY imports → voorkomt router-crash
-        from celery import chain
-        from backend.celery_task.daily_scores_task import calculate_daily_scores
-        from backend.celery_task.daily_report_task import generate_daily_report
+        from backend.celery_task.onboarding_task import run_onboarding_pipeline
 
-        chain(
-            calculate_daily_scores.s(user_id=user_id),
-            generate_daily_report.s(user_id=user_id),
-        ).delay()
-
-        logger.info(f"🚀 Celery pipeline gestart voor user_id={user_id}")
+        run_onboarding_pipeline.delay(user_id)
+        logger.info(f"🚀 Onboarding task gestart voor user_id={user_id}")
 
     except Exception as e:
         logger.error(
-            f"❌ Fout bij kickstart pipeline user_id={user_id}: {e}",
+            f"❌ Fout bij starten onboarding task user_id={user_id}: {e}",
             exc_info=True,
         )
 
 
 # ======================================================
-# Zorg dat user alle onboarding stappen heeft in DB
+# Zorg dat user alle onboarding stappen heeft
 # ======================================================
 def _ensure_steps_for_user(conn, user_id: int):
     with conn.cursor() as cur:
@@ -102,7 +93,7 @@ def _ensure_steps_for_user(conn, user_id: int):
 
 
 # ======================================================
-# MARK STEP COMPLETED
+# Markeer stap als completed
 # ======================================================
 def mark_step_completed(conn, user_id: int, step_key: str):
     now = datetime.now(timezone.utc)
@@ -124,7 +115,7 @@ def mark_step_completed(conn, user_id: int, step_key: str):
 
 
 # ======================================================
-# GET STATUS
+# Status ophalen
 # ======================================================
 def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
     _ensure_steps_for_user(conn, user_id)
@@ -206,7 +197,7 @@ def finish_onboarding(
 
     conn.commit()
 
-    # 🔥 Altijd pipeline starten bij expliciete finish
+    # 🔥 Altijd onboarding task starten bij expliciete finish
     _kickstart_user_pipeline(uid)
 
     return _get_status_dict(conn, uid)
