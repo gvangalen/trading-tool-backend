@@ -69,7 +69,6 @@ def load_ai_insights(user_id: int | None):
         conn.close()
 
 
-
 # ===================================================================
 # 🎯 AI analyseert bestaande strategieën
 # ===================================================================
@@ -104,7 +103,10 @@ JSON format:
   ]
 }}
 """
-    response = ask_gpt(prompt, system_role="Je bent een crypto-strategie analist. ALLEEN geldige JSON.")
+    response = ask_gpt(
+        prompt,
+        system_role="Je bent een crypto-strategie analist. ALLEEN geldige JSON."
+    )
 
     if not isinstance(response, dict):
         logger.error("❌ Ongeldige JSON in analyse")
@@ -113,9 +115,8 @@ JSON format:
     return response
 
 
-
 # ===================================================================
-# 🕒 CELERY TASK — Strategy AI (USER-AWARE!!)
+# 🕒 CELERY TASK — Strategy AI ANALYSE (USER-AWARE!!)
 # ===================================================================
 @shared_task(name="backend.ai_agents.strategy_ai_agent.analyze_strategy_ai")
 def analyze_strategy_ai(user_id: int | None = None):
@@ -128,19 +129,18 @@ def analyze_strategy_ai(user_id: int | None = None):
 
     try:
         # -----------------------------------------------------------------
-        # 1️⃣ STRATEGIEËN OPHALEN (user-specifiek)
+        # 1️⃣ STRATEGIEËN OPHALEN
         # -----------------------------------------------------------------
         with conn.cursor() as cur:
             if user_id:
                 cur.execute("""
-                    SELECT id, setup_id, entry, target, stop_loss, explanation, 
+                    SELECT id, setup_id, entry, target, stop_loss, explanation,
                            risk_profile, created_at
                     FROM strategies
                     WHERE user_id = %s
                     ORDER BY created_at DESC;
                 """, (user_id,))
             else:
-                # backwards compatible (oude globale tool)
                 cur.execute("""
                     SELECT id, setup_id, entry, target, stop_loss, explanation,
                            risk_profile, created_at
@@ -168,12 +168,12 @@ def analyze_strategy_ai(user_id: int | None = None):
             })
 
         # -----------------------------------------------------------------
-        # 2️⃣ AI CONTEXT LADEN (macro/market/technical/setup/strategy)
+        # 2️⃣ AI CONTEXT LADEN
         # -----------------------------------------------------------------
         ai_context = load_ai_insights(user_id=user_id)
 
         # -----------------------------------------------------------------
-        # 3️⃣ AI laat strategieën analyseren
+        # 3️⃣ ANALYSE
         # -----------------------------------------------------------------
         analysis = analyze_strategies(strategies, ai_context)
 
@@ -182,7 +182,7 @@ def analyze_strategy_ai(user_id: int | None = None):
             return
 
         # -----------------------------------------------------------------
-        # 4️⃣ OPSLAAN in ai_category_insights (PER USER!)
+        # 4️⃣ OPSLAAN
         # -----------------------------------------------------------------
         with conn.cursor() as cur:
             if user_id:
@@ -209,7 +209,6 @@ def analyze_strategy_ai(user_id: int | None = None):
                     json.dumps(analysis.get("top_signals", [])),
                 ))
             else:
-                # fallback oude stijl
                 cur.execute("""
                     INSERT INTO ai_category_insights
                         (category, avg_score, trend, bias, risk, summary, top_signals)
@@ -233,7 +232,6 @@ def analyze_strategy_ai(user_id: int | None = None):
                 ))
 
         conn.commit()
-
         logger.info(f"📊 Strategy AI-analyse opgeslagen voor user_id={user_id}")
 
     except Exception as e:
@@ -243,3 +241,22 @@ def analyze_strategy_ai(user_id: int | None = None):
         conn.close()
 
     logger.info("✅ Strategy ANALYSE AI Agent voltooid.")
+
+
+# ===================================================================
+# 🚀 AI STRATEGY GENERATION (WRAPPER – BELANGRIJKE FIX)
+# ===================================================================
+def generate_strategy_from_setup(setup: dict, user_id: int):
+    """
+    Wrapper-functie zodat Celery import NIET faalt.
+    Wordt gebruikt door backend.celery_task.strategy_task
+    """
+
+    from backend.ai_agents.strategy_generator import generate_strategy
+
+    logger.info(f"⚙️ Generate strategy from setup {setup.get('id')} (user_id={user_id})")
+
+    return generate_strategy(
+        setup=setup,
+        user_id=user_id
+    )
