@@ -173,35 +173,36 @@ async def query_strategies(
 
 
 # ==========================================================
-# 3. GENERATE STRATEGY VIA CELERY  ✅ FIX HIER
+# 3. GENERATE STRATEGY VIA CELERY  ✅ DEFINITIEVE FIX
 # ==========================================================
 @router.post("/strategies/generate/{setup_id}")
 async def generate_strategy_for_setup(
     setup_id: int,
-    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
-    body = await request.json()
-    overwrite = body.get("overwrite", True)
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id FROM setups
+                SELECT id
+                FROM setups
                 WHERE id = %s AND user_id = %s
             """, (setup_id, user_id))
             if not cur.fetchone():
-                raise HTTPException(404, "Setup niet gevonden of niet van gebruiker")
+                raise HTTPException(
+                    status_code=404,
+                    detail="Setup niet gevonden of niet van gebruiker"
+                )
 
-        # ✅ LAZY IMPORT (DIT WAS DE BUG)
+        # ✅ LAZY IMPORT (correct)
         from backend.celery_task.strategy_task import generate_for_setup
 
+        # ✅ GEEN overwrite / GEEN extra args
         task = generate_for_setup.delay(
             user_id=user_id,
-            setup_id=setup_id,
-            overwrite=overwrite
+            setup_id=setup_id
         )
 
         return {
