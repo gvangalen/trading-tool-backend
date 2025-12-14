@@ -10,7 +10,7 @@ logger.setLevel(logging.INFO)
 
 
 # ============================================================
-# 🔹 Load setup (zonder score-onzin)
+# 🔹 Load setup (STRICT volgens DB schema)
 # ============================================================
 def load_setup_from_db(setup_id: int, user_id: int) -> dict:
     conn = get_db_connection()
@@ -52,7 +52,7 @@ def load_setup_from_db(setup_id: int, user_id: int) -> dict:
 
 
 # ============================================================
-# 🚀 Generate strategy (CELERY)
+# 🚀 Generate strategy (CELERY TASK)
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.generate_for_setup")
 def generate_for_setup(user_id: int, setup_id: int):
@@ -72,11 +72,11 @@ def generate_for_setup(user_id: int, setup_id: int):
         # --------------------------------------------------
         strategy = generate_strategy_from_setup(setup, user_id=user_id)
 
-        if not strategy:
-            raise ValueError("AI gaf geen strategie terug")
+        if not isinstance(strategy, dict):
+            raise ValueError("AI gaf geen geldige strategie terug")
 
         # --------------------------------------------------
-        # 3️⃣ Opslaan in strategies (ALLEEN BESTAANDE KOL.)
+        # 3️⃣ Opslaan in strategies (EXACT DB SCHEMA)
         # --------------------------------------------------
         conn = get_db_connection()
         with conn.cursor() as cur:
@@ -91,7 +91,7 @@ def generate_for_setup(user_id: int, setup_id: int):
                     strategy_type,
                     data,
                     user_id
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
                 RETURNING id;
             """, (
                 setup_id,
@@ -101,7 +101,7 @@ def generate_for_setup(user_id: int, setup_id: int):
                 strategy.get("explanation"),
                 strategy.get("risk_profile"),
                 setup.get("strategy_type"),
-                strategy,   # volledige AI-output in JSONB
+                strategy,   # volledige AI JSON → data (jsonb)
                 user_id,
             ))
 
@@ -130,9 +130,10 @@ def generate_for_setup(user_id: int, setup_id: int):
         if conn:
             conn.close()
 
-# =========================================================
+
+# ============================================================
 # 🔄 BULK GENERATIE (BEWUST UIT)
-# =========================================================
+# ============================================================
 @shared_task(name="backend.celery_task.strategy_task.generate_all")
 def generate_all(user_id: int):
     return {
