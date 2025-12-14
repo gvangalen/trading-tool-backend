@@ -40,17 +40,16 @@ def safe_request(url, method="GET", payload=None):
 
 # ---------------------------------------------------------
 # 📦 Payload builder voor /strategies
-# ⚠️ BELANGRIJK: strategy_type MOET geldig zijn
 # ---------------------------------------------------------
-def build_payload(setup, strategy):
+def build_payload(setup: dict, strategy: dict) -> dict:
     """
-    Bouw payload die EXACT past bij strategy_api.py
+    Payload die EXACT past bij strategy_api.py
     """
     return {
         "setup_id": setup["id"],
         "setup_name": setup.get("name"),
-        # ❗ FIX: 'ai' is GEEN geldig strategy_type
-        "strategy_type": (setup.get("strategy_type") or "trading").lower(),
+        # ✅ FIX: 'ai' is GEEN geldig type → altijd 'trading'
+        "strategy_type": "trading",
         "symbol": setup.get("symbol", "BTC"),
         "timeframe": setup.get("timeframe", "1D"),
         "score": setup.get("score", 0),
@@ -72,22 +71,30 @@ def generate_for_setup(user_id: int, setup_id: int, overwrite: bool = True):
     try:
         logger.info(f"🚀 AI strategie genereren | user={user_id} setup={setup_id}")
 
-        # 1️⃣ Setup ophalen (user-gebonden)
-        setup_url = f"{API_BASE_URL}/{user_id}/setups/{setup_id}"
+        # -------------------------------------------------
+        # 1️⃣ Setup ophalen
+        # ❗ FIX: GEEN user_id in URL (bestond niet)
+        # -------------------------------------------------
+        setup_url = f"{API_BASE_URL}/setups/{setup_id}"  # ✅ FIX
         setup = safe_request(setup_url, "GET")
 
         logger.info(f"📄 Setup geladen: {setup.get('name')}")
 
+        # -------------------------------------------------
         # 2️⃣ AI strategie genereren
+        # -------------------------------------------------
         logger.info("🧠 AI strategy agent starten...")
         strategy = generate_strategy_from_setup(setup, user_id=user_id)
 
         if not strategy:
             raise ValueError("AI gaf geen strategie terug")
 
+        # -------------------------------------------------
         # 3️⃣ Opslaan via API
+        # ❗ FIX: POST /strategies (GEEN user_id in URL)
+        # -------------------------------------------------
         payload = build_payload(setup, strategy)
-        save_url = f"{API_BASE_URL}/{user_id}/strategies"
+        save_url = f"{API_BASE_URL}/strategies"  # ✅ FIX
 
         result = safe_request(save_url, "POST", payload)
 
@@ -111,7 +118,7 @@ def generate_for_setup(user_id: int, setup_id: int, overwrite: bool = True):
 
 
 # ---------------------------------------------------------
-# 🔄 (OPTIONEEL) bulk generatie — bewust UIT
+# 🔄 Bulk generatie (bewust UIT)
 # ---------------------------------------------------------
 @shared_task(name="backend.celery_task.strategy_task.generate_all")
 def generate_all(user_id: int):
