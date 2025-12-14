@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 def get_all_setups(symbol: str = "BTC", user_id: int = None):
     """
     Haalt ALLE setups op voor een gebruiker + symbool.
-    Zonder user_id → geen resultaten (veiligheidsredenen).
+    Zonder user_id → geen resultaten (veilig).
     """
 
     if user_id is None:
@@ -25,7 +25,8 @@ def get_all_setups(symbol: str = "BTC", user_id: int = None):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT 
                     id,
                     name,
@@ -42,29 +43,33 @@ def get_all_setups(symbol: str = "BTC", user_id: int = None):
                     created_at
                 FROM setups
                 WHERE symbol = %s
-                AND user_id = %s
+                  AND user_id = %s
                 ORDER BY created_at DESC
-            """, (symbol, user_id))
+                """,
+                (symbol, user_id),
+            )
 
             rows = cur.fetchall()
 
         setups = []
         for r in rows:
-            setups.append({
-                "id": r[0],
-                "name": r[1],
-                "min_macro_score": r[2],
-                "max_macro_score": r[3],
-                "min_technical_score": r[4],
-                "max_technical_score": r[5],
-                "min_market_score": r[6],
-                "max_market_score": r[7],
-                "explanation": r[8],
-                "action": r[9],
-                "dynamic_investment": r[10],
-                "symbol": r[11],
-                "created_at": r[12],
-            })
+            setups.append(
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "min_macro_score": r[2],
+                    "max_macro_score": r[3],
+                    "min_technical_score": r[4],
+                    "max_technical_score": r[5],
+                    "min_market_score": r[6],
+                    "max_market_score": r[7],
+                    "explanation": r[8],
+                    "action": r[9],
+                    "dynamic_investment": r[10],
+                    "symbol": r[11],
+                    "created_at": r[12],
+                }
+            )
 
         logger.info(f"📦 {len(setups)} setups opgehaald voor {symbol} (user {user_id})")
         return setups
@@ -78,11 +83,16 @@ def get_all_setups(symbol: str = "BTC", user_id: int = None):
 
 
 # =========================================================
-# 🔥 2. Laatste setup + daily score ophalen (USER-SPECIFIEK)
+# 🔥 2. Laatste setup + daily setup score (USER-SPECIFIEK)
 # =========================================================
 def get_latest_setup_for_symbol(symbol: str = "BTC", user_id: int = None):
     """
-    Haalt de meest recente setup voor een gebruiker op + de daily setup score.
+    Haalt de meest recente setup voor een gebruiker op
+    + eventuele daily setup score (indien aanwezig).
+
+    ❗ BELANGRIJK:
+    - user_id hoort ALLEEN bij `setups`
+    - daily_setup_scores kan leeg zijn (LEFT JOIN)
     """
 
     if user_id is None:
@@ -96,7 +106,8 @@ def get_latest_setup_for_symbol(symbol: str = "BTC", user_id: int = None):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT 
                     s.id,
                     s.name,
@@ -107,14 +118,15 @@ def get_latest_setup_for_symbol(symbol: str = "BTC", user_id: int = None):
                     s.created_at
                 FROM setups s
                 LEFT JOIN daily_setup_scores ds
-                    ON s.id = ds.setup_id
+                    ON ds.setup_id = s.id
                    AND ds.report_date = %s
-                   AND ds.user_id = %s
                 WHERE s.symbol = %s
-                AND s.user_id = %s
+                  AND s.user_id = %s
                 ORDER BY s.created_at DESC
                 LIMIT 1
-            """, (date.today(), user_id, symbol, user_id))
+                """,
+                (date.today(), symbol, user_id),
+            )
 
             row = cur.fetchone()
 
@@ -127,7 +139,7 @@ def get_latest_setup_for_symbol(symbol: str = "BTC", user_id: int = None):
             "name": row[1],
             "explanation": row[2],
             "action": row[3],
-            "score": row[4],
+            "score": row[4],  # kan None zijn → OK
             "symbol": row[5],
             "created_at": row[6],
         }
