@@ -1,5 +1,6 @@
 import logging
 import traceback
+import json
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
@@ -76,7 +77,7 @@ def generate_for_setup(user_id: int, setup_id: int):
             raise ValueError("AI gaf geen geldige strategie terug")
 
         # --------------------------------------------------
-        # 3️⃣ Opslaan in strategies (EXACT DB SCHEMA)
+        # 3️⃣ Opslaan in strategies (JSONB = json.dumps)
         # --------------------------------------------------
         conn = get_db_connection()
         with conn.cursor() as cur:
@@ -99,9 +100,9 @@ def generate_for_setup(user_id: int, setup_id: int):
                 ",".join(map(str, strategy.get("targets", []))),
                 strategy.get("stop_loss"),
                 strategy.get("explanation"),
-                strategy.get("risk_profile"),
+                strategy.get("risk_reward"),      # ← kolom heet risk_profile
                 setup.get("strategy_type"),
-                strategy,   # volledige AI JSON → data (jsonb)
+                json.dumps(strategy),             # ✅ DIT WAS DE BUG
                 user_id,
             ))
 
@@ -132,7 +133,7 @@ def generate_for_setup(user_id: int, setup_id: int):
 
 
 # ============================================================
-# 🔄 BULK GENERATIE (BEWUST UIT)
+# 🔄 BULK GENERATIE (UIT)
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.generate_all")
 def generate_all(user_id: int):
