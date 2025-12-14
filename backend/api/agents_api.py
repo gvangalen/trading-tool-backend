@@ -356,6 +356,44 @@ async def get_setup_insight(current_user: dict = Depends(get_current_user)):
         conn.close()
 
 
+
+
+# ============================================================
+# ==========  TASK STATUS (Celery polling)
+# ============================================================
+
+@router.get("/tasks/{task_id}")
+async def get_task_status(
+    task_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Frontend polling endpoint voor Celery tasks
+    """
+    try:
+        result = AsyncResult(task_id, app=celery_app)
+
+        response = {
+            "task_id": task_id,
+            "state": result.state,
+        }
+
+        if result.state == "SUCCESS":
+            response["result"] = result.result
+
+        elif result.state == "FAILURE":
+            response["error"] = str(result.result)
+
+        return response
+
+    except Exception as e:
+        logger.error(f"❌ Task status fout: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Kon task status niet ophalen",
+        )
+
+
 @router.get("/agents/reflections/setup")
 async def get_setup_reflections(current_user: dict = Depends(get_current_user)):
     logger.info("📡 [setup] Reflecties ophalen")
@@ -491,33 +529,3 @@ async def get_strategy_reflections(current_user: dict = Depends(get_current_user
         return {"reflections": reflections}
 
 
-# ============================================================
-# ==========  CELERY TASK STATUS  =============================
-# ============================================================
-
-@router.get("/tasks/{task_id}")
-async def get_task_status(
-    task_id: str,
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    🔍 Haal status op van een Celery task
-    Wordt gebruikt door frontend polling (AI generatie)
-    """
-    logger.info(f"📡 Task status opgevraagd: {task_id}")
-
-    task = AsyncResult(task_id, app=celery_app)
-
-    response = {
-        "task_id": task_id,
-        "state": task.state,
-        "ready": task.ready(),
-        "success": task.successful() if task.ready() else None,
-        "result": task.result if task.ready() else None,
-    }
-
-    logger.info(f"📊 Task {task_id} status: {response['state']}")
-    return response
-
-    finally:
-        conn.close()
