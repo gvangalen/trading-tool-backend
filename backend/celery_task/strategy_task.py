@@ -8,8 +8,9 @@ from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
 # ============================================================
-# 🔎 Setup laden uit DB (ZONDER score – die bestaat niet meer)
+# 🔹 Load setup (zonder score-onzin)
 # ============================================================
 def load_setup_from_db(setup_id: int, user_id: int) -> dict:
     conn = get_db_connection()
@@ -25,10 +26,10 @@ def load_setup_from_db(setup_id: int, user_id: int) -> dict:
                     symbol,
                     timeframe,
                     strategy_type,
-                    description
+                    description,
+                    filters
                 FROM setups
-                WHERE id = %s
-                  AND user_id = %s
+                WHERE id = %s AND user_id = %s
                 LIMIT 1;
             """, (setup_id, user_id))
 
@@ -41,8 +42,9 @@ def load_setup_from_db(setup_id: int, user_id: int) -> dict:
                 "name": row[1],
                 "symbol": row[2],
                 "timeframe": row[3],
-                "strategy_type": row[4] or "trading",
+                "strategy_type": row[4],
                 "description": row[5],
+                "filters": row[6],
             }
 
     finally:
@@ -50,95 +52,63 @@ def load_setup_from_db(setup_id: int, user_id: int) -> dict:
 
 
 # ============================================================
-# 📦 Payload builder (EXACT wat strategy_api verwacht)
-# ============================================================
-def build_strategy_payload(setup: dict, strategy: dict) -> dict:
-    return {
-        "setup_id": setup["id"],
-        "setup_name": setup["name"],
-        "strategy_type": setup["strategy_type"],
-        "symbol": setup["symbol"],
-        "timeframe": setup["timeframe"],
-
-        # AI-gegenereerde velden
-        "entry": strategy.get("entry"),
-        "targets": strategy.get("targets", []),
-        "stop_loss": strategy.get("stop_loss"),
-        "risk_reward": strategy.get("risk_reward"),
-        "ai_explanation": strategy.get("explanation"),
-    }
-
-
-# ============================================================
-# 🚀 CELERY TASK — AI STRATEGY GENERATION
+# 🚀 Generate strategy (CELERY)
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.generate_for_setup")
-def generate_for_setup(user_id: int, setup_id: int, overwrite: bool = True):
+def generate_for_setup(user_id: int, setup_id: int):
     logger.info(f"🚀 AI strategie genereren | user={user_id} setup={setup_id}")
 
+    conn = None
+
     try:
-        # 1️⃣ Setup laden (DB)
+        # --------------------------------------------------
+        # 1️⃣ Setup laden
+        # --------------------------------------------------
         setup = load_setup_from_db(setup_id, user_id)
         logger.info(f"📄 Setup geladen: {setup['name']}")
 
+        # --------------------------------------------------
         # 2️⃣ AI strategie genereren
-        logger.info("🧠 AI strategy agent starten")
+        # --------------------------------------------------
         strategy = generate_strategy_from_setup(setup, user_id=user_id)
 
         if not strategy:
-            raise RuntimeError("AI gaf geen strategie terug")
+            raise ValueError("AI gaf geen strategie terug")
 
-        # 3️⃣ Strategy opslaan in DB
+        # --------------------------------------------------
+        # 3️⃣ Opslaan in strategies (ALLEEN BESTAANDE KOL.)
+        # --------------------------------------------------
         conn = get_db_connection()
-        if not conn:
-            raise RuntimeError("Geen databaseverbinding")
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO strategies (
+                    setup_id,
+                    entry,
+                    target,
+                    stop_loss,
+                    explanation,
+                    risk_profile,
+                    strategy_type,
+                    data,
+                    user_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
+            """, (
+                setup_id,
+                strategy.get("entry"),
+                ",".join(map(str, strategy.get("targets", []))),
+                strategy.get("stop_loss"),
+                strategy.get("explanation"),
+                strategy.get("risk_profile"),
+                setup.get("strategy_type"),
+                strategy,   # volledige AI-output in JSONB
+                user_id,
+            ))
 
-        try:
-            payload = build_strategy_payload(setup, strategy)
+            strategy_id = cur.fetchone()[0]
+            conn.commit()
 
-            with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO strategies (
-                        user_id,
-                        setup_id,
-                        setup_name,
-                        strategy_type,
-                        symbol,
-                        timeframe,
-                        entry,
-                        target,
-                        stop_loss,
-                        risk_profile,
-                        explanation,
-                        created_at
-                    ) VALUES (
-                        %(user_id)s,
-                        %(setup_id)s,
-                        %(setup_name)s,
-                        %(strategy_type)s,
-                        %(symbol)s,
-                        %(timeframe)s,
-                        %(entry)s,
-                        %(targets)s,
-                        %(stop_loss)s,
-                        %(risk_reward)s,
-                        %(ai_explanation)s,
-                        NOW()
-                    )
-                    RETURNING id;
-                """, {
-                    **payload,
-                    "user_id": user_id,
-                    "targets": ",".join(payload["targets"]) if payload["targets"] else None,
-                })
-
-                strategy_id = cur.fetchone()[0]
-                conn.commit()
-
-        finally:
-            conn.close()
-
-        logger.info(f"✅ AI strategie opgeslagen (id={strategy_id})")
+        logger.info(f"✅ Strategie opgeslagen (id={strategy_id})")
 
         return {
             "state": "SUCCESS",
@@ -156,6 +126,9 @@ def generate_for_setup(user_id: int, setup_id: int, overwrite: bool = True):
             "error": str(e),
         }
 
+    finally:
+        if conn:
+            conn.close()
 
 # =========================================================
 # 🔄 BULK GENERATIE (BEWUST UIT)
