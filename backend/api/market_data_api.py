@@ -333,19 +333,13 @@ def delete_user_market_indicator(
 # 📅 GET /market_data/day — DAGTABEL (user-based)
 # =========================================================
 @router.get("/market_data/day")
-async def get_latest_market_day_data(
-    current_user: dict = Depends(get_current_user),
-):
+def get_market_day_data(current_user: dict = Depends(get_current_user)):
     """
-    Market-indicatoren uit market_data_indicators, per USER:
-
-    - Eerst wordt gekeken naar records van VANDAAG
-      WHERE user_id = huidige gebruiker
-    - Als er geen data voor vandaag is:
-      fallback naar laatst beschikbare datum (voor die user)
+    Geeft de ACTIEVE market-indicatoren van de gebruiker terug.
+    Market = persoonlijk (zoals macro & technical).
+    GEEN fallback, GEEN historie.
     """
     user_id = current_user["id"]
-    logger.info("📄 [market/day] Ophalen market-dagdata (per user)...")
 
     conn = get_db_connection()
     if not conn:
@@ -353,56 +347,17 @@ async def get_latest_market_day_data(
 
     try:
         cur = conn.cursor()
-
-        # 1️⃣ Vandaag, user-specifiek
         cur.execute(
             """
             SELECT name, value, trend, interpretation, action, score, timestamp
             FROM market_data_indicators
-            WHERE DATE(timestamp) = CURRENT_DATE
-              AND user_id = %s
+            WHERE user_id = %s
             ORDER BY timestamp DESC;
             """,
             (user_id,),
         )
         rows = cur.fetchall()
 
-        # 2️⃣ Fallback: laatste beschikbare datum (voor deze user)
-        if not rows:
-            logger.warning(
-                "⚠️ Geen market-data vandaag voor deze user — fallback datum..."
-            )
-
-            cur.execute(
-                """
-                SELECT timestamp
-                FROM market_data_indicators
-                WHERE user_id = %s
-                ORDER BY timestamp DESC
-                LIMIT 1;
-                """,
-                (user_id,),
-            )
-            last = cur.fetchone()
-            if not last:
-                # Helemaal geen data → lege lijst
-                return []
-
-            fallback_date = last[0].date()
-
-            cur.execute(
-                """
-                SELECT name, value, trend, interpretation, action, score, timestamp
-                FROM market_data_indicators
-                WHERE DATE(timestamp) = %s
-                  AND user_id = %s
-                ORDER BY timestamp DESC;
-                """,
-                (fallback_date, user_id),
-            )
-            rows = cur.fetchall()
-
-        # 3️⃣ Normaliseren naar JSON response
         return [
             {
                 "name": r[0],
@@ -416,12 +371,8 @@ async def get_latest_market_day_data(
             for r in rows
         ]
 
-    except Exception as e:
-        logger.error(f"❌ [market/day] {e}", exc_info=True)
-        raise HTTPException(500, "Fout bij ophalen market-dagdata.")
     finally:
         conn.close()
-
 
 # =========================================================
 # 📌 GET /market/indicator_names — lijst beschikbare indicators
