@@ -383,13 +383,13 @@ async def get_strategy_by_setup(
         query = """
             SELECT id, data
             FROM strategies
-            WHERE (data->>'setup_id')::int = %s
+            WHERE setup_id = %s
               AND user_id = %s
         """
         params = [setup_id, user_id]
 
         if strategy_type:
-            query += " AND LOWER(data->>'strategy_type') = LOWER(%s)"
+            query += " AND LOWER(strategy_type) = LOWER(%s)"
             params.append(strategy_type)
 
         query += " ORDER BY created_at DESC LIMIT 1"
@@ -401,9 +401,13 @@ async def get_strategy_by_setup(
         if not row:
             return {"exists": False}
 
-        id_, data = row
-        data["id"] = id_
-        return {"exists": True, "strategy": data}
+        strategy_id, data = row
+        data["id"] = strategy_id
+
+        return {
+            "exists": True,
+            "strategy": data
+        }
 
     finally:
         conn.close()
