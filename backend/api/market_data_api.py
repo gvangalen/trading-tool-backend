@@ -265,68 +265,49 @@ def list_user_market_indicators(
 # =========================================================
 # DELETE /market_data/indicator/{indicator_name}
 # =========================================================
-@router.delete("/market_data/indicator/{indicator_name}")
-def delete_user_market_indicator(
-    indicator_name: str,
+@router.delete("/market_data/indicator/{name}")
+def delete_market_indicator(
+    name: str,
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Verwijdert ALLE records van een market-indicator
-    voor de huidige gebruiker.
-
-    Business-key:
-    - user_id
-    - name (lowercase)
-    """
-    user_id = current_user["id"]
-
-    if not indicator_name:
-        raise HTTPException(400, "❌ Indicatornaam ontbreekt.")
-
-    # 🔒 normaliseren (DB gebruikt lowercase via trigger)
-    normalized_name = indicator_name.strip().lower()
-
     conn = get_db_connection()
     if not conn:
         raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
         with conn.cursor() as cur:
+            # check bestaat
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM market_data_indicators
+                WHERE name = %s AND user_id = %s
+                """,
+                (name, current_user["id"]),
+            )
+            count = cur.fetchone()[0]
+
+            if count == 0:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Indicator '{name}' niet gevonden voor deze gebruiker."
+                )
+
+            # delete
             cur.execute(
                 """
                 DELETE FROM market_data_indicators
-                WHERE user_id = %s
-                  AND LOWER(name) = %s
+                WHERE name = %s AND user_id = %s
                 """,
-                (user_id, normalized_name),
+                (name, current_user["id"]),
             )
-
-            deleted_rows = cur.rowcount
             conn.commit()
 
-        if deleted_rows == 0:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Market-indicator '{normalized_name}' niet gevonden voor deze gebruiker."
-            )
-
         return {
-            "indicator": normalized_name,
-            "deleted": deleted_rows,
-            "message": f"Market-indicator '{normalized_name}' verwijderd ({deleted_rows} records).",
+            "message": f"Indicator '{name}' verwijderd.",
+            "rows_deleted": count,
         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(
-            f"❌ [DELETE market_data/indicator] {e}",
-            exc_info=True
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="❌ Fout bij verwijderen market-indicator."
-        )
     finally:
         conn.close()
 
