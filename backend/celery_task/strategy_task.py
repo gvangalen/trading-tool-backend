@@ -21,7 +21,11 @@ TIMEOUT = 10
 # ---------------------------------------------------------
 # 🔁 Safe Request Helper
 # ---------------------------------------------------------
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=3, max=12), reraise=True)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(min=3, max=12),
+    reraise=True,
+)
 def safe_request(url, method="GET", payload=None):
     response = requests.request(
         method=method,
@@ -36,38 +40,46 @@ def safe_request(url, method="GET", payload=None):
 
 # ---------------------------------------------------------
 # 📦 Payload builder voor /strategies
+# ⚠️ BELANGRIJK: strategy_type MOET geldig zijn
 # ---------------------------------------------------------
 def build_payload(setup, strategy):
+    """
+    Bouw payload die EXACT past bij strategy_api.py
+    """
     return {
         "setup_id": setup["id"],
         "setup_name": setup.get("name"),
-        "strategy_type": (setup.get("strategy_type") or "ai").lower(),
+        # ❗ FIX: 'ai' is GEEN geldig strategy_type
+        "strategy_type": (setup.get("strategy_type") or "trading").lower(),
         "symbol": setup.get("symbol", "BTC"),
         "timeframe": setup.get("timeframe", "1D"),
         "score": setup.get("score", 0),
 
+        # AI-velden
         "ai_explanation": strategy.get("explanation"),
         "risk_reward": strategy.get("risk_reward"),
         "entry": strategy.get("entry"),
-        "targets": strategy.get("targets"),
+        "targets": strategy.get("targets") or [],
         "stop_loss": strategy.get("stop_loss"),
     }
 
 
 # ---------------------------------------------------------
-# 🚀 AI STRATEGY GENERATION (DEZE IS DE BELANGRIJKE)
+# 🚀 AI STRATEGY GENERATION (PER SETUP)
 # ---------------------------------------------------------
 @shared_task(name="backend.celery_task.strategy_task.generate_for_setup")
 def generate_for_setup(user_id: int, setup_id: int, overwrite: bool = True):
     try:
         logger.info(f"🚀 AI strategie genereren | user={user_id} setup={setup_id}")
 
-        # 1️⃣ Setup ophalen
+        # 1️⃣ Setup ophalen (user-gebonden)
         setup_url = f"{API_BASE_URL}/{user_id}/setups/{setup_id}"
         setup = safe_request(setup_url, "GET")
 
+        logger.info(f"📄 Setup geladen: {setup.get('name')}")
+
         # 2️⃣ AI strategie genereren
-        logger.info("🧠 AI strategie agent starten...")
+        logger.info("🧠 AI strategy agent starten...")
         strategy = generate_strategy_from_setup(setup, user_id=user_id)
 
         if not strategy:
@@ -99,7 +111,7 @@ def generate_for_setup(user_id: int, setup_id: int, overwrite: bool = True):
 
 
 # ---------------------------------------------------------
-# 🔄 (OPTIONEEL) bulk generatie — voorlopig uit
+# 🔄 (OPTIONEEL) bulk generatie — bewust UIT
 # ---------------------------------------------------------
 @shared_task(name="backend.celery_task.strategy_task.generate_all")
 def generate_all(user_id: int):
