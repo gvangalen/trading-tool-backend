@@ -1,10 +1,11 @@
 import os
 import logging
 import traceback
-import json
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
+
+from backend.ai_agents.strategy_ai_agent import generate_strategy_from_setup
 
 # ---------------------------------------------------------
 # 🔧 Config + Logging
@@ -18,124 +19,92 @@ TIMEOUT = 10
 
 
 # ---------------------------------------------------------
-# 🔁 Safe Request Helper (GET/POST/PUT)
+# 🔁 Safe Request Helper
 # ---------------------------------------------------------
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=3, max=12), reraise=True)
 def safe_request(url, method="GET", payload=None):
-    try:
-        response = requests.request(
-            method=method,
-            url=url,
-            json=payload,
-            headers=HEADERS,
-            timeout=TIMEOUT
-        )
-        response.raise_for_status()
-        return response.json()
-
-    except Exception as e:
-        logger.error(f"❌ API-call fout ({method} {url}): {e}")
-        logger.error(traceback.format_exc())
-        raise
+    response = requests.request(
+        method=method,
+        url=url,
+        json=payload,
+        headers=HEADERS,
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 # ---------------------------------------------------------
-# 📦 Bestaat strategy al (per user)?
+# 📦 Payload builder voor /strategies
 # ---------------------------------------------------------
-def find_existing_strategy(user_id, setup_id, strategy_type):
-    url = f"{API_BASE_URL}/{user_id}/strategies/by_setup/{setup_id}?type={strategy_type}"
-
-    try:
-        res = requests.get(url, timeout=TIMEOUT)
-
-        if res.status_code == 404:
-            return None
-
-        return res.json()
-
-    except Exception as e:
-        logger.error(f"❌ Failed to check existing strategy: {e}")
-        return None
-
-
-# ---------------------------------------------------------
-# 📦 Payload builder voor opslaan
-# ---------------------------------------------------------
-def build_payload(setup, strategie):
-    """
-    Bouwt de JSON om op te slaan in /strategies.
-    De AI genereert dit, maar jouw versie heeft AI uit.
-    """
+def build_payload(setup, strategy):
     return {
         "setup_id": setup["id"],
         "setup_name": setup.get("name"),
-        "strategy_type": (setup.get("strategy_type") or "manual").lower(),
+        "strategy_type": (setup.get("strategy_type") or "ai").lower(),
         "symbol": setup.get("symbol", "BTC"),
         "timeframe": setup.get("timeframe", "1D"),
         "score": setup.get("score", 0),
 
-        # AI (nu leeg)
-        "ai_explanation": strategie.get("explanation"),
-        "risk_reward": strategie.get("risk_reward"),
-        "entry": strategie.get("entry"),
-        "targets": strategie.get("targets"),
-        "stop_loss": strategie.get("stop_loss"),
+        "ai_explanation": strategy.get("explanation"),
+        "risk_reward": strategy.get("risk_reward"),
+        "entry": strategy.get("entry"),
+        "targets": strategy.get("targets"),
+        "stop_loss": strategy.get("stop_loss"),
     }
 
 
 # ---------------------------------------------------------
-# 🚀 Strategy genereren voor één setup (met user_id)
+# 🚀 AI STRATEGY GENERATION (DEZE IS DE BELANGRIJKE)
 # ---------------------------------------------------------
 @shared_task(name="backend.celery_task.strategy_task.generate_for_setup")
-def generate_for_setup(user_id, setup_id, overwrite=True):
+def generate_for_setup(user_id: int, setup_id: int, overwrite: bool = True):
     try:
-        logger.info(f"🔍 Setup ophalen voor user={user_id}, setup_id={setup_id}")
+        logger.info(f"🚀 AI strategie genereren | user={user_id} setup={setup_id}")
 
-        # 1. Setup ophalen via user-route
+        # 1️⃣ Setup ophalen
         setup_url = f"{API_BASE_URL}/{user_id}/setups/{setup_id}"
-        setup_res = requests.get(setup_url, timeout=TIMEOUT)
+        setup = safe_request(setup_url, "GET")
 
-        if not setup_res.ok:
-            return {
-                "state": "FAILURE",
-                "success": False,
-                "error": f"Setup niet gevonden ({setup_res.status_code})"
-            }
+        # 2️⃣ AI strategie genereren
+        logger.info("🧠 AI strategie agent starten...")
+        strategy = generate_strategy_from_setup(setup, user_id=user_id)
 
-        setup = setup_res.json()
-        logger.info(f"📄 Setup geladen: {setup}")
+        if not strategy:
+            raise ValueError("AI gaf geen strategie terug")
 
-        # -------------------------------------------------
-        # ❌ AI-strategie generatie is uitgeschakeld (jouw keuze)
-        # -------------------------------------------------
+        # 3️⃣ Opslaan via API
+        payload = build_payload(setup, strategy)
+        save_url = f"{API_BASE_URL}/{user_id}/strategies"
+
+        result = safe_request(save_url, "POST", payload)
+
+        logger.info("✅ AI strategie succesvol opgeslagen")
+
         return {
-            "state": "FAILURE",
-            "success": False,
-            "error": "AI strategie-generatie is momenteel uitgeschakeld"
+            "state": "SUCCESS",
+            "success": True,
+            "strategy": result,
         }
 
     except Exception as e:
-        logger.error(f"❌ Fout in generate_for_setup(): {e}")
+        logger.error("❌ Fout in generate_for_setup")
         logger.error(traceback.format_exc())
 
         return {
             "state": "FAILURE",
             "success": False,
-            "error": str(e)
+            "error": str(e),
         }
 
 
 # ---------------------------------------------------------
-# 🔄 Automatisch strategieën genereren (user-specific)
+# 🔄 (OPTIONEEL) bulk generatie — voorlopig uit
 # ---------------------------------------------------------
 @shared_task(name="backend.celery_task.strategy_task.generate_all")
-def generate_all(user_id):
-    """
-    Automatische daily strategie-generatie.
-    Momenteel bewust uitgeschakeld.
-    """
+def generate_all(user_id: int):
     return {
         "state": "FAILURE",
         "success": False,
-        "error": "Automatische strategie-generatie is momenteel uitgeschakeld"
+        "error": "Bulk AI strategie-generatie nog niet geactiveerd",
     }
