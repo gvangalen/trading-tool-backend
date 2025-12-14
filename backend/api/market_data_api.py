@@ -272,46 +272,59 @@ def delete_user_market_indicator(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Verwijdert ALLE entries van deze market-indicator
-    voor de huidige gebruiker (op basis van naam).
+    Verwijdert ALLE records van een market-indicator
+    voor de huidige gebruiker.
+
+    🔑 Business-key:
+    - user_id
+    - name
     """
     user_id = current_user["id"]
+
+    if not indicator_name:
+        raise HTTPException(400, "❌ Indicatornaam ontbreekt.")
 
     conn = get_db_connection()
     if not conn:
         raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
-        cur = conn.cursor()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM market_data_indicators
+                WHERE user_id = %s
+                  AND name = %s
+                """,
+                (user_id, indicator_name),
+            )
 
-        cur.execute(
-            """
-            DELETE FROM market_data_indicators
-            WHERE name = %s AND user_id = %s
-            """,
-            (indicator_name, user_id),
-        )
+            deleted_rows = cur.rowcount
+            conn.commit()
 
-        deleted = cur.rowcount
-        conn.commit()
-
-        if deleted == 0:
+        if deleted_rows == 0:
             raise HTTPException(
-                404,
-                f"Indicator '{indicator_name}' niet gevonden voor deze gebruiker."
+                status_code=404,
+                detail=f"Market-indicator '{indicator_name}' niet gevonden voor deze gebruiker."
             )
 
         return {
-            "deleted": deleted,
             "indicator": indicator_name,
-            "message": f"Indicator '{indicator_name}' verwijderd ({deleted} records).",
+            "deleted": deleted_rows,
+            "message": f"Market-indicator '{indicator_name}' verwijderd ({deleted_rows} records).",
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ [delete market_data/indicator] {e}", exc_info=True)
-        raise HTTPException(500, "Fout bij verwijderen market-indicator.")
+        logger.error(
+            f"❌ [DELETE market_data/indicator] {e}",
+            exc_info=True
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="❌ Fout bij verwijderen market-indicator."
+        )
     finally:
         conn.close()
 
