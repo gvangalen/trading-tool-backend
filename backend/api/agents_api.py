@@ -6,6 +6,9 @@ from fastapi import APIRouter, HTTPException, Depends
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user  # 🔐 user uit token
 
+from celery.result import AsyncResult
+from backend.celery_task.celery_app import celery_app
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -486,6 +489,35 @@ async def get_strategy_reflections(current_user: dict = Depends(get_current_user
             })
 
         return {"reflections": reflections}
+
+
+# ============================================================
+# ==========  CELERY TASK STATUS  =============================
+# ============================================================
+
+@router.get("/tasks/{task_id}")
+async def get_task_status(
+    task_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    🔍 Haal status op van een Celery task
+    Wordt gebruikt door frontend polling (AI generatie)
+    """
+    logger.info(f"📡 Task status opgevraagd: {task_id}")
+
+    task = AsyncResult(task_id, app=celery_app)
+
+    response = {
+        "task_id": task_id,
+        "state": task.state,
+        "ready": task.ready(),
+        "success": task.successful() if task.ready() else None,
+        "result": task.result if task.ready() else None,
+    }
+
+    logger.info(f"📊 Task {task_id} status: {response['state']}")
+    return response
 
     finally:
         conn.close()
