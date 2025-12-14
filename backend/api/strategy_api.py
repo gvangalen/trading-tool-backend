@@ -155,7 +155,11 @@ async def query_strategies(request: Request, current_user: dict = Depends(get_cu
         tag = filters.get("tag")
 
         with conn.cursor() as cur:
-            query = "SELECT id, data FROM strategies WHERE user_id = %s"
+            query = """
+                SELECT id, data
+                FROM strategies
+                WHERE user_id = %s
+            """
             params = [user_id]
 
             if symbol:
@@ -170,17 +174,12 @@ async def query_strategies(request: Request, current_user: dict = Depends(get_cu
                 query += " AND %s = ANY(data->'tags')"
                 params.append(tag)
 
-            query += " ORDER BY created_at DESC"
+            query += " ORDER BY strategies.created_at DESC"
 
             cur.execute(query, tuple(params))
             rows = cur.fetchall()
 
-        out = []
-        for id_, s in rows:
-            s["id"] = id_
-            out.append(s)
-
-        return out
+        return [{**s, "id": id_} for id_, s in rows]
 
     finally:
         conn.close()
