@@ -262,7 +262,6 @@ def list_user_market_indicators(
     finally:
         conn.close()
 
-
 # =========================================================
 # DELETE /market_data/indicator/{indicator_name}
 # =========================================================
@@ -275,14 +274,17 @@ def delete_user_market_indicator(
     Verwijdert ALLE records van een market-indicator
     voor de huidige gebruiker.
 
-    🔑 Business-key:
+    Business-key:
     - user_id
-    - name
+    - name (lowercase)
     """
     user_id = current_user["id"]
 
     if not indicator_name:
         raise HTTPException(400, "❌ Indicatornaam ontbreekt.")
+
+    # 🔒 normaliseren (DB gebruikt lowercase via trigger)
+    normalized_name = indicator_name.strip().lower()
 
     conn = get_db_connection()
     if not conn:
@@ -294,9 +296,9 @@ def delete_user_market_indicator(
                 """
                 DELETE FROM market_data_indicators
                 WHERE user_id = %s
-                  AND name = %s
+                  AND LOWER(name) = %s
                 """,
-                (user_id, indicator_name),
+                (user_id, normalized_name),
             )
 
             deleted_rows = cur.rowcount
@@ -305,13 +307,13 @@ def delete_user_market_indicator(
         if deleted_rows == 0:
             raise HTTPException(
                 status_code=404,
-                detail=f"Market-indicator '{indicator_name}' niet gevonden voor deze gebruiker."
+                detail=f"Market-indicator '{normalized_name}' niet gevonden voor deze gebruiker."
             )
 
         return {
-            "indicator": indicator_name,
+            "indicator": normalized_name,
             "deleted": deleted_rows,
-            "message": f"Market-indicator '{indicator_name}' verwijderd ({deleted_rows} records).",
+            "message": f"Market-indicator '{normalized_name}' verwijderd ({deleted_rows} records).",
         }
 
     except HTTPException:
