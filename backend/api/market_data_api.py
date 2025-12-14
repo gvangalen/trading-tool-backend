@@ -335,9 +335,7 @@ def delete_user_market_indicator(
 @router.get("/market_data/day")
 def get_market_day_data(current_user: dict = Depends(get_current_user)):
     """
-    Geeft de ACTIEVE market-indicatoren van de gebruiker terug.
-    Market = persoonlijk (zoals macro & technical).
-    GEEN fallback, GEEN historie.
+    ACTIEVE market-indicatoren (1 per naam, nieuwste).
     """
     user_id = current_user["id"]
 
@@ -346,17 +344,18 @@ def get_market_day_data(current_user: dict = Depends(get_current_user)):
         raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT name, value, trend, interpretation, action, score, timestamp
-            FROM market_data_indicators
-            WHERE user_id = %s
-            ORDER BY timestamp DESC;
-            """,
-            (user_id,),
-        )
-        rows = cur.fetchall()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (name)
+                    name, value, trend, interpretation, action, score, timestamp
+                FROM market_data_indicators
+                WHERE user_id = %s
+                ORDER BY name, timestamp DESC;
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
 
         return [
             {
