@@ -366,9 +366,47 @@ async def export_strategies(
     finally:
         conn.close()
 
+# ==========================================================
+# 8. AI ANALYSE OP BESTAANDE STRATEGIE (GEEN INSERT)
+# ==========================================================
+@router.post("/strategies/analyze/{strategy_id}")
+async def analyze_strategy(
+    strategy_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["id"]
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id
+                FROM strategies
+                WHERE id = %s AND user_id = %s
+            """, (strategy_id, user_id))
+            if not cur.fetchone():
+                raise HTTPException(404, "Strategie niet gevonden")
+
+        # 🔁 Start AI analyse (GEEN strategie generatie)
+        from backend.ai_agents.strategy_ai_agent import analyze_strategy_ai
+
+        task = analyze_strategy_ai.delay(user_id=user_id)
+
+        return {
+            "message": "🧠 AI-analyse gestart",
+            "task_id": task.id
+        }
+
+    finally:
+        conn.close()
+
+    finally:
+        conn.close()
+
+
 
 # ==========================================================
-# 8. GET STRATEGY BY SETUP
+# 9. GET STRATEGY BY SETUP
 # ==========================================================
 @router.get("/strategies/by_setup/{setup_id}")
 async def get_strategy_by_setup(
@@ -414,7 +452,7 @@ async def get_strategy_by_setup(
 
 
 # ==========================================================
-# 9. GET LAST STRATEGY
+# 10. GET LAST STRATEGY
 # ==========================================================
 @router.get("/strategies/last")
 async def get_last_strategy(
@@ -445,39 +483,3 @@ async def get_last_strategy(
 
 
 
-# ==========================================================
-# 10. AI ANALYSE OP BESTAANDE STRATEGIE (GEEN INSERT)
-# ==========================================================
-@router.post("/strategies/analyze/{strategy_id}")
-async def analyze_strategy(
-    strategy_id: int,
-    current_user: dict = Depends(get_current_user)
-):
-    user_id = current_user["id"]
-
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id
-                FROM strategies
-                WHERE id = %s AND user_id = %s
-            """, (strategy_id, user_id))
-            if not cur.fetchone():
-                raise HTTPException(404, "Strategie niet gevonden")
-
-        # 🔁 Start AI analyse (GEEN strategie generatie)
-        from backend.ai_agents.strategy_ai_agent import analyze_strategy_ai
-
-        task = analyze_strategy_ai.delay(user_id=user_id)
-
-        return {
-            "message": "🧠 AI-analyse gestart",
-            "task_id": task.id
-        }
-
-    finally:
-        conn.close()
-
-    finally:
-        conn.close()
