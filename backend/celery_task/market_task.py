@@ -3,22 +3,23 @@ import traceback
 import requests
 from datetime import datetime
 from pathlib import Path
-from tenacity import retry, stop_after_attempt, wait_exponential
-from celery import shared_task
 from collections import defaultdict
 
-# Eigen imports
+from celery import shared_task
+from tenacity import retry, stop_after_attempt, wait_exponential
+
 from backend.utils.db import get_db_connection
 from backend.celery_task.btc_price_history_task import update_btc_history
 
-# === Config ===
+# =====================================================
+# ⚙️ Config
+# =====================================================
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
 CACHE_FILE = "/tmp/last_market_data_fetch.txt"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
 
 # =====================================================
 # 🔁 Safe HTTP-get met retry
@@ -29,22 +30,21 @@ def safe_get(url, params=None):
     resp.raise_for_status()
     return resp.json()
 
-
 # =====================================================
-# 🔍 Market RAW Endpoints (database-driven)
+# 🔍 Market RAW Endpoints (DB-gedreven)
 # =====================================================
 def load_market_raw_endpoints():
     conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT name, link
-            FROM indicators
-            WHERE category = 'market_raw'
-        """)
-        endpoints = {r[0]: r[1] for r in cur.fetchall()}
-    conn.close()
-    return endpoints
-
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT name, link
+                FROM indicators
+                WHERE category = 'market_raw'
+            """)
+            return {r[0]: r[1] for r in cur.fetchall()}
+    finally:
+        conn.close()
 
 # =====================================================
 # 🌐 RAW Market Data ophalen (globaal)
@@ -57,18 +57,18 @@ def fetch_raw_market_data():
         "https://api.coingecko.com/api/v3/simple/price"
         "?ids=bitcoin&vs_currencies=usd&include_24hr_change=true"
     )
+
     volume_url = endpoints.get(
         "btc_volume",
         "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
     )
 
-    with requests.Session() as s:
-        r = s.get(change_url, timeout=TIMEOUT).json()
-        price = float(r["bitcoin"]["usd"])
-        change_24h = float(r["bitcoin"]["usd_24h_change"])
+    r = safe_get(change_url)
+    price = float(r["bitcoin"]["usd"])
+    change_24h = float(r["bitcoin"]["usd_24h_change"])
 
-        r2 = s.get(volume_url, params={"vs_currency": "usd", "days": "1"}, timeout=TIMEOUT).json()
-        volume = float(r2["total_volumes"][-1][1]) if r2.get("total_volumes") else None
+    r2 = safe_get(volume_url, params={"vs_currency": "usd", "days": "1"})
+    volume = float(r2["total_volumes"][-1][1]) if r2.get("total_volumes") else None
 
     return {
         "price": price,
@@ -76,26 +76,32 @@ def fetch_raw_market_data():
         "change_24h": change_24h,
     }
 
-
 # =====================================================
-# 💾 RAW opslaan in DB (GLOBAAL)
+# 💾 Opslaan in market_data (GLOBAAL)
 # =====================================================
 def store_market_data_db(symbol, price, volume, change_24h):
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO market_data (symbol, price, volume, change_24h, timestamp)
+                INSERT INTO market_data (
+                    symbol, price, volume, change_24h, timestamp
+                )
                 VALUES (%s, %s, %s, %s, %s)
-            """, (symbol, price, volume, change_24h, datetime.utcnow()))
+            """, (
+                symbol,
+                price,
+                volume,
+                change_24h,
+                datetime.utcnow()
+            ))
         conn.commit()
-        logger.info("💾 RAW market_data opgeslagen.")
+        logger.info("💾 market_data opgeslagen (globaal).")
     except Exception:
         logger.error("❌ Fout bij opslaan market_data")
         logger.error(traceback.format_exc())
     finally:
         conn.close()
-
 
 # =====================================================
 # 🔁 RAW → DB
@@ -105,24 +111,21 @@ def process_market_now():
     if not raw:
         logger.warning("⚠️ Geen RAW market data ontvangen.")
         return
-
     store_market_data_db("BTC", raw["price"], raw["volume"], raw["change_24h"])
 
-
 # =====================================================
-# 🚀 Celery task — live RAW update
+# 🚀 Celery — live market update
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data")
-def fetch_market_data_task():
+def fetch_market_data():
     logger.info("📈 Start live market RAW fetch...")
     try:
         process_market_now()
         Path(CACHE_FILE).touch()
         logger.info("✅ Live market RAW data verwerkt.")
     except Exception:
-        logger.error("❌ Fout in fetch_market_data_task")
+        logger.error("❌ Fout in fetch_market_data")
         logger.error(traceback.format_exc())
-
 
 # =====================================================
 # 🕛 Dagelijkse snapshot (globaal)
@@ -138,9 +141,8 @@ def save_market_data_daily():
         logger.error("❌ Fout in save_market_data_daily")
         logger.error(traceback.format_exc())
 
-
 # =====================================================
-# 📆 7-daagse update (globaal)
+# 📆 7-daagse OHLC + volume (globaal)
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
@@ -151,9 +153,10 @@ def fetch_market_data_7d():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT link FROM indicators
-                WHERE name='btc_ohlc' AND category='market_raw'
+                WHERE name = 'btc_ohlc' AND category = 'market_raw'
             """)
             row = cur.fetchone()
+
         binance_url = row[0] if row else "https://api.binance.com/api/v3/klines"
 
         candles = safe_get(binance_url, params={
@@ -162,8 +165,10 @@ def fetch_market_data_7d():
             "limit": 7
         })
 
-        volume_url = "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart"
-        vol_data = safe_get(volume_url, params={"vs_currency": "usd", "days": "7"})
+        vol_data = safe_get(
+            "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+            params={"vs_currency": "usd", "days": "7"}
+        )
 
         volume_by_date = defaultdict(list)
         for ts, vol in vol_data.get("total_volumes", []):
@@ -185,24 +190,24 @@ def fetch_market_data_7d():
                     VALUES ('BTC', %s, %s, %s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (symbol, date)
                     DO UPDATE SET
-                        open=EXCLUDED.open,
-                        high=EXCLUDED.high,
-                        low=EXCLUDED.low,
-                        close=EXCLUDED.close,
-                        change=EXCLUDED.change,
-                        volume=EXCLUDED.volume,
-                        created_at=NOW();
-                """, (date, open_p, high_p, low_p, close_p, change, volume))
+                        open = EXCLUDED.open,
+                        high = EXCLUDED.high,
+                        low = EXCLUDED.low,
+                        close = EXCLUDED.close,
+                        change = EXCLUDED.change,
+                        volume = EXCLUDED.volume,
+                        created_at = NOW();
+                """, (
+                    date, open_p, high_p, low_p, close_p, change, volume
+                ))
 
         conn.commit()
         logger.info("✅ market_data_7d bijgewerkt.")
-
     except Exception:
         logger.error("❌ Fout in fetch_market_data_7d")
         logger.error(traceback.format_exc())
     finally:
         conn.close()
-
 
 # =====================================================
 # 📈 Forward returns (globaal)
@@ -214,7 +219,11 @@ def calculate_and_save_forward_returns():
 
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT date, price FROM btc_price_history ORDER BY date ASC")
+            cur.execute("""
+                SELECT date, price
+                FROM btc_price_history
+                ORDER BY date ASC
+            """)
             rows = cur.fetchall()
 
         if not rows:
@@ -240,14 +249,19 @@ def calculate_and_save_forward_returns():
                         VALUES ('BTC', %s, %s, %s, %s, %s)
                         ON CONFLICT (symbol, period, start_date)
                         DO UPDATE SET
-                            end_date=EXCLUDED.end_date,
-                            change=EXCLUDED.change,
-                            avg_daily=EXCLUDED.avg_daily;
-                    """, (f"{days}d", start["date"], end["date"], round(change, 2), round(avg_daily, 3)))
+                            end_date = EXCLUDED.end_date,
+                            change = EXCLUDED.change,
+                            avg_daily = EXCLUDED.avg_daily;
+                    """, (
+                        f"{days}d",
+                        start["date"],
+                        end["date"],
+                        round(change, 2),
+                        round(avg_daily, 3)
+                    ))
 
         conn.commit()
         logger.info("✅ Forward returns opgeslagen.")
-
     except Exception:
         logger.error("❌ Fout in calculate_and_save_forward_returns")
         logger.error(traceback.format_exc())
