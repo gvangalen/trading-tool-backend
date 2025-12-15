@@ -1,16 +1,11 @@
-# backend/celery_task/dispatcher.py
+from celery import shared_task, current_app
 import logging
-from celery import current_app
 from backend.utils.db import get_db_connection
 
 logger = logging.getLogger(__name__)
 
+@shared_task(name="backend.celery_task.dispatcher.dispatch_for_all_users")
 def dispatch_for_all_users(task_name: str, *, active_only: bool = True):
-    """
-    Dispatch een Celery task (op naam) voor alle users.
-    task_name = bijv. "backend.celery_task.daily_report_task.generate_daily_report"
-    """
-
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding in dispatcher")
@@ -29,7 +24,7 @@ def dispatch_for_all_users(task_name: str, *, active_only: bool = True):
 
         task = current_app.tasks.get(task_name)
         if not task:
-            logger.error(f"❌ Task niet gevonden in registry: {task_name}")
+            logger.error(f"❌ Task niet gevonden: {task_name}")
             return
 
         for user_id in user_ids:
