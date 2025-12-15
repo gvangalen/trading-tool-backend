@@ -16,7 +16,6 @@ logger = logging.getLogger("onboarding")
 # ======================================================
 DEFAULT_FLOW = "default"
 
-# Let op: volgorde in UI kan anders zijn, maar backend accepteert deze set keys
 DEFAULT_STEPS: List[str] = [
     "setup",
     "technical",
@@ -25,7 +24,9 @@ DEFAULT_STEPS: List[str] = [
     "strategy",
 ]
 
-PIPELINE_STEP = "strategy"  # 🔥 ENIGE BRON VAN WAARHEID voor pipeline_started
+PIPELINE_STEP = "strategy"  # 🔥 ENIGE trigger voor Celery
+
+SYSTEM_STEPS = ["market", "macro", "technical"]
 
 STEP_FLAG_MAP = {
     "setup": "has_setup",
@@ -75,6 +76,27 @@ def _ensure_steps_for_user(conn, user_id: int):
 
 
 # ======================================================
+# 🔥 AUTO COMPLETE SYSTEM STEPS (FIX VOOR NIEUWE USERS)
+# ======================================================
+def _auto_complete_system_steps(conn, user_id: int):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE onboarding_steps
+            SET completed = TRUE,
+                completed_at = NOW()
+            WHERE user_id = %s
+              AND flow = %s
+              AND step_key = ANY(%s)
+              AND completed = FALSE
+            """,
+            (user_id, DEFAULT_FLOW, SYSTEM_STEPS),
+        )
+
+    conn.commit()
+
+
+# ======================================================
 # 🧠 STATUS BEREKENEN
 # ======================================================
 def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
@@ -93,33 +115,24 @@ def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
 
     completed = {r[0]: r[1] for r in rows}
 
-    # pipeline_started is alleen relevant op de PIPELINE_STEP row
     pipeline_started = any(
         r[2] for r in rows if r[0] == PIPELINE_STEP
     )
 
     status = {STEP_FLAG_MAP[s]: completed.get(s, False) for s in DEFAULT_STEPS}
-
-    status["onboarding_complete"] = all(status[STEP_FLAG_MAP[s]] for s in DEFAULT_STEPS)
+    status["onboarding_complete"] = all(status.values())
     status["pipeline_started"] = pipeline_started
 
     return status
 
 
 # ======================================================
-# 🔥 PIPELINE START — EXACT 1x (DB LOCK SAFE)
+# 🔥 PIPELINE START — EXACT 1x
 # ======================================================
 def _kickstart_user_pipeline(conn, user_id: int):
-    """
-    Start de pipeline exact 1x.
-    We locken alleen de strategy-row (PIPELINE_STEP).
-    """
-    _ensure_steps_for_user(conn, user_id)
-
     from backend.celery_task.onboarding_task import run_onboarding_pipeline
 
     with conn.cursor() as cur:
-        # 1) lock de strategy row
         cur.execute(
             """
             SELECT completed, pipeline_started
@@ -134,12 +147,10 @@ def _kickstart_user_pipeline(conn, user_id: int):
         row = cur.fetchone()
 
         if not row:
-            logger.warning(f"⚠️ Geen {PIPELINE_STEP}-step voor user_id={user_id}")
             return
 
         strategy_completed, pipeline_started = row
 
-        # 2) extra safety: check of ALLES completed is
         cur.execute(
             """
             SELECT step_key, completed
@@ -154,14 +165,14 @@ def _kickstart_user_pipeline(conn, user_id: int):
 
         logger.info(
             f"🧪 onboarding pipeline check user={user_id} "
-            f"strategy_completed={strategy_completed} all_completed={all_completed} "
+            f"strategy_completed={strategy_completed} "
+            f"all_completed={all_completed} "
             f"pipeline_started={pipeline_started}"
         )
 
         if not all_completed or not strategy_completed or pipeline_started:
             return
 
-        # 3) markeer pipeline gestart (on the strategy row only)
         cur.execute(
             """
             UPDATE onboarding_steps
@@ -174,8 +185,6 @@ def _kickstart_user_pipeline(conn, user_id: int):
         )
 
     conn.commit()
-
-    # Celery task NA commit
     run_onboarding_pipeline.delay(user_id)
     logger.info(f"🚀 Onboarding pipeline gestart voor user_id={user_id}")
 
@@ -228,7 +237,8 @@ def complete_step(
 
     mark_step_completed(conn, uid, step)
 
-    # pipeline check is altijd safe (start alleen als alles klopt)
+    # 🔥 CRUCIAAL
+    _auto_complete_system_steps(conn, uid)
     _kickstart_user_pipeline(conn, uid)
 
     return _get_status_dict(conn, uid)
@@ -257,7 +267,9 @@ def finish_onboarding(
 
     conn.commit()
 
+    _auto_complete_system_steps(conn, uid)
     _kickstart_user_pipeline(conn, uid)
+
     return _get_status_dict(conn, uid)
 
 
