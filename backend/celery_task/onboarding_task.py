@@ -18,12 +18,12 @@ def run_onboarding_pipeline(self, user_id: int):
     Start de volledige onboarding pipeline voor een gebruiker.
 
     Wordt exact ÉÉN keer getriggerd na:
-    - laatste onboarding stap (strategy)
+    - laatste onboarding stap
     - of expliciete /onboarding/finish
 
     Volgorde:
-    1️⃣ Daily scores opslaan (macro / technical / market / setup)
-    2️⃣ Daily report genereren (AI + PDF)
+    1️⃣ Daily scores opslaan
+    2️⃣ Daily report genereren
     """
 
     logger.info("=================================================")
@@ -31,7 +31,7 @@ def run_onboarding_pipeline(self, user_id: int):
     logger.info("=================================================")
 
     try:
-        # ⚠️ Imports hier om circular imports te voorkomen
+        # ⚠️ Lazy imports om circular imports te voorkomen
         from backend.celery_task.store_daily_scores_task import (
             store_daily_scores_task,
         )
@@ -39,10 +39,9 @@ def run_onboarding_pipeline(self, user_id: int):
             generate_daily_report,
         )
 
-        # 🔗 Celery workflow
         workflow = chain(
-            store_daily_scores_task.s(user_id=user_id),
-            generate_daily_report.s(user_id=user_id),
+            store_daily_scores_task.s(user_id),
+            generate_daily_report.si(user_id),  # ✅ CORRECT
         )
 
         workflow.apply_async()
