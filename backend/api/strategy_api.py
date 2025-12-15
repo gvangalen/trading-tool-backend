@@ -193,10 +193,11 @@ async def delete_strategy(
 
 
 # ==========================================================
-# 6. 🧠 AI STRATEGY ANALYSE (USER-LEVEL, WORDT OPGESLAGEN)
+# 6. 🧠 AI STRATEGY ANALYSE (PER STRATEGIE, WORDT OPGESLAGEN)
 # ==========================================================
-@router.post("/strategies/analyze")
+@router.post("/strategies/analyze/{strategy_id}")
 async def analyze_strategy(
+    strategy_id: int,
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user["id"]
@@ -204,7 +205,10 @@ async def analyze_strategy(
     # 🔹 Start AI analyse (GEEN strategie generatie)
     from backend.ai_agents.strategy_ai_agent import analyze_strategy_ai
 
-    task = analyze_strategy_ai.delay(user_id=user_id)
+    task = analyze_strategy_ai.delay(
+        strategy_id=strategy_id,
+        user_id=user_id
+    )
 
     return {
         "message": "🧠 Strategy AI analyse gestart",
