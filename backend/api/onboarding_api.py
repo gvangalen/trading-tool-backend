@@ -24,6 +24,8 @@ DEFAULT_STEPS: List[str] = [
     "strategy",
 ]
 
+PIPELINE_STEP = "strategy"  # 🔥 ENIGE BRON VAN WAARHEID
+
 STEP_FLAG_MAP = {
     "setup": "has_setup",
     "technical": "has_technical",
@@ -65,7 +67,7 @@ def _ensure_steps_for_user(conn, user_id: int):
         cur.executemany(
             """
             INSERT INTO onboarding_steps
-                (user_id, flow, step_key, completed, completed_at, metadata, pipeline_started)
+              (user_id, flow, step_key, completed, completed_at, metadata, pipeline_started)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
             rows,
@@ -75,7 +77,7 @@ def _ensure_steps_for_user(conn, user_id: int):
 
 
 # ======================================================
-# 🧠 STATUS BEREKENEN (✅ MET pipeline_started)
+# 🧠 STATUS BEREKENEN
 # ======================================================
 def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
     _ensure_steps_for_user(conn, user_id)
@@ -91,22 +93,24 @@ def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
         )
         rows = cur.fetchall()
 
-    completed_flags = {r[0]: r[1] for r in rows}
-    pipeline_started = any(r[2] for r in rows)
+    completed = {r[0]: r[1] for r in rows}
+    pipeline_started = any(
+        r[2] for r in rows if r[0] == PIPELINE_STEP
+    )
 
     status = {
-        STEP_FLAG_MAP[s]: completed_flags.get(s, False)
+        STEP_FLAG_MAP[s]: completed.get(s, False)
         for s in DEFAULT_STEPS
     }
 
     status["onboarding_complete"] = all(status.values())
-    status["pipeline_started"] = pipeline_started  # 🔥 ESSENTIEEL
+    status["pipeline_started"] = pipeline_started
 
     return status
 
 
 # ======================================================
-# 🔥 PIPELINE START (DB-GEDREVEN, EXACT 1x)
+# 🔥 PIPELINE START — EXACT 1x (DB LOCK SAFE)
 # ======================================================
 def _kickstart_user_pipeline(conn, user_id: int):
     from backend.celery_task.onboarding_task import run_onboarding_pipeline
@@ -116,42 +120,45 @@ def _kickstart_user_pipeline(conn, user_id: int):
             """
             SELECT completed, pipeline_started
             FROM onboarding_steps
-            WHERE user_id = %s AND flow = %s
+            WHERE user_id = %s
+              AND flow = %s
+              AND step_key = %s
             FOR UPDATE
             """,
-            (user_id, DEFAULT_FLOW),
+            (user_id, DEFAULT_FLOW, PIPELINE_STEP),
         )
-        rows = cur.fetchall()
 
-        if not rows:
-            logger.warning(f"⚠️ Geen onboarding_steps voor user_id={user_id}")
+        row = cur.fetchone()
+        if not row:
+            logger.warning(f"⚠️ Geen strategy-step voor user_id={user_id}")
             return
 
-        all_completed = all(r[0] for r in rows)
-        already_started = any(r[1] for r in rows)  # 🔥 FIX
+        completed, pipeline_started = row
 
         logger.info(
-            f"🧪 onboarding check user={user_id} "
-            f"completed={all_completed} pipeline_started={already_started}"
+            f"🧪 onboarding pipeline check user={user_id} "
+            f"completed={completed} pipeline_started={pipeline_started}"
         )
 
-        if not all_completed or already_started:
+        if not completed or pipeline_started:
             return
 
-        # 🔥 Markeer pipeline gestart
         cur.execute(
             """
             UPDATE onboarding_steps
             SET pipeline_started = TRUE
-            WHERE user_id = %s AND flow = %s
+            WHERE user_id = %s
+              AND flow = %s
+              AND step_key = %s
             """,
-            (user_id, DEFAULT_FLOW),
+            (user_id, DEFAULT_FLOW, PIPELINE_STEP),
         )
 
     conn.commit()
 
     run_onboarding_pipeline.delay(user_id)
     logger.info(f"🚀 Onboarding pipeline gestart voor user_id={user_id}")
+
 
 # ======================================================
 # MARK STEP COMPLETED
