@@ -75,7 +75,7 @@ def _ensure_steps_for_user(conn, user_id: int):
 
 
 # ======================================================
-# 🧠 STATUS BEREKENEN
+# 🧠 STATUS BEREKENEN (✅ MET pipeline_started)
 # ======================================================
 def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
     _ensure_steps_for_user(conn, user_id)
@@ -83,7 +83,7 @@ def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT step_key, completed
+            SELECT step_key, completed, pipeline_started
             FROM onboarding_steps
             WHERE user_id = %s AND flow = %s
             """,
@@ -91,16 +91,16 @@ def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
         )
         rows = cur.fetchall()
 
-    flags = {step: done for step, done in rows}
+    completed_flags = {r[0]: r[1] for r in rows}
+    pipeline_started = any(r[2] for r in rows)
 
     status = {
-        STEP_FLAG_MAP[s]: flags.get(s, False)
+        STEP_FLAG_MAP[s]: completed_flags.get(s, False)
         for s in DEFAULT_STEPS
     }
 
-    status["onboarding_complete"] = all(
-        status[STEP_FLAG_MAP[s]] for s in DEFAULT_STEPS
-    )
+    status["onboarding_complete"] = all(status.values())
+    status["pipeline_started"] = pipeline_started  # 🔥 ESSENTIEEL
 
     return status
 
@@ -109,14 +109,9 @@ def _get_status_dict(conn, user_id: int) -> Dict[str, bool]:
 # 🔥 PIPELINE START (DB-GEDREVEN, EXACT 1x)
 # ======================================================
 def _kickstart_user_pipeline(conn, user_id: int):
-    """
-    Start onboarding Celery pipeline EXACT één keer.
-    Volledig DB-gedreven en race-condition safe.
-    """
     from backend.celery_task.onboarding_task import run_onboarding_pipeline
 
     with conn.cursor() as cur:
-        # 🔒 Lock alle onboarding rows voor deze user
         cur.execute(
             """
             SELECT completed, pipeline_started
@@ -127,10 +122,6 @@ def _kickstart_user_pipeline(conn, user_id: int):
             (user_id, DEFAULT_FLOW),
         )
         rows = cur.fetchall()
-
-        if not rows:
-            logger.warning(f"⚠️ Geen onboarding_steps voor user_id={user_id}")
-            return
 
         all_completed = all(r[0] for r in rows)
         already_started = all(r[1] for r in rows)
@@ -143,7 +134,6 @@ def _kickstart_user_pipeline(conn, user_id: int):
         if not all_completed or already_started:
             return
 
-        # 🔥 Markeer pipeline gestart (ONOMKEERBAAR)
         cur.execute(
             """
             UPDATE onboarding_steps
@@ -155,7 +145,6 @@ def _kickstart_user_pipeline(conn, user_id: int):
 
     conn.commit()
 
-    # 🚀 Celery task NA commit
     run_onboarding_pipeline.delay(user_id)
     logger.info(f"🚀 Onboarding pipeline gestart voor user_id={user_id}")
 
@@ -201,15 +190,11 @@ def complete_step(
     current_user=Depends(get_current_user),
 ):
     uid = current_user["id"]
-    step = payload.step
 
-    mark_step_completed(conn, uid, step)
-    status = _get_status_dict(conn, uid)
-
-    # ✅ GEEN gokwerk: altijd veilig checken
+    mark_step_completed(conn, uid, payload.step)
     _kickstart_user_pipeline(conn, uid)
 
-    return status
+    return _get_status_dict(conn, uid)
 
 
 @router.post("/onboarding/finish")
@@ -233,9 +218,7 @@ def finish_onboarding(
 
     conn.commit()
 
-    # 🔥 Altijd veilig pipeline checken
     _kickstart_user_pipeline(conn, uid)
-
     return _get_status_dict(conn, uid)
 
 
