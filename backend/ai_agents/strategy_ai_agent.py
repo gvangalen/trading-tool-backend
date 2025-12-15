@@ -9,7 +9,6 @@ from backend.utils.openai_client import ask_gpt  # JSON-engine
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
 # ===================================================================
 # 📡 Laad AI-insights (macro / market / technical / setup / strategy)
 # ===================================================================
@@ -41,7 +40,6 @@ def load_ai_insights(user_id: int | None):
 
             rows = cur.fetchall()
 
-        # nieuwste per categorie
         for cat, avg, trend, bias, risk, summary, top_signals, d, created_at in rows:
             if cat in insights:
                 continue
@@ -111,7 +109,7 @@ JSON format:
 
 
 # ===================================================================
-# 🕒 CELERY — STRATEGY ANALYSE (dashboard score)
+# 🕒 CELERY — STRATEGY ANALYSE (DASHBOARD / AGENT)
 # ===================================================================
 @shared_task(name="backend.ai_agents.strategy_ai_agent.analyze_strategy_ai")
 def analyze_strategy_ai(user_id: int | None = None):
@@ -126,16 +124,32 @@ def analyze_strategy_ai(user_id: int | None = None):
         with conn.cursor() as cur:
             if user_id:
                 cur.execute("""
-                    SELECT id, setup_id, entry, targets, stop_loss,
-                           risk_reward, explanation, created_at
+                    SELECT
+                        id,
+                        setup_id,
+                        entry,
+                        target,
+                        stop_loss,
+                        risk_profile,
+                        explanation,
+                        data,
+                        created_at
                     FROM strategies
                     WHERE user_id = %s
                     ORDER BY created_at DESC;
                 """, (user_id,))
             else:
                 cur.execute("""
-                    SELECT id, setup_id, entry, targets, stop_loss,
-                           risk_reward, explanation, created_at
+                    SELECT
+                        id,
+                        setup_id,
+                        entry,
+                        target,
+                        stop_loss,
+                        risk_profile,
+                        explanation,
+                        data,
+                        created_at
                     FROM strategies
                     ORDER BY created_at DESC;
                 """)
@@ -147,15 +161,26 @@ def analyze_strategy_ai(user_id: int | None = None):
             return
 
         strategies = []
-        for sid, setup_id, entry, targets, sl, rr, expl, created_at in rows:
+        for (
+            sid,
+            setup_id,
+            entry,
+            target,
+            stop_loss,
+            risk_profile,
+            explanation,
+            data,
+            created_at
+        ) in rows:
             strategies.append({
                 "strategy_id": sid,
                 "setup_id": setup_id,
                 "entry": entry,
-                "targets": targets or [],
-                "stop_loss": sl,
-                "risk_reward": rr,
-                "explanation": expl,
+                "target": target,
+                "targets": data.get("targets") if isinstance(data, dict) else None,
+                "stop_loss": stop_loss,
+                "risk_profile": risk_profile,
+                "explanation": explanation,
                 "created_at": created_at.isoformat() if created_at else None,
             })
 
@@ -163,6 +188,7 @@ def analyze_strategy_ai(user_id: int | None = None):
         analysis = analyze_strategies(strategies, ai_context)
 
         if not analysis:
+            logger.error("❌ Geen geldige AI analyse")
             return
 
         with conn.cursor() as cur:
@@ -200,14 +226,9 @@ def analyze_strategy_ai(user_id: int | None = None):
 
 
 # ===================================================================
-# 🚀 AI STRATEGY GENERATION (DIRECT – GEEN WRAPPER)
+# 🚀 AI STRATEGY GENERATION (BESTAAND — NIET AAN GEZETEN)
 # ===================================================================
 def generate_strategy_from_setup(setup: dict, user_id: int):
-    """
-    Genereert DIRECT een tradingstrategie vanuit een setup.
-    Wordt gebruikt door backend.celery_task.strategy_task
-    """
-
     logger.info(f"⚙️ AI strategy generatie | setup={setup.get('id')} user={user_id}")
 
     prompt = f"""
