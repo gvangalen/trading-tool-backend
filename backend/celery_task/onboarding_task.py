@@ -17,10 +17,6 @@ def run_onboarding_pipeline(self, user_id: int):
     """
     Start de volledige onboarding pipeline voor een gebruiker.
 
-    Wordt exact ÉÉN keer getriggerd na:
-    - laatste onboarding stap
-    - of expliciete /onboarding/finish
-
     Volgorde:
     1️⃣ Daily scores opslaan
     2️⃣ Daily report genereren
@@ -28,10 +24,11 @@ def run_onboarding_pipeline(self, user_id: int):
 
     logger.info("=================================================")
     logger.info(f"🚀 Onboarding pipeline START voor user_id={user_id}")
+    logger.info(f"📌 Parent task_id={self.request.id}")
     logger.info("=================================================")
 
     try:
-        # ⚠️ Lazy imports om circular imports te voorkomen
+        # ⚠️ Lazy imports
         from backend.celery_task.store_daily_scores_task import (
             store_daily_scores_task,
         )
@@ -41,14 +38,23 @@ def run_onboarding_pipeline(self, user_id: int):
 
         workflow = chain(
             store_daily_scores_task.s(user_id),
-            generate_daily_report.si(user_id),  # ✅ CORRECT
+            generate_daily_report.si(user_id),
         )
 
-        workflow.apply_async()
+        result = workflow.apply_async()
 
         logger.info(
-            f"✅ Onboarding pipeline succesvol gestart voor user_id={user_id}"
+            "🔗 Onboarding chain gestart | "
+            f"chain_id={result.id} | root_id={result.root_id}"
         )
+
+        return {
+            "status": "started",
+            "user_id": user_id,
+            "parent_task_id": self.request.id,
+            "chain_id": result.id,
+            "root_id": result.root_id,
+        }
 
     except Exception as e:
         logger.error(
