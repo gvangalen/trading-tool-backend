@@ -193,7 +193,7 @@ async def delete_strategy(
 
 
 # ==========================================================
-# 6. 🧠 AI ANALYSE (WORDT OPGESLAGEN)
+# 6. 🧠 AI ANALYSE (WORDT OPGESLAGEN VIA CELERY)
 # ==========================================================
 @router.post("/strategies/analyze/{strategy_id}")
 async def analyze_strategy(
@@ -204,26 +204,28 @@ async def analyze_strategy(
     conn = get_db_connection()
 
     try:
+        # 1️⃣ Check of strategie bestaat en van gebruiker is
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT data FROM strategies
+                SELECT id
+                FROM strategies
                 WHERE id = %s AND user_id = %s
             """, (strategy_id, user_id))
-            row = cur.fetchone()
-            if not row:
+            if not cur.fetchone():
                 raise HTTPException(404, "Strategie niet gevonden")
 
-            strategy_data = row[0]
-
+        # 2️⃣ Start AI analyse (GEEN strategie insert)
         from backend.ai_agents.strategy_ai_agent import analyze_strategy_ai
 
-task = analyze_strategy_ai.delay(user_id=user_id)
+        task = analyze_strategy_ai.delay(user_id=user_id)
 
-return {
-    "message": "🧠 Strategy AI analyse gestart",
-    "task_id": task.id
-}
+        return {
+            "message": "🧠 Strategy AI analyse gestart",
+            "task_id": task.id
+        }
 
+    finally:
+        conn.close()
 
 # ==========================================================
 # 7. GET STRATEGY BY SETUP
