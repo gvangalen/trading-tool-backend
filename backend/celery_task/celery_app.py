@@ -18,7 +18,10 @@ if BASE_DIR not in sys.path:
 # =========================================================
 # 🪵 Logging
 # =========================================================
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 logger = logging.getLogger(__name__)
 logger.info(f"🔍 ASSETS_JSON uit .env: {os.getenv('ASSETS_JSON')}")
 
@@ -42,19 +45,17 @@ celery_app.autodiscover_tasks([
 celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
-
 # =========================================================
-# 🕒 BEAT SCHEDULE — User-specific FIXES
+# 🕒 BEAT SCHEDULE (GLOBAL – GEEN USER_ID!)
 # =========================================================
 celery_app.conf.beat_schedule = {
 
-    # =========================================================
+    # =====================================================
     # 1) MARKET DATA
-    # =========================================================
+    # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
         "schedule": crontab(minute="*/15"),
-        "kwargs": {"user_id": 1},   # 🔥 FIX
     },
     "save_market_data_daily": {
         "task": "backend.celery_task.market_task.save_market_data_daily",
@@ -65,35 +66,33 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=1, minute=0),
     },
 
-    # =========================================================
+    # =====================================================
     # 2) MACRO DATA
-    # =========================================================
+    # =====================================================
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
         "schedule": crontab(hour=0, minute=12),
-        "kwargs": {"user_id": 1},  # 🔥 FIX
     },
 
-    # =========================================================
+    # =====================================================
     # 3) TECHNICAL INDICATORS
-    # =========================================================
+    # =====================================================
     "fetch_technical_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
         "schedule": crontab(hour=0, minute=10),
-        "kwargs": {"user_id": 1},  # 🔥 FIX
     },
 
-    # =========================================================
+    # =====================================================
     # 4) BTC PRICE HISTORY
-    # =========================================================
+    # =====================================================
     "update_btc_history": {
         "task": "backend.celery_task.btc_price_history_task.update_btc_history",
         "schedule": crontab(hour=1, minute=10),
     },
 
-    # =========================================================
-    # 5) AI AGENTS
-    # =========================================================
+    # =====================================================
+    # 5) AI INSIGHTS
+    # =====================================================
     "generate_macro_insight": {
         "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
         "schedule": crontab(hour=3, minute=0),
@@ -111,35 +110,33 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=40),
     },
 
-    # =========================================================
+    # =====================================================
     # 6) SETUP AGENT
-    # =========================================================
+    # =====================================================
     "run_setup_agent_daily": {
         "task": "backend.celery_task.setup_task.run_setup_agent_daily",
         "schedule": crontab(hour=3, minute=50),
     },
 
-    # =========================================================
+    # =====================================================
     # 7) DAILY SCORES
-    # =========================================================
+    # =====================================================
     "store_daily_scores": {
         "task": "backend.celery_task.store_daily_scores_task.store_daily_scores_task",
         "schedule": crontab(hour=4, minute=30),
-        "kwargs": {"user_id": 1},  # 🔥 FIX
     },
 
-    # =========================================================
+    # =====================================================
     # 8) DAILY REPORT
-    # =========================================================
+    # =====================================================
     "generate_daily_report": {
         "task": "backend.celery_task.daily_report_task.generate_daily_report",
         "schedule": crontab(hour=5, minute=0),
-        "kwargs": {"user_id": 1},  # 🔥 FIX
     },
 
-    # =========================================================
+    # =====================================================
     # 9) WEEKLY / MONTHLY / QUARTERLY REPORTS
-    # =========================================================
+    # =====================================================
     "generate_weekly_report": {
         "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
         "schedule": crontab(hour=1, minute=20, day_of_week="monday"),
@@ -150,14 +147,19 @@ celery_app.conf.beat_schedule = {
     },
     "generate_quarterly_report": {
         "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
-        "schedule": crontab(hour=1, minute=45, day_of_month="1", month_of_year="1,4,7,10"),
+        "schedule": crontab(
+            hour=1,
+            minute=45,
+            day_of_month="1",
+            month_of_year="1,4,7,10",
+        ),
     },
 }
 
 logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
 
 # =========================================================
-# 📌 FORCE IMPORTS
+# 📌 FORCE IMPORTS (zekerheid bij deploy)
 # =========================================================
 try:
     import backend.celery_task.market_task
@@ -171,7 +173,7 @@ try:
     import backend.celery_task.store_daily_scores_task
     import backend.celery_task.setup_task
     import backend.celery_task.onboarding_task
-    import backend.celery_task.strategy_task   
+    import backend.celery_task.strategy_task
 
     import backend.ai_agents.macro_ai_agent
     import backend.ai_agents.market_ai_agent
