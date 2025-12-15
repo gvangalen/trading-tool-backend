@@ -215,30 +215,14 @@ async def analyze_strategy(
 
             strategy_data = row[0]
 
-        # 🔹 AI analyse (GEEN STRATEGIE)
-        from backend.ai_agents.strategy_ai_agent import analyze_existing_strategy
-        analysis = analyze_existing_strategy(strategy_data)
+        from backend.ai_agents.strategy_ai_agent import analyze_strategy_ai
 
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO ai_reflections (
-                    user_id, entity_type, entity_id,
-                    content, created_at
-                ) VALUES (%s,'strategy',%s,%s::jsonb,NOW())
-            """, (
-                user_id,
-                strategy_id,
-                json.dumps(analysis)
-            ))
-            conn.commit()
+task = analyze_strategy_ai.delay(user_id=user_id)
 
-        return {
-            "message": "🧠 Analyse opgeslagen",
-            "analysis": analysis
-        }
-
-    finally:
-        conn.close()
+return {
+    "message": "🧠 Strategy AI analyse gestart",
+    "task_id": task.id
+}
 
 
 # ==========================================================
