@@ -1,12 +1,14 @@
+# backend/celery_task/dispatchers.py
 import logging
+from celery import current_app
 from backend.utils.db import get_db_connection
 
 logger = logging.getLogger(__name__)
 
-def dispatch_for_all_users(task_func, *, active_only=True):
+def dispatch_for_all_users(task_name: str, *, active_only=True):
     """
-    Roept een Celery task aan voor alle users.
-    task_func = bijv. generate_daily_report
+    Dispatcht een Celery task (op basis van task_name string)
+    voor alle users.
     """
     conn = get_db_connection()
     if not conn:
@@ -22,10 +24,13 @@ def dispatch_for_all_users(task_func, *, active_only=True):
             cur.execute("SELECT id FROM users;")
 
         user_ids = [r[0] for r in cur.fetchall()]
-        logger.info(f"🚀 Dispatch {task_func.__name__} voor {len(user_ids)} users")
+        logger.info(f"🚀 Dispatch {task_name} voor {len(user_ids)} users")
 
         for user_id in user_ids:
-            task_func.delay(user_id)
+            current_app.send_task(
+                task_name,
+                kwargs={"user_id": user_id},
+            )
 
     except Exception as e:
         logger.error(f"❌ Dispatcher fout: {e}", exc_info=True)
