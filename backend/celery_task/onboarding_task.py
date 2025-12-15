@@ -1,6 +1,8 @@
 import logging
 from celery import shared_task, chain
 
+from backend.utils.db import get_db_connection
+
 logger = logging.getLogger(__name__)
 
 # ======================================================
@@ -17,6 +19,8 @@ def run_onboarding_pipeline(self, user_id: int):
     """
     Start de volledige onboarding pipeline voor een gebruiker.
 
+    Wordt exact ÉÉN keer gestart per gebruiker.
+
     Volgorde:
     1️⃣ Daily scores opslaan
     2️⃣ Daily report genereren
@@ -27,8 +31,47 @@ def run_onboarding_pipeline(self, user_id: int):
     logger.info(f"📌 Parent task_id={self.request.id}")
     logger.info("=================================================")
 
+    conn = get_db_connection()
+
     try:
-        # ⚠️ Lazy imports
+        # --------------------------------------------------
+        # 🔒 IDMPOTENTIE CHECK + FLAG SETTEN
+        # --------------------------------------------------
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE onboarding_steps
+                SET pipeline_started = TRUE
+                WHERE user_id = %s
+                  AND flow = 'default'
+                  AND pipeline_started = FALSE
+                RETURNING id
+                """,
+                (user_id,),
+            )
+            updated_rows = cur.fetchall()
+
+        conn.commit()
+
+        # ⛔ Pipeline was al gestart → STOP
+        if not updated_rows:
+            logger.warning(
+                f"⚠️ Onboarding pipeline AL EERDER gestart voor user_id={user_id} — skip"
+            )
+            return {
+                "status": "already_started",
+                "user_id": user_id,
+                "parent_task_id": self.request.id,
+            }
+
+        logger.info(
+            f"✅ pipeline_started=TRUE gezet voor user_id={user_id} "
+            f"(rows={len(updated_rows)})"
+        )
+
+        # --------------------------------------------------
+        # ⚠️ Lazy imports (na DB check!)
+        # --------------------------------------------------
         from backend.celery_task.store_daily_scores_task import (
             store_daily_scores_task,
         )
@@ -36,6 +79,9 @@ def run_onboarding_pipeline(self, user_id: int):
             generate_daily_report,
         )
 
+        # --------------------------------------------------
+        # 🔗 Celery chain
+        # --------------------------------------------------
         workflow = chain(
             store_daily_scores_task.s(user_id),
             generate_daily_report.si(user_id),
@@ -44,7 +90,7 @@ def run_onboarding_pipeline(self, user_id: int):
         result = workflow.apply_async()
 
         logger.info(
-            "🔗 Onboarding chain gestart | "
+            "🔗 Onboarding chain QUEUED | "
             f"chain_id={result.id} | root_id={result.root_id}"
         )
 
@@ -57,8 +103,12 @@ def run_onboarding_pipeline(self, user_id: int):
         }
 
     except Exception as e:
+        conn.rollback()
         logger.error(
             f"❌ Fout in onboarding pipeline user_id={user_id}: {e}",
             exc_info=True,
         )
         raise
+
+    finally:
+        conn.close()
