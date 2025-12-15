@@ -123,8 +123,12 @@ def _kickstart_user_pipeline(conn, user_id: int):
         )
         rows = cur.fetchall()
 
+        if not rows:
+            logger.warning(f"⚠️ Geen onboarding_steps voor user_id={user_id}")
+            return
+
         all_completed = all(r[0] for r in rows)
-        already_started = all(r[1] for r in rows)
+        already_started = any(r[1] for r in rows)  # 🔥 FIX
 
         logger.info(
             f"🧪 onboarding check user={user_id} "
@@ -134,6 +138,7 @@ def _kickstart_user_pipeline(conn, user_id: int):
         if not all_completed or already_started:
             return
 
+        # 🔥 Markeer pipeline gestart
         cur.execute(
             """
             UPDATE onboarding_steps
@@ -147,7 +152,6 @@ def _kickstart_user_pipeline(conn, user_id: int):
 
     run_onboarding_pipeline.delay(user_id)
     logger.info(f"🚀 Onboarding pipeline gestart voor user_id={user_id}")
-
 
 # ======================================================
 # MARK STEP COMPLETED
