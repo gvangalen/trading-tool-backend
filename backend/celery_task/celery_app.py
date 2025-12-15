@@ -46,12 +46,12 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 BEAT SCHEDULE (GLOBAL – GEEN USER_ID!)
+# 🕒 BEAT SCHEDULE (ALLEEN DISPATCHERS)
 # =========================================================
 celery_app.conf.beat_schedule = {
 
     # =====================================================
-    # 1) MARKET DATA
+    # MARKET / MACRO / TECHNICAL (globaal, geen users)
     # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -65,33 +65,21 @@ celery_app.conf.beat_schedule = {
         "task": "backend.celery_task.market_task.sync_price_history_and_returns",
         "schedule": crontab(hour=1, minute=0),
     },
-
-    # =====================================================
-    # 2) MACRO DATA
-    # =====================================================
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
         "schedule": crontab(hour=0, minute=12),
     },
-
-    # =====================================================
-    # 3) TECHNICAL INDICATORS
-    # =====================================================
     "fetch_technical_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
         "schedule": crontab(hour=0, minute=10),
     },
-
-    # =====================================================
-    # 4) BTC PRICE HISTORY
-    # =====================================================
     "update_btc_history": {
         "task": "backend.celery_task.btc_price_history_task.update_btc_history",
         "schedule": crontab(hour=1, minute=10),
     },
 
     # =====================================================
-    # 5) AI INSIGHTS
+    # AI INSIGHTS (globaal)
     # =====================================================
     "generate_macro_insight": {
         "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
@@ -111,7 +99,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 6) SETUP AGENT
+    # SETUP AGENT (globaal)
     # =====================================================
     "run_setup_agent_daily": {
         "task": "backend.celery_task.setup_task.run_setup_agent_daily",
@@ -119,49 +107,61 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 7) DAILY SCORES
+    # 👇 USER-GEBASEERD → VIA DISPATCHER
     # =====================================================
-    "store_daily_scores": {
-        "task": "backend.celery_task.store_daily_scores_task.store_daily_scores_task",
+    "dispatch_daily_scores": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=4, minute=30),
+        "kwargs": {
+            "task_name": "backend.celery_task.store_daily_scores_task.store_daily_scores_task"
+        },
     },
 
-    # =====================================================
-    # 8) DAILY REPORT
-    # =====================================================
-    "generate_daily_report": {
-        "task": "backend.celery_task.daily_report_task.generate_daily_report",
+    "dispatch_daily_report": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=5, minute=0),
+        "kwargs": {
+            "task_name": "backend.celery_task.daily_report_task.generate_daily_report"
+        },
     },
 
-    # =====================================================
-    # 9) WEEKLY / MONTHLY / QUARTERLY REPORTS
-    # =====================================================
-    "generate_weekly_report": {
-        "task": "backend.celery_task.weekly_report_task.generate_weekly_report",
+    "dispatch_weekly_report": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=1, minute=20, day_of_week="monday"),
+        "kwargs": {
+            "task_name": "backend.celery_task.weekly_report_task.generate_weekly_report"
+        },
     },
-    "generate_monthly_report": {
-        "task": "backend.celery_task.monthly_report_task.generate_monthly_report",
+
+    "dispatch_monthly_report": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=1, minute=30, day_of_month="1"),
+        "kwargs": {
+            "task_name": "backend.celery_task.monthly_report_task.generate_monthly_report"
+        },
     },
-    "generate_quarterly_report": {
-        "task": "backend.celery_task.quarterly_report_task.generate_quarterly_report",
+
+    "dispatch_quarterly_report": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(
             hour=1,
             minute=45,
             day_of_month="1",
             month_of_year="1,4,7,10",
         ),
+        "kwargs": {
+            "task_name": "backend.celery_task.quarterly_report_task.generate_quarterly_report"
+        },
     },
 }
 
 logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
 
 # =========================================================
-# 📌 FORCE IMPORTS (zekerheid bij deploy)
+# 📌 FORCE IMPORTS (veilig bij deploy)
 # =========================================================
 try:
+    import backend.celery_task.dispatcher
     import backend.celery_task.market_task
     import backend.celery_task.macro_task
     import backend.celery_task.technical_task
@@ -185,7 +185,7 @@ try:
 
     logger.info("✅ Forced task imports succesvol geladen!")
 except Exception as e:
-    logger.error(f"❌ Fout bij laden van tasks: {e}")
+    logger.error(f"❌ Fout bij laden van tasks: {e}", exc_info=True)
 
 # =========================================================
 # EXPOSE APP
