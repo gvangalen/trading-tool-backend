@@ -26,66 +26,106 @@ async def save_strategy(
 ):
     user_id = current_user["id"]
     data = await request.json()
-    strategy_type = data.get("strategy_type", "").lower()
 
+    strategy_type = (data.get("strategy_type") or "").lower()
     if strategy_type not in ["manual", "trading", "dca"]:
         raise HTTPException(400, "Ongeldig strategy_type")
 
+    # ======================================================
+    # 🔍 Validatie
+    # ======================================================
     required = ["setup_id"]
+
     if strategy_type == "dca":
         required += ["amount", "frequency"]
     else:
-        required += ["entry", "targets", "stop_loss"]
+        required += ["entry", "stop_loss"]  # targets optioneel
 
-    for f in required:
-        if not data.get(f):
-            raise HTTPException(400, f"Veld '{f}' is verplicht")
+    for field in required:
+        if data.get(field) in (None, "", []):
+            raise HTTPException(400, f"Veld '{field}' is verplicht")
 
+    # ======================================================
+    # 🛡️ Defensieve helpers
+    # ======================================================
+    def safe_str(v):
+        return str(v) if v not in (None, "") else None
+
+    def safe_first(lst):
+        if isinstance(lst, list) and len(lst) > 0:
+            return str(lst[0])
+        return None
+
+    entry      = safe_str(data.get("entry"))
+    stop_loss = safe_str(data.get("stop_loss"))
+    target    = safe_first(data.get("targets"))
+
+    # ======================================================
+    # 🗄️ Database
+    # ======================================================
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id FROM setups
-                WHERE id = %s AND user_id = %s
-            """, (data["setup_id"], user_id))
+            # 🔐 Setup ownership check
+            cur.execute(
+                "SELECT id FROM setups WHERE id = %s AND user_id = %s",
+                (data["setup_id"], user_id)
+            )
             if not cur.fetchone():
                 raise HTTPException(403, "Setup niet van gebruiker")
 
+            # ♻️ Unieke strategie per setup + type
             cur.execute("""
                 SELECT id FROM strategies
-                WHERE setup_id = %s AND strategy_type = %s AND user_id = %s
+                WHERE setup_id = %s
+                  AND strategy_type = %s
+                  AND user_id = %s
             """, (data["setup_id"], strategy_type, user_id))
-            if cur.fetchone():
-                raise HTTPException(409, "Strategie bestaat al")
 
+            if cur.fetchone():
+                raise HTTPException(409, "Strategie bestaat al voor deze setup")
+
+            # 📝 Insert
             cur.execute("""
                 INSERT INTO strategies (
-                    setup_id, entry, target, stop_loss,
-                    explanation, risk_profile, strategy_type,
-                    data, created_at, user_id
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,NOW(),%s)
+                    setup_id,
+                    entry,
+                    target,
+                    stop_loss,
+                    explanation,
+                    risk_profile,
+                    strategy_type,
+                    data,
+                    created_at,
+                    user_id
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,NOW(),%s)
                 RETURNING id
             """, (
                 data["setup_id"],
-                str(data.get("entry","")),
-                str(data.get("targets",[""])[0]),
-                str(data.get("stop_loss","")),
-                data.get("explanation",""),
-                data.get("risk_profile"),
+                entry,
+                target,
+                stop_loss,
+                safe_str(data.get("explanation")),
+                safe_str(data.get("risk_profile")),
                 strategy_type,
                 json.dumps(data),
-                user_id
+                user_id,
             ))
 
             strategy_id = cur.fetchone()[0]
             conn.commit()
 
+        # ✅ onboarding stap afronden
         mark_step_completed(conn, user_id, "strategy")
-        return {"id": strategy_id, "message": "✅ Strategie opgeslagen"}
+
+        return {
+            "id": strategy_id,
+            "message": "✅ Strategie succesvol opgeslagen"
+        }
 
     finally:
         conn.close()
-
 
 # ==========================================================
 # 2. QUERY STRATEGIES
