@@ -11,24 +11,24 @@ logger.setLevel(logging.INFO)
 
 # ===================================================================
 # 🎯 AI analyseert BESTAANDE strategieën (GEEN generatie)
+# → Gedraagt zich IDENTIEK aan setup AI-uitleg
 # ===================================================================
 def analyze_strategies(strategies: list):
     prompt = f"""
 Je bent een professionele trading-analist.
 
-Analyseer deze bestaande tradingstrategieën.
+Analyseer deze bestaande tradingstrategie.
 MAAK GEEN NIEUWE STRATEGIEËN.
 
-Strategieën:
+Strategie:
 {json.dumps(strategies, indent=2)}
 
 Geef ALLEEN geldige JSON terug.
 
 JSON format:
 {{
-  "ai_score": 0-100,
-  "comment": "Korte samenvatting",
-  "recommendation": "Concreet advies"
+  "comment": "Korte samenvatting van de kwaliteit",
+  "recommendation": "Concreet en praktisch advies"
 }}
 """
 
@@ -45,13 +45,14 @@ JSON format:
 
 
 # ===================================================================
-# 🕒 CELERY TASK — STRATEGY ANALYSE
-# 👉 wordt gestart door:
-# POST /api/strategies/analyze/{strategy_id}
+# 🕒 CELERY TASK — STRATEGY AI ANALYSE
+# 👉 POST /api/strategies/analyze/{strategy_id}
 # ===================================================================
 @shared_task(name="backend.ai_agents.strategy_ai_agent.analyze_strategy_ai")
 def analyze_strategy_ai(strategy_id: int, user_id: int):
-    logger.info(f"🧠 Start strategy AI analyse | strategy_id={strategy_id} user_id={user_id}")
+    logger.info(
+        f"🧠 Start strategy AI analyse | strategy_id={strategy_id} user_id={user_id}"
+    )
 
     conn = get_db_connection()
     if not conn:
@@ -116,43 +117,32 @@ def analyze_strategy_ai(strategy_id: int, user_id: int):
             logger.error("❌ AI analyse mislukt")
             return
 
+        ai_text = analysis.get("recommendation")
+        if not ai_text:
+            logger.error("❌ Geen AI recommendation ontvangen")
+            return
+
         # ---------------------------------------------------
-        # 3️⃣ Opslaan in ai_reflections (ENIGE TABEL)
+        # 3️⃣ Opslaan IN strategy.data (zoals setup)
         # ---------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO ai_reflections (
-                    category,
-                    indicator,
-                    ai_score,
-                    comment,
-                    recommendation,
-                    user_id
+                UPDATE strategies
+                SET data = jsonb_set(
+                    COALESCE(data, '{}'::jsonb),
+                    '{ai_explanation}',
+                    to_jsonb(%s::text),
+                    true
                 )
-                VALUES (
-                    'strategy',
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s
-                )
-                ON CONFLICT (category, indicator, date)
-                DO UPDATE SET
-                    ai_score = EXCLUDED.ai_score,
-                    comment = EXCLUDED.comment,
-                    recommendation = EXCLUDED.recommendation,
-                    timestamp = NOW();
+                WHERE id = %s AND user_id = %s
             """, (
+                ai_text,
                 strategy_id,
-                analysis.get("ai_score"),
-                analysis.get("comment"),
-                analysis.get("recommendation"),
                 user_id
             ))
 
         conn.commit()
-        logger.info("✅ Strategy AI analyse opgeslagen in ai_reflections")
+        logger.info("✅ Strategy AI uitleg opgeslagen in strategies.data.ai_explanation")
 
     except Exception as e:
         logger.error(f"❌ Strategy AI analyse fout: {e}", exc_info=True)
@@ -162,10 +152,12 @@ def analyze_strategy_ai(strategy_id: int, user_id: int):
 
 
 # ===================================================================
-# 🚀 BESTAANDE STRATEGY GENERATION — NIET AANGEPAST
+# 🚀 BESTAANDE STRATEGY GENERATION — ONGEWIJZIGD
 # ===================================================================
 def generate_strategy_from_setup(setup: dict, user_id: int):
-    logger.info(f"⚙️ AI strategy generatie | setup={setup.get('id')} user={user_id}")
+    logger.info(
+        f"⚙️ AI strategy generatie | setup={setup.get('id')} user={user_id}"
+    )
 
     prompt = f"""
 Je bent een professionele crypto trader.
