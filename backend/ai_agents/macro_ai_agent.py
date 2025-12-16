@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ======================================================
-# 🌍 MACRO AI AGENT — USER-AWARE (STABLE / FIXED)
+# 🌍 MACRO AI AGENT — USER-AWARE (FINAL / STABLE)
 # ======================================================
 
 @shared_task(name="backend.ai_agents.macro_ai_agent.generate_macro_insight")
@@ -21,7 +21,7 @@ def generate_macro_insight(user_id: int):
     """
     Analyseert macro-indicatoren PER USER.
 
-    DB constraints (BELANGRIJK):
+    DB constraints (VERPLICHT):
     - ai_category_insights UNIQUE (user_id, category, date)
     - ai_reflections UNIQUE (category, user_id, indicator, date)
     """
@@ -38,7 +38,7 @@ def generate_macro_insight(user_id: int):
 
     try:
         # =========================================================
-        # 1️⃣ Macro scoreregels (GLOBAAL)
+        # 1️⃣ Macro scoreregels (globaal)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -62,7 +62,7 @@ def generate_macro_insight(user_id: int):
         logger.info(f"📘 Macro regels geladen ({len(rules_by_indicator)} indicatoren)")
 
         # =========================================================
-        # 2️⃣ Macro data VANDAAG (USER-SPECIFIEK)
+        # 2️⃣ Macro data VANDAAG (user-specifiek)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -98,7 +98,7 @@ def generate_macro_insight(user_id: int):
             })
 
         # =========================================================
-        # 3️⃣ Macro-score (USER-AWARE)
+        # 3️⃣ Macro-score (user-aware)
         # =========================================================
         macro_scores = generate_scores_db("macro", user_id=user_id)
         macro_avg = macro_scores.get("total_score", 0)
@@ -188,7 +188,7 @@ ANTWOORD ALS JSON-LIJST:
             ai_reflections = []
 
         # =========================================================
-        # 6️⃣ OPSLAAN ai_category_insights
+        # 6️⃣ Opslaan ai_category_insights
         # UNIQUE (user_id, category, date)
         # =========================================================
         with conn.cursor() as cur:
@@ -217,7 +217,7 @@ ANTWOORD ALS JSON-LIJST:
             ))
 
         # =========================================================
-        # 7️⃣ OPSLAAN ai_reflections
+        # 7️⃣ Opslaan ai_reflections
         # UNIQUE (category, user_id, indicator, date)
         # =========================================================
         for r in ai_reflections:
