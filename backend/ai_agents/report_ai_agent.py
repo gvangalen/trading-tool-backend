@@ -55,7 +55,6 @@ def safe_get(obj, key, fallback="–"):
 
 
 def nv(v):
-    """Normalize None -> '–' for AI prompts."""
     return v if v not in [None, "", "None"] else "–"
 
 
@@ -190,7 +189,7 @@ def get_latest_strategy_for_setup(setup_id: int, user_id: int):
 
 
 # =====================================================
-# 4. MARKET DATA (GLOBAL — NO user_id!)
+# 4. MARKET DATA (GLOBAL SNAPSHOT)
 # =====================================================
 def get_latest_market_data():
     try:
@@ -227,7 +226,47 @@ def get_latest_market_data():
 
 
 # =====================================================
-# 5. GPT helper
+# 5. MARKET INDICATOR SCORES (DAILY MARKET ANALYSIS)
+# =====================================================
+def get_market_indicator_scores(user_id: int):
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return []
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT indicator, value, score, interpretation
+                FROM market_indicator_scores
+                WHERE user_id = %s
+                ORDER BY timestamp DESC;
+            """, (user_id,))
+            rows = cur.fetchall()
+
+        results = []
+        for ind, value, score, interp in rows:
+            results.append({
+                "indicator": ind,
+                "value": to_float(value),
+                "score": to_float(score),
+                "interpretation": interp or "–",
+            })
+
+        return results
+
+    except Exception:
+        logger.error("Fout in get_market_indicator_scores()", exc_info=True)
+        return []
+
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+# =====================================================
+# 6. GPT helper
 # =====================================================
 def generate_section(prompt: str, retries: int = 3) -> str:
     text = ask_gpt_text(prompt, system_role=REPORT_STYLE_GUIDE, retries=retries)
@@ -235,32 +274,41 @@ def generate_section(prompt: str, retries: int = 3) -> str:
 
 
 # =====================================================
-# 6. PROMPTS
+# 7. PROMPTS
 # =====================================================
-def prompt_for_btc_summary(setup, scores, market_data=None, ai_insights=None):
-    price = nv(safe_get(market_data, "price"))
-    volume = nv(safe_get(market_data, "volume"))
-    change = nv(safe_get(market_data, "change_24h"))
+def prompt_for_btc_summary(setup, scores, market_data, market_indicators):
+    lines = []
+    for m in market_indicators[:3]:
+        lines.append(
+            f"- {m['indicator']}: waarde {nv(m['value'])}, score {nv(m['score'])} → {nv(m['interpretation'])}"
+        )
 
-    macro = nv(scores.get("macro_score"))
-    tech = nv(scores.get("technical_score"))
-    setup_score = nv(scores.get("setup_score"))
-    market_score = nv(scores.get("market_score"))
-
-    master = ai_insights.get("master", {}) if ai_insights else {}
+    market_block = "\n".join(lines) if lines else "–"
 
     return f"""
 Schrijf een krachtige openingssectie (6–8 zinnen).
 
-Data:
-- Scores: macro {macro}, technisch {tech}, setup {setup_score}, markt {market_score}
-- Markt: prijs ${price}, volume {volume}, verandering {change}%
-- Setup: {nv(setup.get('name'))} ({nv(setup.get('timeframe'))})
+Scores:
+- Macro: {nv(scores.get("macro_score"))}
+- Technisch: {nv(scores.get("technical_score"))}
+- Setup: {nv(scores.get("setup_score"))}
+- Markt: {nv(scores.get("market_score"))}
+
+Live markt:
+- Prijs: ${nv(safe_get(market_data, "price"))}
+- Volume: {nv(safe_get(market_data, "volume"))}
+- 24h verandering: {nv(safe_get(market_data, "change_24h"))}%
+
+Dagelijkse market-indicatoren:
+{market_block}
+
+Actieve setup:
+- {nv(setup.get("name"))} ({nv(setup.get("timeframe"))})
 """
 
 
 def prompt_for_macro_summary(scores, ai_insights):
-    macro = ai_insights.get("macro", {}) if ai_insights else {}
+    macro = ai_insights.get("macro", {})
     return f"""
 Maak een compacte macro-update (5–8 zinnen).
 
@@ -302,7 +350,7 @@ Stop-loss: {nv(strategy['stop_loss'])}
 """
 
 
-def prompt_for_conclusion(scores, ai_insights):
+def prompt_for_conclusion(scores):
     return "Schrijf een slotconclusie (4–8 zinnen)."
 
 
@@ -311,17 +359,20 @@ def prompt_for_outlook(setup):
 
 
 # =====================================================
-# 7. MAIN REPORT BUILDER
+# 8. MAIN REPORT BUILDER
 # =====================================================
 def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> dict:
     log_and_print(f"Rapportgeneratie gestart voor {symbol} (user_id={user_id})")
 
-    setup_raw = get_latest_setup_for_symbol(symbol=symbol, user_id=user_id)
-    setup = sanitize_json_input(setup_raw or {}, context="setup")
+    setup = sanitize_json_input(
+        get_latest_setup_for_symbol(symbol=symbol, user_id=user_id) or {},
+        context="setup"
+    )
 
     scores = sanitize_json_input(get_scores_from_db(user_id=user_id), context="scores")
     ai_insights = get_ai_insights_from_db(user_id=user_id)
     market_data = get_latest_market_data()
+    market_indicators = get_market_indicator_scores(user_id=user_id)
 
     strategy = get_latest_strategy_for_setup(setup.get("id"), user_id=user_id) or {
         "entry": "n.v.t.",
@@ -333,7 +384,7 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
 
     report = {
         "btc_summary": generate_section(
-            prompt_for_btc_summary(setup, scores, market_data, ai_insights)
+            prompt_for_btc_summary(setup, scores, market_data, market_indicators)
         ),
         "macro_summary": generate_section(
             prompt_for_macro_summary(scores, ai_insights)
@@ -351,13 +402,16 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
             prompt_for_recommendations(strategy)
         ),
         "conclusion": generate_section(
-            prompt_for_conclusion(scores, ai_insights)
+            prompt_for_conclusion(scores)
         ),
         "outlook": generate_section(
             prompt_for_outlook(setup)
         ),
+
+        # Raw data
         "scores": scores,
         "market_data": market_data,
+        "market_indicator_scores": market_indicators,
         "strategy": strategy,
     }
 
