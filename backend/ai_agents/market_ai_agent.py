@@ -1,8 +1,7 @@
 import logging
 import traceback
 import json
-from datetime import datetime, date
-from typing import Dict, Any, List
+from datetime import date
 
 from celery import shared_task
 
@@ -17,28 +16,19 @@ SYMBOL = "BTC"
 
 
 # ======================================================
-# 🪙 MARKET AI AGENT — STRICT PER USER
+# 🪙 MARKET AI AGENT — HYBRIDE (USER + GLOBAAL)
 # ======================================================
 
 @shared_task(name="backend.ai_agents.market_ai_agent.generate_market_insight")
 def generate_market_insight(user_id: int):
     """
-    Analyseert MARKT voor exact één gebruiker.
-
-    Bronnen:
-    1. market_indicator_scores (user-specifiek)
-    2. market_data_7d (user-specifiek)
-    3. market_forward_returns (user-specifiek)
-    4. market_indicator_rules (globaal)
-    5. market score via generate_scores_db("market", user_id)
-
-    Output:
-    - ai_category_insights (market)
-    - ai_reflections (market)
+    Analyseert:
+    - User-specifieke market indicator scores
+    - Globale marktdata (7d prijs & forward returns)
+    - Combineert dit tot één market-advies per user
     """
 
     logger.info(f"🪙 Market AI Agent gestart — user_id={user_id}")
-
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding")
@@ -48,7 +38,7 @@ def generate_market_insight(user_id: int):
 
     try:
         # ======================================================
-        # 1️⃣ MARKET INDICATOR RULES (GLOBAAL)
+        # 1️⃣ GLOBALE MARKET RULES
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -58,7 +48,7 @@ def generate_market_insight(user_id: int):
             """)
             rule_rows = cur.fetchall()
 
-        rules: Dict[str, List[Dict[str, Any]]] = {}
+        rules = {}
         for i, rmin, rmax, score, trend, interp, action in rule_rows:
             rules.setdefault(i, []).append({
                 "range_min": float(rmin),
@@ -70,7 +60,7 @@ def generate_market_insight(user_id: int):
             })
 
         # ======================================================
-        # 2️⃣ MARKET INDICATOR SCORES (USER)
+        # 2️⃣ USER MARKET INDICATOR SCORES
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -89,20 +79,20 @@ def generate_market_insight(user_id: int):
             "trend": t,
             "interpretation": interp,
             "action": a,
-            "timestamp": ts.isoformat() if isinstance(ts, datetime) else str(ts),
+            "timestamp": ts.isoformat(),
         } for i, v, s, t, interp, a, ts in indicator_rows]
 
         # ======================================================
-        # 3️⃣ 7-DAAGSE PRIJS & VOLUME TABEL
+        # 3️⃣ GLOBALE 7-DAAGSE PRIJS & VOLUME
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT date, open, high, low, close, change, volume
                 FROM market_data_7d
-                WHERE user_id = %s AND symbol = %s
+                WHERE symbol = %s
                 ORDER BY date DESC
                 LIMIT 7;
-            """, (user_id, SYMBOL))
+            """, (SYMBOL,))
             rows_7d = cur.fetchall()
 
         price_7d = [{
@@ -116,25 +106,31 @@ def generate_market_insight(user_id: int):
         } for d, o, h, l, c, chg, v in reversed(rows_7d)]
 
         # ======================================================
-        # 4️⃣ FORWARD RETURNS
+        # 4️⃣ GLOBALE FORWARD RETURNS
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT *
+                SELECT period, start_date, end_date, change, avg_daily
                 FROM market_forward_returns
-                WHERE user_id = %s AND symbol = %s
+                WHERE symbol = %s
                 ORDER BY created_at DESC;
-            """, (user_id, SYMBOL))
+            """, (SYMBOL,))
+            fr_rows = cur.fetchall()
 
-            cols = [d.name for d in cur.description]
-            fr_rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        forward_returns = [{
+            "period": p,
+            "start": sd.isoformat(),
+            "end": ed.isoformat() if ed else None,
+            "change": float(ch),
+            "avg_daily": float(ad) if ad else None,
+        } for p, sd, ed, ch, ad in fr_rows]
 
         # ======================================================
-        # 5️⃣ MARKET SCORE (SCORING ENGINE)
+        # 5️⃣ USER MARKET SCORE (ENGINE)
         # ======================================================
-        market_scores = generate_scores_db("market", user_id=user_id)
-        market_avg = float(market_scores.get("total_score", 0))
-        score_items = market_scores.get("scores", {})
+        scores = generate_scores_db("market", user_id=user_id)
+        market_avg = float(scores.get("total_score", 0))
+        score_items = scores.get("scores", {})
 
         top_contributors = sorted(
             score_items.items(),
@@ -151,32 +147,28 @@ def generate_market_insight(user_id: int):
         } for k, v in top_contributors]
 
         # ======================================================
-        # 6️⃣ AI CONTEXT
+        # 6️⃣ AI PAYLOAD
         # ======================================================
         payload = {
-            "user_id": user_id,
             "symbol": SYMBOL,
             "market_avg_score": market_avg,
             "market_top_contributors": top_contributors_pretty,
-            "market_indicator_scores": market_indicators,
-            "price_table_7d": price_7d,
-            "forward_returns": fr_rows,
+            "user_market_indicators": market_indicators,
+            "price_7d": price_7d,
+            "forward_returns": forward_returns,
             "market_rules": rules,
         }
 
-        # ======================================================
-        # 7️⃣ AI – MARKET INSIGHT
-        # ======================================================
         prompt = f"""
 Je bent een professionele Bitcoin marktanalist.
 
-Analyseer de volgende data:
-- Gebruiker-specifieke market indicatoren
-- 7-daagse prijs & volume tabel
+Analyseer:
+- De 7-daagse prijs & volume tabel
 - Forward returns statistieken
-- Samengestelde market score
+- User-specifieke market indicator scores
+- De samengestelde market score
 
-Geef een samenvatting en advies in **GELDIGE JSON**:
+Geef antwoord in **GELDIGE JSON**:
 
 {{
   "trend": "",
@@ -184,34 +176,20 @@ Geef een samenvatting en advies in **GELDIGE JSON**:
   "risk": "",
   "momentum": "",
   "volatility": "",
-  "liquidity": "",
   "summary": "",
-  "top_signals": [{{"signal":"","why":"","impact":""}}]
+  "top_signals": []
 }}
 
 DATA:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 """
 
-        ai = ask_gpt(
-            prompt,
-            system_role="Je bent een professionele marktanalist. Antwoord uitsluitend in JSON."
-        )
-
+        ai = ask_gpt(prompt, system_role="Antwoord uitsluitend in JSON.")
         if not isinstance(ai, dict):
             ai = {}
 
-        insight = {
-            "avg_score": market_avg,
-            "trend": ai.get("trend", ""),
-            "bias": ai.get("bias", ""),
-            "risk": ai.get("risk", ""),
-            "summary": ai.get("summary", ""),
-            "top_signals": ai.get("top_signals", []),
-        }
-
         # ======================================================
-        # 8️⃣ OPSLAAN — CATEGORY INSIGHT
+        # 7️⃣ OPSLAAN INSIGHT
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -225,65 +203,14 @@ DATA:
                 VALUES ('market', %s, %s, %s, %s, %s, %s, %s::jsonb, %s, NOW());
             """, (
                 user_id,
-                insight["avg_score"],
-                insight["trend"],
-                insight["bias"],
-                insight["risk"],
-                insight["summary"],
-                json.dumps(insight["top_signals"]),
+                market_avg,
+                ai.get("trend", ""),
+                ai.get("bias", ""),
+                ai.get("risk", ""),
+                ai.get("summary", ""),
+                json.dumps(ai.get("top_signals", [])),
                 today,
             ))
-
-        # ======================================================
-        # 9️⃣ AI REFLECTIONS
-        # ======================================================
-        prompt_reflect = f"""
-Maak reflecties per indicator (max 12).
-
-JSON schema:
-[
-  {{
-    "indicator": "",
-    "ai_score": 0,
-    "compliance": 0,
-    "comment": "",
-    "recommendation": ""
-  }}
-]
-
-DATA:
-{json.dumps(payload, ensure_ascii=False)}
-"""
-
-        reflections = ask_gpt(
-            prompt_reflect,
-            system_role="Je bent een professionele marktanalist. Antwoord in JSON-lijst."
-        )
-
-        if not isinstance(reflections, list):
-            reflections = []
-
-        with conn.cursor() as cur:
-            cur.execute("""
-                DELETE FROM ai_reflections
-                WHERE category='market' AND user_id=%s AND timestamp::date=%s;
-            """, (user_id, today))
-
-            for r in reflections:
-                if not r.get("indicator"):
-                    continue
-                cur.execute("""
-                    INSERT INTO ai_reflections
-                    (category, user_id, indicator, raw_score, ai_score, compliance, comment, recommendation, timestamp)
-                    VALUES ('market', %s, %s, NULL, %s, %s, %s, %s, NOW());
-                """, (
-                    user_id,
-                    r["indicator"],
-                    r.get("ai_score", 0),
-                    r.get("compliance", 0),
-                    r.get("comment", ""),
-                    r.get("recommendation", ""),
-                ))
 
         conn.commit()
         logger.info(f"✅ Market AI Agent afgerond — user_id={user_id}")
