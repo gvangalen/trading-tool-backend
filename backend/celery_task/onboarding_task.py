@@ -21,12 +21,12 @@ def run_onboarding_pipeline(self, user_id: int):
 
     Wordt exact ÉÉN keer gestart per gebruiker.
 
-    Volgorde:
-    1️⃣ Daily scores
-    2️⃣ Setup agent
-    3️⃣ Strategy agent
-    4️⃣ AI insights (macro / market / technical / master)
-    5️⃣ Daily report
+    Volgorde (architectuur-correct):
+    1️⃣ Daily scores (per user)
+    2️⃣ Setup agent (globaal)
+    3️⃣ Strategy agent (globaal)
+    4️⃣ AI insights (globaal)
+    5️⃣ Daily report (per user)
     """
 
     logger.info("=================================================")
@@ -73,7 +73,7 @@ def run_onboarding_pipeline(self, user_id: int):
         )
 
         # --------------------------------------------------
-        # ⚠️ Lazy imports (na DB check!)
+        # ⚠️ Lazy imports (NA idempotentie check!)
         # --------------------------------------------------
         from backend.celery_task.store_daily_scores_task import (
             store_daily_scores_task,
@@ -82,31 +82,37 @@ def run_onboarding_pipeline(self, user_id: int):
             run_setup_agent_daily,
         )
         from backend.celery_task.strategy_task import (
-            run_strategy_agent_daily,
+            generate_all,   # ✅ BESTAANDE strategy agent
         )
+
+        # AI insights (globaal)
         from backend.ai_agents.macro_ai_agent import generate_macro_insight
         from backend.ai_agents.market_ai_agent import generate_market_insight
         from backend.ai_agents.technical_ai_agent import generate_technical_insight
         from backend.ai_agents.score_ai_agent import generate_master_score
-        from backend.celery_task.daily_report_task import generate_daily_report
+
+        from backend.celery_task.daily_report_task import (
+            generate_daily_report,
+        )
 
         # --------------------------------------------------
-        # 🔗 Celery chain — VOLLEDIGE USER SNAPSHOT
+        # 🔗 Celery chain — ARCHITECTUUR-CORRECT
         # --------------------------------------------------
         workflow = chain(
+            # 🧮 User scores
             store_daily_scores_task.s(user_id),
 
-            # 🧩 Setup & strategy
-            run_setup_agent_daily.s(user_id),
-            run_strategy_agent_daily.s(user_id),
+            # 🧩 Globale agents
+            run_setup_agent_daily.s(),
+            generate_all.s(),
 
-            # 🧠 AI insights
-            generate_macro_insight.s(user_id),
-            generate_market_insight.s(user_id),
-            generate_technical_insight.s(user_id),
-            generate_master_score.s(user_id),
+            # 🧠 Globale AI insights
+            generate_macro_insight.s(),
+            generate_market_insight.s(),
+            generate_technical_insight.s(),
+            generate_master_score.s(),
 
-            # 📄 Report
+            # 📄 User report
             generate_daily_report.si(user_id),
         )
 
