@@ -146,18 +146,16 @@ def save_market_data_daily():
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
+    """
+    OHLC → Binance (hardcoded, correct)
+    Volume → CoinGecko
+    """
     logger.info("📆 Start fetch_market_data_7d...")
     conn = get_db_connection()
 
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT link FROM indicators
-                WHERE name = 'btc_ohlc' AND category = 'market_raw'
-            """)
-            row = cur.fetchone()
-
-        binance_url = row[0] if row else "https://api.binance.com/api/v3/klines"
+        # ✅ ALTJD BINANCE VOOR OHLC
+        binance_url = "https://api.binance.com/api/v3/klines"
 
         candles = safe_get(binance_url, params={
             "symbol": "BTCUSDT",
