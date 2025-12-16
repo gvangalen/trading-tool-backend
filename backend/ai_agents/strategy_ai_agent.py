@@ -1,6 +1,6 @@
 import logging
 import json
-from celery import shared_task
+from datetime import date
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
@@ -13,7 +13,12 @@ logger.setLevel(logging.INFO)
 # 🎯 AI analyseert BESTAANDE strategieën (GEEN generatie)
 # → Gedraagt zich IDENTIEK aan setup AI-uitleg
 # ===================================================================
-def analyze_strategies(strategies: list):
+def analyze_strategies(strategies: list) -> dict | None:
+    """
+    Analyseert bestaande strategieën.
+    Maakt GEEN nieuwe strategie.
+    """
+
     prompt = f"""
 Je bent een professionele trading-analist.
 
@@ -38,17 +43,88 @@ JSON format:
     )
 
     if not isinstance(response, dict):
-        logger.error("❌ Ongeldige JSON van AI")
+        logger.error("❌ Ongeldige JSON van AI bij strategy-analyse")
         return None
 
     return response
 
 
 # ===================================================================
-# 🕒 CELERY TASK — STRATEGY AI ANALYSE
+# 🧠 STRATEGY ADJUSTMENT — NIVAU 2 (VANDAAG-VERSIE)
+# → Past strategy aan obv MARKTCONTEXT
+# → Overschrijft NIETS
+# ===================================================================
+def adjust_strategy_for_today(
+    base_strategy: dict,
+    setup: dict,
+    market_context: dict,
+) -> dict | None:
+    """
+    Past een bestaande strategy subtiel aan voor vandaag.
+    Setup blijft gelijk.
+    """
+
+    logger.info(
+        f"🟡 Strategy adjustment voor setup={setup.get('id')} | date={date.today()}"
+    )
+
+    prompt = f"""
+Je bent een professionele crypto trader.
+
+Je krijgt:
+1. Een BESTAANDE tradingstrategie
+2. De huidige setup (blijft gelijk)
+3. De actuele marktcontext
+
+Je taak:
+- PAS de strategie SUBTIEL aan voor vandaag
+- GEEN nieuwe strategie maken
+- Entry mag gelijk blijven of licht verfijnd
+- Targets mogen verschuiven
+- Stop-loss mag aangescherpt of verruimd worden
+
+Bestaande strategy:
+{json.dumps(base_strategy, indent=2)}
+
+Setup:
+{json.dumps(setup, indent=2)}
+
+Marktcontext (vandaag):
+{json.dumps(market_context, indent=2)}
+
+Geef ALLEEN geldige JSON terug.
+
+JSON format:
+{{
+  "entry": "",
+  "targets": [],
+  "stop_loss": "",
+  "adjustment_reason": "",
+  "confidence_score": 0,
+  "changes": {{
+    "entry": "unchanged | refined",
+    "targets": "raised | lowered | unchanged",
+    "stop_loss": "tightened | loosened | unchanged"
+  }}
+}}
+"""
+
+    result = ask_gpt(
+        prompt,
+        system_role="Je bent een professionele trading AI. Alleen geldige JSON."
+    )
+
+    if not isinstance(result, dict):
+        logger.error("❌ Ongeldige JSON van AI bij strategy-adjustment")
+        return None
+
+    return result
+
+
+# ===================================================================
+# 🕒 CELERY TASK — STRATEGY AI ANALYSE (BESTAAND)
 # 👉 POST /api/strategies/analyze/{strategy_id}
 # ===================================================================
-@shared_task(name="backend.ai_agents.strategy_ai_agent.analyze_strategy_ai")
 def analyze_strategy_ai(strategy_id: int, user_id: int):
     logger.info(
         f"🧠 Start strategy AI analyse | strategy_id={strategy_id} user_id={user_id}"
@@ -114,16 +190,14 @@ def analyze_strategy_ai(strategy_id: int, user_id: int):
         # ---------------------------------------------------
         analysis = analyze_strategies(strategy_payload)
         if not analysis:
-            logger.error("❌ AI analyse mislukt")
             return
 
         ai_text = analysis.get("recommendation")
         if not ai_text:
-            logger.error("❌ Geen AI recommendation ontvangen")
             return
 
         # ---------------------------------------------------
-        # 3️⃣ Opslaan IN strategy.data (zoals setup)
+        # 3️⃣ Opslaan IN strategies.data.ai_explanation
         # ---------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -142,10 +216,10 @@ def analyze_strategy_ai(strategy_id: int, user_id: int):
             ))
 
         conn.commit()
-        logger.info("✅ Strategy AI uitleg opgeslagen in strategies.data.ai_explanation")
+        logger.info("✅ Strategy AI uitleg opgeslagen")
 
     except Exception as e:
-        logger.error(f"❌ Strategy AI analyse fout: {e}", exc_info=True)
+        logger.error("❌ Strategy AI analyse fout", exc_info=True)
 
     finally:
         conn.close()
@@ -154,7 +228,7 @@ def analyze_strategy_ai(strategy_id: int, user_id: int):
 # ===================================================================
 # 🚀 BESTAANDE STRATEGY GENERATION — ONGEWIJZIGD
 # ===================================================================
-def generate_strategy_from_setup(setup: dict, user_id: int):
+def generate_strategy_from_setup(setup: dict, user_id: int) -> dict:
     logger.info(
         f"⚙️ AI strategy generatie | setup={setup.get('id')} user={user_id}"
     )
