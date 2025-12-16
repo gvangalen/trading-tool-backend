@@ -277,111 +277,85 @@ Geef één zin waarom deze match {total_match}/100 scoort.
                     """, (best_setup["setup_id"],))
 
 
-        # ---------------------------------------------------------------
-        # 6️⃣ SAMENVATTING OPSLAAN — ai_category_insights (USER-AWARE)
-        # ---------------------------------------------------------------
-        if results:
-            avg_score = round(sum(r["match_score"] for r in results) / len(results), 2)
-            active_count = sum(1 for r in results if r["active"])
-            total_setups = len(results)
+# ---------------------------------------------------------------
+# 6️⃣ SAMENVATTING OPSLAAN — ai_category_insights (USER-AWARE)
+# ---------------------------------------------------------------
+if results:
+    avg_score = round(sum(r["match_score"] for r in results) / len(results), 2)
+    active_count = sum(1 for r in results if r["active"])
+    total_setups = len(results)
 
-            if best_match_score >= 70:
-                trend = "Sterke match"
-            elif best_match_score >= 40:
-                trend = "Gemiddelde match"
-            else:
-                trend = "Zwakke match"
+    if best_match_score >= 70:
+        trend = "Sterke match"
+    elif best_match_score >= 40:
+        trend = "Gemiddelde match"
+    else:
+        trend = "Zwakke match"
 
-            bias = "Kansrijk" if active_count > 0 else "Afwachten"
+    bias = "Kansrijk" if active_count > 0 else "Afwachten"
 
-            if market_score is not None and market_score < 40:
-                risk = "Hoog"
-            elif market_score is not None and market_score < 60:
-                risk = "Gemiddeld"
-            else:
-                risk = "Laag"
+    if market_score is not None and market_score < 40:
+        risk = "Hoog"
+    elif market_score is not None and market_score < 60:
+        risk = "Gemiddeld"
+    else:
+        risk = "Laag"
 
-            if best_setup:
-                summary = (
-                    f"Vandaag is '{best_setup['name']}' de best passende setup "
-                    f"met een match-score van {best_setup['total_match']}/100. "
-                    f"{active_count}/{total_setups} setups zijn actief binnen hun ranges."
-                )
-            else:
-                summary = (
-                    f"Er zijn {total_setups} setups geëvalueerd, maar geen duidelijke match gevonden."
-                )
+    if best_setup:
+        summary = (
+            f"Vandaag is '{best_setup['name']}' de best passende setup "
+            f"met een match-score van {best_setup['total_match']}/100. "
+            f"{active_count}/{total_setups} setups zijn actief binnen hun ranges."
+        )
+    else:
+        summary = (
+            f"Er zijn {total_setups} setups geëvalueerd, maar geen duidelijke match gevonden."
+        )
 
-            sorted_results = sorted(results, key=lambda r: r["match_score"], reverse=True)
-            top3 = sorted_results[:3]
-            top_signals = [
-                {
-                    "name": r["name"],
-                    "match_score": r["match_score"],
-                    "active": r["active"]
-                }
-                for r in top3
-            ]
+    # Top 3 setups
+    sorted_results = sorted(results, key=lambda r: r["match_score"], reverse=True)
+    top3 = sorted_results[:3]
+    top_signals = [
+        {
+            "name": r["name"],
+            "match_score": r["match_score"],
+            "active": r["active"]
+        }
+        for r in top3
+    ]
 
-            with conn.cursor() as cur:
-                if user_id:
-                    cur.execute("""
-                        INSERT INTO ai_category_insights
-                            (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
-                        VALUES ('setup', %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (category, user_id, date)
-                        DO UPDATE SET
-                            avg_score   = EXCLUDED.avg_score,
-                            trend       = EXCLUDED.trend,
-                            bias        = EXCLUDED.bias,
-                            risk        = EXCLUDED.risk,
-                            summary     = EXCLUDED.summary,
-                            top_signals = EXCLUDED.top_signals,
-                            created_at  = NOW();
-                    """, (
-                        user_id,
-                        avg_score,
-                        trend,
-                        bias,
-                        risk,
-                        summary,
-                        json.dumps(top_signals),
-                    ))
-                else:
-                    cur.execute("""
-                        INSERT INTO ai_category_insights
-                            (category, avg_score, trend, bias, risk, summary, top_signals)
-                        VALUES ('setup', %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (category, date)
-                        DO UPDATE SET
-                            avg_score   = EXCLUDED.avg_score,
-                            trend       = EXCLUDED.trend,
-                            bias        = EXCLUDED.bias,
-                            risk        = EXCLUDED.risk,
-                            summary     = EXCLUDED.summary,
-                            top_signals = EXCLUDED.top_signals,
-                            created_at  = NOW();
-                    """, (
-                        avg_score,
-                        trend,
-                        bias,
-                        risk,
-                        summary,
-                        json.dumps(top_signals),
-                    ))
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO ai_category_insights
+                (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
+            VALUES
+                ('setup', %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (user_id, category, date)
+            DO UPDATE SET
+                avg_score   = EXCLUDED.avg_score,
+                trend       = EXCLUDED.trend,
+                bias        = EXCLUDED.bias,
+                risk        = EXCLUDED.risk,
+                summary     = EXCLUDED.summary,
+                top_signals = EXCLUDED.top_signals,
+                created_at  = NOW();
+        """, (
+            user_id,
+            avg_score,
+            trend,
+            bias,
+            risk,
+            summary,
+            json.dumps(top_signals),
+        ))
 
-        conn.commit()
+    conn.commit()
 
-        logger.info("✅ Setup-Agent voltooid (user-aware).")
-        return {"active_setup": best_setup, "all_setups": results}
-
-    except Exception:
-        logger.error("❌ Setup-Agent crash:", exc_info=True)
-        return {"active_setup": None, "all_setups": []}
-
-    finally:
-        conn.close()
-
+logger.info("✅ Setup-Agent voltooid (user-aware).")
+return {
+    "active_setup": best_setup,
+    "all_setups": results
+}
 
 
 # ===================================================================
