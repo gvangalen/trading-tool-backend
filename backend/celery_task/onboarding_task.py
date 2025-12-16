@@ -35,7 +35,7 @@ def run_onboarding_pipeline(self, user_id: int):
 
     try:
         # --------------------------------------------------
-        # 🔒 IDMPOTENTIE CHECK + FLAG SETTEN
+        # 🔒 IDEMPOTENTIE CHECK + FLAG SETTEN
         # --------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
@@ -91,7 +91,7 @@ def run_onboarding_pipeline(self, user_id: int):
 
         logger.info(
             "🔗 Onboarding chain QUEUED | "
-            f"chain_id={result.id} | root_id={result.root_id}"
+            f"chain_id={result.id} | parent_task_id={self.request.id}"
         )
 
         return {
@@ -99,7 +99,6 @@ def run_onboarding_pipeline(self, user_id: int):
             "user_id": user_id,
             "parent_task_id": self.request.id,
             "chain_id": result.id,
-            "root_id": result.root_id,
         }
 
     except Exception as e:
