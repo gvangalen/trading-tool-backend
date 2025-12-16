@@ -4,6 +4,7 @@ from backend.utils.db import get_db_connection
 
 logger = logging.getLogger(__name__)
 
+
 @shared_task(
     name="backend.celery_task.onboarding_task.run_onboarding_pipeline",
     bind=True,
@@ -20,17 +21,23 @@ def run_onboarding_pipeline(self, user_id: int):
     conn = get_db_connection()
 
     try:
-        # 🔒 Idempotentie check
+        # --------------------------------------------------
+        # 🔒 Idempotentie
+        # --------------------------------------------------
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 UPDATE onboarding_steps
                 SET pipeline_started = TRUE
                 WHERE user_id = %s
                   AND flow = 'default'
                   AND pipeline_started = FALSE
                 RETURNING id
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             rows = cur.fetchall()
+
         conn.commit()
 
         if not rows:
@@ -39,7 +46,9 @@ def run_onboarding_pipeline(self, user_id: int):
 
         logger.info(f"✅ pipeline_started gezet voor user_id={user_id}")
 
+        # --------------------------------------------------
         # Lazy imports
+        # --------------------------------------------------
         from backend.celery_task.store_daily_scores_task import store_daily_scores_task
         from backend.celery_task.setup_task import run_setup_agent_daily
         from backend.celery_task.strategy_task import generate_all as run_strategy_agent
@@ -50,24 +59,34 @@ def run_onboarding_pipeline(self, user_id: int):
         from backend.ai_agents.technical_ai_agent import generate_technical_insight
         from backend.ai_agents.score_ai_agent import generate_master_score
 
-        # ✅ Chain met immutable signatures (geen arg-lekken)
-        workflow = chain(
+        # --------------------------------------------------
+        # 🔗 PER-USER FLOW (STRICT)
+        # --------------------------------------------------
+        user_flow = chain(
             store_daily_scores_task.si(user_id),
             run_setup_agent_daily.si(user_id),
             run_strategy_agent.si(user_id),
-
-            generate_macro_insight.si(user_id),
-            generate_market_insight.si(user_id),
-            generate_technical_insight.si(user_id),
-            generate_master_score.si(user_id),
-
             generate_daily_report.si(user_id),
         )
 
-        workflow.apply_async()
-        logger.info("🔗 Onboarding workflow queued (immutable, per user)")
+        user_flow.apply_async()
+        logger.info("🔗 Per-user onboarding flow gestart")
 
-        return {"status": "started", "user_id": user_id, "task_id": self.request.id}
+        # --------------------------------------------------
+        # 🧠 GLOBALE AI INSIGHTS (1× trigger)
+        # --------------------------------------------------
+        generate_macro_insight.delay()
+        generate_market_insight.delay()
+        generate_technical_insight.delay()
+        generate_master_score.delay()
+
+        logger.info("🧠 Globale AI-insights geforceerd getriggerd")
+
+        return {
+            "status": "started",
+            "user_id": user_id,
+            "task_id": self.request.id,
+        }
 
     except Exception:
         conn.rollback()
