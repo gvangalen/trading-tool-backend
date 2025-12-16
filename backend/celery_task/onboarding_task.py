@@ -22,8 +22,11 @@ def run_onboarding_pipeline(self, user_id: int):
     Wordt exact ÉÉN keer gestart per gebruiker.
 
     Volgorde:
-    1️⃣ Daily scores opslaan
-    2️⃣ Daily report genereren
+    1️⃣ Daily scores
+    2️⃣ Setup agent
+    3️⃣ Strategy agent
+    4️⃣ AI insights (macro / market / technical / master)
+    5️⃣ Daily report
     """
 
     logger.info("=================================================")
@@ -75,15 +78,35 @@ def run_onboarding_pipeline(self, user_id: int):
         from backend.celery_task.store_daily_scores_task import (
             store_daily_scores_task,
         )
-        from backend.celery_task.daily_report_task import (
-            generate_daily_report,
+        from backend.celery_task.setup_task import (
+            run_setup_agent_daily,
         )
+        from backend.celery_task.strategy_task import (
+            run_strategy_agent_daily,
+        )
+        from backend.ai_agents.macro_ai_agent import generate_macro_insight
+        from backend.ai_agents.market_ai_agent import generate_market_insight
+        from backend.ai_agents.technical_ai_agent import generate_technical_insight
+        from backend.ai_agents.score_ai_agent import generate_master_score
+        from backend.celery_task.daily_report_task import generate_daily_report
 
         # --------------------------------------------------
-        # 🔗 Celery chain
+        # 🔗 Celery chain — VOLLEDIGE USER SNAPSHOT
         # --------------------------------------------------
         workflow = chain(
             store_daily_scores_task.s(user_id),
+
+            # 🧩 Setup & strategy
+            run_setup_agent_daily.s(user_id),
+            run_strategy_agent_daily.s(user_id),
+
+            # 🧠 AI insights
+            generate_macro_insight.s(user_id),
+            generate_market_insight.s(user_id),
+            generate_technical_insight.s(user_id),
+            generate_master_score.s(user_id),
+
+            # 📄 Report
             generate_daily_report.si(user_id),
         )
 
