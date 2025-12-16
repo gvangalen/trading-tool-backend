@@ -21,7 +21,7 @@ def run_onboarding_pipeline(self, user_id: int):
 
     Wordt exact ÉÉN keer gestart per gebruiker.
 
-    Volgorde (architectuur-correct):
+    Volgorde:
     1️⃣ Daily scores (per user)
     2️⃣ Setup agent (globaal)
     3️⃣ Strategy agent (globaal)
@@ -38,7 +38,7 @@ def run_onboarding_pipeline(self, user_id: int):
 
     try:
         # --------------------------------------------------
-        # 🔒 IDEMPOTENTIE CHECK + FLAG SETTEN
+        # 🔒 IDEMPOTENTIE CHECK
         # --------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
@@ -56,7 +56,6 @@ def run_onboarding_pipeline(self, user_id: int):
 
         conn.commit()
 
-        # ⛔ Pipeline was al gestart → STOP
         if not updated_rows:
             logger.warning(
                 f"⚠️ Onboarding pipeline AL EERDER gestart voor user_id={user_id} — skip"
@@ -73,7 +72,7 @@ def run_onboarding_pipeline(self, user_id: int):
         )
 
         # --------------------------------------------------
-        # ⚠️ Lazy imports (NA idempotentie check!)
+        # ⚠️ Lazy imports (NA idempotentie)
         # --------------------------------------------------
         from backend.celery_task.store_daily_scores_task import (
             store_daily_scores_task,
@@ -82,10 +81,9 @@ def run_onboarding_pipeline(self, user_id: int):
             run_setup_agent_daily,
         )
         from backend.celery_task.strategy_task import (
-            generate_all,   # ✅ BESTAANDE strategy agent
+            generate_all,
         )
 
-        # AI insights (globaal)
         from backend.ai_agents.macro_ai_agent import generate_macro_insight
         from backend.ai_agents.market_ai_agent import generate_market_insight
         from backend.ai_agents.technical_ai_agent import generate_technical_insight
@@ -96,23 +94,25 @@ def run_onboarding_pipeline(self, user_id: int):
         )
 
         # --------------------------------------------------
-        # 🔗 Celery chain — ARCHITECTUUR-CORRECT
+        # 🔗 Celery chain
         # --------------------------------------------------
         workflow = chain(
-            # 🧮 User scores
+            # 1️⃣ User scores
             store_daily_scores_task.s(user_id),
 
-            # 🧩 Globale agents
+            # 2️⃣ Setup agent (globaal)
             run_setup_agent_daily.s(),
+
+            # 3️⃣ Strategy agent (globaal)
             generate_all.s(),
 
-            # 🧠 Globale AI insights
+            # 4️⃣ AI insights (globaal)
             generate_macro_insight.s(),
             generate_market_insight.s(),
             generate_technical_insight.s(),
             generate_master_score.s(),
 
-            # 📄 User report
+            # 5️⃣ Daily report (user)
             generate_daily_report.si(user_id),
         )
 
