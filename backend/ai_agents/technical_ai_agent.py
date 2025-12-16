@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # =====================================================================
-# 📊 TECHNICAL AI AGENT — USER-AWARE (STABLE)
+# 📊 TECHNICAL AI AGENT — USER-AWARE (FINAL / STABLE)
 # =====================================================================
 
 @shared_task(name="backend.ai_agents.technical_ai_agent.generate_technical_insight")
@@ -19,7 +19,7 @@ def generate_technical_insight(user_id: int):
     """
     Analyseert technische indicatoren PER USER.
 
-    DB-constraints:
+    DB constraints (VERPLICHT):
     - ai_category_insights UNIQUE (user_id, category, date)
     - ai_reflections UNIQUE (category, user_id, indicator, date)
     """
@@ -53,7 +53,7 @@ def generate_technical_insight(user_id: int):
                 "range_max": float(rmax),
                 "score": int(score),
                 "interpretation": interp,
-                "action": action
+                "action": action,
             })
 
         logger.info(f"📘 Technical scoreregels geladen ({len(rule_rows)} regels)")
@@ -128,7 +128,7 @@ ANTWOORD ALLEEN GELDIGE JSON:
             raise ValueError("❌ Technical AI response is geen geldige JSON")
 
         # ------------------------------------------------------
-        # 4️⃣ AI REFLECTIES
+        # 4️⃣ AI REFLECTIES PER INDICATOR
         # ------------------------------------------------------
         prompt_reflections = f"""
 Maak reflecties per technische indicator.
@@ -150,14 +150,14 @@ ANTWOORD ALS JSON-LIJST:
 
         ai_reflections = ask_gpt(
             prompt_reflections,
-            system_role="Je bent een technische analyse expert."
+            system_role="Je bent een technische analyse expert. Antwoord uitsluitend in geldige JSON."
         )
 
         if not isinstance(ai_reflections, list):
             ai_reflections = []
 
         # ------------------------------------------------------
-        # 5️⃣ Opslaan ai_category_insights ✅ FIX
+        # 5️⃣ Opslaan ai_category_insights
         # UNIQUE (user_id, category, date)
         # ------------------------------------------------------
         with conn.cursor() as cur:
@@ -180,7 +180,7 @@ ANTWOORD ALS JSON-LIJST:
                 ai_context["trend"],
                 ai_context["bias"],
                 ai_context["summary"],
-                json.dumps(ai_context.get("top_signals", []))
+                json.dumps(ai_context.get("top_signals", [])),
             ))
 
         # ------------------------------------------------------
@@ -211,7 +211,7 @@ ANTWOORD ALS JSON-LIJST:
                     r.get("ai_score"),
                     r.get("compliance"),
                     r.get("comment"),
-                    r.get("recommendation")
+                    r.get("recommendation"),
                 ))
 
         conn.commit()
