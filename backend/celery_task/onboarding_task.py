@@ -19,14 +19,11 @@ def run_onboarding_pipeline(self, user_id: int):
     logger.info("=================================================")
 
     conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Geen databaseverbinding")
-        return
 
     try:
-        # ==================================================
-        # 🔒 IDEMPOTENTIECHECK
-        # ==================================================
+        # --------------------------------------------------
+        # 🔒 Idempotentie
+        # --------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -49,49 +46,34 @@ def run_onboarding_pipeline(self, user_id: int):
 
         logger.info(f"✅ pipeline_started gezet voor user_id={user_id}")
 
-        # ==================================================
-        # 🔁 LAZY IMPORTS (voorkomt circular imports)
-        # ==================================================
-        from backend.celery_task.store_daily_scores_task import store_daily_scores_task
-        from backend.celery_task.setup_task import run_setup_agent_daily
-        from backend.celery_task.strategy_task import generate_all as run_strategy_agent
-        from backend.celery_task.daily_report_task import generate_daily_report
+        # --------------------------------------------------
+        # Lazy imports (PER USER)
+        # --------------------------------------------------
+        from backend.celery_task.store_daily_scores_task import (
+            store_daily_scores_task,
+        )
+        from backend.celery_task.setup_task import (
+            run_setup_agent_daily,
+        )
+        from backend.celery_task.strategy_task import (
+            generate_all as run_strategy_agent,
+        )
+        from backend.celery_task.daily_report_task import (
+            generate_daily_report,
+        )
 
-        from backend.ai_agents.macro_ai_agent import generate_macro_insight
-        from backend.ai_agents.market_ai_agent import generate_market_insight
-        from backend.ai_agents.technical_ai_agent import generate_technical_insight
-        from backend.ai_agents.score_ai_agent import generate_master_score
-
-        # ==================================================
-        # 🔗 ENIGE JUISTE ONBOARDING FLOW (PER USER)
-        # ==================================================
-        # Volgorde is CRUCIAAL:
-        # 1. Scores opslaan
-        # 2. AI-insights (macro/market/technical)
-        # 3. Master score
-        # 4. Setup-agent (heeft daily_scores nodig)
-        # 5. Strategy-agent
-        # 6. Daily report
-        # ==================================================
-
-        onboarding_flow = chain(
+        # --------------------------------------------------
+        # 🔗 STRICT PER-USER FLOW
+        # --------------------------------------------------
+        workflow = chain(
             store_daily_scores_task.si(user_id),
-
-            generate_macro_insight.si(user_id),
-            generate_market_insight.si(user_id),
-            generate_technical_insight.si(user_id),
-
-            generate_master_score.si(user_id),
-
             run_setup_agent_daily.si(user_id),
             run_strategy_agent.si(user_id),
-
             generate_daily_report.si(user_id),
         )
 
-        onboarding_flow.apply_async()
-
-        logger.info("🔗 Onboarding pipeline correct gestart (per user, volledig)")
+        workflow.apply_async()
+        logger.info("🔗 Per-user onboarding flow gestart")
 
         return {
             "status": "started",
@@ -106,4 +88,3 @@ def run_onboarding_pipeline(self, user_id: int):
 
     finally:
         conn.close()
-        logger.info(f"🔒 DB-verbinding gesloten voor user_id={user_id}")
