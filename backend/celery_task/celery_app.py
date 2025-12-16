@@ -63,7 +63,6 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=0, minute=5),
     },
 
-    # ✅ 🔥 FIX: 7D MARKET SNAPSHOT (WAS ONTBREKEND)
     "fetch_market_data_7d": {
         "task": "backend.celery_task.market_task.fetch_market_data_7d",
         "schedule": crontab(hour=0, minute=15),
@@ -113,7 +112,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # SETUP AGENT (globaal)
+    # SETUP AGENT
     # =====================================================
     "run_setup_agent_daily": {
         "task": "backend.celery_task.setup_task.run_setup_agent_daily",
@@ -121,7 +120,18 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 👇 USER-GEBASEERD → VIA DISPATCHER
+    # 🟡 STRATEGY AGENT — NIEUW (DIT WAS DE MISSENDE)
+    # =====================================================
+    "dispatch_daily_strategy_snapshot": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+        "schedule": crontab(hour=4, minute=0),
+        "kwargs": {
+            "task_name": "backend.celery_task.strategy_task.run_daily_strategy_snapshot"
+        },
+    },
+
+    # =====================================================
+    # USER-GEBASEERD (REPORTS)
     # =====================================================
     "dispatch_daily_scores": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -172,7 +182,7 @@ celery_app.conf.beat_schedule = {
 logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
 
 # =========================================================
-# 📌 FORCE IMPORTS (veilig bij deploy)
+# 📌 FORCE IMPORTS
 # =========================================================
 try:
     import backend.celery_task.dispatcher
