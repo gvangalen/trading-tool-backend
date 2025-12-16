@@ -21,8 +21,8 @@ def run_onboarding_pipeline(self, user_id: int):
     2️⃣ Macro AI insight
     3️⃣ Market AI insight
     4️⃣ Technical AI insight
-    5️⃣ Setup agent
-    6️⃣ Strategy agent
+    5️⃣ Setup agent (beste setup bepalen)
+    6️⃣ Strategy agent (dagelijkse strategy snapshot)
     7️⃣ Daily report
 
     ⚠️ Geen master score, geen batch agents.
@@ -47,7 +47,7 @@ def run_onboarding_pipeline(self, user_id: int):
                 WHERE user_id = %s
                   AND flow = 'default'
                   AND pipeline_started = FALSE
-                RETURNING id
+                RETURNING id;
                 """,
                 (user_id,),
             )
@@ -75,22 +75,33 @@ def run_onboarding_pipeline(self, user_id: int):
         from backend.ai_agents.market_ai_agent import generate_market_insight
         from backend.ai_agents.technical_ai_agent import generate_technical_insight
         from backend.celery_task.setup_task import run_setup_agent_daily
-        from backend.celery_task.strategy_task import generate_all as run_strategy_agent
+
+        # 🔥 JUISTE STRATEGY TASK
+        from backend.celery_task.strategy_task import (
+            run_daily_strategy_snapshot,
+        )
+
         from backend.celery_task.daily_report_task import generate_daily_report
 
         # --------------------------------------------------
         # 🔗 PER-USER CHAIN (IMMUTABLE)
         # --------------------------------------------------
         workflow = chain(
+            # 1️⃣ Scores
             store_daily_scores_task.si(user_id),
 
+            # 2️⃣–4️⃣ AI insights
             generate_macro_insight.si(user_id),
             generate_market_insight.si(user_id),
             generate_technical_insight.si(user_id),
 
+            # 5️⃣ Setup agent → beste setup van de dag
             run_setup_agent_daily.si(user_id),
-            run_strategy_agent.si(user_id),
 
+            # 6️⃣ Strategy agent → daily snapshot
+            run_daily_strategy_snapshot.si(user_id),
+
+            # 7️⃣ Dagrapport
             generate_daily_report.si(user_id),
         )
 
