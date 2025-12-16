@@ -12,15 +12,6 @@ logger = logging.getLogger(__name__)
     retry_backoff=True,
 )
 def run_onboarding_pipeline(self, user_id: int):
-    """
-    Volledige onboarding per user:
-    - scores
-    - setup agent
-    - strategy agent
-    - AI insights (per user)
-    - daily report
-    """
-
     logger.info("=================================================")
     logger.info(f"🚀 ONBOARDING START user_id={user_id}")
     logger.info(f"📌 task_id={self.request.id}")
@@ -29,9 +20,7 @@ def run_onboarding_pipeline(self, user_id: int):
     conn = get_db_connection()
 
     try:
-        # --------------------------------------------------
-        # 🔒 Idempotentie
-        # --------------------------------------------------
+        # 🔒 Idempotentie check
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE onboarding_steps
@@ -42,7 +31,6 @@ def run_onboarding_pipeline(self, user_id: int):
                 RETURNING id
             """, (user_id,))
             rows = cur.fetchall()
-
         conn.commit()
 
         if not rows:
@@ -51,9 +39,7 @@ def run_onboarding_pipeline(self, user_id: int):
 
         logger.info(f"✅ pipeline_started gezet voor user_id={user_id}")
 
-        # --------------------------------------------------
         # Lazy imports
-        # --------------------------------------------------
         from backend.celery_task.store_daily_scores_task import store_daily_scores_task
         from backend.celery_task.setup_task import run_setup_agent_daily
         from backend.celery_task.strategy_task import generate_all as run_strategy_agent
@@ -64,32 +50,24 @@ def run_onboarding_pipeline(self, user_id: int):
         from backend.ai_agents.technical_ai_agent import generate_technical_insight
         from backend.ai_agents.score_ai_agent import generate_master_score
 
-        # --------------------------------------------------
-        # 🔗 Volledige USER chain
-        # --------------------------------------------------
+        # ✅ Chain met immutable signatures (geen arg-lekken)
         workflow = chain(
-            store_daily_scores_task.s(user_id),
-            run_setup_agent_daily.s(user_id),
-            run_strategy_agent.s(user_id),
+            store_daily_scores_task.si(user_id),
+            run_setup_agent_daily.si(user_id),
+            run_strategy_agent.si(user_id),
 
-            # AI insights → PER USER
-            generate_macro_insight.s(user_id),
-            generate_market_insight.s(user_id),
-            generate_technical_insight.s(user_id),
-            generate_master_score.s(user_id),
+            generate_macro_insight.si(user_id),
+            generate_market_insight.si(user_id),
+            generate_technical_insight.si(user_id),
+            generate_master_score.si(user_id),
 
             generate_daily_report.si(user_id),
         )
 
         workflow.apply_async()
+        logger.info("🔗 Onboarding workflow queued (immutable, per user)")
 
-        logger.info("🔗 Onboarding workflow queued (per user, incl AI insights)")
-
-        return {
-            "status": "started",
-            "user_id": user_id,
-            "task_id": self.request.id,
-        }
+        return {"status": "started", "user_id": user_id, "task_id": self.request.id}
 
     except Exception:
         conn.rollback()
