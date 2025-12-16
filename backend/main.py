@@ -107,6 +107,7 @@ safe_include("backend.api.score_api", "score_api")
 safe_include("backend.api.dashboard_api", "dashboard_api")
 safe_include("backend.api.sidebar_api", "sidebar_api")
 safe_include("backend.api.agents_api", "agents_api")
+safe_include("backend.api.report_api", "report_api")
 
 # ==================================================================
 # 🗂 Legacy routes
