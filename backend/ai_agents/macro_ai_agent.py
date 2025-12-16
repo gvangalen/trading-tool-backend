@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ======================================================
-# 🌍 MACRO AI AGENT — USER-AWARE (STABLE)
+# 🌍 MACRO AI AGENT — USER-AWARE (STABLE / FIXED)
 # ======================================================
 
 @shared_task(name="backend.ai_agents.macro_ai_agent.generate_macro_insight")
@@ -21,7 +21,7 @@ def generate_macro_insight(user_id: int):
     """
     Analyseert macro-indicatoren PER USER.
 
-    DB-constraints:
+    DB constraints (BELANGRIJK):
     - ai_category_insights UNIQUE (user_id, category, date)
     - ai_reflections UNIQUE (category, user_id, indicator, date)
     """
@@ -38,7 +38,7 @@ def generate_macro_insight(user_id: int):
 
     try:
         # =========================================================
-        # 1️⃣ Macro scoreregels (globaal)
+        # 1️⃣ Macro scoreregels (GLOBAAL)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -62,7 +62,7 @@ def generate_macro_insight(user_id: int):
         logger.info(f"📘 Macro regels geladen ({len(rules_by_indicator)} indicatoren)")
 
         # =========================================================
-        # 2️⃣ Macro data VANDAAG (user-specifiek)
+        # 2️⃣ Macro data VANDAAG (USER-SPECIFIEK)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -98,7 +98,7 @@ def generate_macro_insight(user_id: int):
             })
 
         # =========================================================
-        # 3️⃣ Macro-score (user-aware)
+        # 3️⃣ Macro-score (USER-AWARE)
         # =========================================================
         macro_scores = generate_scores_db("macro", user_id=user_id)
         macro_avg = macro_scores.get("total_score", 0)
@@ -122,7 +122,7 @@ def generate_macro_insight(user_id: int):
         ]
 
         # =========================================================
-        # 4️⃣ AI context
+        # 4️⃣ AI CONTEXT
         # =========================================================
         payload = {
             "user_id": user_id,
@@ -159,7 +159,7 @@ ANTWOORD ALLEEN GELDIGE JSON:
             raise ValueError("❌ Macro AI response is geen geldige JSON")
 
         # =========================================================
-        # 5️⃣ AI reflecties per indicator
+        # 5️⃣ AI REFLECTIES PER INDICATOR
         # =========================================================
         prompt_reflections = f"""
 Maak reflecties per macro-indicator.
@@ -188,7 +188,7 @@ ANTWOORD ALS JSON-LIJST:
             ai_reflections = []
 
         # =========================================================
-        # 6️⃣ OPSLAAN ai_category_insights ✅ FIX
+        # 6️⃣ OPSLAAN ai_category_insights
         # UNIQUE (user_id, category, date)
         # =========================================================
         with conn.cursor() as cur:
