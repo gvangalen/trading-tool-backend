@@ -46,33 +46,44 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 BEAT SCHEDULE (ALLEEN DISPATCHERS)
+# 🕒 BEAT SCHEDULE
 # =========================================================
 celery_app.conf.beat_schedule = {
 
     # =====================================================
-    # MARKET / MACRO / TECHNICAL (globaal, geen users)
+    # MARKET / MACRO / TECHNICAL (globaal)
     # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
         "schedule": crontab(minute="*/15"),
     },
+
     "save_market_data_daily": {
         "task": "backend.celery_task.market_task.save_market_data_daily",
         "schedule": crontab(hour=0, minute=5),
     },
+
+    # ✅ 🔥 FIX: 7D MARKET SNAPSHOT (WAS ONTBREKEND)
+    "fetch_market_data_7d": {
+        "task": "backend.celery_task.market_task.fetch_market_data_7d",
+        "schedule": crontab(hour=0, minute=15),
+    },
+
     "sync_price_history_and_returns": {
         "task": "backend.celery_task.market_task.sync_price_history_and_returns",
         "schedule": crontab(hour=1, minute=0),
     },
+
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
         "schedule": crontab(hour=0, minute=12),
     },
+
     "fetch_technical_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
         "schedule": crontab(hour=0, minute=10),
     },
+
     "update_btc_history": {
         "task": "backend.celery_task.btc_price_history_task.update_btc_history",
         "schedule": crontab(hour=1, minute=10),
@@ -85,14 +96,17 @@ celery_app.conf.beat_schedule = {
         "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
         "schedule": crontab(hour=3, minute=0),
     },
+
     "generate_market_insight": {
         "task": "backend.ai_agents.market_ai_agent.generate_market_insight",
         "schedule": crontab(hour=3, minute=10),
     },
+
     "generate_technical_insight": {
         "task": "backend.ai_agents.technical_ai_agent.generate_technical_insight",
         "schedule": crontab(hour=3, minute=20),
     },
+
     "generate_master_score": {
         "task": "backend.ai_agents.score_ai_agent.generate_master_score",
         "schedule": crontab(hour=3, minute=40),
