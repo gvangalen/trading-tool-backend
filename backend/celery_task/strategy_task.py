@@ -1,6 +1,5 @@
 import logging
 import json
-from datetime import date
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
@@ -23,8 +22,7 @@ def load_setup_from_db(setup_id: int, user_id: int) -> dict:
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT
                     id,
                     name,
@@ -36,9 +34,7 @@ def load_setup_from_db(setup_id: int, user_id: int) -> dict:
                 FROM setups
                 WHERE id = %s AND user_id = %s
                 LIMIT 1;
-                """,
-                (setup_id, user_id),
-            )
+            """, (setup_id, user_id))
 
             row = cur.fetchone()
             if not row:
@@ -67,8 +63,7 @@ def load_latest_strategy(setup_id: int, user_id: int) -> dict | None:
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT
                     id,
                     entry,
@@ -82,9 +77,7 @@ def load_latest_strategy(setup_id: int, user_id: int) -> dict | None:
                 WHERE setup_id = %s AND user_id = %s
                 ORDER BY created_at DESC
                 LIMIT 1;
-                """,
-                (setup_id, user_id),
-            )
+            """, (setup_id, user_id))
 
             row = cur.fetchone()
             if not row:
@@ -93,7 +86,7 @@ def load_latest_strategy(setup_id: int, user_id: int) -> dict | None:
             return {
                 "strategy_id": row[0],
                 "entry": row[1],
-                "targets": row[2],
+                "targets": row[2],  # comma-separated string
                 "stop_loss": row[3],
                 "risk_profile": row[4],
                 "explanation": row[5],
@@ -115,12 +108,11 @@ def generate_for_setup(user_id: int, setup_id: int):
 
     try:
         setup = load_setup_from_db(setup_id, user_id)
-        strategy = generate_strategy_from_setup(setup, user_id=user_id)
+        strategy = generate_strategy_from_setup(setup)
 
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 INSERT INTO strategies (
                     setup_id,
                     entry,
@@ -133,19 +125,17 @@ def generate_for_setup(user_id: int, setup_id: int):
                     user_id
                 ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
                 RETURNING id;
-                """,
-                (
-                    setup_id,
-                    strategy.get("entry"),
-                    ",".join(map(str, strategy.get("targets", []))),
-                    strategy.get("stop_loss"),
-                    strategy.get("explanation"),
-                    strategy.get("risk_reward"),
-                    setup.get("strategy_type"),
-                    json.dumps(strategy),
-                    user_id,
-                ),
-            )
+            """, (
+                setup_id,
+                strategy.get("entry"),
+                ",".join(map(str, strategy.get("targets", []))),
+                strategy.get("stop_loss"),
+                strategy.get("explanation"),
+                strategy.get("risk_reward"),
+                setup.get("strategy_type"),
+                json.dumps(strategy),
+                user_id,
+            ))
 
             strategy_id = cur.fetchone()[0]
             conn.commit()
@@ -174,42 +164,37 @@ def analyze_strategy(user_id: int, strategy_id: int):
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT
                     id, setup_id, entry, target, stop_loss,
                     risk_profile, explanation, data, created_at
                 FROM strategies
                 WHERE id = %s AND user_id = %s;
-                """,
-                (strategy_id, user_id),
-            )
+            """, (strategy_id, user_id))
+
             row = cur.fetchone()
 
         if not row:
             return
 
-        payload = [
-            {
-                "strategy_id": row[0],
-                "setup_id": row[1],
-                "entry": row[2],
-                "targets": row[3],
-                "stop_loss": row[4],
-                "risk_profile": row[5],
-                "explanation": row[6],
-                "data": row[7],
-                "created_at": row[8].isoformat() if row[8] else None,
-            }
-        ]
+        payload = [{
+            "strategy_id": row[0],
+            "setup_id": row[1],
+            "entry": row[2],
+            "targets": row[3],
+            "stop_loss": row[4],
+            "risk_profile": row[5],
+            "explanation": row[6],
+            "data": row[7],
+            "created_at": row[8].isoformat() if row[8] else None,
+        }]
 
         analysis = analyze_strategies(payload)
         if not analysis:
             return
 
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 UPDATE strategies
                 SET data = jsonb_set(
                     COALESCE(data,'{}'::jsonb),
@@ -218,9 +203,7 @@ def analyze_strategy(user_id: int, strategy_id: int):
                     true
                 )
                 WHERE id = %s AND user_id = %s;
-                """,
-                (json.dumps(analysis), strategy_id, user_id),
-            )
+            """, (json.dumps(analysis), strategy_id, user_id))
 
         conn.commit()
         logger.info("✅ Strategy analyse opgeslagen")
@@ -230,8 +213,7 @@ def analyze_strategy(user_id: int, strategy_id: int):
 
 
 # ============================================================
-# 🟡 NIVAU 2 — DAGELIJKSE STRATEGY SNAPSHOT
-# (best-of-day setup → bijgestelde parameters)
+# 🟡 DAGELIJKSE STRATEGY SNAPSHOT (NIVEAU 2)
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.run_daily_strategy_snapshot")
 def run_daily_strategy_snapshot(user_id: int):
@@ -239,43 +221,36 @@ def run_daily_strategy_snapshot(user_id: int):
     conn = get_db_connection()
 
     try:
-        # 1️⃣ Beste setup van vandaag
+        # 1️⃣ Best-of-day setup
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT setup_id
                 FROM daily_setup_scores
                 WHERE user_id = %s
                   AND report_date = CURRENT_DATE
                   AND is_best = TRUE
                 LIMIT 1;
-                """,
-                (user_id,),
-            )
+            """, (user_id,))
             row = cur.fetchone()
 
         if not row:
-            logger.warning("⚠️ Geen best-of-day setup gevonden")
+            logger.warning("⚠️ Geen best-of-day setup")
             return
 
         setup_id = row[0]
 
         # 2️⃣ Market context
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT macro_score, technical_score, market_score
                 FROM daily_scores
                 WHERE user_id = %s
                   AND report_date = CURRENT_DATE
                 LIMIT 1;
-                """,
-                (user_id,),
-            )
+            """, (user_id,))
             scores = cur.fetchone()
 
         if not scores:
-            logger.warning("⚠️ Geen daily scores gevonden")
             return
 
         market_context = {
@@ -284,15 +259,12 @@ def run_daily_strategy_snapshot(user_id: int):
             "market_score": scores[2],
         }
 
-        # 3️⃣ Basisstrategie
         setup = load_setup_from_db(setup_id, user_id)
         base_strategy = load_latest_strategy(setup_id, user_id)
 
         if not base_strategy:
-            logger.warning("⚠️ Geen basisstrategie gevonden")
             return
 
-        # 4️⃣ Strategy Agent
         adjustment = adjust_strategy_for_today(
             base_strategy=base_strategy,
             setup=setup,
@@ -302,10 +274,8 @@ def run_daily_strategy_snapshot(user_id: int):
         if not adjustment:
             return
 
-        # 5️⃣ Opslaan snapshot
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 INSERT INTO active_strategy_snapshot (
                     user_id,
                     setup_id,
@@ -335,20 +305,18 @@ def run_daily_strategy_snapshot(user_id: int):
                     market_context = EXCLUDED.market_context,
                     changes = EXCLUDED.changes,
                     created_at = NOW();
-                """,
-                (
-                    user_id,
-                    setup_id,
-                    base_strategy["strategy_id"],
-                    adjustment.get("entry"),
-                    adjustment.get("targets"),
-                    adjustment.get("stop_loss"),
-                    adjustment.get("reason"),
-                    adjustment.get("confidence"),
-                    json.dumps(market_context),
-                    json.dumps(adjustment.get("changes")),
-                ),
-            )
+            """, (
+                user_id,
+                setup_id,
+                base_strategy["strategy_id"],
+                adjustment.get("entry"),
+                ",".join(map(str, adjustment.get("targets", []))),
+                adjustment.get("stop_loss"),
+                adjustment.get("adjustment_reason"),
+                adjustment.get("confidence_score"),
+                json.dumps(market_context),
+                json.dumps(adjustment.get("changes")),
+            ))
 
         conn.commit()
         logger.info("✅ Active strategy snapshot opgeslagen")
