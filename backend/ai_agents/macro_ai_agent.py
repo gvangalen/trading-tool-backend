@@ -13,20 +13,17 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ======================================================
-# 🌍 MACRO AI AGENT — USER-AWARE (FINAL)
+# 🌍 MACRO AI AGENT — USER-AWARE (STABLE)
 # ======================================================
 
 @shared_task(name="backend.ai_agents.macro_ai_agent.generate_macro_insight")
 def generate_macro_insight(user_id: int):
     """
-    Analyseert macro-indicatoren PER USER op basis van:
-    - macro_data (user_id verplicht)
-    - macro_indicator_rules (globaal)
-    - macro-score via generate_scores_db("macro", user_id)
+    Analyseert macro-indicatoren PER USER.
 
-    Output:
-    - ai_category_insights (per user, per dag)
-    - ai_reflections (per indicator, per user)
+    DB-constraints:
+    - ai_category_insights UNIQUE (user_id, category, date)
+    - ai_reflections UNIQUE (category, user_id, indicator, date)
     """
 
     if user_id is None:
@@ -41,7 +38,7 @@ def generate_macro_insight(user_id: int):
 
     try:
         # =========================================================
-        # 1️⃣ Macro scoreregels (GLOBAAL)
+        # 1️⃣ Macro scoreregels (globaal)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -51,7 +48,7 @@ def generate_macro_insight(user_id: int):
             """)
             rule_rows = cur.fetchall()
 
-        rules_by_indicator: dict[str, list] = {}
+        rules_by_indicator = {}
         for indicator, rmin, rmax, score, trend, interp, action in rule_rows:
             rules_by_indicator.setdefault(indicator, []).append({
                 "range_min": float(rmin),
@@ -65,7 +62,7 @@ def generate_macro_insight(user_id: int):
         logger.info(f"📘 Macro regels geladen ({len(rules_by_indicator)} indicatoren)")
 
         # =========================================================
-        # 2️⃣ Macro data VANDAAG (USER-SPECIFIEK)
+        # 2️⃣ Macro data VANDAAG (user-specifiek)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -85,24 +82,23 @@ def generate_macro_insight(user_id: int):
             macro_rows = cur.fetchall()
 
         if not macro_rows:
-            logger.warning(f"⚠️ Geen macro_data gevonden voor vandaag (user_id={user_id})")
+            logger.warning(f"⚠️ Geen macro_data voor vandaag (user_id={user_id})")
             return
 
-        macro_items = [
-            {
+        macro_items = []
+        for name, value, trend, interp, action, score, ts in macro_rows:
+            macro_items.append({
                 "indicator": name,
                 "value": float(value) if value is not None else None,
                 "trend": trend,
-                "interpretation": interpretation,
+                "interpretation": interp,
                 "action": action,
                 "score": float(score) if score is not None else None,
                 "timestamp": ts.isoformat() if ts else None,
-            }
-            for name, value, trend, interpretation, action, score, ts in macro_rows
-        ]
+            })
 
         # =========================================================
-        # 3️⃣ Macro-score (USER-SPECIFIEK, VERPLICHT)
+        # 3️⃣ Macro-score (user-aware)
         # =========================================================
         macro_scores = generate_scores_db("macro", user_id=user_id)
         macro_avg = macro_scores.get("total_score", 0)
@@ -126,9 +122,9 @@ def generate_macro_insight(user_id: int):
         ]
 
         # =========================================================
-        # 4️⃣ AI CONTEXT PROMPT
+        # 4️⃣ AI context
         # =========================================================
-        data_payload = {
+        payload = {
             "user_id": user_id,
             "macro_items": macro_items,
             "macro_rules": rules_by_indicator,
@@ -139,10 +135,10 @@ def generate_macro_insight(user_id: int):
         prompt_context = f"""
 Je bent een macro-economische analist gespecialiseerd in Bitcoin.
 
-Analyseer onderstaande macrodata en geef een samenvattend oordeel.
+Analyseer de onderstaande macrodata en geef een samenvattend oordeel.
 
 DATA:
-{json.dumps(data_payload, ensure_ascii=False, indent=2)}
+{json.dumps(payload, ensure_ascii=False, indent=2)}
 
 ANTWOORD ALLEEN GELDIGE JSON:
 {{
@@ -163,7 +159,7 @@ ANTWOORD ALLEEN GELDIGE JSON:
             raise ValueError("❌ Macro AI response is geen geldige JSON")
 
         # =========================================================
-        # 5️⃣ AI REFLECTIES PER INDICATOR
+        # 5️⃣ AI reflecties per indicator
         # =========================================================
         prompt_reflections = f"""
 Maak reflecties per macro-indicator.
@@ -192,7 +188,8 @@ ANTWOORD ALS JSON-LIJST:
             ai_reflections = []
 
         # =========================================================
-        # 6️⃣ OPSLAAN ai_category_insights (PER USER)
+        # 6️⃣ OPSLAAN ai_category_insights ✅ FIX
+        # UNIQUE (user_id, category, date)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -200,7 +197,7 @@ ANTWOORD ALS JSON-LIJST:
                     (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
                 VALUES
                     ('macro', %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (category, user_id, date)
+                ON CONFLICT (user_id, category, date)
                 DO UPDATE SET
                     avg_score   = EXCLUDED.avg_score,
                     trend       = EXCLUDED.trend,
@@ -220,7 +217,8 @@ ANTWOORD ALS JSON-LIJST:
             ))
 
         # =========================================================
-        # 7️⃣ OPSLAAN ai_reflections (PER INDICATOR, PER USER)
+        # 7️⃣ OPSLAAN ai_reflections
+        # UNIQUE (category, user_id, indicator, date)
         # =========================================================
         for r in ai_reflections:
             indicator = r.get("indicator")
