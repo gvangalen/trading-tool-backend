@@ -11,19 +11,17 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # =====================================================================
-# 📊 TECHNICAL AI AGENT — USER-AWARE (FINAL)
+# 📊 TECHNICAL AI AGENT — USER-AWARE (STABLE)
 # =====================================================================
 
 @shared_task(name="backend.ai_agents.technical_ai_agent.generate_technical_insight")
 def generate_technical_insight(user_id: int):
     """
-    Analyseert technische indicatoren PER USER op basis van:
-    - technical_indicators (user_id verplicht)
-    - technical_indicator_rules (globaal)
+    Analyseert technische indicatoren PER USER.
 
-    Output:
-    - ai_category_insights (per user, per dag)
-    - ai_reflections (per indicator, per user)
+    DB-constraints:
+    - ai_category_insights UNIQUE (user_id, category, date)
+    - ai_reflections UNIQUE (category, user_id, indicator, date)
     """
 
     if user_id is None:
@@ -159,21 +157,23 @@ ANTWOORD ALS JSON-LIJST:
             ai_reflections = []
 
         # ------------------------------------------------------
-        # 5️⃣ Opslaan ai_category_insights
+        # 5️⃣ Opslaan ai_category_insights ✅ FIX
+        # UNIQUE (user_id, category, date)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO ai_category_insights
                     (category, user_id, avg_score, trend, bias, summary, top_signals)
-                VALUES ('technical', %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (category, user_id, date)
+                VALUES
+                    ('technical', %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (user_id, category, date)
                 DO UPDATE SET
-                    avg_score = EXCLUDED.avg_score,
-                    trend     = EXCLUDED.trend,
-                    bias      = EXCLUDED.bias,
-                    summary   = EXCLUDED.summary,
+                    avg_score   = EXCLUDED.avg_score,
+                    trend       = EXCLUDED.trend,
+                    bias        = EXCLUDED.bias,
+                    summary     = EXCLUDED.summary,
                     top_signals = EXCLUDED.top_signals,
-                    created_at = NOW();
+                    created_at  = NOW();
             """, (
                 user_id,
                 avg_score,
@@ -185,6 +185,7 @@ ANTWOORD ALS JSON-LIJST:
 
         # ------------------------------------------------------
         # 6️⃣ Opslaan ai_reflections
+        # UNIQUE (category, user_id, indicator, date)
         # ------------------------------------------------------
         for r in ai_reflections:
             indicator = r.get("indicator")
@@ -195,14 +196,15 @@ ANTWOORD ALS JSON-LIJST:
                 cur.execute("""
                     INSERT INTO ai_reflections
                         (category, user_id, indicator, raw_score, ai_score, compliance, comment, recommendation)
-                    VALUES ('technical', %s, %s, NULL, %s, %s, %s, %s)
+                    VALUES
+                        ('technical', %s, %s, NULL, %s, %s, %s, %s)
                     ON CONFLICT (category, user_id, indicator, date)
                     DO UPDATE SET
-                        ai_score = EXCLUDED.ai_score,
-                        compliance = EXCLUDED.compliance,
-                        comment = EXCLUDED.comment,
+                        ai_score       = EXCLUDED.ai_score,
+                        compliance     = EXCLUDED.compliance,
+                        comment        = EXCLUDED.comment,
                         recommendation = EXCLUDED.recommendation,
-                        timestamp = NOW();
+                        timestamp      = NOW();
                 """, (
                     user_id,
                     indicator,
