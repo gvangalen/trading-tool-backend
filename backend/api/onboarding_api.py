@@ -16,7 +16,7 @@ export function useOnboarding() {
   const [error, setError] = useState(null);
 
   // =====================================================
-  // 1️⃣ Status ophalen
+  // 1️ Status ophalen
   // =====================================================
   const fetchStatus = useCallback(async () => {
     try {
@@ -41,7 +41,7 @@ export function useOnboarding() {
   }, [fetchStatus]);
 
   // =====================================================
-  // 2️⃣ Acties
+  // 2️ Acties
   // =====================================================
   const completeStep = async (step, metaReason = "unknown") => {
     try {
@@ -94,7 +94,7 @@ export function useOnboarding() {
   };
 
   // =====================================================
-  // 3️⃣ Stap-status
+  // 3️ Stap-status
   // =====================================================
   const stepStatus = useMemo(() => {
     if (!status) return null;
@@ -112,7 +112,7 @@ export function useOnboarding() {
   }, [status]);
 
   // =====================================================
-  // 4️⃣ Onboarding & pipeline status
+  // 4️ Onboarding & pipeline status
   // =====================================================
   const onboardingComplete = useMemo(() => {
     if (!stepStatus) return false;
