@@ -46,12 +46,12 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 BEAT SCHEDULE
+# 🕒 BEAT SCHEDULE (CORRECTE VOLGORDE)
 # =========================================================
 celery_app.conf.beat_schedule = {
 
     # =====================================================
-    # MARKET / MACRO / TECHNICAL (globaal)
+    # 1️⃣ MARKET / MACRO / TECHNICAL DATA
     # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -63,16 +63,6 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=0, minute=5),
     },
 
-    "fetch_market_data_7d": {
-        "task": "backend.celery_task.market_task.fetch_market_data_7d",
-        "schedule": crontab(hour=0, minute=15),
-    },
-
-    "sync_price_history_and_returns": {
-        "task": "backend.celery_task.market_task.sync_price_history_and_returns",
-        "schedule": crontab(hour=1, minute=0),
-    },
-
     "fetch_macro_data": {
         "task": "backend.celery_task.macro_task.fetch_macro_data",
         "schedule": crontab(hour=0, minute=12),
@@ -80,16 +70,11 @@ celery_app.conf.beat_schedule = {
 
     "fetch_technical_day": {
         "task": "backend.celery_task.technical_task.fetch_technical_data_day",
-        "schedule": crontab(hour=0, minute=10),
-    },
-
-    "update_btc_history": {
-        "task": "backend.celery_task.btc_price_history_task.update_btc_history",
-        "schedule": crontab(hour=1, minute=10),
+        "schedule": crontab(hour=0, minute=15),
     },
 
     # =====================================================
-    # AI INSIGHTS (globaal)
+    # 2️⃣ AI INSIGHTS (OPTIONEEL, LOS)
     # =====================================================
     "generate_macro_insight": {
         "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
@@ -106,13 +91,19 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=3, minute=20),
     },
 
-    "generate_master_score": {
-        "task": "backend.ai_agents.score_ai_agent.generate_master_score",
+    # =====================================================
+    # 3️⃣ DAILY SCORES (ABSOLUUT EERST)
+    # =====================================================
+    "dispatch_daily_scores": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=40),
+        "kwargs": {
+            "task_name": "backend.celery_task.store_daily_scores_task.store_daily_scores_task"
+        },
     },
 
     # =====================================================
-    # SETUP AGENT
+    # 4️⃣ SETUP AGENT (gebruikt daily_scores)
     # =====================================================
     "run_setup_agent_daily": {
         "task": "backend.celery_task.setup_task.run_setup_agent_daily",
@@ -120,7 +111,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 🟡 STRATEGY AGENT — NIEUW (DIT WAS DE MISSENDE)
+    # 5️⃣ STRATEGY SNAPSHOT (gebruikt setup + scores)
     # =====================================================
     "dispatch_daily_strategy_snapshot": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -131,16 +122,8 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # USER-GEBASEERD (REPORTS)
+    # 6️⃣ REPORTS (LAATSTE)
     # =====================================================
-    "dispatch_daily_scores": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=4, minute=30),
-        "kwargs": {
-            "task_name": "backend.celery_task.store_daily_scores_task.store_daily_scores_task"
-        },
-    },
-
     "dispatch_daily_report": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=5, minute=0),
@@ -189,23 +172,21 @@ try:
     import backend.celery_task.market_task
     import backend.celery_task.macro_task
     import backend.celery_task.technical_task
-    import backend.celery_task.btc_price_history_task
+    import backend.celery_task.store_daily_scores_task
+    import backend.celery_task.setup_task
+    import backend.celery_task.strategy_task
     import backend.celery_task.daily_report_task
     import backend.celery_task.weekly_report_task
     import backend.celery_task.monthly_report_task
     import backend.celery_task.quarterly_report_task
-    import backend.celery_task.store_daily_scores_task
-    import backend.celery_task.setup_task
-    import backend.celery_task.onboarding_task
-    import backend.celery_task.strategy_task
 
     import backend.ai_agents.macro_ai_agent
     import backend.ai_agents.market_ai_agent
     import backend.ai_agents.technical_ai_agent
-    import backend.ai_agents.report_ai_agent
     import backend.ai_agents.score_ai_agent
     import backend.ai_agents.setup_ai_agent
     import backend.ai_agents.strategy_ai_agent
+    import backend.ai_agents.report_ai_agent
 
     logger.info("✅ Forced task imports succesvol geladen!")
 except Exception as e:
