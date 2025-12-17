@@ -393,3 +393,52 @@ async def export_strategies(
 
     finally:
         conn.close()
+
+
+# ==========================================================
+# 11. 🎯 ACTIEVE STRATEGIE VANDAAG (SNAPSHOT)
+# ==========================================================
+@router.get("/strategy/active-today")
+async def get_active_strategy_today(
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["id"]
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    s.name       AS setup_name,
+                    s.symbol,
+                    s.timeframe,
+                    a.entry,
+                    a.targets,
+                    a.stop_loss,
+                    a.adjustment_reason,
+                    a.confidence_score
+                FROM active_strategy_snapshot a
+                JOIN setups s ON s.id = a.setup_id
+                WHERE a.user_id = %s
+                  AND a.snapshot_date = CURRENT_DATE
+                LIMIT 1;
+            """, (user_id,))
+
+            row = cur.fetchone()
+
+        if not row:
+            return None  # frontend toont: "Geen actieve strategie vandaag"
+
+        return {
+            "setup_name": row[0],
+            "symbol": row[1],
+            "timeframe": row[2],
+            "entry": row[3],
+            "targets": row[4],
+            "stop_loss": row[5],
+            "adjustment_reason": row[6],
+            "confidence_score": row[7],
+        }
+
+    finally:
+        conn.close()
