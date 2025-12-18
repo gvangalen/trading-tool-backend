@@ -46,12 +46,12 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 BEAT SCHEDULE (CORRECTE VOLGORDE)
+# 🕒 BEAT SCHEDULE — DEFINITIEF CORRECT
 # =========================================================
 celery_app.conf.beat_schedule = {
 
     # =====================================================
-    # 1️⃣ MARKET / MACRO / TECHNICAL DATA
+    # 1️⃣ DATA INGESTIE
     # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -74,25 +74,34 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 2️⃣ AI INSIGHTS (OPTIONEEL, LOS)
+    # 2️⃣ AI INSIGHTS — ALTIJD VIA DISPATCHER
     # =====================================================
-    "generate_macro_insight": {
-        "task": "backend.ai_agents.macro_ai_agent.generate_macro_insight",
+    "dispatch_macro_insight": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=0),
+        "kwargs": {
+            "task_name": "backend.ai_agents.macro_ai_agent.generate_macro_insight"
+        },
     },
 
-    "generate_market_insight": {
-        "task": "backend.ai_agents.market_ai_agent.generate_market_insight",
+    "dispatch_market_insight": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=10),
+        "kwargs": {
+            "task_name": "backend.ai_agents.market_ai_agent.generate_market_insight"
+        },
     },
 
-    "generate_technical_insight": {
-        "task": "backend.ai_agents.technical_ai_agent.generate_technical_insight",
+    "dispatch_technical_insight": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=20),
+        "kwargs": {
+            "task_name": "backend.ai_agents.technical_ai_agent.generate_technical_insight"
+        },
     },
 
     # =====================================================
-    # 3️⃣ DAILY SCORES (ABSOLUUT EERST)
+    # 3️⃣ DAILY SCORES (BASIS VOOR ALLES)
     # =====================================================
     "dispatch_daily_scores": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -103,7 +112,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 4️⃣ SETUP AGENT (gebruikt daily_scores)
+    # 4️⃣ SETUP AGENT
     # =====================================================
     "run_setup_agent_daily": {
         "task": "backend.celery_task.setup_task.run_setup_agent_daily",
@@ -111,7 +120,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 5️⃣ STRATEGY SNAPSHOT (gebruikt setup + scores)
+    # 5️⃣ STRATEGY SNAPSHOT
     # =====================================================
     "dispatch_daily_strategy_snapshot": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -131,35 +140,6 @@ celery_app.conf.beat_schedule = {
             "task_name": "backend.celery_task.daily_report_task.generate_daily_report"
         },
     },
-
-    "dispatch_weekly_report": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=1, minute=20, day_of_week="monday"),
-        "kwargs": {
-            "task_name": "backend.celery_task.weekly_report_task.generate_weekly_report"
-        },
-    },
-
-    "dispatch_monthly_report": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=1, minute=30, day_of_month="1"),
-        "kwargs": {
-            "task_name": "backend.celery_task.monthly_report_task.generate_monthly_report"
-        },
-    },
-
-    "dispatch_quarterly_report": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(
-            hour=1,
-            minute=45,
-            day_of_month="1",
-            month_of_year="1,4,7,10",
-        ),
-        "kwargs": {
-            "task_name": "backend.celery_task.quarterly_report_task.generate_quarterly_report"
-        },
-    },
 }
 
 logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
@@ -176,9 +156,6 @@ try:
     import backend.celery_task.setup_task
     import backend.celery_task.strategy_task
     import backend.celery_task.daily_report_task
-    import backend.celery_task.weekly_report_task
-    import backend.celery_task.monthly_report_task
-    import backend.celery_task.quarterly_report_task
 
     import backend.ai_agents.macro_ai_agent
     import backend.ai_agents.market_ai_agent
