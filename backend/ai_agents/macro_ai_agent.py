@@ -4,7 +4,7 @@ import json
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
-from backend.utils.scoring_utils import generate_scores_db
+from backend.utils.scoring_utils import generate_scores_db, normalize_indicator_name
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -16,9 +16,12 @@ logger.setLevel(logging.INFO)
 def run_macro_agent(user_id: int):
     """
     Genereert macro AI insights voor één gebruiker.
-    Schrijft zelf:
+    Schrijft:
     - ai_category_insights (macro)
     - ai_reflections (macro)
+
+    ❗️Geen Celery hier
+    ❗️Geen data ingestie
     """
 
     if user_id is None:
@@ -33,7 +36,7 @@ def run_macro_agent(user_id: int):
 
     try:
         # =========================================================
-        # 1️⃣ Macro scoreregels
+        # 1️⃣ Macro scoreregels (globaal)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -45,7 +48,8 @@ def run_macro_agent(user_id: int):
 
         rules_by_indicator = {}
         for ind, rmin, rmax, score, trend, interp, action in rows:
-            rules_by_indicator.setdefault(ind, []).append({
+            ind_norm = normalize_indicator_name(ind)
+            rules_by_indicator.setdefault(ind_norm, []).append({
                 "range_min": float(rmin),
                 "range_max": float(rmax),
                 "score": int(score),
@@ -55,7 +59,7 @@ def run_macro_agent(user_id: int):
             })
 
         # =========================================================
-        # 2️⃣ Macro data van vandaag (user)
+        # 2️⃣ Macro data van vandaag (user-specifiek)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -73,7 +77,8 @@ def run_macro_agent(user_id: int):
 
         macro_items = [
             {
-                "indicator": name,
+                # ✅ UPDATE 1 — normalisatie
+                "indicator": normalize_indicator_name(name),
                 "value": float(value) if value is not None else None,
                 "trend": trend,
                 "interpretation": interp,
@@ -88,7 +93,9 @@ def run_macro_agent(user_id: int):
         # 3️⃣ Macro score (DB-gedreven)
         # =========================================================
         macro_scores = generate_scores_db("macro", user_id=user_id)
-        macro_avg = macro_scores.get("total_score", 0)
+
+        # ✅ UPDATE 2 — fallback = 10 (geen 0)
+        macro_avg = macro_scores.get("total_score", 10)
 
         top_contributors = sorted(
             macro_scores.get("scores", {}).items(),
@@ -191,10 +198,10 @@ ANTWOORD ALS JSON-LIJST:
             """, (
                 user_id,
                 macro_avg,
-                ai_context["trend"],
-                ai_context["bias"],
-                ai_context["risk"],
-                ai_context["summary"],
+                ai_context.get("trend", ""),
+                ai_context.get("bias", ""),
+                ai_context.get("risk", ""),
+                ai_context.get("summary", ""),
                 json.dumps(ai_context.get("top_signals", [])),
             ))
 
@@ -204,6 +211,9 @@ ANTWOORD ALS JSON-LIJST:
         for r in ai_reflections:
             if not r.get("indicator"):
                 continue
+
+            # ✅ UPDATE 1 + 3 — normalisatie + defensieve defaults
+            indicator = normalize_indicator_name(r.get("indicator"))
 
             with conn.cursor() as cur:
                 cur.execute("""
@@ -219,11 +229,11 @@ ANTWOORD ALS JSON-LIJST:
                         timestamp = NOW();
                 """, (
                     user_id,
-                    r.get("indicator"),
-                    r.get("ai_score"),
-                    r.get("compliance"),
-                    r.get("comment"),
-                    r.get("recommendation"),
+                    indicator,
+                    r.get("ai_score", 50),
+                    r.get("compliance", 50),
+                    r.get("comment", ""),
+                    r.get("recommendation", ""),
                 ))
 
         conn.commit()
