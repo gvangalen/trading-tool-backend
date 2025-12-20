@@ -12,15 +12,19 @@ def dispatch_for_all_users(task_name: str, *, active_only: bool = True):
         return
 
     try:
-        cur = conn.cursor()
+        with conn.cursor() as cur:
+            if active_only:
+                cur.execute("SELECT id FROM users WHERE is_active = true;")
+            else:
+                cur.execute("SELECT id FROM users;")
 
-        if active_only:
-            cur.execute("SELECT id FROM users WHERE is_active = true;")
-        else:
-            cur.execute("SELECT id FROM users;")
+            user_ids = [r[0] for r in cur.fetchall()]
 
-        user_ids = [r[0] for r in cur.fetchall()]
-        logger.info(f"🚀 Dispatch {task_name} voor {len(user_ids)} users")
+        if not user_ids:
+            logger.warning("⚠️ Geen users gevonden om te dispatchen")
+            return
+
+        logger.info(f"🚀 Dispatch '{task_name}' voor {len(user_ids)} users")
 
         task = current_app.tasks.get(task_name)
         if not task:
@@ -28,7 +32,7 @@ def dispatch_for_all_users(task_name: str, *, active_only: bool = True):
             return
 
         for user_id in user_ids:
-            task.delay(user_id)
+            task.delay(user_id=user_id)
 
     except Exception as e:
         logger.error(f"❌ Dispatcher fout: {e}", exc_info=True)
