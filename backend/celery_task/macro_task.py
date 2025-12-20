@@ -1,11 +1,13 @@
 import logging
-import traceback
 import requests
 from tenacity import retry, stop_after_attempt, wait_exponential
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import generate_scores_db
+from backend.utils.scoring_utils import (
+    generate_scores_db,
+    normalize_indicator_name,
+)
 
 # =====================================================
 # 🪵 Logging
@@ -23,7 +25,11 @@ HEADERS = {"Content-Type": "application/json"}
 # =====================================================
 # 🔁 Retry wrapper
 # =====================================================
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(min=5, max=20), reraise=True)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(min=5, max=20),
+    reraise=True,
+)
 def safe_request(url, params=None):
     resp = requests.get(url, headers=HEADERS, params=params, timeout=TIMEOUT)
     resp.raise_for_status()
@@ -41,15 +47,23 @@ def get_active_macro_indicators(user_id: int):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, name, source, link
                 FROM indicators
                 WHERE category = 'macro'
                   AND active = TRUE
                   AND user_id = %s
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             return [
-                {"id": r[0], "name": r[1], "source": r[2], "link": r[3]}
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "source": r[2],
+                    "link": r[3],
+                }
                 for r in cur.fetchall()
             ]
     except Exception:
@@ -69,13 +83,16 @@ def already_fetched_today(indicator_name: str, user_id: int) -> bool:
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT 1
                 FROM macro_data
                 WHERE name = %s
                   AND user_id = %s
                   AND timestamp::date = CURRENT_DATE
-            """, (indicator_name, user_id))
+                """,
+                (indicator_name, user_id),
+            )
             return cur.fetchone() is not None
     except Exception:
         logger.error("⚠️ Fout bij check macro_data", exc_info=True)
@@ -88,12 +105,12 @@ def already_fetched_today(indicator_name: str, user_id: int) -> bool:
 # 🌐 Waarde ophalen uit bron
 # =====================================================
 def fetch_value_from_source(indicator: dict):
-    name = indicator["name"]
+    raw_name = indicator["name"]
     source = (indicator.get("source") or "").lower()
     link = indicator.get("link")
 
     if not link:
-        logger.warning(f"⚠️ Geen link voor {name}")
+        logger.warning(f"⚠️ Geen link voor {raw_name}")
         return None
 
     data = safe_request(link)
@@ -112,14 +129,14 @@ def fetch_value_from_source(indicator: dict):
             val = data["observations"][-1]["value"]
             return float(val) if val not in (None, ".") else None
 
-        if "dxy" in name.lower():
+        if "dxy" in raw_name.lower():
             return float(data["chart"]["result"][0]["meta"]["regularMarketPrice"])
 
-        logger.warning(f"⚠️ Geen parser voor {name} ({source})")
+        logger.warning(f"⚠️ Geen parser voor {raw_name} ({source})")
         return None
 
     except Exception:
-        logger.error(f"❌ Parse-fout bij {name}", exc_info=True)
+        logger.error(f"❌ Parse-fout bij {raw_name}", exc_info=True)
         return None
 
 
@@ -134,24 +151,27 @@ def store_macro_data(payload: dict, user_id: int):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO macro_data
                     (user_id, name, value, trend, interpretation, action, score, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            """, (
-                user_id,
-                payload["name"],
-                payload["value"],
-                payload["trend"],
-                payload["interpretation"],
-                payload["action"],
-                payload["score"],
-            ))
+                """,
+                (
+                    user_id,
+                    payload["name"],
+                    payload["value"],
+                    payload["trend"],
+                    payload["interpretation"],
+                    payload["action"],
+                    payload["score"],
+                ),
+            )
         conn.commit()
         logger.info(f"💾 Macro opgeslagen: {payload['name']} (user_id={user_id})")
     except Exception:
-        logger.error("❌ Fout bij opslaan macro_data", exc_info=True)
         conn.rollback()
+        logger.error("❌ Fout bij opslaan macro_data", exc_info=True)
     finally:
         conn.close()
 
@@ -168,7 +188,8 @@ def fetch_and_process_macro(user_id: int):
         return
 
     for ind in indicators:
-        name = ind["name"]
+        raw_name = ind["name"]
+        name = normalize_indicator_name(raw_name)
 
         if already_fetched_today(name, user_id):
             logger.info(f"⏩ {name} al verwerkt vandaag (user_id={user_id})")
@@ -179,8 +200,13 @@ def fetch_and_process_macro(user_id: int):
             if value is None:
                 continue
 
-            score_data = generate_scores_db("macro", user_id=user_id, override_values={name: value})
-            score = score_data["scores"].get(name)
+            score_data = generate_scores_db(
+                "macro",
+                data={name: value},
+                user_id=user_id,
+            )
+
+            score = score_data.get("scores", {}).get(name)
             if not score:
                 logger.warning(f"⚠️ Geen scoreregels voor {name}")
                 continue
@@ -208,7 +234,7 @@ def fetch_and_process_macro(user_id: int):
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data(user_id: int):
     """
-    Wordt altijd aangeroepen via dispatcher.dispatch_for_all_users
+    Wordt aangeroepen via dispatcher.dispatch_for_all_users
     """
     try:
         fetch_and_process_macro(user_id=user_id)
