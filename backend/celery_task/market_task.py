@@ -2,7 +2,6 @@ import logging
 import traceback
 import requests
 from datetime import datetime
-from pathlib import Path
 from collections import defaultdict
 
 from celery import shared_task
@@ -16,10 +15,14 @@ from backend.celery_task.btc_price_history_task import update_btc_history
 # =====================================================
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
-CACHE_FILE = "/tmp/last_market_data_fetch.txt"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
+
+SYMBOL = "BTC"
 
 # =====================================================
 # 🔁 Safe HTTP-get met retry
@@ -31,7 +34,7 @@ def safe_get(url, params=None):
     return resp.json()
 
 # =====================================================
-# 🔍 Market RAW Endpoints (DB-gedreven)
+# 🔍 Market RAW endpoints (DB-gedreven)
 # =====================================================
 def load_market_raw_endpoints():
     conn = get_db_connection()
@@ -41,13 +44,14 @@ def load_market_raw_endpoints():
                 SELECT name, link
                 FROM indicators
                 WHERE category = 'market_raw'
+                  AND active = TRUE
             """)
             return {r[0]: r[1] for r in cur.fetchall()}
     finally:
         conn.close()
 
 # =====================================================
-# 🌐 RAW Market Data ophalen (globaal)
+# 🌐 RAW market data ophalen (globaal)
 # =====================================================
 def fetch_raw_market_data():
     endpoints = load_market_raw_endpoints()
@@ -77,16 +81,15 @@ def fetch_raw_market_data():
     }
 
 # =====================================================
-# 💾 Opslaan in market_data (GLOBAAL)
+# 💾 Opslaan market_data (GLOBAAL)
 # =====================================================
 def store_market_data_db(symbol, price, volume, change_24h):
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO market_data (
-                    symbol, price, volume, change_24h, timestamp
-                )
+                INSERT INTO market_data
+                    (symbol, price, volume, change_24h, timestamp)
                 VALUES (%s, %s, %s, %s, %s)
             """, (
                 symbol,
@@ -98,48 +101,55 @@ def store_market_data_db(symbol, price, volume, change_24h):
         conn.commit()
         logger.info("💾 market_data opgeslagen (globaal).")
     except Exception:
-        logger.error("❌ Fout bij opslaan market_data")
-        logger.error(traceback.format_exc())
+        logger.error("❌ Fout bij opslaan market_data", exc_info=True)
+        conn.rollback()
     finally:
         conn.close()
 
 # =====================================================
-# 🔁 RAW → DB
+# 🔁 RAW → DB (helper)
 # =====================================================
 def process_market_now():
     raw = fetch_raw_market_data()
     if not raw:
         logger.warning("⚠️ Geen RAW market data ontvangen.")
         return
-    store_market_data_db("BTC", raw["price"], raw["volume"], raw["change_24h"])
+    store_market_data_db(
+        SYMBOL,
+        raw["price"],
+        raw["volume"],
+        raw["change_24h"]
+    )
 
 # =====================================================
-# 🚀 Celery — live market update
+# 🚀 Celery — live market update (globaal)
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data")
 def fetch_market_data():
     logger.info("📈 Start live market RAW fetch...")
     try:
         process_market_now()
-        Path(CACHE_FILE).touch()
         logger.info("✅ Live market RAW data verwerkt.")
     except Exception:
-        logger.error("❌ Fout in fetch_market_data")
-        logger.error(traceback.format_exc())
+        logger.error("❌ Fout in fetch_market_data", exc_info=True)
 
 # =====================================================
 # 🕛 Dagelijkse snapshot (globaal)
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.save_market_data_daily")
 def save_market_data_daily():
+    """
+    Dagelijkse market snapshot:
+    - RAW market data
+    - BTC price history update
+    """
     logger.info("🕛 Dagelijkse market snapshot gestart...")
     try:
         process_market_now()
         update_btc_history()
-        fetch_market_data_7d()
+        logger.info("✅ Dagelijkse market snapshot voltooid.")
     except Exception:
-        logger.error("❌ Fout in save_market_data_daily")
-        logger.error(traceback.format_exc())
+        logger.error("❌ Fout in save_market_data_daily", exc_info=True)
 
 # =====================================================
 # 📆 7-daagse OHLC + volume (globaal)
@@ -147,16 +157,14 @@ def save_market_data_daily():
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
     """
-    OHLC → Binance (hardcoded, correct)
+    OHLC → Binance
     Volume → CoinGecko
     """
     logger.info("📆 Start fetch_market_data_7d...")
     conn = get_db_connection()
 
     try:
-        # ✅ ALTJD BINANCE VOOR OHLC
         binance_url = "https://api.binance.com/api/v3/klines"
-
         candles = safe_get(binance_url, params={
             "symbol": "BTCUSDT",
             "interval": "1d",
@@ -185,7 +193,7 @@ def fetch_market_data_7d():
                 cur.execute("""
                     INSERT INTO market_data_7d
                         (symbol, date, open, high, low, close, change, volume, created_at)
-                    VALUES ('BTC', %s, %s, %s, %s, %s, %s, %s, NOW())
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                     ON CONFLICT (symbol, date)
                     DO UPDATE SET
                         open = EXCLUDED.open,
@@ -196,14 +204,15 @@ def fetch_market_data_7d():
                         volume = EXCLUDED.volume,
                         created_at = NOW();
                 """, (
-                    date, open_p, high_p, low_p, close_p, change, volume
+                    SYMBOL, date,
+                    open_p, high_p, low_p, close_p,
+                    change, volume
                 ))
 
         conn.commit()
         logger.info("✅ market_data_7d bijgewerkt.")
     except Exception:
-        logger.error("❌ Fout in fetch_market_data_7d")
-        logger.error(traceback.format_exc())
+        logger.error("❌ Fout in fetch_market_data_7d", exc_info=True)
     finally:
         conn.close()
 
@@ -244,13 +253,14 @@ def calculate_and_save_forward_returns():
                     cur.execute("""
                         INSERT INTO market_forward_returns
                             (symbol, period, start_date, end_date, change, avg_daily)
-                        VALUES ('BTC', %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (symbol, period, start_date)
                         DO UPDATE SET
                             end_date = EXCLUDED.end_date,
                             change = EXCLUDED.change,
                             avg_daily = EXCLUDED.avg_daily;
                     """, (
+                        SYMBOL,
                         f"{days}d",
                         start["date"],
                         end["date"],
@@ -261,7 +271,6 @@ def calculate_and_save_forward_returns():
         conn.commit()
         logger.info("✅ Forward returns opgeslagen.")
     except Exception:
-        logger.error("❌ Fout in calculate_and_save_forward_returns")
-        logger.error(traceback.format_exc())
+        logger.error("❌ Fout in calculate_and_save_forward_returns", exc_info=True)
     finally:
         conn.close()
