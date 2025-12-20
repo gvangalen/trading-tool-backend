@@ -1,39 +1,22 @@
-import os
 import logging
 import json
 from decimal import Decimal
+from datetime import date
 
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import get_scores_for_symbol
 from backend.utils.openai_client import ask_gpt_text
 
 # =====================================================
 # Logging
 # =====================================================
-LOG_FILE = "/tmp/daily_report_debug.log"
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
-)
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.INFO)
 
 # =====================================================
 # Helpers
 # =====================================================
-def log_and_print(msg: str):
-    logger.info(msg)
-    try:
-        with open(LOG_FILE, "a") as f:
-            f.write(msg + "\n")
-    except Exception:
-        pass
-    print(msg)
-
-
 def to_float(v):
     if v is None:
         return None
@@ -45,21 +28,12 @@ def to_float(v):
         return None
 
 
-def safe_get(obj, key, fallback="–"):
-    if isinstance(obj, dict):
-        val = obj.get(key, fallback)
-        if isinstance(val, Decimal):
-            return to_float(val)
-        return val if val not in [None, "None", ""] else fallback
-    return fallback
-
-
 def nv(v):
     return v if v not in [None, "", "None"] else "–"
 
 
 # =====================================================
-# Report style
+# STYLE
 # =====================================================
 REPORT_STYLE_GUIDE = """
 Je bent een professionele Bitcoin- en macro-analist.
@@ -69,83 +43,101 @@ Schrijf in het Nederlands in de stijl van een premium nieuwsbrief
 
 
 # =====================================================
-# 1. SCORES (USER-SPECIFIC)
+# 1️⃣ DAILY SCORES (SINGLE SOURCE OF TRUTH)
 # =====================================================
-def get_scores_from_db(user_id: int):
+def get_daily_scores(user_id: int) -> dict:
+    conn = get_db_connection()
+    if not conn:
+        return {}
+
     try:
-        scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
-        if scores:
-            return {k: to_float(v) for k, v in scores.items()}
-    except Exception:
-        pass
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    macro_score,
+                    technical_score,
+                    market_score,
+                    setup_score
+                FROM daily_scores
+                WHERE user_id = %s
+                  AND report_date = CURRENT_DATE
+                LIMIT 1;
+            """, (user_id,))
+            row = cur.fetchone()
 
-    return {
-        "macro_score": None,
-        "technical_score": None,
-        "setup_score": None,
-        "market_score": None,
-    }
-
-
-# =====================================================
-# 2. AI INSIGHTS (USER-SPECIFIC)
-# =====================================================
-def get_ai_insights_from_db(user_id: int):
-    try:
-        conn = get_db_connection()
-        if not conn:
+        if not row:
+            logger.warning(f"⚠️ Geen daily_scores gevonden (user_id={user_id})")
             return {}
 
+        return {
+            "macro_score": to_float(row[0]),
+            "technical_score": to_float(row[1]),
+            "market_score": to_float(row[2]),
+            "setup_score": to_float(row[3]),
+        }
+
+    finally:
+        conn.close()
+
+
+# =====================================================
+# 2️⃣ AI CATEGORY INSIGHTS (VALIDATED)
+# =====================================================
+def get_ai_insights(user_id: int) -> dict:
+    conn = get_db_connection()
+    if not conn:
+        return {}
+
+    try:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT category, avg_score, trend, bias, risk, summary
                 FROM ai_category_insights
-                WHERE date = CURRENT_DATE
-                  AND user_id = %s;
+                WHERE user_id = %s
+                  AND date = CURRENT_DATE;
             """, (user_id,))
             rows = cur.fetchall()
 
         insights = {}
-        for cat, avg_score, trend, bias, risk, summary in rows:
+        for cat, avg, trend, bias, risk, summary in rows:
             insights[cat] = {
-                "avg_score": to_float(avg_score),
+                "avg_score": to_float(avg),
                 "trend": trend or "–",
                 "bias": bias or "–",
                 "risk": risk or "–",
-                "summary": summary or "Geen data."
+                "summary": summary or "Geen data.",
             }
+
+        required = ["macro", "market", "technical", "setup"]
+        missing = [r for r in required if r not in insights]
+        if missing:
+            logger.warning(
+                f"⚠️ Ontbrekende AI insights {missing} (user_id={user_id})"
+            )
 
         return insights
 
-    except Exception:
-        logger.error("Fout in get_ai_insights_from_db()", exc_info=True)
-        return {}
-
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
 
 
 # =====================================================
-# 3. STRATEGY (USER-SPECIFIC)
+# 3️⃣ STRATEGY (LATEST PER SETUP)
 # =====================================================
-def get_latest_strategy_for_setup(setup_id: int, user_id: int):
+def get_latest_strategy(setup_id: int, user_id: int) -> dict | None:
     if not setup_id:
         return None
 
-    try:
-        conn = get_db_connection()
-        if not conn:
-            return None
+    conn = get_db_connection()
+    if not conn:
+        return None
 
+    try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT entry, target, stop_loss, explanation, risk_profile, data, created_at
+                SELECT entry, target, stop_loss, explanation, risk_profile, data
                 FROM strategies
-                WHERE setup_id = %s
-                  AND user_id = %s
+                WHERE setup_id = %s AND user_id = %s
                 ORDER BY created_at DESC
                 LIMIT 1;
             """, (setup_id, user_id))
@@ -154,14 +146,14 @@ def get_latest_strategy_for_setup(setup_id: int, user_id: int):
         if not row:
             return None
 
-        entry, target, stop_loss, explanation, risk_profile, data_json, created_at = row
+        entry, target, stop, expl, risk, data = row
 
-        if isinstance(data_json, dict):
-            entry = data_json.get("entry", entry)
-            target = data_json.get("targets", target)
-            stop_loss = data_json.get("stop_loss", stop_loss)
-            explanation = data_json.get("explanation", explanation)
-            risk_profile = data_json.get("risk_reward", risk_profile)
+        if isinstance(data, dict):
+            entry = data.get("entry", entry)
+            target = data.get("targets", target)
+            stop = data.get("stop_loss", stop)
+            expl = data.get("explanation", expl)
+            risk = data.get("risk_reward", risk)
 
         targets = []
         if isinstance(target, str):
@@ -172,31 +164,24 @@ def get_latest_strategy_for_setup(setup_id: int, user_id: int):
         return {
             "entry": entry or "n.v.t.",
             "targets": targets,
-            "stop_loss": stop_loss or "n.v.t.",
-            "risk_reward": risk_profile or "?",
-            "explanation": explanation or "Geen uitleg beschikbaar."
+            "stop_loss": stop or "n.v.t.",
+            "risk_reward": risk or "?",
+            "explanation": expl or "Geen uitleg beschikbaar.",
         }
 
-    except Exception as e:
-        logger.error(f"Strategy fout: {e}", exc_info=True)
-        return None
-
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
 
 
 # =====================================================
-# 4. MARKET DATA (GLOBAL SNAPSHOT)
+# 4️⃣ MARKET DATA (GLOBAL SNAPSHOT)
 # =====================================================
-def get_latest_market_data():
+def get_latest_market_data() -> dict:
+    conn = get_db_connection()
+    if not conn:
+        return {}
+
     try:
-        conn = get_db_connection()
-        if not conn:
-            return {}
-
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT price, volume, change_24h
@@ -206,222 +191,157 @@ def get_latest_market_data():
             """)
             row = cur.fetchone()
 
-        if row:
-            return {
-                "price": to_float(row[0]),
-                "volume": to_float(row[1]),
-                "change_24h": to_float(row[2]),
-            }
+        if not row:
+            return {}
 
-    except Exception:
-        logger.error("Market data fout", exc_info=True)
+        return {
+            "price": to_float(row[0]),
+            "volume": to_float(row[1]),
+            "change_24h": to_float(row[2]),
+        }
 
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-    return {}
+        conn.close()
 
 
 # =====================================================
-# 5. MARKET INDICATOR SCORES (DAILY MARKET ANALYSIS)
+# 5️⃣ DAILY MARKET INDICATOR SCORES
 # =====================================================
-def get_market_indicator_scores(user_id: int):
+def get_market_indicator_scores(user_id: int) -> list:
+    conn = get_db_connection()
+    if not conn:
+        return []
+
     try:
-        conn = get_db_connection()
-        if not conn:
-            return []
-
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT indicator, value, score, interpretation
                 FROM market_indicator_scores
                 WHERE user_id = %s
+                  AND timestamp::date = CURRENT_DATE
                 ORDER BY timestamp DESC;
             """, (user_id,))
             rows = cur.fetchall()
 
-        results = []
-        for ind, value, score, interp in rows:
-            results.append({
-                "indicator": ind,
-                "value": to_float(value),
-                "score": to_float(score),
-                "interpretation": interp or "–",
-            })
-
-        return results
-
-    except Exception:
-        logger.error("Fout in get_market_indicator_scores()", exc_info=True)
-        return []
+        return [
+            {
+                "indicator": r[0],
+                "value": to_float(r[1]),
+                "score": to_float(r[2]),
+                "interpretation": r[3] or "–",
+            }
+            for r in rows
+        ]
 
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
 
 
 # =====================================================
-# 6. GPT helper
+# 6️⃣ GPT HELPER
 # =====================================================
-def generate_section(prompt: str, retries: int = 3) -> str:
-    text = ask_gpt_text(prompt, system_role=REPORT_STYLE_GUIDE, retries=retries)
+def generate_section(prompt: str) -> str:
+    text = ask_gpt_text(prompt, system_role=REPORT_STYLE_GUIDE)
     return text.strip() if text else "AI-generatie mislukt."
 
 
 # =====================================================
-# 7. PROMPTS
+# 7️⃣ PROMPTS
 # =====================================================
-def prompt_for_btc_summary(setup, scores, market_data, market_indicators):
-    lines = []
-    for m in market_indicators[:3]:
-        lines.append(
-            f"- {m['indicator']}: waarde {nv(m['value'])}, score {nv(m['score'])} → {nv(m['interpretation'])}"
-        )
-
-    market_block = "\n".join(lines) if lines else "–"
+def prompt_btc_summary(setup, scores, market, indicators):
+    ind_lines = "\n".join(
+        f"- {i['indicator']}: {nv(i['value'])}, score {nv(i['score'])} → {i['interpretation']}"
+        for i in indicators[:3]
+    ) or "–"
 
     return f"""
-Schrijf een krachtige openingssectie (6–8 zinnen).
+Schrijf een krachtige opening (6–8 zinnen).
 
 Scores:
-- Macro: {nv(scores.get("macro_score"))}
-- Technisch: {nv(scores.get("technical_score"))}
-- Setup: {nv(scores.get("setup_score"))}
-- Markt: {nv(scores.get("market_score"))}
+- Macro: {nv(scores.get('macro_score'))}
+- Technisch: {nv(scores.get('technical_score'))}
+- Markt: {nv(scores.get('market_score'))}
+- Setup: {nv(scores.get('setup_score'))}
 
-Live markt:
-- Prijs: ${nv(safe_get(market_data, "price"))}
-- Volume: {nv(safe_get(market_data, "volume"))}
-- 24h verandering: {nv(safe_get(market_data, "change_24h"))}%
+Markt:
+- Prijs: ${nv(market.get('price'))}
+- Volume: {nv(market.get('volume'))}
+- 24h: {nv(market.get('change_24h'))}%
 
 Dagelijkse market-indicatoren:
-{market_block}
+{ind_lines}
 
 Actieve setup:
-- {nv(setup.get("name"))} ({nv(setup.get("timeframe"))})
+- {nv(setup.get('name'))} ({nv(setup.get('timeframe'))})
 """
 
 
-def prompt_for_macro_summary(scores, ai_insights):
-    macro = ai_insights.get("macro", {})
+def prompt_macro(ai):
     return f"""
-Maak een compacte macro-update (5–8 zinnen).
+Maak een macro-update (5–8 zinnen).
 
-Macro score vandaag: {nv(scores.get("macro_score"))}
-Trend: {nv(macro.get("trend"))}
-Bias: {nv(macro.get("bias"))}
-Risico: {nv(macro.get("risk"))}
-Samenvatting: {nv(macro.get("summary"))}
+Trend: {ai.get('trend')}
+Bias: {ai.get('bias')}
+Risico: {ai.get('risk')}
+Samenvatting: {ai.get('summary')}
 """
 
 
-def prompt_for_setup_checklist(setup):
+def prompt_setup_checklist(setup):
+    return f"Schrijf 6–8 bullets over de setup {setup.get('name')} ({setup.get('timeframe')})."
+
+
+def prompt_strategy(strategy):
     return f"""
-Schrijf 6–8 bullets over sterktes, zwaktes, activatie, invalidatie en praktische tips.
+Schrijf een strategie-uitleg (6–10 zinnen).
 
-Setup: {nv(setup.get('name'))} ({nv(setup.get('timeframe'))})
-"""
-
-
-def prompt_for_priorities(setup, scores):
-    return "Genereer 3–7 dagelijkse prioriteiten voor traders."
-
-
-def prompt_for_wyckoff_analysis(setup):
-    return f"""
-Maak een Wyckoff-analyse (5–10 zinnen).
-Setup: {nv(setup.get('name'))}
-Phase: {nv(setup.get('wyckoff_phase'))}
-"""
-
-
-def prompt_for_recommendations(strategy):
-    return f"""
-Schrijf een premium strategie-uitleg (6–10 zinnen).
-
-Entry: {nv(strategy['entry'])}
+Entry: {strategy['entry']}
 Targets: {strategy['targets']}
-Stop-loss: {nv(strategy['stop_loss'])}
+Stop-loss: {strategy['stop_loss']}
 """
 
 
-def prompt_for_conclusion(scores):
-    return "Schrijf een slotconclusie (4–8 zinnen)."
-
-
-def prompt_for_outlook(setup):
+def prompt_outlook():
     return "Schrijf een 2–5 dagen outlook met bullish, bearish en sideways scenario."
 
 
 # =====================================================
-# 8. MAIN REPORT BUILDER
+# 8️⃣ MAIN REPORT BUILDER
 # =====================================================
 def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> dict:
-    log_and_print(f"Rapportgeneratie gestart voor {symbol} (user_id={user_id})")
+    logger.info(f"📄 Rapport genereren | {symbol} | user_id={user_id}")
 
     setup = sanitize_json_input(
         get_latest_setup_for_symbol(symbol=symbol, user_id=user_id) or {},
-        context="setup"
+        context="setup",
     )
 
-    scores = sanitize_json_input(get_scores_from_db(user_id=user_id), context="scores")
-    ai_insights = get_ai_insights_from_db(user_id=user_id)
-    market_data = get_latest_market_data()
-    market_indicators = get_market_indicator_scores(user_id=user_id)
+    scores = get_daily_scores(user_id)
+    ai = get_ai_insights(user_id)
+    market = get_latest_market_data()
+    indicators = get_market_indicator_scores(user_id)
 
-    strategy = get_latest_strategy_for_setup(setup.get("id"), user_id=user_id) or {
+    if scores.get("setup_score") is None and ai.get("setup"):
+        scores["setup_score"] = ai["setup"].get("avg_score")
+
+    strategy = get_latest_strategy(setup.get("id"), user_id) or {
         "entry": "n.v.t.",
         "targets": [],
         "stop_loss": "n.v.t.",
         "risk_reward": "?",
-        "explanation": "Geen strategy beschikbaar."
+        "explanation": "Geen strategy beschikbaar.",
     }
 
-    report = {
+    return {
         "btc_summary": generate_section(
-            prompt_for_btc_summary(setup, scores, market_data, market_indicators)
+            prompt_btc_summary(setup, scores, market, indicators)
         ),
-        "macro_summary": generate_section(
-            prompt_for_macro_summary(scores, ai_insights)
-        ),
-        "setup_checklist": generate_section(
-            prompt_for_setup_checklist(setup)
-        ),
-        "priorities": generate_section(
-            prompt_for_priorities(setup, scores)
-        ),
-        "wyckoff_analysis": generate_section(
-            prompt_for_wyckoff_analysis(setup)
-        ),
-        "recommendations": generate_section(
-            prompt_for_recommendations(strategy)
-        ),
-        "conclusion": generate_section(
-            prompt_for_conclusion(scores)
-        ),
-        "outlook": generate_section(
-            prompt_for_outlook(setup)
-        ),
-
-        # Raw data
+        "macro_summary": generate_section(prompt_macro(ai.get("macro", {}))),
+        "setup_checklist": generate_section(prompt_setup_checklist(setup)),
+        "recommendations": generate_section(prompt_strategy(strategy)),
+        "outlook": generate_section(prompt_outlook()),
         "scores": scores,
-        "market_data": market_data,
-        "market_indicator_scores": market_indicators,
         "strategy": strategy,
+        "market_data": market,
+        "market_indicator_scores": indicators,
     }
-
-    log_and_print("Rapport succesvol gegenereerd.")
-    return report
-
-
-if __name__ == "__main__":
-    print(json.dumps(
-        generate_daily_report_sections("BTC", user_id=1),
-        indent=2,
-        ensure_ascii=False
-    ))
