@@ -46,12 +46,12 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 BEAT SCHEDULE — DEFINITIEF CORRECT
+# 🕒 BEAT SCHEDULE — DEFINITIEF CORRECT (USER-AWARE)
 # =========================================================
 celery_app.conf.beat_schedule = {
 
     # =====================================================
-    # 1️⃣ DATA INGESTIE
+    # 1️⃣ DATA INGESTIE (globaal / geen user_id)
     # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -74,7 +74,18 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 2️⃣ AI INSIGHTS — ALTIJD VIA DISPATCHER
+    # 2️⃣ DAILY SCORES (basis voor alles user-aware)
+    # =====================================================
+    "dispatch_daily_scores": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+        "schedule": crontab(hour=3, minute=40),
+        "kwargs": {
+            "task_name": "backend.celery_task.store_daily_scores_task.store_daily_scores_task"
+        },
+    },
+
+    # =====================================================
+    # 3️⃣ AI INSIGHTS — ALTIJD VIA DISPATCHER (user_id required)
     # =====================================================
     "dispatch_macro_insight": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -100,27 +111,36 @@ celery_app.conf.beat_schedule = {
         },
     },
 
-    # =====================================================
-    # 3️⃣ DAILY SCORES (BASIS VOOR ALLES)
-    # =====================================================
-    "dispatch_daily_scores": {
+    # ✅ ONTBRAK BIJ JOU (macro/setup/strategy issue!)
+    "dispatch_setup_insight": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=40),
+        "schedule": crontab(hour=3, minute=30),
         "kwargs": {
-            "task_name": "backend.celery_task.store_daily_scores_task.store_daily_scores_task"
+            "task_name": "backend.ai_agents.setup_ai_agent.generate_setup_insight"
+        },
+    },
+
+    "dispatch_strategy_insight": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+        "schedule": crontab(hour=4, minute=10),
+        "kwargs": {
+            "task_name": "backend.ai_agents.strategy_ai_agent.generate_strategy_insight"
         },
     },
 
     # =====================================================
-    # 4️⃣ SETUP AGENT
+    # 4️⃣ SETUP AGENT (ook user-aware → dus via dispatcher)
     # =====================================================
-    "run_setup_agent_daily": {
-        "task": "backend.celery_task.setup_task.run_setup_agent_daily",
+    "dispatch_setup_agent_daily": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=50),
+        "kwargs": {
+            "task_name": "backend.celery_task.setup_task.run_setup_agent_daily"
+        },
     },
 
     # =====================================================
-    # 5️⃣ STRATEGY SNAPSHOT
+    # 5️⃣ STRATEGY SNAPSHOT (gebruikt setups + scores)
     # =====================================================
     "dispatch_daily_strategy_snapshot": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -131,7 +151,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 6️⃣ REPORTS (LAATSTE)
+    # 6️⃣ REPORTS (laatste)
     # =====================================================
     "dispatch_daily_report": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -160,10 +180,10 @@ try:
     import backend.ai_agents.macro_ai_agent
     import backend.ai_agents.market_ai_agent
     import backend.ai_agents.technical_ai_agent
-    import backend.ai_agents.score_ai_agent
     import backend.ai_agents.setup_ai_agent
     import backend.ai_agents.strategy_ai_agent
     import backend.ai_agents.report_ai_agent
+    import backend.ai_agents.score_ai_agent
 
     logger.info("✅ Forced task imports succesvol geladen!")
 except Exception as e:
