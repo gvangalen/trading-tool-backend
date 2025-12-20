@@ -1,6 +1,7 @@
 import logging
 import json
 from datetime import date
+from typing import Dict, List, Optional, Any
 
 from backend.utils.openai_client import ask_gpt
 
@@ -10,7 +11,8 @@ logger.setLevel(logging.INFO)
 # ===================================================================
 # 🎯 AI analyseert BESTAANDE strategieën (GEEN generatie)
 # ===================================================================
-def analyze_strategies(strategies: list[dict]) -> dict | None:
+
+def analyze_strategies(strategies: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
     Analyseert bestaande strategieën.
     Maakt GEEN nieuwe strategie.
@@ -22,7 +24,7 @@ Je bent een professionele trading-analist.
 Analyseer deze bestaande tradingstrategie.
 MAAK GEEN NIEUWE STRATEGIEËN.
 
-Strategie:
+Strategieën:
 {json.dumps(strategies, indent=2)}
 
 Geef ALLEEN geldige JSON terug.
@@ -43,17 +45,22 @@ JSON format:
         logger.error("❌ Ongeldige JSON van AI bij strategy-analyse")
         return None
 
+    if not {"comment", "recommendation"}.issubset(response.keys()):
+        logger.error("❌ Strategy-analyse mist verplichte velden")
+        return None
+
     return response
 
 
 # ===================================================================
-# 🟡 STRATEGY ADJUSTMENT — NIVAU 2 (VANDAAG-VERSIE)
+# 🟡 STRATEGY ADJUSTMENT — DAGELIJKSE BIJSTELLING
 # ===================================================================
+
 def adjust_strategy_for_today(
-    base_strategy: dict,
-    setup: dict,
-    market_context: dict,
-) -> dict | None:
+    base_strategy: Dict[str, Any],
+    setup: Dict[str, Any],
+    market_context: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
     """
     Past een bestaande strategy subtiel aan voor vandaag.
     Setup blijft gelijk.
@@ -113,13 +120,25 @@ JSON format:
         logger.error("❌ Ongeldige JSON van AI bij strategy-adjustment")
         return None
 
+    # ✅ Verplichte velden check
+    required_keys = {"entry", "targets", "stop_loss", "changes"}
+    if not required_keys.issubset(result.keys()):
+        logger.error("❌ Strategy-adjustment mist verplichte velden")
+        return None
+
+    # ✅ Confidence score afdwingen
+    score = result.get("confidence_score")
+    if not isinstance(score, (int, float)) or not (0 <= score <= 100):
+        result["confidence_score"] = 50
+
     return result
 
 
 # ===================================================================
 # 🚀 INITIËLE STRATEGY GENERATIE (SETUP → STRATEGY)
 # ===================================================================
-def generate_strategy_from_setup(setup: dict) -> dict:
+
+def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
     """
     Genereert een initiële tradingstrategie op basis van een setup.
     """
@@ -152,6 +171,10 @@ JSON format:
     )
 
     if not isinstance(result, dict):
-        raise ValueError("AI strategy generatie gaf geen geldige JSON")
+        raise ValueError("❌ AI strategy generatie gaf geen geldige JSON")
+
+    required_keys = {"entry", "targets", "stop_loss"}
+    if not required_keys.issubset(result.keys()):
+        raise ValueError("❌ Strategy mist verplichte velden")
 
     return result
