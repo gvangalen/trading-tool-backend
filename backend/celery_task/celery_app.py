@@ -23,7 +23,8 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-logger.info(f"🔍 ASSETS_JSON uit .env: {os.getenv('ASSETS_JSON')}")
+
+logger.info(f"🔍 CELERY_BROKER_URL = {os.getenv('CELERY_BROKER_URL')}")
 
 # =========================================================
 # 🧠 Celery instance
@@ -46,12 +47,12 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 BEAT SCHEDULE — DEFINITIEF CORRECT (USER-AWARE)
+# 🕒 CELERY BEAT — DEFINITIEF CORRECTE VOLGORDE
 # =========================================================
 celery_app.conf.beat_schedule = {
 
     # =====================================================
-    # 1️⃣ DATA INGESTIE (globaal / geen user_id)
+    # 1️⃣ GLOBALE MARKET DATA (GEEN user_id)
     # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -63,86 +64,75 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=0, minute=5),
     },
 
-    "fetch_macro_data": {
-        "task": "backend.celery_task.macro_task.fetch_macro_data",
+    # =====================================================
+    # 2️⃣ USER-AWARE INGESTIE
+    # =====================================================
+    "dispatch_macro_data": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=0, minute=12),
+        "kwargs": {
+            "task_name": "backend.celery_task.macro_task.fetch_macro_data"
+        },
     },
 
-    "fetch_technical_day": {
-        "task": "backend.celery_task.technical_task.fetch_technical_data_day",
+    "dispatch_technical_data": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=0, minute=15),
+        "kwargs": {
+            "task_name": "backend.celery_task.technical_task.fetch_technical_data_day"
+        },
     },
 
     # =====================================================
-    # 2️⃣ DAILY SCORES (basis voor alles user-aware)
+    # 3️⃣ DAILY SCORES (BASIS VOOR ALLES)
     # =====================================================
     "dispatch_daily_scores": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=40),
+        "schedule": crontab(hour=3, minute=0),
         "kwargs": {
             "task_name": "backend.celery_task.store_daily_scores_task.store_daily_scores_task"
         },
     },
 
     # =====================================================
-    # 3️⃣ AI INSIGHTS — ALTIJD VIA DISPATCHER (user_id required)
+    # 4️⃣ AI CATEGORY AGENTS (LEZEN daily_scores)
     # =====================================================
-    "dispatch_macro_insight": {
+    "dispatch_macro_agent": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=0),
+        "schedule": crontab(hour=3, minute=10),
         "kwargs": {
-            "task_name": "backend.ai_agents.macro_ai_agent.generate_macro_insight"
+            "task_name": "backend.ai_agents.macro_ai_agent.run_macro_agent"
         },
     },
 
-    "dispatch_market_insight": {
+    "dispatch_market_agent": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=10),
+        "schedule": crontab(hour=3, minute=20),
         "kwargs": {
             "task_name": "backend.ai_agents.market_ai_agent.generate_market_insight"
         },
     },
 
-    "dispatch_technical_insight": {
+    "dispatch_technical_agent": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=20),
+        "schedule": crontab(hour=3, minute=30),
         "kwargs": {
             "task_name": "backend.ai_agents.technical_ai_agent.generate_technical_insight"
         },
     },
 
-    # ✅ ONTBRAK BIJ JOU (macro/setup/strategy issue!)
-    "dispatch_setup_insight": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=30),
-        "kwargs": {
-            "task_name": "backend.ai_agents.setup_ai_agent.generate_setup_insight"
-        },
-    },
-
-    "dispatch_strategy_insight": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=4, minute=10),
-        "kwargs": {
-            "task_name": "backend.ai_agents.strategy_ai_agent.generate_strategy_insight"
-        },
-    },
-
     # =====================================================
-    # 4️⃣ SETUP AGENT (ook user-aware → dus via dispatcher)
+    # 5️⃣ SETUP + STRATEGY (AFHANKELIJK VAN AI INSIGHTS)
     # =====================================================
-    "dispatch_setup_agent_daily": {
+    "dispatch_setup_agent": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=50),
+        "schedule": crontab(hour=3, minute=40),
         "kwargs": {
             "task_name": "backend.celery_task.setup_task.run_setup_agent_daily"
         },
     },
 
-    # =====================================================
-    # 5️⃣ STRATEGY SNAPSHOT (gebruikt setups + scores)
-    # =====================================================
-    "dispatch_daily_strategy_snapshot": {
+    "dispatch_strategy_snapshot": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=4, minute=0),
         "kwargs": {
@@ -151,7 +141,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 6️⃣ REPORTS (laatste)
+    # 6️⃣ DAGRAPPORT (LAATSTE STAP)
     # =====================================================
     "dispatch_daily_report": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -162,10 +152,10 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-logger.info(f"🚀 Celery & Beat draaien met broker: {CELERY_BROKER}")
+logger.info("🚀 Celery Beat schedule geladen (DEFINITIEF)")
 
 # =========================================================
-# 📌 FORCE IMPORTS
+# 📌 FORCE IMPORTS (GARANDEERT TASK REGISTRATIE)
 # =========================================================
 try:
     import backend.celery_task.dispatcher
@@ -185,9 +175,10 @@ try:
     import backend.ai_agents.report_ai_agent
     import backend.ai_agents.score_ai_agent
 
-    logger.info("✅ Forced task imports succesvol geladen!")
+    logger.info("✅ Alle Celery tasks & AI agents succesvol geïmporteerd")
+
 except Exception as e:
-    logger.error(f"❌ Fout bij laden van tasks: {e}", exc_info=True)
+    logger.error("❌ Fout bij force-imports", exc_info=True)
 
 # =========================================================
 # EXPOSE APP
