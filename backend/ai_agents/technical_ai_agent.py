@@ -11,18 +11,11 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # =====================================================================
-# 📊 TECHNICAL AI AGENT — USER-AWARE (FINAL / STABLE)
+# 📊 TECHNICAL AI AGENT — USER-AWARE (FINAL)
 # =====================================================================
 
 @shared_task(name="backend.ai_agents.technical_ai_agent.generate_technical_insight")
 def generate_technical_insight(user_id: int):
-    """
-    Analyseert technische indicatoren PER USER.
-
-    DB constraints (VERPLICHT):
-    - ai_category_insights UNIQUE (user_id, category, date)
-    - ai_reflections UNIQUE (category, user_id, indicator, date)
-    """
 
     if user_id is None:
         raise ValueError("❌ Technical AI Agent vereist een user_id")
@@ -40,18 +33,19 @@ def generate_technical_insight(user_id: int):
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT indicator, range_min, range_max, score, interpretation, action
+                SELECT indicator, range_min, range_max, score, trend, interpretation, action
                 FROM technical_indicator_rules
                 ORDER BY indicator ASC, range_min ASC;
             """)
             rule_rows = cur.fetchall()
 
         rules_by_indicator = {}
-        for indicator, rmin, rmax, score, interp, action in rule_rows:
+        for indicator, rmin, rmax, score, trend, interp, action in rule_rows:
             rules_by_indicator.setdefault(indicator, []).append({
                 "range_min": float(rmin),
                 "range_max": float(rmax),
                 "score": int(score),
+                "trend": trend,
                 "interpretation": interp,
                 "action": action,
             })
@@ -74,7 +68,6 @@ def generate_technical_insight(user_id: int):
             logger.warning(f"⚠️ Geen technische data gevonden voor user_id={user_id}")
             return
 
-        # Neem alleen de laatste waarde per indicator
         latest = {}
         for name, value, score, advies, uitleg, ts in rows:
             if name not in latest:
@@ -84,11 +77,16 @@ def generate_technical_insight(user_id: int):
         scores = []
 
         for name, (value, score, advies, uitleg, ts) in latest.items():
-            score_f = float(score)
+            score_f = float(score) if score is not None else 50  # defensieve fallback
+
             combined.append({
                 "indicator": name,
-                "value": float(value),
+                "value": float(value) if value is not None else None,
                 "score": score_f,
+                "trend": next(
+                    (r["trend"] for r in rules_by_indicator.get(name, []) if r["score"] == score_f),
+                    None
+                ),
                 "advies": advies or "",
                 "uitleg": uitleg or "",
                 "timestamp": ts.isoformat(),
@@ -102,7 +100,7 @@ def generate_technical_insight(user_id: int):
         # 3️⃣ AI CONTEXT
         # ------------------------------------------------------
         prompt = f"""
-Je bent een professionele technische analyse AI.
+Je bent een professionele technische analyse expert.
 
 Analyseer onderstaande technische indicatoren en geef een samenvattend oordeel.
 
@@ -113,6 +111,7 @@ ANTWOORD ALLEEN GELDIGE JSON:
 {{
   "trend": "",
   "bias": "",
+  "risk": "",
   "momentum": "",
   "summary": "",
   "top_signals": []
@@ -128,7 +127,7 @@ ANTWOORD ALLEEN GELDIGE JSON:
             raise ValueError("❌ Technical AI response is geen geldige JSON")
 
         # ------------------------------------------------------
-        # 4️⃣ AI REFLECTIES PER INDICATOR
+        # 4️⃣ AI REFLECTIES
         # ------------------------------------------------------
         prompt_reflections = f"""
 Maak reflecties per technische indicator.
@@ -158,34 +157,34 @@ ANTWOORD ALS JSON-LIJST:
 
         # ------------------------------------------------------
         # 5️⃣ Opslaan ai_category_insights
-        # UNIQUE (user_id, category, date)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO ai_category_insights
-                    (category, user_id, avg_score, trend, bias, summary, top_signals)
+                    (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
                 VALUES
-                    ('technical', %s, %s, %s, %s, %s, %s)
+                    ('technical', %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id, category, date)
                 DO UPDATE SET
                     avg_score   = EXCLUDED.avg_score,
                     trend       = EXCLUDED.trend,
                     bias        = EXCLUDED.bias,
+                    risk        = EXCLUDED.risk,
                     summary     = EXCLUDED.summary,
                     top_signals = EXCLUDED.top_signals,
                     created_at  = NOW();
             """, (
                 user_id,
                 avg_score,
-                ai_context["trend"],
-                ai_context["bias"],
-                ai_context["summary"],
+                ai_context.get("trend", ""),
+                ai_context.get("bias", ""),
+                ai_context.get("risk", ""),
+                ai_context.get("summary", ""),
                 json.dumps(ai_context.get("top_signals", [])),
             ))
 
         # ------------------------------------------------------
         # 6️⃣ Opslaan ai_reflections
-        # UNIQUE (category, user_id, indicator, date)
         # ------------------------------------------------------
         for r in ai_reflections:
             indicator = r.get("indicator")
@@ -219,8 +218,7 @@ ANTWOORD ALS JSON-LIJST:
 
     except Exception:
         conn.rollback()
-        logger.error("❌ Technical AI Agent FOUT")
-        logger.error(traceback.format_exc())
+        logger.error("❌ Technical AI Agent FOUT", exc_info=True)
 
     finally:
         conn.close()
