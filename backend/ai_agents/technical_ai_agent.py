@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # =====================================================================
-# 📊 TECHNICAL AI AGENT — USER-AWARE (FINAL)
+# 📊 TECHNICAL AI AGENT — USER-AWARE (FINAL + DEDUP FIX)
 # =====================================================================
 
 @shared_task(name="backend.ai_agents.technical_ai_agent.generate_technical_insight")
@@ -68,6 +68,7 @@ def generate_technical_insight(user_id: int):
             logger.warning(f"⚠️ Geen technische data gevonden voor user_id={user_id}")
             return
 
+        # Dedup: alleen laatste per indicator
         latest = {}
         for name, value, score, advies, uitleg, ts in rows:
             if name not in latest:
@@ -77,7 +78,7 @@ def generate_technical_insight(user_id: int):
         scores = []
 
         for name, (value, score, advies, uitleg, ts) in latest.items():
-            score_f = float(score) if score is not None else 50  # defensieve fallback
+            score_f = float(score) if score is not None else 50
 
             combined.append({
                 "indicator": name,
@@ -156,6 +157,17 @@ ANTWOORD ALS JSON-LIJST:
             ai_reflections = []
 
         # ------------------------------------------------------
+        # 🧹 FIX: verwijder oude technical AI-reflecties van vandaag
+        # ------------------------------------------------------
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM ai_reflections
+                WHERE category = 'technical'
+                  AND user_id = %s
+                  AND date = CURRENT_DATE;
+            """, (user_id,))
+
+        # ------------------------------------------------------
         # 5️⃣ Opslaan ai_category_insights
         # ------------------------------------------------------
         with conn.cursor() as cur:
@@ -184,7 +196,7 @@ ANTWOORD ALS JSON-LIJST:
             ))
 
         # ------------------------------------------------------
-        # 6️⃣ Opslaan ai_reflections
+        # 6️⃣ Opslaan ai_reflections (SCHOON PER DAG)
         # ------------------------------------------------------
         for r in ai_reflections:
             indicator = r.get("indicator")
