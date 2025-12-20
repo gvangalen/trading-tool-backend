@@ -54,7 +54,7 @@ def load_setup_from_db(setup_id: int, user_id: int) -> dict:
 
 
 # ============================================================
-# 🔹 Load LAATSTE strategy voor setup (basisstrategie)
+# 🔹 Load LAATSTE strategy voor setup
 # ============================================================
 def load_latest_strategy(setup_id: int, user_id: int) -> dict | None:
     conn = get_db_connection()
@@ -69,7 +69,7 @@ def load_latest_strategy(setup_id: int, user_id: int) -> dict | None:
                     entry,
                     target,
                     stop_loss,
-                    risk_profile,
+                    risk_reward,
                     explanation,
                     data,
                     created_at
@@ -86,9 +86,9 @@ def load_latest_strategy(setup_id: int, user_id: int) -> dict | None:
             return {
                 "strategy_id": row[0],
                 "entry": row[1],
-                "targets": row[2],  # comma-separated string
+                "targets": row[2].split(",") if row[2] else [],
                 "stop_loss": row[3],
-                "risk_profile": row[4],
+                "risk_reward": row[4],
                 "explanation": row[5],
                 "data": row[6] or {},
                 "created_at": row[7].isoformat() if row[7] else None,
@@ -99,7 +99,6 @@ def load_latest_strategy(setup_id: int, user_id: int) -> dict | None:
 
 # ============================================================
 # 🚀 INITIËLE STRATEGY GENERATIE
-# (onboarding / handmatig)
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.generate_for_setup")
 def generate_for_setup(user_id: int, setup_id: int):
@@ -119,7 +118,7 @@ def generate_for_setup(user_id: int, setup_id: int):
                     target,
                     stop_loss,
                     explanation,
-                    risk_profile,
+                    risk_reward,
                     strategy_type,
                     data,
                     user_id
@@ -153,7 +152,7 @@ def generate_for_setup(user_id: int, setup_id: int):
 
 
 # ============================================================
-# 🧠 ANALYSE BESTAANDE STRATEGY (AI uitleg)
+# 🧠 ANALYSE BESTAANDE STRATEGY (AI)
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.analyze_strategy")
 def analyze_strategy(user_id: int, strategy_id: int):
@@ -167,7 +166,7 @@ def analyze_strategy(user_id: int, strategy_id: int):
             cur.execute("""
                 SELECT
                     id, setup_id, entry, target, stop_loss,
-                    risk_profile, explanation, data, created_at
+                    risk_reward, explanation, data, created_at
                 FROM strategies
                 WHERE id = %s AND user_id = %s;
             """, (strategy_id, user_id))
@@ -181,9 +180,9 @@ def analyze_strategy(user_id: int, strategy_id: int):
             "strategy_id": row[0],
             "setup_id": row[1],
             "entry": row[2],
-            "targets": row[3],
+            "targets": row[3].split(",") if row[3] else [],
             "stop_loss": row[4],
-            "risk_profile": row[5],
+            "risk_reward": row[5],
             "explanation": row[6],
             "data": row[7],
             "created_at": row[8].isoformat() if row[8] else None,
@@ -199,11 +198,11 @@ def analyze_strategy(user_id: int, strategy_id: int):
                 SET data = jsonb_set(
                     COALESCE(data,'{}'::jsonb),
                     '{ai_analysis}',
-                    to_jsonb(%s::json),
+                    to_jsonb(%s),
                     true
                 )
                 WHERE id = %s AND user_id = %s;
-            """, (json.dumps(analysis), strategy_id, user_id))
+            """, (analysis, strategy_id, user_id))
 
         conn.commit()
         logger.info("✅ Strategy analyse opgeslagen")
@@ -213,7 +212,7 @@ def analyze_strategy(user_id: int, strategy_id: int):
 
 
 # ============================================================
-# 🟡 DAGELIJKSE STRATEGY SNAPSHOT (NIVEAU 2)
+# 🟡 DAGELIJKSE STRATEGY SNAPSHOT
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.run_daily_strategy_snapshot")
 def run_daily_strategy_snapshot(user_id: int):
@@ -271,7 +270,8 @@ def run_daily_strategy_snapshot(user_id: int):
             market_context=market_context,
         )
 
-        if not adjustment:
+        if not adjustment or not adjustment.get("entry") or not adjustment.get("targets"):
+            logger.warning("⚠️ Onvolledige strategy adjustment — snapshot overgeslagen")
             return
 
         with conn.cursor() as cur:
@@ -329,12 +329,12 @@ def run_daily_strategy_snapshot(user_id: int):
 
 
 # ============================================================
-# 🔄 BULK GENERATIE (BEWUST UIT)
+# 🔄 BULK GENERATIE — BEWUST UIT
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.generate_all")
 def generate_all(user_id: int):
     return {
-        "state": "FAILURE",
+        "state": "IGNORED",
         "success": False,
-        "error": "Bulk AI strategie-generatie nog niet geactiveerd",
+        "reason": "Bulk AI strategie-generatie is uitgeschakeld",
     }
