@@ -1,8 +1,7 @@
 import logging
-import traceback
 import json
-from datetime import date
 from decimal import Decimal
+from datetime import date
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
@@ -10,9 +9,9 @@ from backend.utils.openai_client import ask_gpt_text
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# ===================================================================
-# 🧮 HELPER – safe numeric + range score intersect
-# ===================================================================
+# ======================================================
+# 🔢 Helpers
+# ======================================================
 
 def to_float(v):
     if v is None:
@@ -46,95 +45,83 @@ def score_overlap(value, min_v, max_v):
     return round(100 - (dist / max_dist * 100))
 
 
-# ===================================================================
-# 🤖 MAIN SETUP AGENT — USER AWARE
-# ===================================================================
-def run_setup_agent(asset="BTC", user_id: int | None = None):
-    logger.info(f"🤖 Setup-Agent gestart (user_id={user_id})...")
+# ======================================================
+# 🤖 SETUP AGENT — AI LOGICA (USER AWARE)
+# ======================================================
+
+def run_setup_agent(*, user_id: int, asset: str = "BTC"):
+    """
+    Bepaalt beste setup van de dag + schrijft:
+    - daily_setup_scores
+    - ai_category_insights (category=setup)
+
+    ⚠️ Deze functie:
+    - wordt ALTIJD aangeroepen via een Celery task
+    - bevat GEEN Celery decorators
+    """
+
+    logger.info(f"🤖 Setup AI Agent gestart (user_id={user_id}, asset={asset})")
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding.")
-        return {"active_setup": None, "all_setups": []}
+        logger.error("❌ Geen DB-verbinding")
+        return
 
     try:
-        # ---------------------------------------------------------------
+        # ======================================================
         # 1️⃣ DAILY SCORES
-        # ---------------------------------------------------------------
+        # ======================================================
         with conn.cursor() as cur:
-            if user_id:
-                cur.execute("""
-                    SELECT macro_score, technical_score, market_score
-                    FROM daily_scores
-                    WHERE report_date = CURRENT_DATE AND user_id = %s
-                    LIMIT 1;
-                """, (user_id,))
-            else:
-                cur.execute("""
-                    SELECT macro_score, technical_score, market_score
-                    FROM daily_scores
-                    WHERE report_date = CURRENT_DATE
-                    LIMIT 1;
-                """)
+            cur.execute("""
+                SELECT macro_score, technical_score, market_score
+                FROM daily_scores
+                WHERE report_date = CURRENT_DATE
+                  AND user_id = %s
+                LIMIT 1;
+            """, (user_id,))
             row = cur.fetchone()
 
         if not row:
-            logger.error("❌ Geen daily_scores gevonden.")
-            return {"active_setup": None, "all_setups": []}
+            logger.warning("⚠️ Geen daily_scores gevonden")
+            return
 
         macro_score, technical_score, market_score = map(to_float, row)
 
-        # ---------------------------------------------------------------
+        # ======================================================
         # 2️⃣ SETUPS OPHALEN
-        # ---------------------------------------------------------------
+        # ======================================================
         with conn.cursor() as cur:
-            if user_id:
-                cur.execute("""
-                    SELECT 
-                        id, name, symbol,
-                        min_macro_score, max_macro_score,
-                        min_technical_score, max_technical_score,
-                        min_market_score, max_market_score,
-                        explanation, action, strategy_type,
-                        dynamic_investment, created_at
-                    FROM setups
-                    WHERE symbol = %s AND user_id = %s
-                    ORDER BY created_at DESC;
-                """, (asset, user_id))
-            else:
-                cur.execute("""
-                    SELECT 
-                        id, name, symbol,
-                        min_macro_score, max_macro_score,
-                        min_technical_score, max_technical_score,
-                        min_market_score, max_market_score,
-                        explanation, action, strategy_type,
-                        dynamic_investment, created_at
-                    FROM setups
-                    WHERE symbol = %s
-                    ORDER BY created_at DESC;
-                """, (asset,))
-
+            cur.execute("""
+                SELECT 
+                    id, name, symbol,
+                    min_macro_score, max_macro_score,
+                    min_technical_score, max_technical_score,
+                    min_market_score, max_market_score,
+                    strategy_type, dynamic_investment
+                FROM setups
+                WHERE user_id = %s
+                  AND symbol = %s
+                ORDER BY created_at DESC;
+            """, (user_id, asset))
             setups = cur.fetchall()
 
         if not setups:
-            logger.warning("⚠️ Geen setups gevonden.")
-            return {"active_setup": None, "all_setups": []}
+            logger.info("ℹ️ Geen setups gevonden")
+            return
 
+        best_setup_id = None
+        best_score = -1
         results = []
-        best_setup = None
-        best_match_score = -1
 
-        # ---------------------------------------------------------------
-        # 3️⃣ MATCHING + OPSLAAN DAILY_SETUP_SCORES
-        # ---------------------------------------------------------------
+        # ======================================================
+        # 3️⃣ MATCHING + DAILY_SETUP_SCORES
+        # ======================================================
         for (
             setup_id, name, symbol,
             min_macro, max_macro,
             min_tech, max_tech,
             min_market, max_market,
-            explanation, action, strategy_type,
-            dynamic_investment, created_at
+            strategy_type, dynamic_investment
         ) in setups:
 
             macro_match = score_overlap(macro_score, min_macro, max_macro)
@@ -142,108 +129,95 @@ def run_setup_agent(asset="BTC", user_id: int | None = None):
             market_match = score_overlap(market_score, min_market, max_market)
 
             total_match = round((macro_match + tech_match + market_match) / 3)
-            active = macro_match > 0 and tech_match > 0 and market_match > 0
+            is_active = macro_match > 0 and tech_match > 0 and market_match > 0
 
-            if total_match > best_match_score:
-                best_match_score = total_match
-                best_setup = {
-                    "setup_id": setup_id,
-                    "name": name,
-                    "symbol": symbol,
-                    "total_match": total_match,
-                    "active": active,
-                }
+            if total_match > best_score:
+                best_score = total_match
+                best_setup_id = setup_id
 
             prompt = f"""
 Je bent een crypto analist.
 
-MARKT SCORES:
+MARKT:
 Macro {macro_score}
 Technical {technical_score}
 Market {market_score}
 
-Setup '{name}' ranges:
+Setup "{name}":
 Macro {min_macro}-{max_macro}
 Technical {min_tech}-{max_tech}
 Market {min_market}-{max_market}
 
-Geef één zin waarom deze match {total_match}/100 scoort.
+Waarom scoort deze setup {total_match}/100?
 """
             ai_comment = ask_gpt_text(prompt)
 
             results.append({
                 "setup_id": setup_id,
                 "name": name,
-                "symbol": symbol,
-                "match_score": total_match,
-                "active": active,
-                "ai_comment": ai_comment,
-                "best_of_day": False,
+                "score": total_match,
+                "active": is_active,
+                "comment": ai_comment,
             })
 
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO daily_setup_scores
-                        (setup_id, user_id, report_date, score, is_active, explanation, breakdown)
-                    VALUES (%s, %s, CURRENT_DATE, %s, %s, %s, %s::jsonb)
+                        (setup_id, user_id, report_date, score, is_active, explanation)
+                    VALUES (%s, %s, CURRENT_DATE, %s, %s, %s)
                     ON CONFLICT (setup_id, user_id, report_date)
                     DO UPDATE SET
                         score = EXCLUDED.score,
                         is_active = EXCLUDED.is_active,
                         explanation = EXCLUDED.explanation,
-                        breakdown = EXCLUDED.breakdown,
                         created_at = NOW();
                 """, (
                     setup_id,
                     user_id,
                     total_match,
-                    active,
+                    is_active,
                     ai_comment,
-                    json.dumps({
-                        "macro": macro_match,
-                        "technical": tech_match,
-                        "market": market_match,
-                    })
                 ))
 
-        # ---------------------------------------------------------------
+        # ======================================================
         # 4️⃣ BEST OF DAY
-        # ---------------------------------------------------------------
-        if best_setup:
-            for r in results:
-                if r["setup_id"] == best_setup["setup_id"]:
-                    r["best_of_day"] = True
-
+        # ======================================================
+        if best_setup_id:
             with conn.cursor() as cur:
                 cur.execute("""
                     UPDATE daily_setup_scores
                     SET is_best = TRUE
-                    WHERE setup_id = %s AND user_id = %s AND report_date = CURRENT_DATE;
-                """, (best_setup["setup_id"], user_id))
+                    WHERE setup_id = %s
+                      AND user_id = %s
+                      AND report_date = CURRENT_DATE;
+                """, (best_setup_id, user_id))
 
-        # ---------------------------------------------------------------
+        # ======================================================
         # 5️⃣ AI CATEGORY INSIGHT (SETUP)
-        # ---------------------------------------------------------------
-        avg_score = round(sum(r["match_score"] for r in results) / len(results), 2)
+        # ======================================================
+        avg_score = round(sum(r["score"] for r in results) / len(results), 2)
         active_count = sum(1 for r in results if r["active"])
 
         trend = (
-            "Sterke match" if best_match_score >= 70 else
-            "Gemiddelde match" if best_match_score >= 40 else
-            "Zwakke match"
+            "Sterk" if best_score >= 70 else
+            "Gemiddeld" if best_score >= 40 else
+            "Zwak"
         )
 
         bias = "Kansrijk" if active_count > 0 else "Afwachten"
-        risk = "Laag" if market_score >= 60 else "Gemiddeld" if market_score >= 40 else "Hoog"
-
-        summary = (
-            f"Vandaag is '{best_setup['name']}' de best passende setup "
-            f"met een match-score van {best_setup['total_match']}/100."
-            if best_setup else
-            "Geen duidelijke setup-match gevonden."
+        risk = (
+            "Laag" if market_score >= 60 else
+            "Gemiddeld" if market_score >= 40 else
+            "Hoog"
         )
 
-        top_signals = sorted(results, key=lambda r: r["match_score"], reverse=True)[:3]
+        summary = (
+            f"Beste setup vandaag heeft een match-score van {best_score}/100."
+            if best_setup_id else
+            "Geen duidelijke setup vandaag."
+        )
+
+        top_signals = sorted(results, key=lambda r: r["score"], reverse=True)[:3]
 
         with conn.cursor() as cur:
             cur.execute("""
@@ -270,51 +244,48 @@ Geef één zin waarom deze match {total_match}/100 scoort.
             ))
 
         conn.commit()
-        logger.info("✅ Setup-Agent voltooid.")
-        return {"active_setup": best_setup, "all_setups": results}
+        logger.info("✅ Setup AI Agent voltooid")
 
     except Exception:
         conn.rollback()
-        logger.error("❌ Setup-Agent crash", exc_info=True)
-        return {"active_setup": None, "all_setups": []}
+        logger.error("❌ Setup AI Agent crash", exc_info=True)
 
     finally:
         conn.close()
 
 
-# ===================================================================
-# 🧠 SETUP UITLEG GENERATOR
-# ===================================================================
-def generate_setup_explanation(setup_id: int, user_id: int | None = None):
+# ======================================================
+# 🧠 SETUP UITLEG (LOS AANROEPBAAR)
+# ======================================================
+
+def generate_setup_explanation(*, setup_id: int, user_id: int):
     conn = get_db_connection()
     if not conn:
-        return "Geen databaseverbinding."
+        return None
 
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT name, symbol, trend, timeframe,
+                SELECT name, symbol, timeframe,
                        min_macro_score, max_macro_score,
                        min_technical_score, max_technical_score,
                        min_market_score, max_market_score
                 FROM setups
                 WHERE id = %s AND user_id = %s;
             """, (setup_id, user_id))
-
             row = cur.fetchone()
 
         if not row:
-            return "Setup niet gevonden."
+            return None
 
-        name, symbol, trend, timeframe, min_macro, max_macro, min_tech, max_tech, min_market, max_market = row
+        name, symbol, timeframe, min_macro, max_macro, min_tech, max_tech, min_market, max_market = row
 
         prompt = f"""
 Je bent een crypto analist.
 
-Naam: {name}
+Setup: {name}
 Asset: {symbol}
 Timeframe: {timeframe}
-Trend: {trend}
 
 Macro {min_macro}-{max_macro}
 Technical {min_tech}-{max_tech}
@@ -322,7 +293,6 @@ Market {min_market}-{max_market}
 
 Geef maximaal 3 zinnen uitleg.
 """
-
         explanation = ask_gpt_text(prompt)
 
         with conn.cursor() as cur:
@@ -336,8 +306,8 @@ Geef maximaal 3 zinnen uitleg.
         return explanation
 
     except Exception:
-        logger.error("❌ Uitleg fout", exc_info=True)
-        return "Fout bij uitleg."
+        logger.error("❌ Setup uitleg fout", exc_info=True)
+        return None
 
     finally:
         conn.close()
