@@ -9,7 +9,7 @@ from backend.utils.scoring_utils import (
     normalize_indicator_name,
 )
 
-# ✅ AI-agent logica blijft gescheiden (zoals afgesproken)
+# ✅ AI-agent logica blijft gescheiden
 from backend.ai_agents.macro_ai_agent import run_macro_agent
 
 # =====================================================
@@ -40,9 +40,9 @@ def safe_request(url, params=None):
 
 
 # =====================================================
-# 📡 Actieve macro-indicatoren per user
+# 📡 Actieve macro-indicatoren (GLOBAAL – GEEN user_id)
 # =====================================================
-def get_active_macro_indicators(user_id: int):
+def get_active_macro_indicators():
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen DB-verbinding (macro indicators)")
@@ -50,18 +50,14 @@ def get_active_macro_indicators(user_id: int):
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, name, source, link
+            cur.execute("""
+                SELECT name, source, link
                 FROM indicators
                 WHERE category = 'macro'
                   AND active = TRUE
-                  AND user_id = %s
-                """,
-                (user_id,),
-            )
+            """)
             return [
-                {"id": r[0], "name": r[1], "source": r[2], "link": r[3]}
+                {"name": r[0], "source": r[1], "link": r[2]}
                 for r in cur.fetchall()
             ]
     except Exception:
@@ -72,7 +68,7 @@ def get_active_macro_indicators(user_id: int):
 
 
 # =====================================================
-# 📅 Check of vandaag al verwerkt
+# 📅 Check of indicator vandaag al verwerkt is
 # =====================================================
 def already_fetched_today(indicator_name: str, user_id: int) -> bool:
     conn = get_db_connection()
@@ -81,17 +77,14 @@ def already_fetched_today(indicator_name: str, user_id: int) -> bool:
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 SELECT 1
                 FROM macro_data
                 WHERE name = %s
                   AND user_id = %s
                   AND timestamp::date = CURRENT_DATE
                 LIMIT 1
-                """,
-                (indicator_name, user_id),
-            )
+            """, (indicator_name, user_id))
             return cur.fetchone() is not None
     except Exception:
         logger.error("⚠️ Fout bij check macro_data", exc_info=True)
@@ -115,24 +108,19 @@ def fetch_value_from_source(indicator: dict):
     data = safe_request(link)
 
     try:
-        # Fear & Greed / Alternative.me
         if "fear" in link or "alternative" in source:
             return float(data["data"][0]["value"])
 
-        # CoinGecko dominance
         if "coingecko" in source:
             return float(data["data"]["market_cap_percentage"]["btc"])
 
-        # Yahoo meta price
         if "yahoo" in source:
             return float(data["chart"]["result"][0]["meta"]["regularMarketPrice"])
 
-        # FRED observations
         if "fred" in source:
             val = data["observations"][-1]["value"]
             return float(val) if val not in (None, ".") else None
 
-        # DXY via chart meta
         if "dxy" in raw_name.lower():
             return float(data["chart"]["result"][0]["meta"]["regularMarketPrice"])
 
@@ -145,7 +133,7 @@ def fetch_value_from_source(indicator: dict):
 
 
 # =====================================================
-# 💾 Opslaan macro_data
+# 💾 Opslaan macro_data (PER USER)
 # =====================================================
 def store_macro_data(payload: dict, user_id: int):
     conn = get_db_connection()
@@ -155,22 +143,19 @@ def store_macro_data(payload: dict, user_id: int):
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            cur.execute("""
                 INSERT INTO macro_data
                     (user_id, name, value, trend, interpretation, action, score, timestamp)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                """,
-                (
-                    user_id,
-                    payload["name"],
-                    payload["value"],
-                    payload["trend"],
-                    payload["interpretation"],
-                    payload["action"],
-                    payload["score"],
-                ),
-            )
+            """, (
+                user_id,
+                payload["name"],
+                payload["value"],
+                payload["trend"],
+                payload["interpretation"],
+                payload["action"],
+                payload["score"],
+            ))
         conn.commit()
         logger.info(f"💾 Macro opgeslagen: {payload['name']} (user_id={user_id})")
     except Exception:
@@ -181,14 +166,14 @@ def store_macro_data(payload: dict, user_id: int):
 
 
 # =====================================================
-# 🧠 Hoofdverwerking ingestie (GEEN Celery)
+# 🧠 Macro ingestie (GEEN Celery)
 # =====================================================
 def fetch_and_process_macro(user_id: int):
     logger.info(f"🚀 Macro ingestie gestart (user_id={user_id})")
 
-    indicators = get_active_macro_indicators(user_id)
+    indicators = get_active_macro_indicators()
     if not indicators:
-        logger.warning(f"⚠️ Geen macro-indicatoren (user_id={user_id})")
+        logger.warning("⚠️ Geen actieve macro-indicatoren")
         return
 
     for ind in indicators:
@@ -204,7 +189,6 @@ def fetch_and_process_macro(user_id: int):
             if value is None:
                 continue
 
-            # Score per indicator (DB rules)
             score_data = generate_scores_db(
                 "macro",
                 data={name: value},
@@ -234,14 +218,10 @@ def fetch_and_process_macro(user_id: int):
 
 
 # =====================================================
-# 🚀 Celery task 1: INGESTIE (PER USER)
+# 🚀 Celery task 1: INGESTIE
 # =====================================================
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data(user_id: int):
-    """
-    Wordt aangeroepen via dispatcher.dispatch_for_all_users
-    -> vult macro_data + score/interpretation/action per indicator
-    """
     try:
         fetch_and_process_macro(user_id=user_id)
     except Exception:
@@ -249,18 +229,13 @@ def fetch_macro_data(user_id: int):
 
 
 # =====================================================
-# 🚀 Celery task 2: AI ANALYSE (PER USER) ✅ NIEUW
+# 🚀 Celery task 2: AI ANALYSE
 # =====================================================
 @shared_task(name="backend.celery_task.macro_task.generate_macro_insight")
 def generate_macro_insight(user_id: int):
-    """
-    Wordt aangeroepen via dispatcher.dispatch_for_all_users
-    -> schrijft ai_category_insights (macro) + ai_reflections (macro)
-    (logica zit in backend.ai_agents.macro_ai_agent.run_macro_agent)
-    """
     try:
-        logger.info(f"🧠 Macro AI insight task gestart (user_id={user_id})")
+        logger.info(f"🧠 Macro AI insight gestart (user_id={user_id})")
         run_macro_agent(user_id=user_id)
-        logger.info(f"✅ Macro AI insight task klaar (user_id={user_id})")
+        logger.info(f"✅ Macro AI insight klaar (user_id={user_id})")
     except Exception:
         logger.error("❌ Macro AI insight task crash", exc_info=True)
