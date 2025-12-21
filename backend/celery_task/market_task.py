@@ -277,19 +277,18 @@ def fetch_and_process_market_indicators(user_id: int):
         return
 
     try:
-        # 1️⃣ Actieve market-indicators VOOR DEZE USER
+        # 1️⃣ GLOBALE actieve market-indicators
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name
                 FROM indicators
                 WHERE category = 'market'
                   AND active = TRUE
-                  AND user_id = %s
-            """, (user_id,))
+            """)
             indicators = [r[0] for r in cur.fetchall()]
 
         if not indicators:
-            logger.info("ℹ️ Geen actieve market-indicators voor user")
+            logger.info("ℹ️ Geen actieve market-indicators")
             return
 
         # 2️⃣ Laatste globale market snapshot
@@ -303,7 +302,7 @@ def fetch_and_process_market_indicators(user_id: int):
             row = cur.fetchone()
 
         if not row:
-            logger.warning("⚠️ Geen market_data beschikbaar")
+            logger.warning("⚠️ Geen market_data gevonden")
             return
 
         market_values = {
@@ -312,21 +311,19 @@ def fetch_and_process_market_indicators(user_id: int):
             "change_24h": row[2],
         }
 
-        # 3️⃣ Score + opslag per indicator
+        # 3️⃣ Score + opslag PER USER
         for name in indicators:
             value = market_values.get(name)
             if value is None:
                 continue
 
-            # ✅ FIX: market rules zijn globaal → GEEN user_id filteren
             score_data = generate_scores_db(
                 category="market",
-                data={name: value}
+                data={name: value}   # ⛔ GEEN user_id hier
             )
 
             score = score_data.get("scores", {}).get(name)
             if not score:
-                logger.warning(f"⚠️ Geen scoreregels gevonden voor market indicator: {name}")
                 continue
 
             with conn.cursor() as cur:
@@ -338,10 +335,10 @@ def fetch_and_process_market_indicators(user_id: int):
                     user_id,
                     name,
                     value,
-                    score.get("trend"),
-                    score.get("interpretation"),
-                    score.get("action"),
-                    score.get("score"),
+                    score["trend"],
+                    score["interpretation"],
+                    score["action"],
+                    score["score"],
                 ))
 
         conn.commit()
