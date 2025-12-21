@@ -210,16 +210,27 @@ async def get_technical_insight(current_user: dict = Depends(get_current_user)):
 async def get_technical_reflections(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     conn, cur = get_conn_cursor()
+
     try:
         cur.execute("""
-            SELECT indicator, raw_score, ai_score, compliance,
-                   comment, recommendation, date, timestamp
+            SELECT DISTINCT ON (indicator)
+                   indicator,
+                   raw_score,
+                   ai_score,
+                   compliance,
+                   comment,
+                   recommendation,
+                   date,
+                   timestamp
             FROM ai_reflections
-            WHERE category='technical' AND user_id=%s
-            ORDER BY date DESC, timestamp DESC
-            LIMIT 10
+            WHERE category = 'technical'
+              AND user_id = %s
+              AND date = CURRENT_DATE
+            ORDER BY indicator, timestamp DESC;
         """, (user_id,))
+
         rows = cur.fetchall()
+
         return {
             "reflections": [
                 {
@@ -235,6 +246,7 @@ async def get_technical_reflections(current_user: dict = Depends(get_current_use
                 for (i, rs, ai, c, cm, r, d, ts) in rows
             ]
         }
+
     finally:
         conn.close()
 
