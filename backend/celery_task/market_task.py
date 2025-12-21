@@ -1,5 +1,4 @@
 import logging
-import traceback
 import requests
 from datetime import datetime
 from collections import defaultdict
@@ -9,6 +8,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.utils.db import get_db_connection
 from backend.celery_task.btc_price_history_task import update_btc_history
+from backend.utils.scoring_utils import generate_scores_db
 
 # =====================================================
 # ⚙️ Config
@@ -156,10 +156,6 @@ def save_market_data_daily():
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
-    """
-    OHLC → Binance
-    Volume → CoinGecko
-    """
     logger.info("📆 Start fetch_market_data_7d...")
     conn = get_db_connection()
 
@@ -274,3 +270,92 @@ def calculate_and_save_forward_returns():
         logger.error("❌ Fout in calculate_and_save_forward_returns", exc_info=True)
     finally:
         conn.close()
+
+# =====================================================
+# 📊 USER-AWARE MARKET INDICATORS (NIEUW – ONTBRAK)
+# =====================================================
+def fetch_and_process_market_indicators(user_id: int):
+    logger.info(f"📊 Market indicators ingestie gestart (user_id={user_id})")
+
+    conn = get_db_connection()
+    if not conn:
+        return
+
+    try:
+        # Actieve market-indicators per user
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT name
+                FROM indicators
+                WHERE category = 'market'
+                  AND active = TRUE
+                  AND user_id = %s
+            """, (user_id,))
+            indicators = [r[0] for r in cur.fetchall()]
+
+        if not indicators:
+            logger.info("ℹ️ Geen actieve market-indicators")
+            return
+
+        # Laatste globale market snapshot
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT price, volume, change_24h
+                FROM market_data
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+
+        if not row:
+            return
+
+        market_values = {
+            "price": row[0],
+            "volume": row[1],
+            "change_24h": row[2],
+        }
+
+        for indicator in indicators:
+            value = market_values.get(indicator)
+            if value is None:
+                continue
+
+            score_data = generate_scores_db(
+                category="market",
+                data={indicator: value},
+                user_id=user_id
+            )
+
+            score = score_data.get("scores", {}).get(indicator)
+            if not score:
+                continue
+
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO market_indicators
+                        (user_id, indicator, value, score, advice, explanation, timestamp)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                """, (
+                    user_id,
+                    indicator,
+                    value,
+                    score["score"],
+                    score["action"],
+                    score["interpretation"],
+                ))
+
+        conn.commit()
+        logger.info(f"✅ Market indicators opgeslagen (user_id={user_id})")
+
+    except Exception:
+        conn.rollback()
+        logger.error("❌ Fout in market indicators", exc_info=True)
+    finally:
+        conn.close()
+
+@shared_task(name="backend.celery_task.market_task.fetch_market_indicators")
+def fetch_market_indicators(user_id: int):
+    if user_id is None:
+        raise ValueError("user_id verplicht")
+    fetch_and_process_market_indicators(user_id)
