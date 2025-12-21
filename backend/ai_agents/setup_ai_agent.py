@@ -25,41 +25,48 @@ def to_float(v):
 
 def score_overlap(value, min_v, max_v):
     """
-    Geeft overlap-score 0–100 voor value binnen [min_v, max_v]
+    Bepaalt overlap-score (0–100).
+    NULL min/max = geen beperking = 100
     """
     value = to_float(value)
     min_v = to_float(min_v)
     max_v = to_float(max_v)
 
-    if value is None or min_v is None or max_v is None:
+    if value is None:
         return 0
 
-    if value < min_v or value > max_v:
+    # ✅ GEEN FILTER = VOLLEDIGE MATCH
+    if min_v is None and max_v is None:
+        return 100
+
+    if min_v is not None and value < min_v:
         return 0
 
+    if max_v is not None and value > max_v:
+        return 0
+
+    # Eénzijdige range → geldig = 100
+    if min_v is None or max_v is None:
+        return 100
+
+    # Volledige range → afstand tot midden
     mid = (min_v + max_v) / 2
-    dist = abs(value - mid)
     max_dist = (max_v - min_v) / 2
 
     if max_dist <= 0:
         return 100
 
+    dist = abs(value - mid)
     return round(100 - (dist / max_dist * 100))
 
 
 # ======================================================
-# 🤖 SETUP AI AGENT — PURE LOGICA (USER + ASSET)
+# 🤖 SETUP AI AGENT — FINAL & CORRECT
 # ======================================================
 
 def run_setup_agent(*, user_id: int, asset: str = "BTC"):
     """
     Bepaalt beste setup van de dag voor één user + asset.
-
-    Schrijft:
-    - daily_setup_scores
-    - ai_category_insights (category='setup')
-
-    ⚠️ Geen Celery decorator (wordt altijd via task aangeroepen)
     """
 
     if user_id is None:
@@ -74,7 +81,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
 
     try:
         # ======================================================
-        # 1️⃣ Daily scores (macro / technical / market)
+        # 1️⃣ Daily scores ophalen
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -93,7 +100,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         macro_score, technical_score, market_score = map(to_float, row)
 
         # ======================================================
-        # 2️⃣ Setups ophalen (user + asset)
+        # 2️⃣ Setups ophalen
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -114,7 +121,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             return
 
         # ======================================================
-        # 3️⃣ Reset best-of-day (BELANGRIJK)
+        # 3️⃣ Reset previous best
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -129,7 +136,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         best_score = -1
 
         # ======================================================
-        # 4️⃣ Matching + opslaan daily_setup_scores
+        # 4️⃣ Evaluatie per setup
         # ======================================================
         for (
             setup_id, name, symbol,
@@ -143,18 +150,17 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             market_match = score_overlap(market_score, min_market, max_market)
 
             total_score = round((macro_match + tech_match + market_match) / 3)
-            is_active = macro_match > 0 and tech_match > 0 and market_match > 0
+
+            is_active = total_score > 0
 
             if total_score > best_score:
                 best_score = total_score
                 best_setup_id = setup_id
 
-            # Korte AI uitleg (max 1 zin)
-            prompt = (
-                f"Marktscore: macro {macro_score}, technical {technical_score}, market {market_score}. "
+            ai_comment = ask_gpt_text(
+                f"Marktscores: macro {macro_score}, technical {technical_score}, market {market_score}. "
                 f"Setup '{name}' matcht {total_score}/100. Geef 1 korte reden."
             )
-            ai_comment = ask_gpt_text(prompt)
 
             results.append({
                 "setup_id": setup_id,
@@ -186,7 +192,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         # ======================================================
         # 5️⃣ Markeer BEST setup
         # ======================================================
-        if best_setup_id:
+        if best_setup_id is not None:
             with conn.cursor() as cur:
                 cur.execute("""
                     UPDATE daily_setup_scores
@@ -197,30 +203,15 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 """, (best_setup_id, user_id))
 
         # ======================================================
-        # 6️⃣ AI CATEGORY INSIGHT (SETUP)
+        # 6️⃣ AI category insight
         # ======================================================
         avg_score = round(sum(r["score"] for r in results) / len(results), 2)
-        active_count = sum(1 for r in results if r["active"])
-
-        trend = (
-            "Sterk" if best_score >= 70 else
-            "Gemiddeld" if best_score >= 40 else
-            "Zwak"
-        )
-        bias = "Kansrijk" if active_count > 0 else "Afwachten"
-        risk = (
-            "Laag" if market_score >= 60 else
-            "Gemiddeld" if market_score >= 40 else
-            "Hoog"
-        )
 
         summary = (
             f"Beste {asset}-setup scoort {best_score}/100."
-            if best_setup_id else
-            f"Geen actieve {asset}-setup vandaag."
+            if best_score > 0 else
+            f"Geen duidelijke {asset}-setup vandaag."
         )
-
-        top_signals = sorted(results, key=lambda r: r["score"], reverse=True)[:3]
 
         with conn.cursor() as cur:
             cur.execute("""
@@ -230,24 +221,21 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 ON CONFLICT (user_id, category, date)
                 DO UPDATE SET
                     avg_score = EXCLUDED.avg_score,
-                    trend = EXCLUDED.trend,
-                    bias = EXCLUDED.bias,
-                    risk = EXCLUDED.risk,
                     summary = EXCLUDED.summary,
                     top_signals = EXCLUDED.top_signals,
                     created_at = NOW();
             """, (
                 user_id,
                 avg_score,
-                trend,
-                bias,
-                risk,
+                "Actief" if best_score >= 50 else "Neutraal",
+                "Kansrijk" if best_score >= 50 else "Afwachten",
+                "Gemiddeld",
                 summary,
-                json.dumps(top_signals),
+                json.dumps(results[:3]),
             ))
 
         conn.commit()
-        logger.info(f"✅ [Setup-Agent] Voltooid (user_id={user_id}, asset={asset})")
+        logger.info(f"✅ [Setup-Agent] Voltooid (user_id={user_id})")
 
     except Exception:
         conn.rollback()
