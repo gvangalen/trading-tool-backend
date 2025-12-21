@@ -1,13 +1,12 @@
 import logging
-import traceback
 from celery import shared_task
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import (
     fetch_technical_value,
-    interpret_technical_indicator_db
+    interpret_technical_indicator_db,
 )
+from backend.ai_agents.technical_ai_agent import run_technical_agent
 
 # =====================================================
 # 🪵 Logging
@@ -109,7 +108,7 @@ def get_active_technical_indicators(user_id: int):
 
 
 # =====================================================
-# 🧠 Hoofdlogica (GEEN Celery)
+# 🧠 Technische ingestie (GEEN Celery)
 # =====================================================
 def fetch_and_process_technical(user_id: int):
     logger.info(f"🚀 Technische data ingestie gestart (user_id={user_id})")
@@ -127,12 +126,21 @@ def fetch_and_process_technical(user_id: int):
             continue
 
         try:
-            result = fetch_technical_value(name, ind.get("source"), ind.get("link"))
+            result = fetch_technical_value(
+                name,
+                ind.get("source"),
+                ind.get("link")
+            )
+
             if not result or "value" not in result:
                 continue
 
             value = result["value"]
-            interpretation = interpret_technical_indicator_db(name, value, user_id)
+            interpretation = interpret_technical_indicator_db(
+                name,
+                value,
+                user_id
+            )
 
             if not interpretation:
                 logger.warning(f"⚠️ Geen scoreregels voor {name}")
@@ -149,18 +157,37 @@ def fetch_and_process_technical(user_id: int):
             store_technical_score_db(payload, user_id)
 
         except Exception:
-            logger.error(f"❌ Fout bij technische indicator {name}", exc_info=True)
+            logger.error(
+                f"❌ Fout bij technische indicator {name}",
+                exc_info=True
+            )
 
     logger.info(f"✅ Technische ingestie voltooid (user_id={user_id})")
 
 
 # =====================================================
-# 🚀 Celery Task — ALTIJD via dispatcher
+# 🚀 Celery Task — TECHNICAL INGESTIE
 # =====================================================
 @shared_task(name="backend.celery_task.technical_task.fetch_technical_data_day")
 def fetch_technical_data_day(user_id: int):
     if user_id is None:
         raise ValueError("❌ user_id is verplicht voor technical task")
 
-    logger.info(f"📌 Celery technical task gestart (user_id={user_id})")
+    logger.info(f"📌 Celery technical ingestie gestart (user_id={user_id})")
     fetch_and_process_technical(user_id)
+
+
+# =====================================================
+# 🤖 Celery Task — TECHNICAL AI AGENT (WRAPPER)
+# =====================================================
+@shared_task(name="backend.celery_task.technical_task.run_technical_agent_daily")
+def run_technical_agent_daily(user_id: int):
+    """
+    Roept de PURE AI agent aan.
+    Wordt getriggerd NA daily_scores.
+    """
+    if user_id is None:
+        raise ValueError("❌ user_id is verplicht voor technical AI task")
+
+    logger.info(f"🤖 Celery technical AI agent gestart (user_id={user_id})")
+    run_technical_agent(user_id=user_id)
