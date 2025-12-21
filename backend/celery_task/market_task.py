@@ -277,9 +277,7 @@ def fetch_and_process_market_indicators(user_id: int):
         return
 
     try:
-        # -------------------------------------------------
         # 1️⃣ Actieve market-indicators VOOR DEZE USER
-        # -------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name
@@ -294,9 +292,7 @@ def fetch_and_process_market_indicators(user_id: int):
             logger.info("ℹ️ Geen actieve market-indicators voor user")
             return
 
-        # -------------------------------------------------
         # 2️⃣ Laatste globale market snapshot
-        # -------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT price, volume, change_24h
@@ -316,22 +312,21 @@ def fetch_and_process_market_indicators(user_id: int):
             "change_24h": row[2],
         }
 
-        # -------------------------------------------------
         # 3️⃣ Score + opslag per indicator
-        # -------------------------------------------------
         for name in indicators:
             value = market_values.get(name)
             if value is None:
                 continue
 
+            # ✅ FIX: market rules zijn globaal → GEEN user_id filteren
             score_data = generate_scores_db(
                 category="market",
-                data={name: value},
-                user_id=user_id
+                data={name: value}
             )
 
             score = score_data.get("scores", {}).get(name)
             if not score:
+                logger.warning(f"⚠️ Geen scoreregels gevonden voor market indicator: {name}")
                 continue
 
             with conn.cursor() as cur:
