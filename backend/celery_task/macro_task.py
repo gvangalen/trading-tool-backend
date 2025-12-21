@@ -9,6 +9,9 @@ from backend.utils.scoring_utils import (
     normalize_indicator_name,
 )
 
+# ✅ AI-agent logica blijft gescheiden (zoals afgesproken)
+from backend.ai_agents.macro_ai_agent import run_macro_agent
+
 # =====================================================
 # 🪵 Logging
 # =====================================================
@@ -58,12 +61,7 @@ def get_active_macro_indicators(user_id: int):
                 (user_id,),
             )
             return [
-                {
-                    "id": r[0],
-                    "name": r[1],
-                    "source": r[2],
-                    "link": r[3],
-                }
+                {"id": r[0], "name": r[1], "source": r[2], "link": r[3]}
                 for r in cur.fetchall()
             ]
     except Exception:
@@ -90,6 +88,7 @@ def already_fetched_today(indicator_name: str, user_id: int) -> bool:
                 WHERE name = %s
                   AND user_id = %s
                   AND timestamp::date = CURRENT_DATE
+                LIMIT 1
                 """,
                 (indicator_name, user_id),
             )
@@ -116,19 +115,24 @@ def fetch_value_from_source(indicator: dict):
     data = safe_request(link)
 
     try:
+        # Fear & Greed / Alternative.me
         if "fear" in link or "alternative" in source:
             return float(data["data"][0]["value"])
 
+        # CoinGecko dominance
         if "coingecko" in source:
             return float(data["data"]["market_cap_percentage"]["btc"])
 
+        # Yahoo meta price
         if "yahoo" in source:
             return float(data["chart"]["result"][0]["meta"]["regularMarketPrice"])
 
+        # FRED observations
         if "fred" in source:
             val = data["observations"][-1]["value"]
             return float(val) if val not in (None, ".") else None
 
+        # DXY via chart meta
         if "dxy" in raw_name.lower():
             return float(data["chart"]["result"][0]["meta"]["regularMarketPrice"])
 
@@ -177,7 +181,7 @@ def store_macro_data(payload: dict, user_id: int):
 
 
 # =====================================================
-# 🧠 Hoofdverwerking (GEEN Celery)
+# 🧠 Hoofdverwerking ingestie (GEEN Celery)
 # =====================================================
 def fetch_and_process_macro(user_id: int):
     logger.info(f"🚀 Macro ingestie gestart (user_id={user_id})")
@@ -200,6 +204,7 @@ def fetch_and_process_macro(user_id: int):
             if value is None:
                 continue
 
+            # Score per indicator (DB rules)
             score_data = generate_scores_db(
                 "macro",
                 data={name: value},
@@ -229,14 +234,33 @@ def fetch_and_process_macro(user_id: int):
 
 
 # =====================================================
-# 🚀 Celery task (PER USER)
+# 🚀 Celery task 1: INGESTIE (PER USER)
 # =====================================================
 @shared_task(name="backend.celery_task.macro_task.fetch_macro_data")
 def fetch_macro_data(user_id: int):
     """
     Wordt aangeroepen via dispatcher.dispatch_for_all_users
+    -> vult macro_data + score/interpretation/action per indicator
     """
     try:
         fetch_and_process_macro(user_id=user_id)
     except Exception:
-        logger.error("❌ Macro task crash", exc_info=True)
+        logger.error("❌ Macro ingestie task crash", exc_info=True)
+
+
+# =====================================================
+# 🚀 Celery task 2: AI ANALYSE (PER USER) ✅ NIEUW
+# =====================================================
+@shared_task(name="backend.celery_task.macro_task.generate_macro_insight")
+def generate_macro_insight(user_id: int):
+    """
+    Wordt aangeroepen via dispatcher.dispatch_for_all_users
+    -> schrijft ai_category_insights (macro) + ai_reflections (macro)
+    (logica zit in backend.ai_agents.macro_ai_agent.run_macro_agent)
+    """
+    try:
+        logger.info(f"🧠 Macro AI insight task gestart (user_id={user_id})")
+        run_macro_agent(user_id=user_id)
+        logger.info(f"✅ Macro AI insight task klaar (user_id={user_id})")
+    except Exception:
+        logger.error("❌ Macro AI insight task crash", exc_info=True)
