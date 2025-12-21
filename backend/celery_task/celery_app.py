@@ -67,11 +67,11 @@ celery_app.conf.beat_schedule = {
     # =====================================================
     # 2️⃣ USER-AWARE INGESTIE
     # =====================================================
-    "dispatch_macro_data": {
+    "dispatch_macro_agent": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=0, minute=12),
+        "schedule": crontab(hour=3, minute=10),
         "kwargs": {
-            "task_name": "backend.celery_task.macro_task.fetch_macro_data"
+            "task_name": "backend.celery_task.macro_task.generate_macro_insight"
         },
     },
 
