@@ -12,7 +12,10 @@ from backend.utils.email_utils import send_email_with_attachment
 # =====================================================
 # Logging
 # =====================================================
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 load_dotenv()
 
@@ -75,10 +78,14 @@ def generate_daily_report(user_id: int):
         if row:
             ai_master_score, ai_master_trend, ai_master_bias, ai_master_risk, ai_master_summary = row
         else:
-            ai_master_score = ai_master_trend = ai_master_bias = ai_master_risk = ai_master_summary = None
+            ai_master_score = None
+            ai_master_trend = None
+            ai_master_bias = None
+            ai_master_risk = None
+            ai_master_summary = None
 
         # -------------------------------------------------
-        # 3️⃣ OPSLAAN IN daily_reports
+        # 3️⃣ OPSLAAN IN daily_reports (ZONDER updated_at)
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -108,23 +115,22 @@ def generate_daily_report(user_id: int):
                 %s, %s, %s, %s,
                 %s, %s, %s, %s, %s
             )
-            ON CONFLICT (report_date, user_id)
+            ON CONFLICT (user_id, report_date)
             DO UPDATE SET
-                btc_summary        = EXCLUDED.btc_summary,
-                macro_summary      = EXCLUDED.macro_summary,
-                setup_checklist    = EXCLUDED.setup_checklist,
-                recommendations    = EXCLUDED.recommendations,
-                outlook            = EXCLUDED.outlook,
-                macro_score        = EXCLUDED.macro_score,
-                technical_score    = EXCLUDED.technical_score,
-                setup_score        = EXCLUDED.setup_score,
-                market_score       = EXCLUDED.market_score,
-                ai_master_score    = EXCLUDED.ai_master_score,
-                ai_master_trend    = EXCLUDED.ai_master_trend,
-                ai_master_bias     = EXCLUDED.ai_master_bias,
-                ai_master_risk     = EXCLUDED.ai_master_risk,
-                ai_master_summary  = EXCLUDED.ai_master_summary,
-                updated_at         = NOW();
+                btc_summary       = EXCLUDED.btc_summary,
+                macro_summary     = EXCLUDED.macro_summary,
+                setup_checklist   = EXCLUDED.setup_checklist,
+                recommendations   = EXCLUDED.recommendations,
+                outlook           = EXCLUDED.outlook,
+                macro_score       = EXCLUDED.macro_score,
+                technical_score   = EXCLUDED.technical_score,
+                setup_score       = EXCLUDED.setup_score,
+                market_score      = EXCLUDED.market_score,
+                ai_master_score   = EXCLUDED.ai_master_score,
+                ai_master_trend   = EXCLUDED.ai_master_trend,
+                ai_master_bias    = EXCLUDED.ai_master_bias,
+                ai_master_risk    = EXCLUDED.ai_master_risk,
+                ai_master_summary = EXCLUDED.ai_master_summary;
         """, (
             today,
             user_id,
