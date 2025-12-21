@@ -1,26 +1,29 @@
 import logging
-import traceback
 import json
-
-from celery import shared_task
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
+from backend.utils.scoring_utils import normalize_indicator_name
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # =====================================================================
-# 📊 TECHNICAL AI AGENT — USER-AWARE (FINAL + DEDUP FIX)
+# 📊 TECHNICAL AI AGENT — PURE LOGICA (NO CELERY) + DEDUP FIX
 # =====================================================================
 
-@shared_task(name="backend.ai_agents.technical_ai_agent.generate_technical_insight")
-def generate_technical_insight(user_id: int):
+def run_technical_agent(user_id: int):
+    """
+    Genereert technical AI insights voor één user.
+    Schrijft:
+    - ai_category_insights (category='technical')
+    - ai_reflections (category='technical')
+    """
 
     if user_id is None:
         raise ValueError("❌ Technical AI Agent vereist een user_id")
 
-    logger.info(f"📊 Start Technical AI Agent — user_id={user_id}")
+    logger.info(f"📊 [Technical-Agent] Start — user_id={user_id}")
 
     conn = get_db_connection()
     if not conn:
@@ -41,10 +44,11 @@ def generate_technical_insight(user_id: int):
 
         rules_by_indicator = {}
         for indicator, rmin, rmax, score, trend, interp, action in rule_rows:
-            rules_by_indicator.setdefault(indicator, []).append({
-                "range_min": float(rmin),
-                "range_max": float(rmax),
-                "score": int(score),
+            key = normalize_indicator_name(indicator)
+            rules_by_indicator.setdefault(key, []).append({
+                "range_min": float(rmin) if rmin is not None else None,
+                "range_max": float(rmax) if rmax is not None else None,
+                "score": int(score) if score is not None else None,
                 "trend": trend,
                 "interpretation": interp,
                 "action": action,
@@ -54,6 +58,7 @@ def generate_technical_insight(user_id: int):
 
         # ------------------------------------------------------
         # 2️⃣ Laatste technische indicatoren (PER USER)
+        #    -> we halen bewust veel op en deduppen op naam (laatste)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -68,37 +73,41 @@ def generate_technical_insight(user_id: int):
             logger.warning(f"⚠️ Geen technische data gevonden voor user_id={user_id}")
             return
 
-        # Dedup: alleen laatste per indicator
+        # Dedup: alleen de nieuwste per indicator (normalised key)
         latest = {}
         for name, value, score, advies, uitleg, ts in rows:
-            if name not in latest:
-                latest[name] = (value, score, advies, uitleg, ts)
+            key = normalize_indicator_name(name)
+            if key not in latest:
+                latest[key] = (name, value, score, advies, uitleg, ts)
 
         combined = []
         scores = []
 
-        for name, (value, score, advies, uitleg, ts) in latest.items():
-            score_f = float(score) if score is not None else 50
+        for key, (name, value, score, advies, uitleg, ts) in latest.items():
+            score_f = float(score) if score is not None else 50.0
+
+            # trend lookup op basis van score (als je exact scores gebruikt: 10/25/50/75/100)
+            rule_trend = next(
+                (r["trend"] for r in rules_by_indicator.get(key, []) if float(r.get("score") or -1) == score_f),
+                None
+            )
 
             combined.append({
-                "indicator": name,
+                "indicator": normalize_indicator_name(name),
                 "value": float(value) if value is not None else None,
                 "score": score_f,
-                "trend": next(
-                    (r["trend"] for r in rules_by_indicator.get(name, []) if r["score"] == score_f),
-                    None
-                ),
+                "trend": rule_trend,
                 "advies": advies or "",
                 "uitleg": uitleg or "",
-                "timestamp": ts.isoformat(),
-                "rules": rules_by_indicator.get(name, [])
+                "timestamp": ts.isoformat() if ts else None,
+                "rules": rules_by_indicator.get(key, [])
             })
             scores.append(score_f)
 
-        avg_score = round(sum(scores) / len(scores), 2)
+        avg_score = round(sum(scores) / len(scores), 2) if scores else 50.0
 
         # ------------------------------------------------------
-        # 3️⃣ AI CONTEXT
+        # 3️⃣ AI CONTEXT (samenvatting)
         # ------------------------------------------------------
         prompt = f"""
 Je bent een professionele technische analyse expert.
@@ -118,17 +127,15 @@ ANTWOORD ALLEEN GELDIGE JSON:
   "top_signals": []
 }}
 """
-
         ai_context = ask_gpt(
             prompt,
             system_role="Je bent een technische analyse expert. Antwoord uitsluitend in geldige JSON."
         )
-
         if not isinstance(ai_context, dict):
             raise ValueError("❌ Technical AI response is geen geldige JSON")
 
         # ------------------------------------------------------
-        # 4️⃣ AI REFLECTIES
+        # 4️⃣ AI REFLECTIES (per indicator)
         # ------------------------------------------------------
         prompt_reflections = f"""
 Maak reflecties per technische indicator.
@@ -147,17 +154,15 @@ ANTWOORD ALS JSON-LIJST:
   }}
 ]
 """
-
         ai_reflections = ask_gpt(
             prompt_reflections,
             system_role="Je bent een technische analyse expert. Antwoord uitsluitend in geldige JSON."
         )
-
         if not isinstance(ai_reflections, list):
             ai_reflections = []
 
         # ------------------------------------------------------
-        # 🧹 FIX: verwijder oude technical AI-reflecties van vandaag
+        # 🧹 FIX: verwijder oude technical reflecties van vandaag
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -196,12 +201,14 @@ ANTWOORD ALS JSON-LIJST:
             ))
 
         # ------------------------------------------------------
-        # 6️⃣ Opslaan ai_reflections (SCHOON PER DAG)
+        # 6️⃣ Opslaan ai_reflections (per indicator, 1 per dag)
         # ------------------------------------------------------
         for r in ai_reflections:
             indicator = r.get("indicator")
             if not indicator:
                 continue
+
+            indicator_norm = normalize_indicator_name(indicator)
 
             with conn.cursor() as cur:
                 cur.execute("""
@@ -218,19 +225,19 @@ ANTWOORD ALS JSON-LIJST:
                         timestamp      = NOW();
                 """, (
                     user_id,
-                    indicator,
-                    r.get("ai_score"),
-                    r.get("compliance"),
-                    r.get("comment"),
-                    r.get("recommendation"),
+                    indicator_norm,
+                    r.get("ai_score", 50),
+                    r.get("compliance", 50),
+                    r.get("comment", ""),
+                    r.get("recommendation", ""),
                 ))
 
         conn.commit()
-        logger.info(f"✅ Technical AI Agent voltooid voor user_id={user_id}")
+        logger.info(f"✅ [Technical-Agent] Voltooid voor user_id={user_id}")
 
     except Exception:
         conn.rollback()
-        logger.error("❌ Technical AI Agent FOUT", exc_info=True)
+        logger.error("❌ [Technical-Agent] FOUT", exc_info=True)
 
     finally:
         conn.close()
