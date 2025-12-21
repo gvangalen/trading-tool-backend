@@ -67,6 +67,9 @@ def score_overlap(value, min_v, max_v):
 def run_setup_agent(*, user_id: int, asset: str = "BTC"):
     """
     Bepaalt beste setup van de dag voor één user + asset.
+    Schrijft:
+    - daily_setup_scores
+    - ai_category_insights (category='setup')
     """
 
     if user_id is None:
@@ -150,7 +153,6 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             market_match = score_overlap(market_score, min_market, max_market)
 
             total_score = round((macro_match + tech_match + market_match) / 3)
-
             is_active = total_score > 0
 
             if total_score > best_score:
@@ -240,6 +242,54 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
     except Exception:
         conn.rollback()
         logger.error("❌ Setup AI Agent crash", exc_info=True)
+
+    finally:
+        conn.close()
+
+
+# ======================================================
+# 🧠 AI UITLEG PER SETUP (NODIG VOOR setups_api)
+# ======================================================
+
+def generate_setup_explanation(setup_id: int, user_id: int) -> str:
+    """
+    Wordt gebruikt door:
+    POST /api/setups/explanation/{setup_id}
+    """
+
+    conn = get_db_connection()
+    if not conn:
+        return ""
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT name, symbol, strategy_type, description, action
+                FROM setups
+                WHERE id = %s AND user_id = %s
+            """, (setup_id, user_id))
+            row = cur.fetchone()
+
+        if not row:
+            return ""
+
+        name, symbol, strategy_type, description, action = row
+
+        prompt = f"""
+Leg in maximaal 3 zinnen uit waarom deze trading setup logisch is.
+
+Naam: {name}
+Asset: {symbol}
+Strategie: {strategy_type}
+Beschrijving: {description}
+Actie: {action}
+"""
+
+        return ask_gpt_text(prompt)
+
+    except Exception:
+        logger.error("❌ generate_setup_explanation fout", exc_info=True)
+        return ""
 
     finally:
         conn.close()
