@@ -266,23 +266,27 @@ def calculate_and_save_forward_returns():
         conn.close()
 
 # =====================================================
-# 📊 USER-AWARE MARKET INDICATORS (CORRECT)
+# 📊 USER-AWARE MARKET INDICATORS (FINAL & CORRECT)
 # =====================================================
 def fetch_and_process_market_indicators(user_id: int):
     logger.info(f"📊 Market indicators ingestie gestart (user_id={user_id})")
 
     conn = get_db_connection()
     if not conn:
+        logger.error("❌ Geen DB-verbinding")
         return
 
     try:
-        # 1️⃣ Actieve market-indicators per user
+        # -------------------------------------------------
+        # 1️⃣ Actieve market-indicators VOOR DEZE USER
+        # -------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT mdi.indicator
-                FROM market_data_indicators mdi
-                WHERE mdi.user_id = %s
-                  AND mdi.active = TRUE
+                SELECT name
+                FROM indicators
+                WHERE category = 'market'
+                  AND active = TRUE
+                  AND user_id = %s
             """, (user_id,))
             indicators = [r[0] for r in cur.fetchall()]
 
@@ -290,7 +294,9 @@ def fetch_and_process_market_indicators(user_id: int):
             logger.info("ℹ️ Geen actieve market-indicators voor user")
             return
 
+        # -------------------------------------------------
         # 2️⃣ Laatste globale market snapshot
+        # -------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT price, volume, change_24h
@@ -301,6 +307,7 @@ def fetch_and_process_market_indicators(user_id: int):
             row = cur.fetchone()
 
         if not row:
+            logger.warning("⚠️ Geen market_data beschikbaar")
             return
 
         market_values = {
@@ -309,43 +316,37 @@ def fetch_and_process_market_indicators(user_id: int):
             "change_24h": row[2],
         }
 
-        # 3️⃣ Score + opslag
-        for indicator in indicators:
-            value = market_values.get(indicator)
+        # -------------------------------------------------
+        # 3️⃣ Score + opslag per indicator
+        # -------------------------------------------------
+        for name in indicators:
+            value = market_values.get(name)
             if value is None:
                 continue
 
             score_data = generate_scores_db(
                 category="market",
-                data={indicator: value},
+                data={name: value},
                 user_id=user_id
             )
 
-            score = score_data.get("scores", {}).get(indicator)
+            score = score_data.get("scores", {}).get(name)
             if not score:
                 continue
 
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO market_indicator_scores
-                        (user_id, indicator, value, score, trend, interpretation, action, timestamp)
+                    INSERT INTO market_data_indicators
+                        (user_id, name, value, trend, interpretation, action, score, timestamp)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-                    ON CONFLICT (user_id, indicator, date)
-                    DO UPDATE SET
-                        value = EXCLUDED.value,
-                        score = EXCLUDED.score,
-                        trend = EXCLUDED.trend,
-                        interpretation = EXCLUDED.interpretation,
-                        action = EXCLUDED.action,
-                        timestamp = NOW();
                 """, (
                     user_id,
-                    indicator,
+                    name,
                     value,
-                    score["score"],
-                    score["trend"],
-                    score["interpretation"],
-                    score["action"],
+                    score.get("trend"),
+                    score.get("interpretation"),
+                    score.get("action"),
+                    score.get("score"),
                 ))
 
         conn.commit()
@@ -354,11 +355,16 @@ def fetch_and_process_market_indicators(user_id: int):
     except Exception:
         conn.rollback()
         logger.error("❌ Fout in market indicators", exc_info=True)
+
     finally:
         conn.close()
 
+
+# =====================================================
+# 🚀 Celery wrapper (via dispatcher)
+# =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_indicators")
 def fetch_market_indicators(user_id: int):
     if user_id is None:
-        raise ValueError("user_id verplicht")
+        raise ValueError("❌ user_id verplicht")
     fetch_and_process_market_indicators(user_id)
