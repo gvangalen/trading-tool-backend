@@ -38,16 +38,11 @@ celery_app = Celery(
     backend=CELERY_BACKEND,
 )
 
-celery_app.autodiscover_tasks([
-    "backend.celery_task",
-    "backend.ai_agents",
-])
-
 celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 CELERY BEAT — DEFINITIEF CORRECTE VOLGORDE
+# 🕒 CELERY BEAT — DEFINITIEVE JUISTE VOLGORDE
 # =========================================================
 celery_app.conf.beat_schedule = {
 
@@ -65,13 +60,13 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 2️⃣ USER-AWARE INGESTIE
+    # 2️⃣ USER-INGESTIE (DATA OPBOUW)
     # =====================================================
-    "dispatch_macro_agent": {
+    "dispatch_macro_data": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=10),
+        "schedule": crontab(hour=0, minute=12),
         "kwargs": {
-            "task_name": "backend.celery_task.macro_task.generate_macro_insight"
+            "task_name": "backend.celery_task.macro_task.fetch_macro_data"
         },
     },
 
@@ -84,7 +79,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 3️⃣ DAILY SCORES (BASIS VOOR ALLES)
+    # 3️⃣ DAILY SCORES (BASIS VOOR AI)
     # =====================================================
     "dispatch_daily_scores": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -95,34 +90,34 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 4️⃣ AI CATEGORY AGENTS (LEZEN daily_scores)
+    # 4️⃣ AI CATEGORY AGENTS (ALTIJD VIA TASK)
     # =====================================================
-    "dispatch_macro_agent": {
+    "dispatch_macro_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=10),
         "kwargs": {
-            "task_name": "backend.ai_agents.macro_ai_agent.run_macro_agent"
+            "task_name": "backend.celery_task.macro_task.run_macro_agent_daily"
         },
     },
 
-    "dispatch_market_agent": {
+    "dispatch_market_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=20),
         "kwargs": {
-            "task_name": "backend.ai_agents.market_ai_agent.generate_market_insight"
+            "task_name": "backend.celery_task.market_task.run_market_agent_daily"
         },
     },
 
-    "dispatch_technical_agent": {
+    "dispatch_technical_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=30),
         "kwargs": {
-            "task_name": "backend.ai_agents.technical_ai_agent.generate_technical_insight"
+            "task_name": "backend.celery_task.technical_task.run_technical_agent_daily"
         },
     },
 
     # =====================================================
-    # 5️⃣ SETUP + STRATEGY (AFHANKELIJK VAN AI INSIGHTS)
+    # 5️⃣ SETUP & STRATEGY
     # =====================================================
     "dispatch_setup_agent": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -141,7 +136,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 6️⃣ DAGRAPPORT (LAATSTE STAP)
+    # 6️⃣ DAILY REPORT (LAATSTE)
     # =====================================================
     "dispatch_daily_report": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -152,10 +147,10 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-logger.info("🚀 Celery Beat schedule geladen (DEFINITIEF)")
+logger.info("🚀 Celery Beat schedule geladen (DEFINITIEF & SCHOON)")
 
 # =========================================================
-# 📌 FORCE IMPORTS (GARANDEERT TASK REGISTRATIE)
+# 📌 FORCE IMPORTS — GARANDEERT TASK REGISTRATIE
 # =========================================================
 try:
     import backend.celery_task.dispatcher
@@ -167,20 +162,12 @@ try:
     import backend.celery_task.strategy_task
     import backend.celery_task.daily_report_task
 
-    import backend.ai_agents.macro_ai_agent
-    import backend.ai_agents.market_ai_agent
-    import backend.ai_agents.technical_ai_agent
-    import backend.ai_agents.setup_ai_agent
-    import backend.ai_agents.strategy_ai_agent
-    import backend.ai_agents.report_ai_agent
-    import backend.ai_agents.score_ai_agent
+    logger.info("✅ Alle Celery TASKS succesvol geïmporteerd")
 
-    logger.info("✅ Alle Celery tasks & AI agents succesvol geïmporteerd")
-
-except Exception as e:
-    logger.error("❌ Fout bij force-imports", exc_info=True)
+except Exception:
+    logger.error("❌ Fout bij Celery task imports", exc_info=True)
 
 # =========================================================
-# EXPOSE APP
+# 🚀 EXPOSE
 # =========================================================
 app = celery_app
