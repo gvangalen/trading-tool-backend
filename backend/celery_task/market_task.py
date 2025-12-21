@@ -15,14 +15,13 @@ from backend.utils.scoring_utils import generate_scores_db
 # =====================================================
 TIMEOUT = 10
 HEADERS = {"Content-Type": "application/json"}
+SYMBOL = "BTC"
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-SYMBOL = "BTC"
 
 # =====================================================
 # 🔁 Safe HTTP-get met retry
@@ -34,7 +33,7 @@ def safe_get(url, params=None):
     return resp.json()
 
 # =====================================================
-# 🔍 Market RAW endpoints (DB-gedreven)
+# 🔍 Market RAW endpoints (DB-gedreven, GLOBAAL)
 # =====================================================
 def load_market_raw_endpoints():
     conn = get_db_connection()
@@ -51,7 +50,7 @@ def load_market_raw_endpoints():
         conn.close()
 
 # =====================================================
-# 🌐 RAW market data ophalen (globaal)
+# 🌐 RAW market data ophalen (GLOBAAL)
 # =====================================================
 def fetch_raw_market_data():
     endpoints = load_market_raw_endpoints()
@@ -101,13 +100,13 @@ def store_market_data_db(symbol, price, volume, change_24h):
         conn.commit()
         logger.info("💾 market_data opgeslagen (globaal).")
     except Exception:
-        logger.error("❌ Fout bij opslaan market_data", exc_info=True)
         conn.rollback()
+        logger.error("❌ Fout bij opslaan market_data", exc_info=True)
     finally:
         conn.close()
 
 # =====================================================
-# 🔁 RAW → DB (helper)
+# 🔁 RAW → DB helper
 # =====================================================
 def process_market_now():
     raw = fetch_raw_market_data()
@@ -122,7 +121,7 @@ def process_market_now():
     )
 
 # =====================================================
-# 🚀 Celery — live market update (globaal)
+# 🚀 Celery — live market update (GLOBAAL)
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data")
 def fetch_market_data():
@@ -134,15 +133,10 @@ def fetch_market_data():
         logger.error("❌ Fout in fetch_market_data", exc_info=True)
 
 # =====================================================
-# 🕛 Dagelijkse snapshot (globaal)
+# 🕛 Dagelijkse snapshot (GLOBAAL)
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.save_market_data_daily")
 def save_market_data_daily():
-    """
-    Dagelijkse market snapshot:
-    - RAW market data
-    - BTC price history update
-    """
     logger.info("🕛 Dagelijkse market snapshot gestart...")
     try:
         process_market_now()
@@ -152,7 +146,7 @@ def save_market_data_daily():
         logger.error("❌ Fout in save_market_data_daily", exc_info=True)
 
 # =====================================================
-# 📆 7-daagse OHLC + volume (globaal)
+# 📆 7-daagse OHLC + volume (GLOBAAL)
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
@@ -213,7 +207,7 @@ def fetch_market_data_7d():
         conn.close()
 
 # =====================================================
-# 📈 Forward returns (globaal)
+# 📈 Forward returns (GLOBAAL)
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.calculate_and_save_forward_returns")
 def calculate_and_save_forward_returns():
@@ -272,7 +266,7 @@ def calculate_and_save_forward_returns():
         conn.close()
 
 # =====================================================
-# 📊 USER-AWARE MARKET INDICATORS (NIEUW – ONTBRAK)
+# 📊 USER-AWARE MARKET INDICATORS (CORRECT)
 # =====================================================
 def fetch_and_process_market_indicators(user_id: int):
     logger.info(f"📊 Market indicators ingestie gestart (user_id={user_id})")
@@ -282,22 +276,21 @@ def fetch_and_process_market_indicators(user_id: int):
         return
 
     try:
-        # Actieve market-indicators per user
+        # 1️⃣ Actieve market-indicators per user
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT name
-                FROM indicators
-                WHERE category = 'market'
-                  AND active = TRUE
-                  AND user_id = %s
+                SELECT mdi.indicator
+                FROM market_data_indicators mdi
+                WHERE mdi.user_id = %s
+                  AND mdi.active = TRUE
             """, (user_id,))
             indicators = [r[0] for r in cur.fetchall()]
 
         if not indicators:
-            logger.info("ℹ️ Geen actieve market-indicators")
+            logger.info("ℹ️ Geen actieve market-indicators voor user")
             return
 
-        # Laatste globale market snapshot
+        # 2️⃣ Laatste globale market snapshot
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT price, volume, change_24h
@@ -316,6 +309,7 @@ def fetch_and_process_market_indicators(user_id: int):
             "change_24h": row[2],
         }
 
+        # 3️⃣ Score + opslag
         for indicator in indicators:
             value = market_values.get(indicator)
             if value is None:
@@ -333,16 +327,25 @@ def fetch_and_process_market_indicators(user_id: int):
 
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO market_indicators
-                        (user_id, indicator, value, score, advice, explanation, timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                    INSERT INTO market_indicator_scores
+                        (user_id, indicator, value, score, trend, interpretation, action, timestamp)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (user_id, indicator, date)
+                    DO UPDATE SET
+                        value = EXCLUDED.value,
+                        score = EXCLUDED.score,
+                        trend = EXCLUDED.trend,
+                        interpretation = EXCLUDED.interpretation,
+                        action = EXCLUDED.action,
+                        timestamp = NOW();
                 """, (
                     user_id,
                     indicator,
                     value,
                     score["score"],
-                    score["action"],
+                    score["trend"],
                     score["interpretation"],
+                    score["action"],
                 ))
 
         conn.commit()
