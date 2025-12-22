@@ -68,7 +68,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
 
     BELANGRIJK:
     - Scores zijn RELATIEF (setup vs setup)
-    - Setup-card toont ADVIES, geen numerieke eindscore
+    - Score kan NOOIT 0 zijn (floor = 25)
     """
 
     if not user_id:
@@ -149,7 +149,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         evaluations = []
 
         # ==================================================
-        # 4️⃣ Per setup: RELATIEVE score berekenen
+        # 4️⃣ Per setup: RELATIEVE score berekenen (MET FLOOR)
         # ==================================================
         for row in setups:
             setup_id = row[0]
@@ -166,7 +166,8 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             t  = score_overlap(technical, min_tech, max_tech)
             mk = score_overlap(market, min_market, max_market)
 
-            score = round((m + t + mk) / 3)
+            raw_score = round((m + t + mk) / 3)
+            score = max(25, raw_score)  # 🔒 FLOOR = 25
 
             explanation = ask_gpt_text(
                 f"Marktscores vandaag: macro {macro}, technical {technical}, market {market}. "
@@ -201,7 +202,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 )
 
         # ==================================================
-        # 5️⃣ Beste setup bepalen (RELATIEF)
+        # 5️⃣ Beste setup bepalen
         # ==================================================
         ranked = sorted(evaluations, key=lambda x: x["score"], reverse=True)
         best = ranked[0]
@@ -219,7 +220,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             )
 
         # ==================================================
-        # 6️⃣ Menselijk ADVIES (zelfde patroon als Technical)
+        # 6️⃣ Menselijk ADVIES
         # ==================================================
         trend = "Actief" if best["score"] >= 60 else "Neutraal"
         bias  = "Kansrijk" if best["score"] >= 60 else "Afwachten"
@@ -252,7 +253,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 """,
                 (
                     user_id,
-                    best["score"],   # intern nuttig, UI toont dit niet
+                    best["score"],
                     trend,
                     bias,
                     "Gemiddeld",
