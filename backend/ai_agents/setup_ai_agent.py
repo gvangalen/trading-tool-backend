@@ -53,21 +53,21 @@ def score_overlap(value, min_v, max_v):
 
 
 # ======================================================
-# 🤖 SETUP AGENT — ADVIES-GERICHT
+# 🤖 SETUP AGENT — DEFINITIEF
 # ======================================================
 
 def run_setup_agent(*, user_id: int, asset: str = "BTC"):
     """
     Doel:
-    - Technisch: daily_setup_scores vullen
-    - Advies: 1 duidelijke setup-aanbeveling per dag
+    - daily_setup_scores vullen (technisch)
+    - 1 setup-advies genereren (ai_category_insights)
 
-    UI gebruikt:
-    - ai_category_insights (category='setup')
+    GEEN setup krijgt ooit automatisch score 0
+    → altijd relatieve ranking
     """
 
     if not user_id:
-        raise ValueError("Setup agent vereist user_id")
+        raise ValueError("❌ Setup agent vereist user_id")
 
     logger.info(f"🤖 [Setup-Agent] Start (user_id={user_id}, asset={asset})")
 
@@ -78,7 +78,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
 
     try:
         # ==================================================
-        # 1️⃣ Daily scores (MARKT CONTEXT)
+        # 1️⃣ Daily scores (marktcontext)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -121,7 +121,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             logger.info("ℹ️ Geen setups")
             return
 
-        # Reset best
+        # Reset best-flag
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -133,10 +133,9 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             )
 
         evaluations = []
-        best = None
 
         # ==================================================
-        # 3️⃣ Evaluatie per setup (TECHNISCH)
+        # 3️⃣ Per setup: ALTIJD score berekenen
         # ==================================================
         for (
             setup_id, name,
@@ -150,19 +149,17 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             mk = score_overlap(market, min_market, max_market)
 
             score = round((m + t + mk) / 3)
-            active = score > 0
 
             explanation = ask_gpt_text(
                 f"Marktscore: macro {macro}, technical {technical}, market {market}. "
-                f"Waarom past setup '{name}' vandaag wel of niet?"
+                f"Waarom past setup '{name}' vandaag beter of slechter?"
             )
 
             evaluations.append({
                 "setup_id": setup_id,
                 "name": name,
                 "score": score,
-                "active": active,
-                "reasons": {
+                "components": {
                     "macro": m,
                     "technical": t,
                     "market": mk,
@@ -178,55 +175,44 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                     ON CONFLICT (setup_id, user_id, report_date)
                     DO UPDATE SET
                         score = EXCLUDED.score,
-                        is_active = EXCLUDED.is_active,
+                        is_active = TRUE,
                         explanation = EXCLUDED.explanation,
                         created_at = NOW()
                     """,
-                    (setup_id, user_id, score, active, explanation),
+                    (setup_id, user_id, score, explanation),
                 )
 
-            if active and (not best or score > best["score"]):
-                best = {
-                    "setup_id": setup_id,
-                    "name": name,
-                    "score": score,
-                }
+        # ==================================================
+        # 4️⃣ Beste setup bepalen (RELATIEF)
+        # ==================================================
+        ranked = sorted(evaluations, key=lambda x: x["score"], reverse=True)
+        best = ranked[0]
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE daily_setup_scores
+                SET is_best = TRUE
+                WHERE setup_id = %s AND user_id = %s
+                      AND report_date = CURRENT_DATE
+                """,
+                (best["setup_id"], user_id),
+            )
+
+        avg_score = round(
+            sum(e["score"] for e in evaluations) / len(evaluations), 1
+        )
+
+        trend = "Actief" if best["score"] >= 60 else "Neutraal"
+        bias = "Kansrijk" if best["score"] >= 60 else "Afwachten"
+
+        summary = (
+            f"Beste {asset}-setup vandaag: "
+            f"{best['name']} ({best['score']}/100)."
+        )
 
         # ==================================================
-        # 4️⃣ Advies bepalen (DIT IS DE CARD)
-        # ==================================================
-        if best:
-            advice = f"Actieve setup vandaag: {best['name']} ({best['score']}/100)."
-            trend = "Actief"
-            bias = "Kansrijk"
-            top_signals = [
-                f"Setup {best['name']} past bij huidige marktscore",
-                "Scores binnen ingestelde ranges",
-            ]
-
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE daily_setup_scores
-                    SET is_best = TRUE
-                    WHERE setup_id = %s AND user_id = %s
-                          AND report_date = CURRENT_DATE
-                    """,
-                    (best["setup_id"], user_id),
-                )
-        else:
-            advice = f"Geen actieve {asset}-setup vandaag. Afwachten."
-            trend = "Neutraal"
-            bias = "Afwachten"
-            top_signals = [
-                "Marktscore buiten setup-ranges",
-                "Onvoldoende technische bevestiging",
-            ]
-
-        avg_score = round(sum(e["score"] for e in evaluations) / len(evaluations), 1)
-
-        # ==================================================
-        # 5️⃣ AI CATEGORY INSIGHT (SETUP)
+        # 5️⃣ AI CATEGORY INSIGHT — SETUP CARD
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -245,17 +231,17 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 """,
                 (
                     user_id,
-                    avg_score,
+                    best["score"],
                     trend,
                     bias,
                     "Gemiddeld",
-                    advice,
-                    json.dumps(top_signals, ensure_ascii=False),
+                    summary,
+                    json.dumps(ranked[:3], ensure_ascii=False),
                 ),
             )
 
         conn.commit()
-        logger.info(f"✅ [Setup-Agent] Advies opgeslagen (user_id={user_id})")
+        logger.info(f"✅ [Setup-Agent] Klaar (user_id={user_id})")
 
     except Exception:
         conn.rollback()
