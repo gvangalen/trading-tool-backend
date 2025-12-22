@@ -64,21 +64,30 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 2️⃣ INDICATOR INGEST (DETERMINISTISCH, ZELF users)
+    # 2️⃣ INDICATOR INGEST (PER USER → dispatcher)
     # =====================================================
-    "fetch_macro_indicators_daily": {
-        "task": "backend.celery_task.macro_task.fetch_macro_data_daily",
+    "dispatch_macro_indicators": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=0, minute=12),
+        "kwargs": {
+            "task_name": "backend.celery_task.macro_task.fetch_macro_data"
+        },
     },
 
-    "fetch_technical_indicators_daily": {
-        "task": "backend.celery_task.technical_task.fetch_technical_data_daily",
+    "dispatch_technical_indicators": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=0, minute=15),
+        "kwargs": {
+            "task_name": "backend.celery_task.technical_task.fetch_technical_data_day"
+        },
     },
 
-    "fetch_market_indicators_daily": {
-        "task": "backend.celery_task.market_task.fetch_market_indicators_daily",
+    "dispatch_market_indicators": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=0, minute=18),
+        "kwargs": {
+            "task_name": "backend.celery_task.market_task.fetch_market_indicators_day"
+        },
     },
 
     # =====================================================
