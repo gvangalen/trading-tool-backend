@@ -23,7 +23,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
 logger.info(f"🔍 CELERY_BROKER_URL = {os.getenv('CELERY_BROKER_URL')}")
 
 # =========================================================
@@ -42,7 +41,7 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 CELERY BEAT — DEFINITIEVE JUISTE VOLGORDE
+# 🕒 CELERY BEAT — DEFINITIEVE PIPELINE
 # =========================================================
 celery_app.conf.beat_schedule = {
 
@@ -65,7 +64,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 2️⃣ USER-INGESTIE (RAW → DB)
+    # 2️⃣ USER DATA INGESTIE (RAW → DB)
     # =====================================================
     "dispatch_macro_data": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -84,7 +83,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 3️⃣ 🧠 DAILY SCORES — MASTER AI (ENIGE SCORE ENTRYPOINT)
+    # 3️⃣ 🧠 DAILY SCORES + MASTER SCORE (ENIGE SCORE ENTRYPOINT)
     # =====================================================
     "run_master_score_ai": {
         "task": "backend.celery_task.store_daily_scores_task.run_master_score_ai",
@@ -92,7 +91,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 4️⃣ AI CATEGORY AGENTS
+    # 4️⃣ AI CATEGORY INSIGHTS
     # =====================================================
     "dispatch_macro_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -138,7 +137,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 6️⃣ DAILY REPORT (LAATSTE)
+    # 6️⃣ DAILY REPORT (LAATSTE STAP)
     # =====================================================
     "dispatch_daily_report": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -149,10 +148,10 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-logger.info("🚀 Celery Beat schedule geladen (DEFINITIEF & SCHOON)")
+logger.info("🚀 Celery Beat schedule geladen (FINAL & CLEAN)")
 
 # =========================================================
-# 📌 FORCE IMPORTS — GARANDEERT TASK REGISTRATIE
+# 📌 FORCE IMPORTS — TASK REGISTRATIE
 # =========================================================
 try:
     import backend.celery_task.dispatcher
