@@ -49,10 +49,16 @@ celery_app.conf.beat_schedule = {
     # =====================================================
     # 1️⃣ GLOBALE MARKET DATA (GEEN user_id)
     # =====================================================
+
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
         "schedule": crontab(minute="*/15"),
-    },
+     },
+
+    "fetch_market_data_7d": {
+        "task": "backend.celery_task.market_task.fetch_market_data_7d",
+        "schedule": crontab(hour=0, minute=2),
+     },
 
     "save_market_data_daily": {
         "task": "backend.celery_task.market_task.save_market_data_daily",
