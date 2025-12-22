@@ -19,6 +19,11 @@ def _jsonb(value):
 # 1️⃣ BUILD DAILY SCORES (RULE-BASED) — PER USER
 # =========================================================
 def build_daily_scores_for_user(user_id: int):
+    """
+    Bouwt rule-based daily_scores voor één user.
+    GEEN AI — puur deterministisch.
+    """
+
     scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
 
     if not scores:
@@ -49,7 +54,8 @@ def build_daily_scores_for_user(user_id: int):
                     market_top_contributors
                 )
                 VALUES (
-                    CURRENT_DATE, %s, %s, %s, %s, %s,
+                    CURRENT_DATE,
+                    %s, %s, %s, %s, %s,
                     %s, %s, %s,
                     %s::jsonb, %s::jsonb, %s::jsonb
                 )
@@ -64,8 +70,7 @@ def build_daily_scores_for_user(user_id: int):
                     market_interpretation = EXCLUDED.market_interpretation,
                     macro_top_contributors = EXCLUDED.macro_top_contributors,
                     technical_top_contributors = EXCLUDED.technical_top_contributors,
-                    market_top_contributors = EXCLUDED.market_top_contributors,
-                    updated_at = NOW();
+                    market_top_contributors = EXCLUDED.market_top_contributors;
                 """,
                 (
                     user_id,
@@ -76,9 +81,9 @@ def build_daily_scores_for_user(user_id: int):
                     scores.get("macro_interpretation"),
                     scores.get("technical_interpretation"),
                     scores.get("market_interpretation"),
-                    _jsonb(scores.get("macro_top_contributors", [])),
-                    _jsonb(scores.get("technical_top_contributors", [])),
-                    _jsonb(scores.get("market_top_contributors", [])),
+                    _jsonb(scores.get("macro_top_contributors")),
+                    _jsonb(scores.get("technical_top_contributors")),
+                    _jsonb(scores.get("market_top_contributors")),
                 ),
             )
 
@@ -96,8 +101,15 @@ def build_daily_scores_for_user(user_id: int):
 # =========================================================
 # 2️⃣ CELERY TASK: RULE-BASED DAILY SCORES (ALLE USERS)
 # =========================================================
-@shared_task(name="backend.celery_task.store_daily_scores_task.run_rule_based_daily_scores")
+@shared_task(
+    name="backend.celery_task.store_daily_scores_task.run_rule_based_daily_scores"
+)
 def run_rule_based_daily_scores():
+    """
+    Draait rule-based scoring voor alle users.
+    Wordt gebruikt als basis voor setup + master AI.
+    """
+
     logger.info("🚀 Start RULE-BASED daily_scores (alle users)")
 
     conn = get_db_connection()
@@ -121,16 +133,23 @@ def run_rule_based_daily_scores():
 # =========================================================
 # 3️⃣ CELERY TASK: MASTER SCORE AI (ALLE USERS)
 # =========================================================
-@shared_task(name="backend.celery_task.store_daily_scores_task.run_master_score_ai")
+@shared_task(
+    name="backend.celery_task.store_daily_scores_task.run_master_score_ai"
+)
 def run_master_score_ai():
     """
-    Draait master orchestrator AI.
-    LET OP: plan deze NA macro/market/technical/setup/strategy agents.
+    Draait de MASTER orchestrator AI.
+    Leest:
+      - daily_scores
+      - ai_category_insights
+    Schrijft:
+      - ai_category_insights (category='master')
     """
+
     logger.info("🧠 Start MASTER Score AI (alle users)")
 
     try:
-        generate_master_score()  # draait intern voor alle users
+        generate_master_score()  # interne loop over users
         logger.info("✅ MASTER Score AI afgerond")
     except Exception:
         logger.error("❌ Fout tijdens MASTER Score AI", exc_info=True)
