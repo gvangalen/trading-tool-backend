@@ -67,8 +67,8 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
     - ai_category_insights (category='setup') vullen voor dashboard card
 
     BELANGRIJK:
-    - Altijd relatieve scores
-    - Hoogste score wint, ook als niemand perfect past
+    - Scores zijn RELATIEF (setup vs setup)
+    - Setup-card toont ADVIES, geen numerieke eindscore
     """
 
     if not user_id:
@@ -201,7 +201,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 )
 
         # ==================================================
-        # 5️⃣ Beste setup bepalen (ALTIJD RELATIEF)
+        # 5️⃣ Beste setup bepalen (RELATIEF)
         # ==================================================
         ranked = sorted(evaluations, key=lambda x: x["score"], reverse=True)
         best = ranked[0]
@@ -219,15 +219,12 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             )
 
         # ==================================================
-        # 6️⃣ Menselijk advies (zoals Technical card)
+        # 6️⃣ Menselijk ADVIES (zelfde patroon als Technical)
         # ==================================================
         trend = "Actief" if best["score"] >= 60 else "Neutraal"
         bias  = "Kansrijk" if best["score"] >= 60 else "Afwachten"
 
-        summary = (
-            f"Beste {asset}-setup vandaag: "
-            f"{best['name']} ({best['score']}/100)."
-        )
+        summary = f"Beste {asset}-setup vandaag: {best['name']}."
 
         top_signals = [
             f"{best['name']} past momenteel het best bij de marktscores",
@@ -255,7 +252,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 """,
                 (
                     user_id,
-                    best["score"],
+                    best["score"],   # intern nuttig, UI toont dit niet
                     trend,
                     bias,
                     "Gemiddeld",
