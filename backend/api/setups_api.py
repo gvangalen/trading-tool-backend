@@ -497,7 +497,8 @@ async def get_daily_setup_scores(current_user: dict = Depends(get_current_user))
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT
                     ds.setup_id,
                     ds.score,
@@ -510,15 +511,17 @@ async def get_daily_setup_scores(current_user: dict = Depends(get_current_user))
                 WHERE ds.user_id = %s
                   AND ds.report_date = CURRENT_DATE
                 ORDER BY ds.score DESC
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
 
             rows = cur.fetchall()
 
         return [
             {
-                "id": r[0],
-                "score": float(r[1]) if r[1] is not None else None,
-                "is_best": r[2],
+                "setup_id": int(r[0]),
+                "score": int(r[1]) if r[1] is not None else None,
+                "is_best": bool(r[2]),
                 "name": r[3],
                 "symbol": r[4],
                 "timeframe": r[5],
