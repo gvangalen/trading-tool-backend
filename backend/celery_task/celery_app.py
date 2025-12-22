@@ -41,12 +41,12 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 CELERY BEAT — DEFINITIEVE DAGELIJKSE PIPELINE
+# 🕒 CELERY BEAT — STABIELE DAGELIJKSE PIPELINE
 # =========================================================
 celery_app.conf.beat_schedule = {
 
     # =====================================================
-    # 1️⃣ GLOBALE MARKET DATA (GEEN user_id, GEEN dispatcher)
+    # 1️⃣ GLOBALE MARKET DATA (GEEN user_id)
     # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -64,26 +64,25 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 2️⃣ USER DATA INGESTIE (PER USER → via dispatcher)
+    # 2️⃣ INDICATOR INGEST (DETERMINISTISCH, ZELF users)
     # =====================================================
-    "dispatch_macro_data": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+    "fetch_macro_indicators_daily": {
+        "task": "backend.celery_task.macro_task.fetch_macro_data_daily",
         "schedule": crontab(hour=0, minute=12),
-        "kwargs": {
-            "task_name": "backend.celery_task.macro_task.fetch_macro_data"
-        },
     },
 
-    "dispatch_technical_data": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+    "fetch_technical_indicators_daily": {
+        "task": "backend.celery_task.technical_task.fetch_technical_data_daily",
         "schedule": crontab(hour=0, minute=15),
-        "kwargs": {
-            "task_name": "backend.celery_task.technical_task.fetch_technical_data_day"
-        },
+    },
+
+    "fetch_market_indicators_daily": {
+        "task": "backend.celery_task.market_task.fetch_market_indicators_daily",
+        "schedule": crontab(hour=0, minute=18),
     },
 
     # =====================================================
-    # 3️⃣ RULE-BASED DAILY SCORES (ORCHESTRATOR — ZELF users)
+    # 3️⃣ RULE-BASED DAILY SCORES (ORCHESTRATOR)
     # =====================================================
     "run_rule_based_daily_scores": {
         "task": "backend.celery_task.store_daily_scores_task.run_rule_based_daily_scores",
@@ -137,7 +136,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 6️⃣ MASTER SCORE AI (ORCHESTRATOR — ZELF users)
+    # 6️⃣ MASTER SCORE AI (ORCHESTRATOR)
     # =====================================================
     "run_master_score_ai": {
         "task": "backend.celery_task.store_daily_scores_task.run_master_score_ai",
@@ -156,7 +155,7 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-logger.info("🚀 Celery Beat schedule geladen (STABIEL & DEFINITIEF)")
+logger.info("🚀 Celery Beat schedule geladen (STABIEL & PRODUCTIE-WAARDIG)")
 
 # =========================================================
 # 📌 FORCE IMPORTS — TASK REGISTRATIE
