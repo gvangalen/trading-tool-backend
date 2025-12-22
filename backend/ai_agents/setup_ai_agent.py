@@ -1,6 +1,7 @@
 import logging
 import json
 from decimal import Decimal
+from typing import Optional
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
@@ -12,7 +13,7 @@ logger.setLevel(logging.INFO)
 # 🔢 Helpers
 # ======================================================
 
-def to_float(v):
+def to_float(v) -> Optional[float]:
     if v is None:
         return None
     if isinstance(v, Decimal):
@@ -23,10 +24,12 @@ def to_float(v):
         return None
 
 
-def score_overlap(value, min_v, max_v):
+def score_overlap(value, min_v, max_v) -> int:
     """
     Overlap-score (0–100)
-    NULL min/max = geen filter = 100
+    - NULL min/max = geen filter = 100
+    - Buiten range = 0
+    - Binnen range = relatieve score
     """
     value = to_float(value)
     min_v = to_float(min_v)
@@ -35,12 +38,16 @@ def score_overlap(value, min_v, max_v):
     if value is None:
         return 0
 
+    # Geen filters → altijd match
     if min_v is None and max_v is None:
         return 100
+
     if min_v is not None and value < min_v:
         return 0
     if max_v is not None and value > max_v:
         return 0
+
+    # Eénzijdig filter
     if min_v is None or max_v is None:
         return 100
 
@@ -49,21 +56,23 @@ def score_overlap(value, min_v, max_v):
     if max_dist <= 0:
         return 100
 
-    return round(100 - abs(value - mid) / max_dist * 100)
+    return round(100 - (abs(value - mid) / max_dist * 100))
 
 
 # ======================================================
-# 🤖 SETUP AGENT — DEFINITIEF
+# 🤖 SETUP AGENT — DEFINITIEF & ADVIES-GERICHT
 # ======================================================
 
 def run_setup_agent(*, user_id: int, asset: str = "BTC"):
     """
     Doel:
-    - daily_setup_scores vullen (technisch)
-    - 1 setup-advies genereren (ai_category_insights)
+    - daily_setup_scores vullen (per setup, relatieve score)
+    - 1 duidelijke setup-aanbeveling per dag genereren
+    - ai_category_insights (category='setup') vullen voor dashboard card
 
-    GEEN setup krijgt ooit automatisch score 0
-    → altijd relatieve ranking
+    BELANGRIJK:
+    - Geen setup krijgt automatisch score 0
+    - Hoogste score wint, ook als niemand perfect past
     """
 
     if not user_id:
@@ -78,7 +87,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
 
     try:
         # ==================================================
-        # 1️⃣ Daily scores (marktcontext)
+        # 1️⃣ Daily scores ophalen (marktcontext)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -87,13 +96,14 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 FROM daily_scores
                 WHERE report_date = CURRENT_DATE
                   AND user_id = %s
+                LIMIT 1
                 """,
                 (user_id,),
             )
             row = cur.fetchone()
 
         if not row:
-            logger.warning("⚠️ Geen daily_scores")
+            logger.warning("⚠️ Geen daily_scores gevonden — setup agent stopt")
             return
 
         macro, technical, market = map(to_float, row)
@@ -105,12 +115,17 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             cur.execute(
                 """
                 SELECT
-                    id, name,
-                    min_macro_score, max_macro_score,
-                    min_technical_score, max_technical_score,
-                    min_market_score, max_market_score
+                    id,
+                    name,
+                    min_macro_score,
+                    max_macro_score,
+                    min_technical_score,
+                    max_technical_score,
+                    min_market_score,
+                    max_market_score
                 FROM setups
-                WHERE user_id = %s AND symbol = %s
+                WHERE user_id = %s
+                  AND symbol = %s
                 ORDER BY created_at DESC
                 """,
                 (user_id, asset),
@@ -118,16 +133,19 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             setups = cur.fetchall()
 
         if not setups:
-            logger.info("ℹ️ Geen setups")
+            logger.info("ℹ️ Geen setups gevonden")
             return
 
-        # Reset best-flag
+        # ==================================================
+        # 3️⃣ Reset best-flag
+        # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE daily_setup_scores
                 SET is_best = FALSE
-                WHERE user_id = %s AND report_date = CURRENT_DATE
+                WHERE user_id = %s
+                  AND report_date = CURRENT_DATE
                 """,
                 (user_id,),
             )
@@ -135,24 +153,29 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         evaluations = []
 
         # ==================================================
-        # 3️⃣ Per setup: ALTIJD score berekenen
+        # 4️⃣ Per setup: RELATIEVE score berekenen
         # ==================================================
-        for (
-            setup_id, name,
-            min_macro, max_macro,
-            min_tech, max_tech,
-            min_market, max_market
-        ) in setups:
+        for row in setups:
+            # defensief uitlezen (geen tuple-crash meer)
+            setup_id = row[0]
+            name = row[1]
 
-            m = score_overlap(macro, min_macro, max_macro)
-            t = score_overlap(technical, min_tech, max_tech)
+            min_macro  = row[2]
+            max_macro  = row[3]
+            min_tech   = row[4]
+            max_tech   = row[5]
+            min_market = row[6]
+            max_market = row[7]
+
+            m  = score_overlap(macro, min_macro, max_macro)
+            t  = score_overlap(technical, min_tech, max_tech)
             mk = score_overlap(market, min_market, max_market)
 
             score = round((m + t + mk) / 3)
 
             explanation = ask_gpt_text(
-                f"Marktscore: macro {macro}, technical {technical}, market {market}. "
-                f"Waarom past setup '{name}' vandaag beter of slechter?"
+                f"Marktscores vandaag: macro {macro}, technical {technical}, market {market}. "
+                f"Waarom past de setup '{name}' hier beter of slechter bij?"
             )
 
             evaluations.append({
@@ -171,7 +194,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                     """
                     INSERT INTO daily_setup_scores
                         (setup_id, user_id, report_date, score, is_active, explanation)
-                    VALUES (%s, %s, CURRENT_DATE, %s, %s, %s)
+                    VALUES (%s, %s, CURRENT_DATE, %s, TRUE, %s)
                     ON CONFLICT (setup_id, user_id, report_date)
                     DO UPDATE SET
                         score = EXCLUDED.score,
@@ -183,7 +206,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 )
 
         # ==================================================
-        # 4️⃣ Beste setup bepalen (RELATIEF)
+        # 5️⃣ Beste setup bepalen (ALTIJD RELATIEF)
         # ==================================================
         ranked = sorted(evaluations, key=lambda x: x["score"], reverse=True)
         best = ranked[0]
@@ -193,18 +216,19 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 """
                 UPDATE daily_setup_scores
                 SET is_best = TRUE
-                WHERE setup_id = %s AND user_id = %s
-                      AND report_date = CURRENT_DATE
+                WHERE setup_id = %s
+                  AND user_id = %s
+                  AND report_date = CURRENT_DATE
                 """,
                 (best["setup_id"], user_id),
             )
 
         avg_score = round(
-            sum(e["score"] for e in evaluations) / len(evaluations), 1
+            sum(e["score"] for e in ranked) / len(ranked), 1
         )
 
         trend = "Actief" if best["score"] >= 60 else "Neutraal"
-        bias = "Kansrijk" if best["score"] >= 60 else "Afwachten"
+        bias  = "Kansrijk" if best["score"] >= 60 else "Afwachten"
 
         summary = (
             f"Beste {asset}-setup vandaag: "
@@ -212,7 +236,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         )
 
         # ==================================================
-        # 5️⃣ AI CATEGORY INSIGHT — SETUP CARD
+        # 6️⃣ AI CATEGORY INSIGHT — SETUP CARD
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
