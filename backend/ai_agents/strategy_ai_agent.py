@@ -64,11 +64,17 @@ def adjust_strategy_for_today(
     """
     Past een bestaande strategy subtiel aan voor vandaag.
     Setup blijft gelijk.
+
+    BELANGRIJK:
+    - DCA heeft GEEN entry-trigger
+    - Entry bij DCA = referentieprijs (context)
     """
 
     logger.info(
         f"🟡 Strategy adjustment | setup={setup.get('id')} | date={date.today()}"
     )
+
+    strategy_type = (setup.get("strategy_type") or "").lower()
 
     prompt = f"""
 Je bent een professionele crypto trader.
@@ -78,12 +84,20 @@ Je krijgt:
 2. De huidige setup (blijft gelijk)
 3. De actuele marktcontext
 
-Je taak:
-- PAS de strategie SUBTIEL aan voor vandaag
-- GEEN nieuwe strategie maken
-- Entry mag gelijk blijven of licht verfijnd
-- Targets mogen verschuiven
-- Stop-loss mag aangescherpt of verruimd worden
+BELANGRIJKE REGELS:
+- Maak GEEN nieuwe strategie
+- Houd setup gelijk
+- Pas alleen details subtiel aan
+
+SPECIFIEK VOOR DCA:
+- DCA heeft GEEN vaste entry-trigger
+- Gebruik "entry" als REFERENTIEPRIJS (bijv. huidige marktprijs)
+- Entry is GEEN koop-signaal
+- Geef altijd een korte uitleg waarom dit een referentie is
+
+VOOR ANDERE STRATEGIEËN:
+- Entry is een actieprijs
+- Entry mag licht verfijnd worden
 
 Bestaande strategy:
 {json.dumps(base_strategy, indent=2)}
@@ -98,13 +112,14 @@ Geef ALLEEN geldige JSON terug.
 
 JSON format:
 {{
-  "entry": "",
+  "entry": null | number | string,
+  "entry_type": "reference" | "action",
   "targets": [],
-  "stop_loss": "",
+  "stop_loss": null | number | string,
   "adjustment_reason": "",
   "confidence_score": 0,
   "changes": {{
-    "entry": "unchanged | refined",
+    "entry": "unchanged | refined | reference",
     "targets": "raised | lowered | unchanged",
     "stop_loss": "tightened | loosened | unchanged"
   }}
@@ -120,19 +135,32 @@ JSON format:
         logger.error("❌ Ongeldige JSON van AI bij strategy-adjustment")
         return None
 
-    # ✅ Verplichte velden check
-    required_keys = {"entry", "targets", "stop_loss", "changes"}
+    # ===============================
+    # ✅ VALIDATIE & NORMALISATIE
+    # ===============================
+
+    required_keys = {"entry", "targets", "stop_loss", "changes", "entry_type"}
     if not required_keys.issubset(result.keys()):
         logger.error("❌ Strategy-adjustment mist verplichte velden")
         return None
 
-    # ✅ Confidence score afdwingen
+    # Confidence score afdwingen
     score = result.get("confidence_score")
     if not isinstance(score, (int, float)) or not (0 <= score <= 100):
         result["confidence_score"] = 50
 
-    return result
+    # DCA-consistentie afdwingen
+    if strategy_type == "dca":
+        result["entry_type"] = "reference"
+        if result.get("entry") in ("", None):
+            # entry mag leeg zijn, maar moet verklaard worden
+            result["changes"]["entry"] = "reference"
 
+    else:
+        # Non-DCA moet action entry zijn
+        result["entry_type"] = "action"
+
+    return result
 
 # ===================================================================
 # 🚀 INITIËLE STRATEGY GENERATIE (SETUP → STRATEGY)
