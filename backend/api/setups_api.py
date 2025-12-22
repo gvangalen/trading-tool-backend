@@ -430,18 +430,29 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT ds.setup_id, ds.score, ds.explanation,
-                       s.name, s.symbol, s.timeframe, s.trend,
-                       s.strategy_type, s.min_investment,
-                       s.dynamic_investment, s.tags,
-                       s.favorite, s.action, s.explanation
+                SELECT
+                    ds.setup_id,
+                    ds.score,
+                    ds.explanation,
+                    s.name,
+                    s.symbol,
+                    s.timeframe,
+                    s.trend,
+                    s.strategy_type,
+                    s.min_investment,
+                    s.dynamic_investment,
+                    s.tags,
+                    s.favorite,
+                    s.action,
+                    s.explanation
                 FROM daily_setup_scores ds
                 JOIN setups s ON s.id = ds.setup_id
-                WHERE ds.date=CURRENT_DATE
-                AND ds.user_id=%s
-                AND ds.is_best=TRUE
+                WHERE ds.report_date = CURRENT_DATE
+                  AND ds.user_id = %s
+                  AND ds.is_best = TRUE
                 LIMIT 1
             """, (user_id,))
+
             row = cur.fetchone()
 
         if not row:
