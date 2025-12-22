@@ -46,7 +46,7 @@ celery_app.conf.timezone = "UTC"
 celery_app.conf.beat_schedule = {
 
     # =====================================================
-    # 1️⃣ GLOBALE MARKET DATA (GEEN user_id)
+    # 1️⃣ GLOBALE MARKET DATA (GEEN user_id, GEEN dispatcher)
     # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -64,7 +64,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 2️⃣ USER DATA INGESTIE (RAW → DB)
+    # 2️⃣ USER DATA INGESTIE (PER USER → via dispatcher)
     # =====================================================
     "dispatch_macro_data": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -83,7 +83,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 3️⃣ RULE-BASED DAILY SCORES (SETUP HEEFT DIT NODIG)
+    # 3️⃣ RULE-BASED DAILY SCORES (ORCHESTRATOR — ZELF users)
     # =====================================================
     "run_rule_based_daily_scores": {
         "task": "backend.celery_task.store_daily_scores_task.run_rule_based_daily_scores",
@@ -91,7 +91,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 4️⃣ AI CATEGORY INSIGHTS (LEZEN daily_scores)
+    # 4️⃣ AI CATEGORY AGENTS (PER USER → dispatcher)
     # =====================================================
     "dispatch_macro_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -118,7 +118,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 5️⃣ SETUP & STRATEGY (HEEFT daily_scores + AI nodig)
+    # 5️⃣ SETUP & STRATEGY (PER USER → dispatcher)
     # =====================================================
     "dispatch_setup_agent": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -137,7 +137,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 6️⃣ MASTER SCORE AI (DASHBOARD / ORCHESTRATOR)
+    # 6️⃣ MASTER SCORE AI (ORCHESTRATOR — ZELF users)
     # =====================================================
     "run_master_score_ai": {
         "task": "backend.celery_task.store_daily_scores_task.run_master_score_ai",
@@ -145,7 +145,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 7️⃣ DAILY REPORT (LAATSTE STAP)
+    # 7️⃣ DAILY REPORT (PER USER → dispatcher)
     # =====================================================
     "dispatch_daily_report": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -156,7 +156,7 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-logger.info("🚀 Celery Beat schedule geladen (FINAL & CORRECT)")
+logger.info("🚀 Celery Beat schedule geladen (STABIEL & DEFINITIEF)")
 
 # =========================================================
 # 📌 FORCE IMPORTS — TASK REGISTRATIE
