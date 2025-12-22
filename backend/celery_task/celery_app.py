@@ -49,16 +49,15 @@ celery_app.conf.beat_schedule = {
     # =====================================================
     # 1️⃣ GLOBALE MARKET DATA (GEEN user_id)
     # =====================================================
-
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
         "schedule": crontab(minute="*/15"),
-     },
+    },
 
     "fetch_market_data_7d": {
         "task": "backend.celery_task.market_task.fetch_market_data_7d",
         "schedule": crontab(hour=0, minute=2),
-     },
+    },
 
     "save_market_data_daily": {
         "task": "backend.celery_task.market_task.save_market_data_daily",
@@ -66,7 +65,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 2️⃣ USER-INGESTIE (DATA OPBOUW)
+    # 2️⃣ USER-INGESTIE (RAW → DB)
     # =====================================================
     "dispatch_macro_data": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -85,18 +84,15 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 3️⃣ DAILY SCORES (BASIS VOOR AI)
+    # 3️⃣ 🧠 DAILY SCORES — MASTER AI (ENIGE SCORE ENTRYPOINT)
     # =====================================================
-    "dispatch_daily_scores": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+    "run_master_score_ai": {
+        "task": "backend.celery_task.store_daily_scores_task.run_master_score_ai",
         "schedule": crontab(hour=3, minute=0),
-        "kwargs": {
-            "task_name": "backend.celery_task.store_daily_scores_task.store_daily_scores_task"
-        },
     },
 
     # =====================================================
-    # 4️⃣ AI CATEGORY AGENTS (ALTIJD VIA TASK)
+    # 4️⃣ AI CATEGORY AGENTS
     # =====================================================
     "dispatch_macro_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
