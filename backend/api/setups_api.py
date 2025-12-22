@@ -474,3 +474,46 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
 
     finally:
         conn.close()
+
+
+# ============================================================
+# 🔟 Daily setup scores (voor SetupMatchCard)
+# ============================================================
+@router.get("/setups/daily-scores")
+async def get_daily_setup_scores(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    ds.setup_id,
+                    ds.score,
+                    ds.is_best,
+                    s.name,
+                    s.symbol,
+                    s.timeframe
+                FROM daily_setup_scores ds
+                JOIN setups s ON s.id = ds.setup_id
+                WHERE ds.user_id = %s
+                  AND ds.report_date = CURRENT_DATE
+                ORDER BY ds.score DESC
+            """, (user_id,))
+
+            rows = cur.fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "score": float(r[1]) if r[1] is not None else None,
+                "is_best": r[2],
+                "name": r[3],
+                "symbol": r[4],
+                "timeframe": r[5],
+            }
+            for r in rows
+        ]
+
+    finally:
+        conn.close()
