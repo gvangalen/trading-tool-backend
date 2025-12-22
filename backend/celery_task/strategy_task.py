@@ -411,7 +411,7 @@ def run_daily_strategy_snapshot(user_id: int):
         setup_id = row[0]
 
         # ==================================================
-        # 2️⃣ Market context (🔥 Decimal → float FIX)
+        # 2️⃣ Market context (scores van vandaag)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -437,7 +437,7 @@ def run_daily_strategy_snapshot(user_id: int):
         }
 
         # ==================================================
-        # 3️⃣ Load setup + laatste strategy
+        # 3️⃣ Setup + base strategy
         # ==================================================
         setup = load_setup_from_db(setup_id, user_id)
         base_strategy = load_latest_strategy(setup_id, user_id)
@@ -447,7 +447,7 @@ def run_daily_strategy_snapshot(user_id: int):
             return
 
         # ==================================================
-        # 4️⃣ AI: subtiele daily adjustment
+        # 4️⃣ AI adjustment (SUBTIEL)
         # ==================================================
         adjustment = adjust_strategy_for_today(
             base_strategy=base_strategy,
@@ -455,19 +455,41 @@ def run_daily_strategy_snapshot(user_id: int):
             market_context=market_context,
         )
 
-        if not adjustment or not adjustment.get("entry") or not adjustment.get("targets"):
-            logger.warning("⚠️ Onvolledige strategy adjustment — snapshot overgeslagen")
+        if not adjustment:
+            logger.warning("⚠️ Geen AI adjustment ontvangen")
             return
 
         # ==================================================
-        # 5️⃣ Cast AI-output → DB-safe types
+        # 5️⃣ FALLBACK LOGICA (DIT WAS DE BUG 🔥)
         # ==================================================
-        entry_num = safe_numeric(adjustment.get("entry"))
-        stop_num = safe_numeric(adjustment.get("stop_loss"))
-        confidence = safe_confidence(adjustment.get("confidence_score"), fallback=50)
+        entry_value = adjustment.get("entry")
+        targets_value = adjustment.get("targets")
+        stop_value = adjustment.get("stop_loss")
+
+        # Entry → fallback naar bestaande strategy
+        if entry_value is None:
+            entry_value = base_strategy.get("entry")
+
+        # Targets zijn verplicht
+        if not targets_value:
+            logger.warning("⚠️ Geen targets uit AI — snapshot overgeslagen")
+            return
+
+        # Stop-loss → fallback
+        if stop_value is None:
+            stop_value = base_strategy.get("stop_loss")
 
         # ==================================================
-        # 6️⃣ Snapshot opslaan
+        # 6️⃣ Type-safety voor DB
+        # ==================================================
+        entry_num = safe_numeric(entry_value)
+        stop_num = safe_numeric(stop_value)
+        confidence = safe_confidence(
+            adjustment.get("confidence_score"), fallback=50
+        )
+
+        # ==================================================
+        # 7️⃣ Snapshot opslaan
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -507,7 +529,7 @@ def run_daily_strategy_snapshot(user_id: int):
                     setup_id,
                     base_strategy["strategy_id"],
                     entry_num,
-                    ",".join(map(str, adjustment.get("targets", []))),
+                    ",".join(map(str, targets_value)),
                     stop_num,
                     adjustment.get("adjustment_reason"),
                     confidence,
@@ -517,20 +539,20 @@ def run_daily_strategy_snapshot(user_id: int):
             )
 
         # ==================================================
-        # 7️⃣ Strategy AI insight (dashboard card)
+        # 8️⃣ STRATEGY AI INSIGHT (dashboard card)
         # ==================================================
-        analysis_payload = [
-            {
-                "setup_id": setup_id,
-                "strategy_id": base_strategy["strategy_id"],
-                "entry": adjustment.get("entry"),
-                "targets": adjustment.get("targets"),
-                "stop_loss": adjustment.get("stop_loss"),
-                "confidence_score": confidence,
-            }
-        ]
-
-        analysis = analyze_strategies(analysis_payload)
+        analysis = analyze_strategies(
+            [
+                {
+                    "setup_id": setup_id,
+                    "strategy_id": base_strategy["strategy_id"],
+                    "entry": entry_value,
+                    "targets": targets_value,
+                    "stop_loss": stop_value,
+                    "confidence_score": confidence,
+                }
+            ]
+        )
 
         if analysis:
             trend = "Actief" if confidence >= 60 else "Neutraal"
@@ -551,14 +573,7 @@ def run_daily_strategy_snapshot(user_id: int):
                         date
                     ) VALUES (
                         'strategy',
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s::jsonb,
-                        CURRENT_DATE
+                        %s,%s,%s,%s,%s,%s,%s::jsonb,CURRENT_DATE
                     )
                     ON CONFLICT (user_id, category, date)
                     DO UPDATE SET
