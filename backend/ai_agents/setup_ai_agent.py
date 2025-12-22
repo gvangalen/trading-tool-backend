@@ -38,16 +38,12 @@ def score_overlap(value, min_v, max_v) -> int:
     if value is None:
         return 0
 
-    # Geen filters → altijd match
     if min_v is None and max_v is None:
         return 100
-
     if min_v is not None and value < min_v:
         return 0
     if max_v is not None and value > max_v:
         return 0
-
-    # Eénzijdig filter
     if min_v is None or max_v is None:
         return 100
 
@@ -66,12 +62,12 @@ def score_overlap(value, min_v, max_v) -> int:
 def run_setup_agent(*, user_id: int, asset: str = "BTC"):
     """
     Doel:
-    - daily_setup_scores vullen (per setup, relatieve score)
-    - 1 duidelijke setup-aanbeveling per dag genereren
+    - daily_setup_scores vullen (technisch, per setup)
+    - 1 duidelijke setup-aanbeveling genereren
     - ai_category_insights (category='setup') vullen voor dashboard card
 
     BELANGRIJK:
-    - Geen setup krijgt automatisch score 0
+    - Altijd relatieve scores
     - Hoogste score wint, ook als niemand perfect past
     """
 
@@ -87,7 +83,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
 
     try:
         # ==================================================
-        # 1️⃣ Daily scores ophalen (marktcontext)
+        # 1️⃣ Daily scores (marktcontext)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -156,7 +152,6 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         # 4️⃣ Per setup: RELATIEVE score berekenen
         # ==================================================
         for row in setups:
-            # defensief uitlezen (geen tuple-crash meer)
             setup_id = row[0]
             name = row[1]
 
@@ -223,10 +218,9 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                 (best["setup_id"], user_id),
             )
 
-        avg_score = round(
-            sum(e["score"] for e in ranked) / len(ranked), 1
-        )
-
+        # ==================================================
+        # 6️⃣ Menselijk advies (zoals Technical card)
+        # ==================================================
         trend = "Actief" if best["score"] >= 60 else "Neutraal"
         bias  = "Kansrijk" if best["score"] >= 60 else "Afwachten"
 
@@ -235,8 +229,14 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             f"{best['name']} ({best['score']}/100)."
         )
 
+        top_signals = [
+            f"{best['name']} past momenteel het best bij de marktscores",
+            "Technische score beperkt agressieve strategieën",
+            "Markt- en macrocontext ondersteunen deze setup relatief het meest",
+        ]
+
         # ==================================================
-        # 6️⃣ AI CATEGORY INSIGHT — SETUP CARD
+        # 7️⃣ AI CATEGORY INSIGHT — SETUP CARD
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -260,7 +260,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
                     bias,
                     "Gemiddeld",
                     summary,
-                    json.dumps(ranked[:3], ensure_ascii=False),
+                    json.dumps(top_signals, ensure_ascii=False),
                 ),
             )
 
