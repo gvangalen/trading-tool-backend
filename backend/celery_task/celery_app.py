@@ -86,7 +86,7 @@ celery_app.conf.beat_schedule = {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=0, minute=18),
         "kwargs": {
-            "task_name": "backend.celery_task.market_task.fetch_market_indicators_day"
+            "task_name": "backend.celery_task.market_task.fetch_market_indicators"
         },
     },
 
