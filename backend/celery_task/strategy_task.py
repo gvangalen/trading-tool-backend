@@ -387,7 +387,9 @@ def run_daily_strategy_snapshot(user_id: int):
         return
 
     try:
+        # ==================================================
         # 1️⃣ Best-of-day setup
+        # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -408,7 +410,9 @@ def run_daily_strategy_snapshot(user_id: int):
 
         setup_id = row[0]
 
-        # 2️⃣ Market context
+        # ==================================================
+        # 2️⃣ Market context (🔥 Decimal → float FIX)
+        # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -427,17 +431,24 @@ def run_daily_strategy_snapshot(user_id: int):
             return
 
         market_context = {
-            "macro_score": scores[0],
-            "technical_score": scores[1],
-            "market_score": scores[2],
+            "macro_score": float(scores[0]) if scores[0] is not None else None,
+            "technical_score": float(scores[1]) if scores[1] is not None else None,
+            "market_score": float(scores[2]) if scores[2] is not None else None,
         }
 
+        # ==================================================
+        # 3️⃣ Load setup + laatste strategy
+        # ==================================================
         setup = load_setup_from_db(setup_id, user_id)
         base_strategy = load_latest_strategy(setup_id, user_id)
+
         if not base_strategy:
-            logger.warning("⚠️ Geen base strategy gevonden voor best setup")
+            logger.warning("⚠️ Geen base strategy gevonden")
             return
 
+        # ==================================================
+        # 4️⃣ AI: subtiele daily adjustment
+        # ==================================================
         adjustment = adjust_strategy_for_today(
             base_strategy=base_strategy,
             setup=setup,
@@ -448,12 +459,16 @@ def run_daily_strategy_snapshot(user_id: int):
             logger.warning("⚠️ Onvolledige strategy adjustment — snapshot overgeslagen")
             return
 
-        # ✅ CASTS voor numeric kolommen (super belangrijk)
+        # ==================================================
+        # 5️⃣ Cast AI-output → DB-safe types
+        # ==================================================
         entry_num = safe_numeric(adjustment.get("entry"))
         stop_num = safe_numeric(adjustment.get("stop_loss"))
-        conf = safe_confidence(adjustment.get("confidence_score"), fallback=50)
+        confidence = safe_confidence(adjustment.get("confidence_score"), fallback=50)
 
-        # 3️⃣ Snapshot opslaan
+        # ==================================================
+        # 6️⃣ Snapshot opslaan
+        # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -495,13 +510,15 @@ def run_daily_strategy_snapshot(user_id: int):
                     ",".join(map(str, adjustment.get("targets", []))),
                     stop_num,
                     adjustment.get("adjustment_reason"),
-                    conf,
+                    confidence,
                     json.dumps(market_context),
                     json.dumps(adjustment.get("changes") or {}, ensure_ascii=False),
                 ),
             )
 
-        # 4️⃣ STRATEGY AI INSIGHT (DASHBOARD)
+        # ==================================================
+        # 7️⃣ Strategy AI insight (dashboard card)
+        # ==================================================
         analysis_payload = [
             {
                 "setup_id": setup_id,
@@ -509,15 +526,15 @@ def run_daily_strategy_snapshot(user_id: int):
                 "entry": adjustment.get("entry"),
                 "targets": adjustment.get("targets"),
                 "stop_loss": adjustment.get("stop_loss"),
-                "confidence_score": conf,
+                "confidence_score": confidence,
             }
         ]
 
         analysis = analyze_strategies(analysis_payload)
 
         if analysis:
-            trend = "Actief" if conf >= 60 else "Neutraal"
-            bias = "Kansrijk" if conf >= 60 else "Afwachten"
+            trend = "Actief" if confidence >= 60 else "Neutraal"
+            bias = "Kansrijk" if confidence >= 60 else "Afwachten"
 
             with conn.cursor() as cur:
                 cur.execute(
@@ -555,7 +572,7 @@ def run_daily_strategy_snapshot(user_id: int):
                     """,
                     (
                         user_id,
-                        conf,
+                        confidence,
                         trend,
                         bias,
                         "Gemiddeld",
