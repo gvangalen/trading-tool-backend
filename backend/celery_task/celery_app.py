@@ -41,7 +41,7 @@ celery_app.conf.enable_utc = True
 celery_app.conf.timezone = "UTC"
 
 # =========================================================
-# 🕒 CELERY BEAT — DEFINITIEVE PIPELINE
+# 🕒 CELERY BEAT — DEFINITIEVE DAGELIJKSE PIPELINE
 # =========================================================
 celery_app.conf.beat_schedule = {
 
@@ -83,15 +83,15 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 3️⃣ 🧠 DAILY SCORES + MASTER SCORE (ENIGE SCORE ENTRYPOINT)
+    # 3️⃣ RULE-BASED DAILY SCORES (SETUP HEEFT DIT NODIG)
     # =====================================================
-    "run_master_score_ai": {
-        "task": "backend.celery_task.store_daily_scores_task.run_master_score_ai",
+    "run_rule_based_daily_scores": {
+        "task": "backend.celery_task.store_daily_scores_task.run_rule_based_daily_scores",
         "schedule": crontab(hour=3, minute=0),
     },
 
     # =====================================================
-    # 4️⃣ AI CATEGORY INSIGHTS
+    # 4️⃣ AI CATEGORY INSIGHTS (LEZEN daily_scores)
     # =====================================================
     "dispatch_macro_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -118,7 +118,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 5️⃣ SETUP & STRATEGY
+    # 5️⃣ SETUP & STRATEGY (HEEFT daily_scores + AI nodig)
     # =====================================================
     "dispatch_setup_agent": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -137,7 +137,15 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 6️⃣ DAILY REPORT (LAATSTE STAP)
+    # 6️⃣ MASTER SCORE AI (DASHBOARD / ORCHESTRATOR)
+    # =====================================================
+    "run_master_score_ai": {
+        "task": "backend.celery_task.store_daily_scores_task.run_master_score_ai",
+        "schedule": crontab(hour=4, minute=10),
+    },
+
+    # =====================================================
+    # 7️⃣ DAILY REPORT (LAATSTE STAP)
     # =====================================================
     "dispatch_daily_report": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -148,7 +156,7 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-logger.info("🚀 Celery Beat schedule geladen (FINAL & CLEAN)")
+logger.info("🚀 Celery Beat schedule geladen (FINAL & CORRECT)")
 
 # =========================================================
 # 📌 FORCE IMPORTS — TASK REGISTRATIE
