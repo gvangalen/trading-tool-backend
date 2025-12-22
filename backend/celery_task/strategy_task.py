@@ -1,6 +1,7 @@
 import logging
 import json
 from celery import shared_task
+from datetime import date
 
 from backend.utils.db import get_db_connection
 from backend.ai_agents.strategy_ai_agent import (
@@ -172,7 +173,6 @@ def analyze_strategy(user_id: int, strategy_id: int):
             """, (strategy_id, user_id))
 
             row = cur.fetchone()
-
         if not row:
             return
 
@@ -212,7 +212,7 @@ def analyze_strategy(user_id: int, strategy_id: int):
 
 
 # ============================================================
-# 🟡 DAGELIJKSE STRATEGY SNAPSHOT
+# 🟡 DAGELIJKSE STRATEGY SNAPSHOT + DASHBOARD INSIGHT
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.run_daily_strategy_snapshot")
 def run_daily_strategy_snapshot(user_id: int):
@@ -260,7 +260,6 @@ def run_daily_strategy_snapshot(user_id: int):
 
         setup = load_setup_from_db(setup_id, user_id)
         base_strategy = load_latest_strategy(setup_id, user_id)
-
         if not base_strategy:
             return
 
@@ -274,6 +273,7 @@ def run_daily_strategy_snapshot(user_id: int):
             logger.warning("⚠️ Onvolledige strategy adjustment — snapshot overgeslagen")
             return
 
+        # 3️⃣ Snapshot opslaan
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO active_strategy_snapshot (
@@ -318,8 +318,58 @@ def run_daily_strategy_snapshot(user_id: int):
                 json.dumps(adjustment.get("changes")),
             ))
 
+        # 4️⃣ STRATEGY AI INSIGHT (DASHBOARD)
+        analysis = analyze_strategies([{
+            "setup_id": setup_id,
+            "strategy_id": base_strategy["strategy_id"],
+            "entry": adjustment["entry"],
+            "targets": adjustment["targets"],
+            "stop_loss": adjustment["stop_loss"],
+            "confidence_score": adjustment.get("confidence_score"),
+        }])
+
+        if analysis:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO ai_category_insights (
+                        category,
+                        user_id,
+                        avg_score,
+                        trend,
+                        bias,
+                        risk,
+                        summary,
+                        top_signals,
+                        date
+                    ) VALUES (
+                        'strategy',
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s::jsonb,
+                        CURRENT_DATE
+                    )
+                    ON CONFLICT (user_id, category, date)
+                    DO UPDATE SET
+                        avg_score = EXCLUDED.avg_score,
+                        summary = EXCLUDED.summary,
+                        top_signals = EXCLUDED.top_signals,
+                        created_at = NOW();
+                """, (
+                    user_id,
+                    adjustment.get("confidence_score", 50),
+                    "Actief" if adjustment.get("confidence_score", 0) >= 60 else "Neutraal",
+                    "Kansrijk" if adjustment.get("confidence_score", 0) >= 60 else "Afwachten",
+                    "Gemiddeld",
+                    analysis["comment"],
+                    json.dumps([analysis["recommendation"]]),
+                ))
+
         conn.commit()
-        logger.info("✅ Active strategy snapshot opgeslagen")
+        logger.info("✅ Daily strategy snapshot + AI insight opgeslagen")
 
     except Exception:
         logger.error("❌ Daily strategy snapshot fout", exc_info=True)
