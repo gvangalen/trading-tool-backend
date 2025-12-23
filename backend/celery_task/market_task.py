@@ -266,7 +266,7 @@ def calculate_and_save_forward_returns():
         conn.close()
 
 # =====================================================
-# 📊 USER-AWARE MARKET INDICATORS (PRO DEBUG + USER RULES)
+# 📊 USER-AWARE MARKET INDICATORS (PRO DEBUG + MAPPING)
 # =====================================================
 def fetch_and_process_market_indicators(user_id: int):
     logger.info("========================================")
@@ -279,8 +279,16 @@ def fetch_and_process_market_indicators(user_id: int):
 
     inserted = 0
 
+    # ✅ mapping: indicator-name -> key in snapshot
+    SNAPSHOT_KEY_MAP = {
+        "btc_change_24h": "change_24h",
+        "change_24h": "change_24h",
+        "price": "price",
+        "volume": "volume",
+    }
+
     try:
-        # 1️⃣ Actieve market-indicators (GLOBAAL, géén user_id kolom in indicators)
+        # 1️⃣ Actieve market-indicators (globaal)
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name
@@ -291,12 +299,11 @@ def fetch_and_process_market_indicators(user_id: int):
             indicators = [r[0] for r in cur.fetchall()]
 
         logger.info(f"📊 Aantal actieve market indicators gevonden: {len(indicators)}")
-
         if not indicators:
             logger.warning("⚠️ Geen actieve market-indicators (check indicators tabel)")
             return
 
-        # 2️⃣ Laatste globale market snapshot
+        # 2️⃣ Laatste globale snapshot
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT price, volume, change_24h, timestamp
@@ -313,46 +320,56 @@ def fetch_and_process_market_indicators(user_id: int):
         price, volume, change_24h, ts = row
         logger.info(f"🕒 Laatste market_data snapshot: {ts} | price={price} volume={volume} change_24h={change_24h}")
 
-        market_values = {
+        snapshot = {
             "price": price,
             "volume": volume,
             "change_24h": change_24h,
         }
 
-        # 3️⃣ Score + opslag PER USER
+        # 3️⃣ (optioneel) simpele derived metrics zodat je bestaande indicator-namen kunt gebruiken
+        # Later vervangen door echte logica (7d avg volume, trend op basis van 7d candles, etc.)
+        derived = {
+            "volume_strength": snapshot["volume"],  # placeholder
+            "price_trend": snapshot["price"],        # placeholder
+        }
+
+        # Combineer alles
+        market_values = {**snapshot, **derived}
+
+        # 4️⃣ Score + opslag per user
         for name in indicators:
             logger.info(f"➡️ Verwerk market indicator: {name}")
 
-            value = market_values.get(name)
+            # mapping naar snapshot key (indien nodig)
+            mapped_key = SNAPSHOT_KEY_MAP.get(name, name)
+            value = market_values.get(mapped_key)
 
             if value is None:
-                logger.warning(f"⚠️ Geen value beschikbaar voor '{name}' uit market_data snapshot. Beschikbaar: {list(market_values.keys())}")
+                logger.warning(
+                    f"⚠️ Geen value voor '{name}' (mapped_key='{mapped_key}'). "
+                    f"Beschikbaar: {list(market_values.keys())}"
+                )
                 continue
 
-            logger.info(f"📈 {name} value = {value}")
+            logger.info(f"📈 {name} (mapped_key='{mapped_key}') value={value}")
 
-            # ✅ Belangrijk: rules zijn user-specific → altijd user_id meegeven
             score_data = generate_scores_db(
                 category="market",
-                data={name: value},
+                data={name: value},   # ✅ we scoren op de indicator-naam uit indicators tabel
                 user_id=user_id,
             )
 
             score_obj = (score_data or {}).get("scores", {}).get(name)
-
             if not score_obj:
                 logger.warning(f"⚠️ Geen scoreregels gevonden voor '{name}' (market) user_id={user_id}")
-                # fallback zodat je iig ziet dat de pipeline werkt
                 score_obj = {
                     "score": 50,
                     "trend": "unknown",
                     "interpretation": "Geen scoreregels gevonden in DB voor deze market indicator.",
-                    "action": "Voeg scoreregels toe in indicator_rules / jouw rules tabel.",
+                    "action": "Voeg scoreregels toe in de rules tabel.",
                 }
 
-            logger.info(
-                f"🧠 Score {name}: score={score_obj.get('score')} trend={score_obj.get('trend')}"
-            )
+            logger.info(f"🧠 Score {name}: score={score_obj.get('score')} trend={score_obj.get('trend')}")
 
             with conn.cursor() as cur:
                 cur.execute("""
@@ -379,10 +396,8 @@ def fetch_and_process_market_indicators(user_id: int):
     except Exception:
         conn.rollback()
         logger.exception("❌ Fout in market indicators ingestie (rollback gedaan)")
-
     finally:
         conn.close()
-
 
 # =====================================================
 # 🚀 Celery wrapper (via dispatcher)
