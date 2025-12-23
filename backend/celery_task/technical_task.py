@@ -1,9 +1,10 @@
 import logging
+import asyncio
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import (
-    fetch_technical_value,
+    fetch_technical_value,              # ⬅️ async functie
     interpret_technical_indicator_db,
 )
 from backend.ai_agents.technical_ai_agent import run_technical_agent
@@ -80,7 +81,7 @@ def store_technical_score_db(payload: dict, user_id: int):
 
 
 # =====================================================
-# 📊 Actieve technische indicatoren per user
+# 📊 Actieve technische indicatoren (globaal)
 # =====================================================
 def get_active_technical_indicators(user_id: int):
     conn = get_db_connection()
@@ -97,9 +98,7 @@ def get_active_technical_indicators(user_id: int):
             """)
             rows = cur.fetchall()
 
-        logger.info(
-            f"📊 {len(rows)} technische indicatoren geladen (globaal)"
-        )
+        logger.info(f"📊 {len(rows)} technische indicatoren geladen (globaal)")
 
         return [
             {"name": r[0], "source": r[1], "link": r[2]}
@@ -115,7 +114,7 @@ def get_active_technical_indicators(user_id: int):
 
 
 # =====================================================
-# 🧠 Technische ingestie (GEEN Celery)
+# 🧠 Technische ingestie (SYNC wrapper)
 # =====================================================
 def fetch_and_process_technical(user_id: int):
     logger.info("========================================")
@@ -139,12 +138,16 @@ def fetch_and_process_technical(user_id: int):
             logger.info(f"⏩ SKIP {name} — al verwerkt vandaag (user_id={user_id})")
             continue
 
-        logger.info(f"🌐 Ophalen waarde voor {name}")
         try:
-            result = fetch_technical_value(
-                name,
-                ind.get("source"),
-                ind.get("link")
+            logger.info(f"🌐 Ophalen waarde voor {name}")
+
+            # 🔥 FIX: async → sync
+            result = asyncio.run(
+                fetch_technical_value(
+                    name,
+                    ind.get("source"),
+                    ind.get("link")
+                )
             )
 
             if not result:
@@ -152,9 +155,7 @@ def fetch_and_process_technical(user_id: int):
                 continue
 
             if "value" not in result:
-                logger.warning(
-                    f"⚠️ Result zonder 'value' voor {name}: {result}"
-                )
+                logger.warning(f"⚠️ Result zonder 'value' voor {name}: {result}")
                 continue
 
             value = result["value"]
@@ -207,14 +208,10 @@ def fetch_technical_data_day(user_id: int):
 
 
 # =====================================================
-# 🤖 Celery Task — TECHNICAL AI AGENT (WRAPPER)
+# 🤖 Celery Task — TECHNICAL AI AGENT
 # =====================================================
 @shared_task(name="backend.celery_task.technical_task.run_technical_agent_daily")
 def run_technical_agent_daily(user_id: int):
-    """
-    Roept de PURE AI agent aan.
-    Wordt getriggerd NA daily_scores.
-    """
     if user_id is None:
         raise ValueError("❌ user_id is verplicht voor technical AI task")
 
