@@ -266,18 +266,21 @@ def calculate_and_save_forward_returns():
         conn.close()
 
 # =====================================================
-# 📊 USER-AWARE MARKET INDICATORS (FINAL & CORRECT)
+# 📊 USER-AWARE MARKET INDICATORS (PRO DEBUG + USER RULES)
 # =====================================================
 def fetch_and_process_market_indicators(user_id: int):
-    logger.info(f"📊 Market indicators ingestie gestart (user_id={user_id})")
+    logger.info("========================================")
+    logger.info(f"📊 START market indicators ingestie (user_id={user_id})")
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding")
+        logger.error("❌ Geen DB-verbinding (market indicators)")
         return
 
+    inserted = 0
+
     try:
-        # 1️⃣ GLOBALE actieve market-indicators
+        # 1️⃣ Actieve market-indicators (GLOBAAL, géén user_id kolom in indicators)
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name
@@ -287,14 +290,16 @@ def fetch_and_process_market_indicators(user_id: int):
             """)
             indicators = [r[0] for r in cur.fetchall()]
 
+        logger.info(f"📊 Aantal actieve market indicators gevonden: {len(indicators)}")
+
         if not indicators:
-            logger.info("ℹ️ Geen actieve market-indicators")
+            logger.warning("⚠️ Geen actieve market-indicators (check indicators tabel)")
             return
 
         # 2️⃣ Laatste globale market snapshot
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT price, volume, change_24h
+                SELECT price, volume, change_24h, timestamp
                 FROM market_data
                 ORDER BY timestamp DESC
                 LIMIT 1
@@ -302,29 +307,52 @@ def fetch_and_process_market_indicators(user_id: int):
             row = cur.fetchone()
 
         if not row:
-            logger.warning("⚠️ Geen market_data gevonden")
+            logger.warning("⚠️ Geen market_data snapshot gevonden (market_data leeg?)")
             return
 
+        price, volume, change_24h, ts = row
+        logger.info(f"🕒 Laatste market_data snapshot: {ts} | price={price} volume={volume} change_24h={change_24h}")
+
         market_values = {
-            "price": row[0],
-            "volume": row[1],
-            "change_24h": row[2],
+            "price": price,
+            "volume": volume,
+            "change_24h": change_24h,
         }
 
         # 3️⃣ Score + opslag PER USER
         for name in indicators:
+            logger.info(f"➡️ Verwerk market indicator: {name}")
+
             value = market_values.get(name)
+
             if value is None:
+                logger.warning(f"⚠️ Geen value beschikbaar voor '{name}' uit market_data snapshot. Beschikbaar: {list(market_values.keys())}")
                 continue
 
+            logger.info(f"📈 {name} value = {value}")
+
+            # ✅ Belangrijk: rules zijn user-specific → altijd user_id meegeven
             score_data = generate_scores_db(
                 category="market",
-                data={name: value}   # ⛔ GEEN user_id hier
+                data={name: value},
+                user_id=user_id,
             )
 
-            score = score_data.get("scores", {}).get(name)
-            if not score:
-                continue
+            score_obj = (score_data or {}).get("scores", {}).get(name)
+
+            if not score_obj:
+                logger.warning(f"⚠️ Geen scoreregels gevonden voor '{name}' (market) user_id={user_id}")
+                # fallback zodat je iig ziet dat de pipeline werkt
+                score_obj = {
+                    "score": 50,
+                    "trend": "unknown",
+                    "interpretation": "Geen scoreregels gevonden in DB voor deze market indicator.",
+                    "action": "Voeg scoreregels toe in indicator_rules / jouw rules tabel.",
+                }
+
+            logger.info(
+                f"🧠 Score {name}: score={score_obj.get('score')} trend={score_obj.get('trend')}"
+            )
 
             with conn.cursor() as cur:
                 cur.execute("""
@@ -335,18 +363,22 @@ def fetch_and_process_market_indicators(user_id: int):
                     user_id,
                     name,
                     value,
-                    score["trend"],
-                    score["interpretation"],
-                    score["action"],
-                    score["score"],
+                    score_obj.get("trend"),
+                    score_obj.get("interpretation"),
+                    score_obj.get("action"),
+                    score_obj.get("score"),
                 ))
 
+            inserted += 1
+            logger.info(f"💾 Insert OK: {name} (user_id={user_id})")
+
         conn.commit()
-        logger.info(f"✅ Market indicators opgeslagen (user_id={user_id})")
+        logger.info(f"✅ EINDE market indicators ingestie (user_id={user_id}) — inserted={inserted}")
+        logger.info("========================================")
 
     except Exception:
         conn.rollback()
-        logger.error("❌ Fout in market indicators", exc_info=True)
+        logger.exception("❌ Fout in market indicators ingestie (rollback gedaan)")
 
     finally:
         conn.close()
