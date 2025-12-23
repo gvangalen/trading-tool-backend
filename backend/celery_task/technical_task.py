@@ -111,20 +111,28 @@ def get_active_technical_indicators(user_id: int):
 # 🧠 Technische ingestie (GEEN Celery)
 # =====================================================
 def fetch_and_process_technical(user_id: int):
-    logger.info(f"🚀 Technische data ingestie gestart (user_id={user_id})")
+    logger.info("========================================")
+    logger.info(f"🚀 START technical ingestie (user_id={user_id})")
 
     indicators = get_active_technical_indicators(user_id)
+    logger.info(f"📊 Aantal actieve technical indicators gevonden: {len(indicators)}")
+
     if not indicators:
-        logger.warning(f"⚠️ Geen technische indicatoren voor user_id={user_id}")
+        logger.warning(
+            f"⚠️ GEEN technische indicatoren gevonden voor user_id={user_id} "
+            "(check indicators tabel!)"
+        )
         return
 
     for ind in indicators:
         name = ind["name"]
+        logger.info(f"➡️ Verwerk indicator: {name}")
 
         if already_fetched_today(name, user_id):
-            logger.info(f"⏩ {name} al verwerkt vandaag (user_id={user_id})")
+            logger.info(f"⏩ SKIP {name} — al verwerkt vandaag (user_id={user_id})")
             continue
 
+        logger.info(f"🌐 Ophalen waarde voor {name}")
         try:
             result = fetch_technical_value(
                 name,
@@ -132,10 +140,19 @@ def fetch_and_process_technical(user_id: int):
                 ind.get("link")
             )
 
-            if not result or "value" not in result:
+            if not result:
+                logger.warning(f"⚠️ Geen result terug van fetch_technical_value({name})")
+                continue
+
+            if "value" not in result:
+                logger.warning(
+                    f"⚠️ Result zonder 'value' voor {name}: {result}"
+                )
                 continue
 
             value = result["value"]
+            logger.info(f"📈 {name} waarde opgehaald: {value}")
+
             interpretation = interpret_technical_indicator_db(
                 name,
                 value,
@@ -143,8 +160,14 @@ def fetch_and_process_technical(user_id: int):
             )
 
             if not interpretation:
-                logger.warning(f"⚠️ Geen scoreregels voor {name}")
+                logger.warning(
+                    f"⚠️ Geen interpretatie/scoreregels voor {name} (user_id={user_id})"
+                )
                 continue
+
+            logger.info(
+                f"🧠 Interpretatie {name}: score={interpretation.get('score')}"
+            )
 
             payload = {
                 "indicator": name,
@@ -154,15 +177,14 @@ def fetch_and_process_technical(user_id: int):
                 "uitleg": interpretation.get("interpretation", "–"),
             }
 
+            logger.info(f"💾 Opslaan {name} voor user_id={user_id}")
             store_technical_score_db(payload, user_id)
 
         except Exception:
-            logger.error(
-                f"❌ Fout bij technische indicator {name}",
-                exc_info=True
-            )
+            logger.exception(f"❌ HARD ERROR bij technische indicator {name}")
 
-    logger.info(f"✅ Technische ingestie voltooid (user_id={user_id})")
+    logger.info(f"✅ EINDE technical ingestie (user_id={user_id})")
+    logger.info("========================================")
 
 
 # =====================================================
