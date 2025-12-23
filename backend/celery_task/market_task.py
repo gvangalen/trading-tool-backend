@@ -279,97 +279,84 @@ def fetch_and_process_market_indicators(user_id: int):
 
     inserted = 0
 
-    # ✅ mapping: indicator-name -> key in snapshot
-    SNAPSHOT_KEY_MAP = {
-        "btc_change_24h": "change_24h",
-        "change_24h": "change_24h",
-        "price": "price",
-        "volume": "volume",
-    }
-
     try:
-        # 1️⃣ Actieve market-indicators (globaal)
+        # 1️⃣ Actieve market-indicators
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name
                 FROM indicators
                 WHERE category = 'market'
                   AND active = TRUE
+                ORDER BY name
             """)
             indicators = [r[0] for r in cur.fetchall()]
 
-        logger.info(f"📊 Aantal actieve market indicators gevonden: {len(indicators)}")
+        logger.info(f"📊 Actieve market indicators: {indicators}")
         if not indicators:
-            logger.warning("⚠️ Geen actieve market-indicators (check indicators tabel)")
             return
 
-        # 2️⃣ Laatste globale snapshot
+        # 2️⃣ Laatste 2 market snapshots (voor volume %)
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT price, volume, change_24h, timestamp
                 FROM market_data
                 ORDER BY timestamp DESC
-                LIMIT 1
+                LIMIT 2
             """)
-            row = cur.fetchone()
+            rows = cur.fetchall()
 
-        if not row:
-            logger.warning("⚠️ Geen market_data snapshot gevonden (market_data leeg?)")
+        if not rows:
+            logger.warning("⚠️ Geen market_data gevonden")
             return
 
-        price, volume, change_24h, ts = row
-        logger.info(f"🕒 Laatste market_data snapshot: {ts} | price={price} volume={volume} change_24h={change_24h}")
+        latest = rows[0]
+        previous = rows[1] if len(rows) > 1 else None
 
-        snapshot = {
-            "price": price,
-            "volume": volume,
-            "change_24h": change_24h,
+        price_now, volume_now, change_24h, ts = latest
+        volume_prev = previous[1] if previous else None
+
+        logger.info(
+            f"🕒 Snapshot: price={price_now}, volume={volume_now}, "
+            f"change_24h={change_24h}"
+        )
+
+        # 3️⃣ Volume % verandering (ABS)
+        volume_change_pct = None
+        if volume_prev and volume_prev > 0 and volume_now:
+            volume_change_pct = abs(
+                ((volume_now - volume_prev) / volume_prev) * 100
+            )
+
+        logger.info(f"📈 volume_change_pct={volume_change_pct}")
+
+        # 4️⃣ Indicator → waarde (%)
+        indicator_value_map = {
+            "change_24h": float(change_24h),        # al %
+            "volume": float(volume_change_pct) if volume_change_pct is not None else None,
         }
 
-        # 3️⃣ (optioneel) simpele derived metrics zodat je bestaande indicator-namen kunt gebruiken
-        # Later vervangen door echte logica (7d avg volume, trend op basis van 7d candles, etc.)
-        derived = {
-            "volume_strength": snapshot["volume"],  # placeholder
-            "price_trend": snapshot["price"],        # placeholder
-        }
-
-        # Combineer alles
-        market_values = {**snapshot, **derived}
-
-        # 4️⃣ Score + opslag per user
+        # 5️⃣ Score + opslag per user
         for name in indicators:
             logger.info(f"➡️ Verwerk market indicator: {name}")
 
-            # mapping naar snapshot key (indien nodig)
-            mapped_key = SNAPSHOT_KEY_MAP.get(name, name)
-            value = market_values.get(mapped_key)
+            value = indicator_value_map.get(name)
 
             if value is None:
-                logger.warning(
-                    f"⚠️ Geen value voor '{name}' (mapped_key='{mapped_key}'). "
-                    f"Beschikbaar: {list(market_values.keys())}"
-                )
+                logger.warning(f"⚠️ Geen value voor {name}, skip")
                 continue
 
-            logger.info(f"📈 {name} (mapped_key='{mapped_key}') value={value}")
+            logger.info(f"📊 {name} value_for_scoring={value}")
 
             score_data = generate_scores_db(
                 category="market",
-                data={name: value},   # ✅ we scoren op de indicator-naam uit indicators tabel
+                data={name: value},
                 user_id=user_id,
             )
 
             score_obj = (score_data or {}).get("scores", {}).get(name)
             if not score_obj:
-                logger.warning(f"⚠️ Geen scoreregels gevonden voor '{name}' (market) user_id={user_id}")
-                score_obj = {
-                    "score": 50,
-                    "trend": "unknown",
-                    "interpretation": "Geen scoreregels gevonden in DB voor deze market indicator.",
-                    "action": "Voeg scoreregels toe in de rules tabel.",
-                }
-
-            logger.info(f"🧠 Score {name}: score={score_obj.get('score')} trend={score_obj.get('trend')}")
+                logger.warning(f"⚠️ Geen scoreregels voor {name}")
+                continue
 
             with conn.cursor() as cur:
                 cur.execute("""
@@ -380,22 +367,22 @@ def fetch_and_process_market_indicators(user_id: int):
                     user_id,
                     name,
                     value,
-                    score_obj.get("trend"),
-                    score_obj.get("interpretation"),
-                    score_obj.get("action"),
-                    score_obj.get("score"),
+                    score_obj["trend"],
+                    score_obj["interpretation"],
+                    score_obj["action"],
+                    score_obj["score"],
                 ))
 
             inserted += 1
-            logger.info(f"💾 Insert OK: {name} (user_id={user_id})")
+            logger.info(f"💾 Insert OK: {name}")
 
         conn.commit()
-        logger.info(f"✅ EINDE market indicators ingestie (user_id={user_id}) — inserted={inserted}")
+        logger.info(f"✅ EINDE market ingestie — inserted={inserted}")
         logger.info("========================================")
 
     except Exception:
         conn.rollback()
-        logger.exception("❌ Fout in market indicators ingestie (rollback gedaan)")
+        logger.exception("❌ Fout in market indicators ingestie")
     finally:
         conn.close()
 
