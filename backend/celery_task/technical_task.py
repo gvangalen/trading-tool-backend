@@ -94,15 +94,22 @@ def get_active_technical_indicators(user_id: int):
                 FROM indicators
                 WHERE category = 'technical'
                   AND active = TRUE
-                  AND user_id = %s
-            """, (user_id,))
-            return [
-                {"name": r[0], "source": r[1], "link": r[2]}
-                for r in cur.fetchall()
-            ]
+            """)
+            rows = cur.fetchall()
+
+        logger.info(
+            f"📊 {len(rows)} technische indicatoren geladen (globaal)"
+        )
+
+        return [
+            {"name": r[0], "source": r[1], "link": r[2]}
+            for r in rows
+        ]
+
     except Exception:
-        logger.error("❌ Fout bij ophalen technische indicatoren", exc_info=True)
+        logger.exception("❌ Fout bij ophalen technische indicatoren")
         return []
+
     finally:
         conn.close()
 
