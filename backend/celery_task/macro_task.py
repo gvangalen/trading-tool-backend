@@ -227,6 +227,15 @@ def fetch_macro_data(user_id: int):
     except Exception:
         logger.error("❌ Macro ingestie task crash", exc_info=True)
 
+@shared_task(name="backend.celery_task.macro_task.run_macro_agent_daily")
+def run_macro_agent_daily(user_id: int):
+    try:
+        logger.info(f"🧠 Macro AI Agent gestart (user_id={user_id})")
+        run_macro_agent(user_id=user_id)
+        logger.info(f"✅ Macro AI Agent voltooid (user_id={user_id})")
+    except Exception:
+        logger.error("❌ Macro AI Agent crash", exc_info=True)
+
 
 # =====================================================
 # 🚀 Celery task 2: AI ANALYSE
