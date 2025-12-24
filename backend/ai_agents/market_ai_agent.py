@@ -14,18 +14,29 @@ logger.setLevel(logging.INFO)
 SYMBOL = "BTC"
 
 
+def _to_float(x):
+    try:
+        return float(x) if x is not None else None
+    except Exception:
+        return None
+
+
+def _to_int(x):
+    try:
+        return int(x) if x is not None else None
+    except Exception:
+        return None
+
+
 # ======================================================
 # 🪙 MARKET AI AGENT — DB-GEDREVEN (ENIGE WAARHEID)
 # ======================================================
-
 def run_market_agent(user_id: int, symbol: str = SYMBOL):
     """
     Genereert market AI insights.
 
-    BELANGRIJK:
     - Gebruikt ALLEEN market_data_indicators (reeds berekend & gescoord)
     - Doet GEEN eigen berekeningen
-    - Geen generate_scores_db("market") meer
     """
 
     if user_id is None:
@@ -38,11 +49,9 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
         logger.error("❌ Geen DB-verbinding")
         return
 
-    today = date.today()
-
     try:
         # ======================================================
-        # 1️⃣ LAATSTE MARKET INDICATOR SCORES (DE BRON!)
+        # 1️⃣ LAATSTE MARKET INDICATOR SCORES (USER-SPECIFIC!)
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -55,14 +64,15 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
                     action,
                     timestamp
                 FROM market_data_indicators
+                WHERE user_id = %s
                 ORDER BY name, timestamp DESC;
-            """)
+            """, (user_id,))
             rows = cur.fetchall()
 
         market_indicators = [{
             "indicator": name,
-            "value": float(value) if value is not None else None,
-            "score": int(score) if score is not None else None,
+            "value": _to_float(value),
+            "score": _to_int(score),
             "trend": trend,
             "interpretation": interpretation,
             "action": action,
@@ -70,18 +80,18 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
         } for name, value, score, trend, interpretation, action, ts in rows]
 
         if not market_indicators:
-            logger.warning("⚠️ Geen market indicator scores gevonden")
+            logger.warning("⚠️ Geen market indicator scores gevonden (market_data_indicators leeg)")
             return
 
         # ======================================================
-        # 2️⃣ MARKET SCORE (GEMIDDELDE)
+        # 2️⃣ MARKET SCORE (GEMIDDELDE VAN GELDIGE SCORES)
         # ======================================================
         valid_scores = [i["score"] for i in market_indicators if i["score"] is not None]
         market_avg = round(sum(valid_scores) / len(valid_scores)) if valid_scores else 10
 
         top_contributors = sorted(
-            market_indicators,
-            key=lambda x: x["score"] or 0,
+            [i for i in market_indicators if i["score"] is not None],
+            key=lambda x: x["score"],
             reverse=True
         )[:5]
 
@@ -99,13 +109,13 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
             rows_7d = cur.fetchall()
 
         price_7d = [{
-            "date": d.isoformat(),
-            "open": float(o),
-            "high": float(h),
-            "low": float(l),
-            "close": float(c),
-            "change_pct": float(ch),
-            "volume": float(v),
+            "date": d.isoformat() if d else None,
+            "open": _to_float(o),
+            "high": _to_float(h),
+            "low": _to_float(l),
+            "close": _to_float(c),
+            "change_pct": _to_float(ch),
+            "volume": _to_float(v),
         } for d, o, h, l, c, ch, v in reversed(rows_7d)]
 
         # ======================================================
@@ -146,8 +156,12 @@ DATA:
         if not isinstance(ai, dict):
             ai = {}
 
+        top_signals = ai.get("top_signals", [])
+        if not isinstance(top_signals, list):
+            top_signals = []
+
         # ======================================================
-        # 5️⃣ OPSLAAN
+        # 5️⃣ OPSLAAN (UPSERT)
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -171,7 +185,7 @@ DATA:
                 ai.get("bias", ""),
                 ai.get("risk", ""),
                 ai.get("summary", ""),
-                json.dumps(ai.get("top_signals", [])),
+                json.dumps(top_signals),
             ))
 
         conn.commit()
@@ -181,7 +195,6 @@ DATA:
         conn.rollback()
         logger.error("❌ [Market-Agent] Fout", exc_info=True)
         logger.error(traceback.format_exc())
-
     finally:
         conn.close()
 
@@ -189,7 +202,9 @@ DATA:
 # ======================================================
 # ✅ Celery wrapper
 # ======================================================
-
 @shared_task(name="backend.ai_agents.market_ai_agent.generate_market_insight")
 def generate_market_insight(user_id: int):
-    run_market_agent(user_id=user_id, symbol=SYMBOL)
+    try:
+        run_market_agent(user_id=user_id, symbol=SYMBOL)
+    except Exception:
+        logger.error("❌ Market AI task crash", exc_info=True)
