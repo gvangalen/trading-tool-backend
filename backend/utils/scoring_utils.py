@@ -13,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =========================================================
-# 🧩 Naam-aliases (alleen macro/technical, GEEN market!)
+# 🧩 Naam-aliases (ALLEEN macro/technical – GEEN market!)
 # =========================================================
 NAME_ALIASES = {
     "fear_and_greed_index": "fear_greed_index",
@@ -88,6 +88,9 @@ def get_score_rule_from_db(
                     "action": r[5],
                 }
 
+        logger.warning(
+            f"⚠️ Waarde {value} valt buiten ranges voor {indicator_name}"
+        )
         return None
 
     except Exception:
@@ -100,75 +103,37 @@ def get_score_rule_from_db(
         conn.close()
 
 # =========================================================
-# 📊 MARKET helpers (GEEN user_id)
-# =========================================================
-def load_market_rule_indicators(conn):
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT DISTINCT indicator
-            FROM market_indicator_rules
-        """)
-        return [r[0] for r in cur.fetchall()]
-
-def load_latest_market_snapshot(conn):
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT price, volume, change_24h
-            FROM market_data
-            WHERE symbol = 'BTC'
-            ORDER BY timestamp DESC
-            LIMIT 1
-        """)
-        return cur.fetchone()
-
-def extract_market_data(rule_indicators, snapshot):
-    """
-    ENIGE market-indicatoren die bestaan:
-    - change_24h
-    - volume (volume-afwijking %)
-    """
-    data = {}
-
-    if not snapshot:
-        return data
-
-    price, volume, change_24h = snapshot
-
-    if "change_24h" in rule_indicators and change_24h is not None:
-        data["change_24h"] = float(change_24h)
-
-    if "volume" in rule_indicators and volume is not None:
-        data["volume"] = float(volume)
-
-    return data
-
-# =========================================================
-# 🔢 SCORE ENGINE
+# 🔢 SCORE ENGINE (DEFINITIEF)
 # =========================================================
 def generate_scores_db(
     category: str,
     data: Optional[Dict[str, float]] = None,
     user_id: Optional[int] = None
 ) -> Dict[str, Any]:
+    """
+    Centrale score-engine.
 
-    # -----------------------------------------------------
-    # MARKET (globaal, GEEN user_id)
-    # -----------------------------------------------------
+    REGELS:
+    - MARKET:
+        • gebruikt ALTIJD meegegeven data (bv. volume % afwijking)
+        • haalt GEEN eigen market_data op als data is gezet
+    - MACRO / TECHNICAL:
+        • data=None → data uit DB op basis van user_id
+    """
+
+    # =====================================================
+    # MARKET (GLOBAAL — GEEN user_id)
+    # =====================================================
     if category == "market":
-        conn = get_db_connection()
-        if not conn:
+        if data is None:
+            logger.warning(
+                "⚠️ generate_scores_db(market) zonder data aangeroepen — skip"
+            )
             return {"scores": {}, "total_score": 10}
 
-        try:
-            rule_indicators = load_market_rule_indicators(conn)
-            snapshot = load_latest_market_snapshot(conn)
-            data = extract_market_data(rule_indicators, snapshot)
-        finally:
-            conn.close()
-
-    # -----------------------------------------------------
-    # MACRO / TECHNICAL (user-specific)
-    # -----------------------------------------------------
+    # =====================================================
+    # MACRO / TECHNICAL (USER-SPECIFIEK)
+    # =====================================================
     elif data is None:
         if user_id is None:
             raise ValueError(
@@ -181,6 +146,7 @@ def generate_scores_db(
 
         try:
             with conn.cursor() as cur:
+
                 if category == "macro":
                     cur.execute("""
                         SELECT DISTINCT ON (name) name, value
@@ -192,6 +158,7 @@ def generate_scores_db(
                     data = {
                         normalize_indicator_name(r[0]): float(r[1])
                         for r in rows
+                        if r[1] is not None
                     }
 
                 elif category == "technical":
@@ -205,41 +172,56 @@ def generate_scores_db(
                     data = {
                         normalize_indicator_name(r[0]): float(r[1])
                         for r in rows
+                        if r[1] is not None
                     }
         finally:
             conn.close()
 
-    # -----------------------------------------------------
-    # Geen data → minimale score
-    # -----------------------------------------------------
+    # =====================================================
+    # GEEN DATA → MINIMUM SCORE
+    # =====================================================
     if not data:
         return {"scores": {}, "total_score": 10}
 
-    scores = {}
-    total = 0
+    # =====================================================
+    # SCORE BEREKENING
+    # =====================================================
+    scores: Dict[str, Any] = {}
+    total_score = 0
     count = 0
 
     for indicator, value in data.items():
-        rule = get_score_rule_from_db(category, indicator, value)
+        rule = get_score_rule_from_db(
+            category=category,
+            indicator_name=indicator,
+            value=value
+        )
+
         if not rule:
+            logger.warning(
+                f"⚠️ Geen scoreregel match voor {indicator} "
+                f"(value={value}, category={category})"
+            )
             continue
+
+        score = int(rule["score"])
 
         scores[indicator] = {
             "value": value,
-            "score": rule["score"],
+            "score": score,
             "trend": rule["trend"],
             "interpretation": rule["interpretation"],
             "action": rule["action"],
         }
 
-        total += rule["score"]
+        total_score += score
         count += 1
 
-    avg = round(total / count) if count else 10
+    avg_score = round(total_score / count) if count else 10
 
     return {
         "scores": scores,
-        "total_score": avg
+        "total_score": avg_score
     }
 
 # =========================================================
@@ -252,7 +234,9 @@ def get_scores_for_symbol(
 
     macro = generate_scores_db("macro", user_id=user_id)
     tech = generate_scores_db("technical", user_id=user_id)
-    market = generate_scores_db("market")
+
+    # ⚠️ MARKET SCORE KOMT UIT market_data_indicators
+    market = generate_scores_db("market", data={})
 
     macro_score = macro["total_score"]
     tech_score = tech["total_score"]
