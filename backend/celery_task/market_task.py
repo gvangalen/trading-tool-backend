@@ -280,7 +280,9 @@ def fetch_and_process_market_indicators(user_id: int):
     inserted = 0
 
     try:
+        # =====================================================
         # 1️⃣ Actieve market-indicators
+        # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name
@@ -295,47 +297,77 @@ def fetch_and_process_market_indicators(user_id: int):
         if not indicators:
             return
 
-        # 2️⃣ Laatste 2 market snapshots (voor volume %)
+        # =====================================================
+        # 2️⃣ Laatste dagvolume + historisch volume (SMA)
+        # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT price, volume, change_24h, timestamp
+                SELECT DATE(timestamp) AS day, volume
                 FROM market_data
+                WHERE volume IS NOT NULL
                 ORDER BY timestamp DESC
-                LIMIT 2
+                LIMIT 8
             """)
             rows = cur.fetchall()
 
-        if not rows:
-            logger.warning("⚠️ Geen market_data gevonden")
+        if len(rows) < 2:
+            logger.warning("⚠️ Onvoldoende volume data voor SMA")
             return
 
-        latest = rows[0]
-        previous = rows[1] if len(rows) > 1 else None
+        volume_today = rows[0][1]
+        historical_volumes = [r[1] for r in rows[1:] if r[1] > 0]
 
-        price_now, volume_now, change_24h, ts = latest
-        volume_prev = previous[1] if previous else None
+        if not historical_volumes:
+            logger.warning("⚠️ Geen geldige historische volumes")
+            return
 
-        logger.info(
-            f"🕒 Snapshot: price={price_now}, volume={volume_now}, "
-            f"change_24h={change_24h}"
-        )
+        avg_volume = sum(historical_volumes) / len(historical_volumes)
 
-        # 3️⃣ Volume % verandering (ABS)
+        # =====================================================
+        # 3️⃣ Volume afwijking (%) t.o.v. gemiddeld
+        # =====================================================
         volume_change_pct = None
-        if volume_prev and volume_prev > 0 and volume_now:
-            volume_change_pct = abs(
-                ((volume_now - volume_prev) / volume_prev) * 100
+        if avg_volume > 0 and volume_today:
+            volume_change_pct = round(
+                ((volume_today - avg_volume) / avg_volume) * 100,
+                2
             )
 
-        logger.info(f"📈 volume_change_pct={volume_change_pct}")
+        logger.info(
+            f"📊 Volume vandaag={volume_today} | "
+            f"Avg={avg_volume:.2f} | "
+            f"Δ%={volume_change_pct}"
+        )
 
-        # 4️⃣ Indicator → waarde (%)
+        # =====================================================
+        # 4️⃣ Laatste prijs + change_24h
+        # =====================================================
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT price, change_24h
+                FROM market_data
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+            price_row = cur.fetchone()
+
+        if not price_row:
+            logger.warning("⚠️ Geen prijsdata gevonden")
+            return
+
+        price_now, change_24h = price_row
+
+        # =====================================================
+        # 5️⃣ Indicator → waarde mapping
+        # =====================================================
         indicator_value_map = {
-            "change_24h": float(change_24h),        # al %
-            "volume": float(volume_change_pct) if volume_change_pct is not None else None,
+            "change_24h": float(change_24h),
+            "volume": volume_change_pct,
         }
 
-        # 5️⃣ Score + opslag per user
+        # =====================================================
+        # 6️⃣ Score + opslag per indicator
+        # =====================================================
         for name in indicators:
             logger.info(f"➡️ Verwerk market indicator: {name}")
 
@@ -385,73 +417,7 @@ def fetch_and_process_market_indicators(user_id: int):
         logger.exception("❌ Fout in market indicators ingestie")
     finally:
         conn.close()
-
-@shared_task(name="backend.celery_task.market_task.run_market_agent_daily")
-def run_market_agent_daily(user_id: int):
-    logger.info(f"🧠 START Market AI Agent (user_id={user_id})")
-
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            # Haal laatste market indicatoren
-            cur.execute("""
-                SELECT name, score, interpretation, action
-                FROM market_data_indicators
-                WHERE user_id = %s
-                ORDER BY timestamp DESC
-            """, (user_id,))
-            rows = cur.fetchall()
-
-        if not rows:
-            summary = (
-                "Nog onvoldoende marktdata beschikbaar om een "
-                "betrouwbare market-analyse te genereren."
-            )
-            top_signals = []
-            score = None
-            trend = "neutral"
-            bias = "neutral"
-            risk = "unknown"
-        else:
-            scores = [r[1] for r in rows if r[1] is not None]
-            score = round(sum(scores) / len(scores), 1) if scores else None
-
-            top_signals = [
-                f"{r[0]}: {r[2]}" for r in rows[:3]
-            ]
-
-            summary = (
-                "De marktanalyse is gebaseerd op recente prijsverandering "
-                "en volumegedrag."
-            )
-            trend = "bullish" if score and score >= 60 else "bearish" if score and score <= 40 else "neutral"
-            bias = trend
-            risk = "hoog" if score and score >= 80 else "laag" if score and score <= 20 else "matig"
-
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO ai_category_insights
-                    (user_id, category, score, trend, bias, risk, summary, top_signals, created_at)
-                VALUES (%s, 'market', %s, %s, %s, %s, %s, %s, NOW())
-            """, (
-                user_id,
-                score,
-                trend,
-                bias,
-                risk,
-                summary,
-                top_signals,
-            ))
-
-        conn.commit()
-        logger.info(f"✅ Market AI insight opgeslagen (user_id={user_id})")
-
-    except Exception:
-        conn.rollback()
-        logger.exception("❌ Fout in Market AI Agent")
-    finally:
-        conn.close()
-
+        
 # =====================================================
 # 🚀 Celery wrapper (via dispatcher)
 # =====================================================
