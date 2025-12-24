@@ -386,6 +386,72 @@ def fetch_and_process_market_indicators(user_id: int):
     finally:
         conn.close()
 
+@shared_task(name="backend.celery_task.market_task.run_market_agent_daily")
+def run_market_agent_daily(user_id: int):
+    logger.info(f"🧠 START Market AI Agent (user_id={user_id})")
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            # Haal laatste market indicatoren
+            cur.execute("""
+                SELECT name, score, interpretation, action
+                FROM market_data_indicators
+                WHERE user_id = %s
+                ORDER BY timestamp DESC
+            """, (user_id,))
+            rows = cur.fetchall()
+
+        if not rows:
+            summary = (
+                "Nog onvoldoende marktdata beschikbaar om een "
+                "betrouwbare market-analyse te genereren."
+            )
+            top_signals = []
+            score = None
+            trend = "neutral"
+            bias = "neutral"
+            risk = "unknown"
+        else:
+            scores = [r[1] for r in rows if r[1] is not None]
+            score = round(sum(scores) / len(scores), 1) if scores else None
+
+            top_signals = [
+                f"{r[0]}: {r[2]}" for r in rows[:3]
+            ]
+
+            summary = (
+                "De marktanalyse is gebaseerd op recente prijsverandering "
+                "en volumegedrag."
+            )
+            trend = "bullish" if score and score >= 60 else "bearish" if score and score <= 40 else "neutral"
+            bias = trend
+            risk = "hoog" if score and score >= 80 else "laag" if score and score <= 20 else "matig"
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO ai_category_insights
+                    (user_id, category, score, trend, bias, risk, summary, top_signals, created_at)
+                VALUES (%s, 'market', %s, %s, %s, %s, %s, %s, NOW())
+            """, (
+                user_id,
+                score,
+                trend,
+                bias,
+                risk,
+                summary,
+                top_signals,
+            ))
+
+        conn.commit()
+        logger.info(f"✅ Market AI insight opgeslagen (user_id={user_id})")
+
+    except Exception:
+        conn.rollback()
+        logger.exception("❌ Fout in Market AI Agent")
+    finally:
+        conn.close()
+
 # =====================================================
 # 🚀 Celery wrapper (via dispatcher)
 # =====================================================
