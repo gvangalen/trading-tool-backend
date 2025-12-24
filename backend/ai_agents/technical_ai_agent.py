@@ -58,14 +58,18 @@ def run_technical_agent(user_id: int):
 
         # ------------------------------------------------------
         # 2️⃣ Laatste technische indicatoren (PER USER)
-        #    -> we halen bewust veel op en deduppen op naam (laatste)
+        # ✅ FIX: alleen indicators die in indicators-tabel als technical+active staan
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT indicator, value, score, advies, uitleg, timestamp
-                FROM technical_indicators
-                WHERE user_id = %s
-                ORDER BY indicator ASC, timestamp DESC;
+                SELECT ti.indicator, ti.value, ti.score, ti.advies, ti.uitleg, ti.timestamp
+                FROM technical_indicators ti
+                JOIN indicators i
+                  ON i.name = ti.indicator
+                 AND i.category = 'technical'
+                 AND i.active = TRUE
+                WHERE ti.user_id = %s
+                ORDER BY ti.indicator ASC, ti.timestamp DESC;
             """, (user_id,))
             rows = cur.fetchall()
 
@@ -86,7 +90,6 @@ def run_technical_agent(user_id: int):
         for key, (name, value, score, advies, uitleg, ts) in latest.items():
             score_f = float(score) if score is not None else 50.0
 
-            # trend lookup op basis van score (als je exact scores gebruikt: 10/25/50/75/100)
             rule_trend = next(
                 (r["trend"] for r in rules_by_indicator.get(key, []) if float(r.get("score") or -1) == score_f),
                 None
