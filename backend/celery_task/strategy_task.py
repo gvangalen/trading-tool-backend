@@ -374,6 +374,155 @@ def analyze_strategy(user_id: int, strategy_id: int):
     finally:
         conn.close()
 
+def run_dca_strategy_snapshot(user_id: int, setup: dict):
+    """
+    Dagelijkse DCA snapshot:
+    - GEEN targets
+    - GEEN stop-loss
+    - Entry = referentie (contextueel)
+    - Wel AI confidence + uitleg
+    - Wel dashboard AI insight (category = strategy)
+    """
+
+    logger.info(f"🟢 DCA snapshot gestart | user={user_id} setup={setup['id']}")
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ Geen databaseverbinding (DCA snapshot)")
+        return
+
+    try:
+        # ==================================================
+        # 1️⃣ Market context (scores van vandaag)
+        # ==================================================
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT macro_score, technical_score, market_score
+                FROM daily_scores
+                WHERE user_id = %s
+                  AND report_date = CURRENT_DATE
+                LIMIT 1;
+                """,
+                (user_id,),
+            )
+            scores = cur.fetchone()
+
+        if not scores:
+            logger.warning("⚠️ Geen daily_scores gevonden (DCA)")
+            return
+
+        market_context = {
+            "macro_score": float(scores[0]) if scores[0] is not None else None,
+            "technical_score": float(scores[1]) if scores[1] is not None else None,
+            "market_score": float(scores[2]) if scores[2] is not None else None,
+        }
+
+        # ==================================================
+        # 2️⃣ Laatste strategy laden (DCA heeft vaak geen entry)
+        # ==================================================
+        base_strategy = load_latest_strategy(setup["id"], user_id)
+
+        if not base_strategy:
+            logger.warning("⚠️ Geen base DCA strategy gevonden")
+            return
+
+        # ==================================================
+        # 3️⃣ AI adjustment (DCA-context)
+        # ==================================================
+        adjustment = adjust_strategy_for_today(
+            base_strategy=base_strategy,
+            setup=setup,
+            market_context=market_context,
+        )
+
+        if not adjustment:
+            logger.warning("⚠️ Geen AI adjustment ontvangen (DCA)")
+            return
+
+        confidence = safe_confidence(
+            adjustment.get("confidence_score"), fallback=50
+        )
+
+        # ==================================================
+        # 4️⃣ STRATEGY AI INSIGHT (dashboard)
+        # ==================================================
+        analysis = analyze_strategies(
+            [
+                {
+                    "setup_id": setup["id"],
+                    "strategy_type": "dca",
+                    "confidence_score": confidence,
+                    "market_context": market_context,
+                    "adjustment_reason": adjustment.get("adjustment_reason"),
+                }
+            ]
+        )
+
+        if analysis:
+            trend = "Actief" if confidence >= 60 else "Neutraal"
+            bias = "Accumuleer" if confidence >= 60 else "Rustig opbouwen"
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO ai_category_insights (
+                        category,
+                        user_id,
+                        avg_score,
+                        trend,
+                        bias,
+                        risk,
+                        summary,
+                        top_signals,
+                        date
+                    ) VALUES (
+                        'strategy',
+                        %s,%s,%s,%s,%s,%s,%s::jsonb,CURRENT_DATE
+                    )
+                    ON CONFLICT (user_id, category, date)
+                    DO UPDATE SET
+                        avg_score = EXCLUDED.avg_score,
+                        trend = EXCLUDED.trend,
+                        bias = EXCLUDED.bias,
+                        risk = EXCLUDED.risk,
+                        summary = EXCLUDED.summary,
+                        top_signals = EXCLUDED.top_signals,
+                        created_at = NOW();
+                    """,
+                    (
+                        user_id,
+                        confidence,
+                        trend,
+                        bias,
+                        "Laag",
+                        analysis.get(
+                            "comment",
+                            "DCA evaluatie op basis van marktcontext"
+                        ),
+                        json.dumps(
+                            [
+                                analysis.get(
+                                    "recommendation",
+                                    "Blijf consistent accumuleren."
+                                )
+                            ],
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+
+        conn.commit()
+        logger.info("✅ DCA snapshot + AI insight opgeslagen")
+
+    except Exception:
+        logger.error("❌ DCA snapshot fout", exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
 
 # ============================================================
 # 🟡 DAGELIJKSE STRATEGY SNAPSHOT + DASHBOARD INSIGHT
@@ -409,7 +558,15 @@ def run_daily_strategy_snapshot(user_id: int):
             return
 
         setup_id = row[0]
+        setup = load_setup_from_db(setup_id, user_id)
 
+        # ==================================================
+        # 🔥 DCA SPLIT (DIT IS DE FIX)
+        # ==================================================
+        if setup.get("strategy_type") == "dca":
+            return run_dca_strategy_snapshot(user_id, setup)
+
+        
         # ==================================================
         # 2️⃣ Market context (scores van vandaag)
         # ==================================================
