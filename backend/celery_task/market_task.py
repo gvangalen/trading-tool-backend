@@ -417,6 +417,38 @@ def fetch_and_process_market_indicators(user_id: int):
         logger.exception("❌ Fout in market indicators ingestie")
     finally:
         conn.close()
+
+# =====================================================
+# 🧠 MARKET AI AGENT — CELERY WRAPPER
+# =====================================================
+from celery import shared_task
+import logging
+
+from backend.ai_agents.market_ai_agent import run_market_agent
+
+logger = logging.getLogger(__name__)
+
+
+@shared_task(name="backend.celery_task.market_task.run_market_agent_daily")
+def run_market_agent_daily(user_id: int):
+    """
+    Celery wrapper voor de Market AI Agent.
+
+    - Wordt aangeroepen door dispatcher (per user)
+    - Doet GEEN berekeningen
+    - Roept uitsluitend de AI-agent aan
+    """
+
+    if user_id is None:
+        logger.error("❌ run_market_agent_daily aangeroepen zonder user_id")
+        return
+
+    try:
+        logger.info(f"🧠 Market AI Agent gestart (user_id={user_id})")
+        run_market_agent(user_id=user_id)
+        logger.info(f"✅ Market AI Agent voltooid (user_id={user_id})")
+    except Exception:
+        logger.exception("❌ Market AI Agent crash")
         
 # =====================================================
 # 🚀 Celery wrapper (via dispatcher)
@@ -426,3 +458,5 @@ def fetch_market_indicators(user_id: int):
     if user_id is None:
         raise ValueError("❌ user_id verplicht")
     fetch_and_process_market_indicators(user_id)
+
+
