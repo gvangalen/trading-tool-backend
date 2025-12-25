@@ -161,7 +161,7 @@ DATA:
             top_signals = []
 
         # ======================================================
-        # 5️⃣ OPSLAAN (UPSERT)
+        # 5️⃣ OPSLAAN AI INSIGHT (ai_category_insights)
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -186,6 +186,23 @@ DATA:
                 ai.get("risk", ""),
                 ai.get("summary", ""),
                 json.dumps(top_signals),
+            ))
+
+        # ======================================================
+        # 6️⃣ DAILY_SCORES BIJWERKEN (DASHBOARD METERS)
+        # ======================================================
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE daily_scores
+                SET
+                    market_score = %s,
+                    market_interpretation = %s
+                WHERE user_id = %s
+                  AND report_date = CURRENT_DATE
+            """, (
+                market_avg,
+                ai.get("summary", ""),
+                user_id
             ))
 
         conn.commit()
