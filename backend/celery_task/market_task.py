@@ -455,8 +455,38 @@ def run_market_agent_daily(user_id: int):
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_indicators")
 def fetch_market_indicators(user_id: int):
+    """
+    ✔ Haalt market indicators op
+    ✔ Slaat indicator-scores op
+    ✔ Triggert daarna de Market AI Agent
+    ❌ Doet zelf GEEN AI
+    """
+
     if user_id is None:
         raise ValueError("❌ user_id verplicht")
-    fetch_and_process_market_indicators(user_id)
 
+    logger.info("========================================")
+    logger.info(f"📊 START market indicator pipeline (user_id={user_id})")
 
+    # -------------------------------------------------
+    # 1️⃣ Market indicators ophalen + opslaan
+    # -------------------------------------------------
+    try:
+        fetch_and_process_market_indicators(user_id)
+        logger.info("✅ Market indicators verwerkt")
+    except Exception:
+        logger.exception("❌ Fout tijdens market indicator verwerking")
+        return
+
+    # -------------------------------------------------
+    # 2️⃣ Market AI Agent triggeren (STRICT gescheiden)
+    # -------------------------------------------------
+    try:
+        logger.info("🧠 Trigger Market AI Agent...")
+        run_market_agent(user_id=user_id)
+        logger.info("✅ Market AI Agent afgerond")
+    except Exception:
+        logger.exception("❌ Market AI Agent crash")
+
+    logger.info(f"🏁 EINDE market pipeline (user_id={user_id})")
+    logger.info("========================================")
