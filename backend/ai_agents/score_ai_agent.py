@@ -250,7 +250,8 @@ def store_master_result(conn, result: dict, user_id: int):
                 bias = EXCLUDED.bias,
                 risk = EXCLUDED.risk,
                 summary = EXCLUDED.summary,
-                top_signals = EXCLUDED.top_signals;
+                top_signals = EXCLUDED.top_signals,
+                updated_at = NOW();
             """,
             (
                 user_id,
@@ -303,9 +304,8 @@ def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
                 macro_interpretation = EXCLUDED.macro_interpretation,
                 market_interpretation = EXCLUDED.market_interpretation,
                 technical_interpretation = EXCLUDED.technical_interpretation,
-                setup_score = EXCLUDED.setup_score,
-                updated_at = NOW();
-            """,
+                setup_score = EXCLUDED.setup_score;
+             """,
             (
                 user_id,
                 macro,
