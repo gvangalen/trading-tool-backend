@@ -4,6 +4,7 @@ from datetime import date
 from typing import Dict, List, Optional, Any
 
 from backend.utils.openai_client import ask_gpt
+from backend.utils.db import get_db_connection
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -135,35 +136,28 @@ JSON format:
         logger.error("❌ Ongeldige JSON van AI bij strategy-adjustment")
         return None
 
-    # ===============================
-    # ✅ VALIDATIE & NORMALISATIE
-    # ===============================
-
     required_keys = {"entry", "targets", "stop_loss", "changes", "entry_type"}
     if not required_keys.issubset(result.keys()):
         logger.error("❌ Strategy-adjustment mist verplichte velden")
         return None
 
-    # Confidence score afdwingen
     score = result.get("confidence_score")
     if not isinstance(score, (int, float)) or not (0 <= score <= 100):
         result["confidence_score"] = 50
 
-    # DCA-consistentie afdwingen
     if strategy_type == "dca":
         result["entry_type"] = "reference"
         if result.get("entry") in ("", None):
-            # entry mag leeg zijn, maar moet verklaard worden
             result["changes"]["entry"] = "reference"
-
     else:
-        # Non-DCA moet action entry zijn
         result["entry_type"] = "action"
 
     return result
 
+
 # ===================================================================
 # 🚀 INITIËLE STRATEGY GENERATIE (SETUP → STRATEGY)
+# ⚠️ Wordt alleen gebruikt door strategy_task (NIET door analyse)
 # ===================================================================
 
 def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
@@ -207,7 +201,10 @@ JSON format:
 
     return result
 
-from backend.utils.db import get_db_connection
+
+# ===================================================================
+# 💾 OPSLAAN AI-UITLEG IN STRATEGY.DATA
+# ===================================================================
 
 def save_ai_explanation_to_strategy(
     strategy_id: int,
@@ -237,3 +234,33 @@ def save_ai_explanation_to_strategy(
             conn.commit()
     finally:
         conn.close()
+
+
+# ===================================================================
+# 🧠 ORCHESTRATOR — ANALYSE → OPSLAG (DIT ONTBRAK)
+# ===================================================================
+
+def analyze_and_store_strategy(
+    strategy_id: int,
+    strategies: List[Dict[str, Any]],
+):
+    """
+    1️⃣ Analyseert bestaande strategie(ën)
+    2️⃣ Slaat AI-uitleg op in strategies.data.ai_explanation
+    """
+
+    logger.info(f"🧠 Strategy AI analyse gestart | strategy_id={strategy_id}")
+
+    ai_result = analyze_strategies(strategies)
+
+    if not ai_result:
+        logger.error("❌ Geen AI-resultaat bij strategy-analyse")
+        return None
+
+    save_ai_explanation_to_strategy(
+        strategy_id=strategy_id,
+        ai_result=ai_result,
+    )
+
+    logger.info(f"✅ AI-uitleg opgeslagen voor strategy_id={strategy_id}")
+    return ai_result
