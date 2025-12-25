@@ -290,6 +290,7 @@ def generate_for_setup(user_id: int, setup_id: int):
 @shared_task(name="backend.celery_task.strategy_task.analyze_strategy")
 def analyze_strategy(user_id: int, strategy_id: int):
     logger.info(f"🧠 Analyse strategy | user={user_id} strategy={strategy_id}")
+
     conn = get_db_connection()
     if not conn:
         return
@@ -330,22 +331,25 @@ def analyze_strategy(user_id: int, strategy_id: int):
                 "strategy_id": row_map.get("id"),
                 "setup_id": row_map.get("setup_id"),
                 "entry": row_map.get("entry"),
-                "targets": row_map.get("target").split(",")
-                if row_map.get("target")
-                else [],
+                "targets": row_map.get("target").split(",") if row_map.get("target") else [],
                 "stop_loss": row_map.get("stop_loss"),
                 "risk_reward": row_map.get("risk_reward"),
                 "explanation": row_map.get("explanation"),
                 "data": safe_json(row_map.get("data")),
-                "created_at": row_map.get("created_at").isoformat()
-                if row_map.get("created_at")
-                else None,
+                "created_at": row_map.get("created_at").isoformat() if row_map.get("created_at") else None,
             }
         ]
 
+        # ✅ AI analyse
         analysis = analyze_strategies(payload)
         if not analysis:
             return
+
+        # ✅ BELANGRIJKE FIX:
+        # schrijf naar 'ai_explanation' (niet ai_analysis)
+        explanation_text = (
+            f"{analysis.get('comment', '')}\n\n{analysis.get('recommendation', '')}"
+        ).strip()
 
         with conn.cursor() as cur:
             cur.execute(
@@ -353,17 +357,17 @@ def analyze_strategy(user_id: int, strategy_id: int):
                 UPDATE strategies
                 SET data = jsonb_set(
                     COALESCE(data,'{}'::jsonb),
-                    '{ai_analysis}',
-                    to_jsonb(%s),
+                    '{ai_explanation}',
+                    %s::jsonb,
                     true
                 )
                 WHERE id = %s AND user_id = %s;
                 """,
-                (analysis, strategy_id, user_id),
+                (json.dumps(explanation_text), strategy_id, user_id),
             )
 
         conn.commit()
-        logger.info("✅ Strategy analyse opgeslagen")
+        logger.info("✅ Strategy AI explanation opgeslagen (ai_explanation)")
 
     except Exception:
         logger.error("❌ analyze_strategy fout", exc_info=True)
