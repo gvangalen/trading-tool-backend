@@ -232,37 +232,56 @@ def get_scores_for_symbol(
     include_metadata: bool = False
 ) -> Dict[str, Any]:
 
-    macro = generate_scores_db("macro", user_id=user_id)
-    tech = generate_scores_db("technical", user_id=user_id)
+    conn = get_db_connection()
+    if not conn:
+        return {}
 
-    # ⚠️ MARKET SCORE KOMT UIT market_data_indicators
-    market = generate_scores_db("market", data={})
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    macro_score,
+                    macro_interpretation,
+                    macro_top_contributors,
 
-    macro_score = macro["total_score"]
-    tech_score = tech["total_score"]
-    market_score = market["total_score"]
+                    technical_score,
+                    technical_interpretation,
+                    technical_top_contributors,
 
-    setup_score = round((macro_score + tech_score) / 2)
+                    market_score,
+                    market_interpretation,
+                    market_top_contributors,
 
-    result = {
-        "macro_score": macro_score,
-        "technical_score": tech_score,
-        "market_score": market_score,
-        "setup_score": setup_score,
-    }
+                    setup_score
+                FROM daily_scores
+                WHERE user_id = %s
+                  AND report_date = CURRENT_DATE
+                LIMIT 1
+            """, (user_id,))
 
-    if include_metadata:
-        def top(scores):
-            return sorted(
-                scores.get("scores", {}).items(),
-                key=lambda x: x[1]["score"],
-                reverse=True
-            )[:3]
+            row = cur.fetchone()
 
-        result.update({
-            "macro_top_contributors": [i[0] for i in top(macro)],
-            "technical_top_contributors": [i[0] for i in top(tech)],
-            "market_top_contributors": [i[0] for i in top(market)],
-        })
+        if not row:
+            return {}
 
-    return result
+        result = {
+            "macro_score": row[0],
+            "macro_interpretation": row[1],
+            "macro_top_contributors": row[2] or [],
+
+            "technical_score": row[3],
+            "technical_interpretation": row[4],
+            "technical_top_contributors": row[5] or [],
+
+            # 🔥 DIT WAS HET PROBLEEM
+            "market_score": row[6],
+            "market_interpretation": row[7],
+            "market_top_contributors": row[8] or [],
+
+            "setup_score": row[9],
+        }
+
+        return result
+
+    finally:
+        conn.close()
