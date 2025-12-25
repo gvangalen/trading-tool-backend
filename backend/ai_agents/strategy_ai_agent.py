@@ -206,3 +206,34 @@ JSON format:
         raise ValueError("❌ Strategy mist verplichte velden")
 
     return result
+
+from backend.utils.db import get_db_connection
+
+def save_ai_explanation_to_strategy(
+    strategy_id: int,
+    ai_result: dict,
+):
+    explanation = (
+        f"{ai_result.get('comment', '')}\n\n"
+        f"{ai_result.get('recommendation', '')}"
+    ).strip()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE strategies
+                SET data = jsonb_set(
+                    data,
+                    '{ai_explanation}',
+                    %s::jsonb,
+                    true
+                )
+                WHERE id = %s
+            """, (
+                json.dumps(explanation),
+                strategy_id,
+            ))
+            conn.commit()
+    finally:
+        conn.close()
