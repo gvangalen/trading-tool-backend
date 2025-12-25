@@ -278,7 +278,7 @@ def fetch_and_process_market_indicators(user_id: int):
         return
 
     inserted = 0
-    top_contributors = []
+    market_scores = []  # <-- HIER verzamelen we scores
 
     try:
         # =====================================================
@@ -322,11 +322,12 @@ def fetch_and_process_market_indicators(user_id: int):
         volume_change_pct = None
         if avg_volume > 0 and volume_today:
             volume_change_pct = round(
-                ((volume_today - avg_volume) / avg_volume) * 100, 2
+                ((volume_today - avg_volume) / avg_volume) * 100,
+                2
             )
 
         # =====================================================
-        # 3️⃣ Laatste prijs + change
+        # 3️⃣ Laatste prijs + change_24h
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -382,14 +383,28 @@ def fetch_and_process_market_indicators(user_id: int):
                     score,
                 ))
 
-            # ⭐ verzamel contributors
-            if score >= 60:
-                top_contributors.append(name)
+            # ⭐ Verzamel ALLE scores
+            market_scores.append({
+                "name": name,
+                "score": score
+            })
 
             inserted += 1
 
         # =====================================================
-        # 5️⃣ MARKET TOP CONTRIBUTORS → daily_scores
+        # 5️⃣ TOP CONTRIBUTORS (zoals Macro & Technical)
+        # =====================================================
+        top_contributors = [
+            s["name"]
+            for s in sorted(
+                market_scores,
+                key=lambda x: x["score"],
+                reverse=True
+            )[:3]
+        ]
+
+        # =====================================================
+        # 6️⃣ Opslaan in daily_scores
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -405,7 +420,7 @@ def fetch_and_process_market_indicators(user_id: int):
         conn.commit()
 
         logger.info(f"✅ Market ingestie klaar | indicators={inserted}")
-        logger.info(f"⭐ Top contributors: {top_contributors}")
+        logger.info(f"⭐ Market top contributors: {top_contributors}")
         logger.info("========================================")
 
     except Exception:
