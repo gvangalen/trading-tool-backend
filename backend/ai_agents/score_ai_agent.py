@@ -250,8 +250,7 @@ def store_master_result(conn, result: dict, user_id: int):
                 bias = EXCLUDED.bias,
                 risk = EXCLUDED.risk,
                 summary = EXCLUDED.summary,
-                top_signals = EXCLUDED.top_signals,
-                created_at = NOW();
+                top_signals = EXCLUDED.top_signals;
             """,
             (
                 user_id,
