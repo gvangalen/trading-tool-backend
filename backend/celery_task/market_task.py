@@ -278,6 +278,7 @@ def fetch_and_process_market_indicators(user_id: int):
         return
 
     inserted = 0
+    top_contributors = []
 
     try:
         # =====================================================
@@ -293,16 +294,16 @@ def fetch_and_process_market_indicators(user_id: int):
             """)
             indicators = [r[0] for r in cur.fetchall()]
 
-        logger.info(f"📊 Actieve market indicators: {indicators}")
         if not indicators:
+            logger.warning("⚠️ Geen actieve market indicators")
             return
 
         # =====================================================
-        # 2️⃣ Laatste dagvolume + historisch volume (SMA)
+        # 2️⃣ Volume context
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT DATE(timestamp) AS day, volume
+                SELECT DATE(timestamp), volume
                 FROM market_data
                 WHERE volume IS NOT NULL
                 ORDER BY timestamp DESC
@@ -311,36 +312,21 @@ def fetch_and_process_market_indicators(user_id: int):
             rows = cur.fetchall()
 
         if len(rows) < 2:
-            logger.warning("⚠️ Onvoldoende volume data voor SMA")
+            logger.warning("⚠️ Onvoldoende volume data")
             return
 
         volume_today = rows[0][1]
         historical_volumes = [r[1] for r in rows[1:] if r[1] > 0]
-
-        if not historical_volumes:
-            logger.warning("⚠️ Geen geldige historische volumes")
-            return
-
         avg_volume = sum(historical_volumes) / len(historical_volumes)
 
-        # =====================================================
-        # 3️⃣ Volume afwijking (%) t.o.v. gemiddeld
-        # =====================================================
         volume_change_pct = None
         if avg_volume > 0 and volume_today:
             volume_change_pct = round(
-                ((volume_today - avg_volume) / avg_volume) * 100,
-                2
+                ((volume_today - avg_volume) / avg_volume) * 100, 2
             )
 
-        logger.info(
-            f"📊 Volume vandaag={volume_today} | "
-            f"Avg={avg_volume:.2f} | "
-            f"Δ%={volume_change_pct}"
-        )
-
         # =====================================================
-        # 4️⃣ Laatste prijs + change_24h
+        # 3️⃣ Laatste prijs + change
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -352,32 +338,22 @@ def fetch_and_process_market_indicators(user_id: int):
             price_row = cur.fetchone()
 
         if not price_row:
-            logger.warning("⚠️ Geen prijsdata gevonden")
             return
 
         price_now, change_24h = price_row
 
-        # =====================================================
-        # 5️⃣ Indicator → waarde mapping
-        # =====================================================
         indicator_value_map = {
             "change_24h": float(change_24h),
             "volume": volume_change_pct,
         }
 
         # =====================================================
-        # 6️⃣ Score + opslag per indicator
+        # 4️⃣ Scoring per indicator
         # =====================================================
         for name in indicators:
-            logger.info(f"➡️ Verwerk market indicator: {name}")
-
             value = indicator_value_map.get(name)
-
             if value is None:
-                logger.warning(f"⚠️ Geen value voor {name}, skip")
                 continue
-
-            logger.info(f"📊 {name} value_for_scoring={value}")
 
             score_data = generate_scores_db(
                 category="market",
@@ -387,8 +363,9 @@ def fetch_and_process_market_indicators(user_id: int):
 
             score_obj = (score_data or {}).get("scores", {}).get(name)
             if not score_obj:
-                logger.warning(f"⚠️ Geen scoreregels voor {name}")
                 continue
+
+            score = score_obj["score"]
 
             with conn.cursor() as cur:
                 cur.execute("""
@@ -402,21 +379,41 @@ def fetch_and_process_market_indicators(user_id: int):
                     score_obj["trend"],
                     score_obj["interpretation"],
                     score_obj["action"],
-                    score_obj["score"],
+                    score,
                 ))
 
+            # ⭐ verzamel contributors
+            if score >= 60:
+                top_contributors.append(name)
+
             inserted += 1
-            logger.info(f"💾 Insert OK: {name}")
+
+        # =====================================================
+        # 5️⃣ MARKET TOP CONTRIBUTORS → daily_scores
+        # =====================================================
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE daily_scores
+                SET market_top_contributors = %s
+                WHERE user_id = %s
+                  AND report_date = CURRENT_DATE
+            """, (
+                top_contributors,
+                user_id
+            ))
 
         conn.commit()
-        logger.info(f"✅ EINDE market ingestie — inserted={inserted}")
+
+        logger.info(f"✅ Market ingestie klaar | indicators={inserted}")
+        logger.info(f"⭐ Top contributors: {top_contributors}")
         logger.info("========================================")
 
     except Exception:
         conn.rollback()
-        logger.exception("❌ Fout in market indicators ingestie")
+        logger.exception("❌ Fout in market indicator ingestie")
     finally:
         conn.close()
+
 
 # =====================================================
 # 🧠 MARKET AI AGENT — CELERY WRAPPER
@@ -458,29 +455,20 @@ def fetch_market_indicators(user_id: int):
     """
     ✔ Haalt market indicators op
     ✔ Slaat indicator-scores op
+    ✔ Bouwt market top contributors
     ✔ Triggert daarna de Market AI Agent
-    ❌ Doet zelf GEEN AI
     """
 
     if user_id is None:
         raise ValueError("❌ user_id verplicht")
 
     logger.info("========================================")
-    logger.info(f"📊 START market indicator pipeline (user_id={user_id})")
+    logger.info(f"📊 START market pipeline (user_id={user_id})")
 
-    # -------------------------------------------------
-    # 1️⃣ Market indicators ophalen + opslaan
-    # -------------------------------------------------
-    try:
-        fetch_and_process_market_indicators(user_id)
-        logger.info("✅ Market indicators verwerkt")
-    except Exception:
-        logger.exception("❌ Fout tijdens market indicator verwerking")
-        return
+    # 1️⃣ Indicators + top contributors
+    fetch_and_process_market_indicators(user_id)
 
-    # -------------------------------------------------
-    # 2️⃣ Market AI Agent triggeren (STRICT gescheiden)
-    # -------------------------------------------------
+    # 2️⃣ Market AI Agent
     try:
         logger.info("🧠 Trigger Market AI Agent...")
         run_market_agent(user_id=user_id)
