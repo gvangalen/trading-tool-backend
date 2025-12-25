@@ -804,3 +804,10 @@ def generate_all(user_id: int):
         "success": False,
         "reason": "Bulk AI strategie-generatie is uitgeschakeld",
     }
+
+def debug_analyze_strategy(user_id: int, strategy_id: int):
+    """
+    Debug helper zonder Celery async gedrag.
+    Roept de task-functie direct aan.
+    """
+    return analyze_strategy(user_id=user_id, strategy_id=strategy_id)
