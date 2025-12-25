@@ -1,5 +1,6 @@
 import logging
 import requests
+import json
 from datetime import datetime
 from collections import defaultdict
 
@@ -404,16 +405,16 @@ def fetch_and_process_market_indicators(user_id: int):
         ]
 
         # =====================================================
-        # 6️⃣ Opslaan in daily_scores
+        # 6️⃣ Opslaan in daily_scores (JSONB FIX)
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE daily_scores
-                SET market_top_contributors = %s
+                SET market_top_contributors = %s::jsonb
                 WHERE user_id = %s
                   AND report_date = CURRENT_DATE
             """, (
-                top_contributors,
+                json.dumps(top_contributors),
                 user_id
             ))
 
