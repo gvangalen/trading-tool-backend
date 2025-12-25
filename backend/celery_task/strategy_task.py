@@ -293,7 +293,8 @@ def analyze_strategy(user_id: int, strategy_id: int):
 
     conn = get_db_connection()
     if not conn:
-        return
+        logger.error("❌ Geen databaseverbinding")
+        raise RuntimeError("Geen databaseverbinding")
 
     try:
         cols = _get_strategy_columns(conn)
@@ -321,8 +322,10 @@ def analyze_strategy(user_id: int, strategy_id: int):
             cur.execute(query, (strategy_id, user_id))
             row = cur.fetchone()
 
+        # ✅ NOOIT stil returnen
         if not row:
-            return
+            logger.error(f"❌ Strategy niet gevonden | strategy_id={strategy_id} user_id={user_id}")
+            raise ValueError("Strategy niet gevonden voor deze user")
 
         row_map = dict(zip(select_fields, row))
 
@@ -340,16 +343,27 @@ def analyze_strategy(user_id: int, strategy_id: int):
             }
         ]
 
-        # ✅ AI analyse
-        analysis = analyze_strategies(payload)
-        if not analysis:
-            return
+        # ✅ PAYLOAD LOGGEN (zodat je ziet wat naar AI gaat)
+        logger.info("🚀 AI analyse payload:")
+        logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
 
-        # ✅ BELANGRIJKE FIX:
-        # schrijf naar 'ai_explanation' (niet ai_analysis)
+        analysis = analyze_strategies(payload)
+
+        # ✅ NOOIT stil returnen
+        if not analysis:
+            logger.error("❌ AI analyse faalde: analyze_strategies() gaf None terug")
+            raise RuntimeError("AI analyse faalde (None)")
+
+        logger.info("🧠 AI analyse result:")
+        logger.info(json.dumps(analysis, indent=2, ensure_ascii=False))
+
         explanation_text = (
             f"{analysis.get('comment', '')}\n\n{analysis.get('recommendation', '')}"
         ).strip()
+
+        if not explanation_text:
+            logger.error("❌ AI analyse gaf lege uitleg terug")
+            raise RuntimeError("AI gaf lege explanation terug")
 
         with conn.cursor() as cur:
             cur.execute(
@@ -366,15 +380,22 @@ def analyze_strategy(user_id: int, strategy_id: int):
                 (json.dumps(explanation_text), strategy_id, user_id),
             )
 
+            if cur.rowcount == 0:
+                logger.error("❌ Update faalde: rowcount=0 (ownership mismatch?)")
+                raise RuntimeError("DB update faalde (rowcount=0)")
+
         conn.commit()
-        logger.info("✅ Strategy AI explanation opgeslagen (ai_explanation)")
+        logger.info("✅ Strategy AI explanation opgeslagen → data.ai_explanation")
+
+        return {"success": True, "strategy_id": strategy_id}
 
     except Exception:
-        logger.error("❌ analyze_strategy fout", exc_info=True)
+        logger.exception("❌ analyze_strategy crash")
         try:
             conn.rollback()
         except Exception:
             pass
+        raise
     finally:
         conn.close()
 
