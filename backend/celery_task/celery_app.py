@@ -113,10 +113,10 @@ celery_app.conf.beat_schedule = {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=20),
         "kwargs": {
-            "task_name": "backend.ai_agents.market_ai_agent.generate_market_insight"
+            "task_name": "backend.celery_task.market_task.run_market_agent_daily"
         },
     },
-
+    
     "dispatch_technical_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=30),
