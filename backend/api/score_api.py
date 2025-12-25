@@ -156,49 +156,76 @@ async def get_daily_scores(current_user: dict = Depends(get_current_user)):
         }
 
 
+
 # =========================================================
-# AI Master Score (tijdelijk **zonder user_id** i.v.m. missing column)
+# AI Master Score — uit ai_category_insights (user-specific)
 # =========================================================
 @router.get("/ai/master_score")
 def get_ai_master_score(current_user: dict = Depends(get_current_user)):
-    """
-    Tijdelijk geen user_id-filter totdat de tabel is gemigreerd.
-    Dit voorkomt: column "user_id" does not exist
-    """
+    user_id = current_user["id"]
+
     conn = get_db_connection()
     if not conn:
         return {"error": "Geen DB-verbinding"}
 
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT 
-                    master_score, 
-                    master_trend, 
-                    master_bias, 
-                    master_risk,
-                    alignment_score,
-                    outlook,
-                    weights,
-                    data_warnings,
-                    domains,
+                SELECT
+                    avg_score AS master_score,
+                    trend     AS master_trend,
+                    bias      AS master_bias,
+                    risk      AS master_risk,
                     summary,
+                    top_signals,
                     date
-                FROM ai_master_score_view
+                FROM ai_category_insights
+                WHERE user_id = %s
+                  AND category = 'master'
                 ORDER BY date DESC
                 LIMIT 1;
-            """)
+            """, (user_id,))
 
             row = cur.fetchone()
             if not row:
-                return {"message": "Nog geen AI-master-score beschikbaar"}
+                return {
+                    "master_score": 50,
+                    "master_trend": "–",
+                    "master_bias": "–",
+                    "master_risk": "–",
+                    "outlook": "Nog geen master-outlook",
+                    "alignment_score": 0,
+                    "weights": {},
+                    "data_warnings": [],
+                    "domains": {},
+                    "summary": "Nog geen master score beschikbaar",
+                    "date": None,
+                }
 
-            columns = [desc[0] for desc in cur.description]
-            return dict(zip(columns, row))
+            # top_signals bevat bij master jouw meta JSON (weights, outlook, domains, warnings)
+            meta = row.get("top_signals") or {}
+            if isinstance(meta, str):
+                try:
+                    meta = json.loads(meta)
+                except Exception:
+                    meta = {}
+
+            return {
+                "master_score": float(row.get("master_score") or 0),
+                "master_trend": row.get("master_trend") or "–",
+                "master_bias": row.get("master_bias") or "–",
+                "master_risk": row.get("master_risk") or "–",
+                "alignment_score": meta.get("alignment_score", 0),
+                "outlook": meta.get("outlook", "Geen outlook"),
+                "weights": meta.get("weights", {}),
+                "data_warnings": meta.get("data_warnings", []),
+                "domains": meta.get("domains", {}),
+                "summary": row.get("summary") or "",
+                "date": str(row.get("date")) if row.get("date") else None,
+            }
 
     except Exception as e:
-        logger.error(f"❌ Fout bij ophalen AI Master Score: {e}")
+        logger.error(f"❌ Fout bij ophalen AI Master Score: {e}", exc_info=True)
         return {"error": str(e)}
-
     finally:
         conn.close()
