@@ -65,10 +65,17 @@ def get_score_rule_from_db(
 
     try:
         with conn.cursor() as cur:
+            # 🔥 FIX: normaliseer DB-indicatornaam in SQL
             cur.execute(f"""
                 SELECT range_min, range_max, score, trend, interpretation, action
                 FROM {table}
-                WHERE LOWER(indicator) = LOWER(%s)
+                WHERE LOWER(
+                    REPLACE(
+                        REPLACE(
+                            REPLACE(indicator, ' ', '_'),
+                        '-', '_'),
+                    '&', 'and')
+                ) = LOWER(%s)
                 ORDER BY range_min ASC
             """, (indicator_name,))
             rules = cur.fetchall()
@@ -115,8 +122,8 @@ def generate_scores_db(
 
     REGELS:
     - MARKET:
-        • gebruikt ALTIJD meegegeven data (bv. volume % afwijking)
-        • haalt GEEN eigen market_data op als data is gezet
+        • gebruikt ALTIJD meegegeven data
+        • haalt GEEN eigen market_data op
     - MACRO / TECHNICAL:
         • data=None → data uit DB op basis van user_id
     """
@@ -136,9 +143,7 @@ def generate_scores_db(
     # =====================================================
     elif data is None:
         if user_id is None:
-            raise ValueError(
-                "❌ user_id verplicht voor macro/technical"
-            )
+            raise ValueError("❌ user_id verplicht voor macro/technical")
 
         conn = get_db_connection()
         if not conn:
@@ -264,7 +269,7 @@ def get_scores_for_symbol(
         if not row:
             return {}
 
-        result = {
+        return {
             "macro_score": row[0],
             "macro_interpretation": row[1],
             "macro_top_contributors": row[2] or [],
@@ -273,15 +278,12 @@ def get_scores_for_symbol(
             "technical_interpretation": row[4],
             "technical_top_contributors": row[5] or [],
 
-            # 🔥 DIT WAS HET PROBLEEM
             "market_score": row[6],
             "market_interpretation": row[7],
             "market_top_contributors": row[8] or [],
 
             "setup_score": row[9],
         }
-
-        return result
 
     finally:
         conn.close()
