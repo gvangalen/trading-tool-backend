@@ -21,14 +21,17 @@ def _jsonb(value):
 def build_daily_scores_for_user(user_id: int):
     """
     Bouwt rule-based daily_scores voor één user.
-    GEEN AI — puur deterministisch.
+    BRON = generate_scores_db (niet daily_scores).
     """
 
-    scores = get_scores_for_symbol(user_id=user_id, include_metadata=True)
+    macro = generate_scores_db("macro", user_id=user_id)
+    technical = generate_scores_db("technical", user_id=user_id)
+    market = generate_scores_db("market", data={})
 
-    if not scores:
-        logger.warning(f"⚠️ Geen scores voor user_id={user_id}")
-        return
+    macro_score = macro.get("total_score", 0)
+    technical_score = technical.get("total_score", 0)
+    market_score = market.get("total_score", 0)
+    setup_score = round((macro_score + technical_score) / 2)
 
     conn = get_db_connection()
     if not conn:
@@ -74,16 +77,16 @@ def build_daily_scores_for_user(user_id: int):
                 """,
                 (
                     user_id,
-                    scores.get("macro_score"),
-                    scores.get("technical_score"),
-                    scores.get("market_score"),
-                    scores.get("setup_score"),
-                    scores.get("macro_interpretation"),
-                    scores.get("technical_interpretation"),
-                    scores.get("market_interpretation"),
-                    _jsonb(scores.get("macro_top_contributors")),
-                    _jsonb(scores.get("technical_top_contributors")),
-                    _jsonb(scores.get("market_top_contributors")),
+                    macro_score,
+                    technical_score,
+                    market_score,
+                    setup_score,
+                    "Rule-based macro score",
+                    "Rule-based technical score",
+                    "Rule-based market score",
+                    json.dumps(list(macro.get("scores", {}).keys())),
+                    json.dumps(list(technical.get("scores", {}).keys())),
+                    json.dumps(list(market.get("scores", {}).keys())),
                 ),
             )
 
@@ -96,7 +99,6 @@ def build_daily_scores_for_user(user_id: int):
 
     finally:
         conn.close()
-
 
 # =========================================================
 # 2️⃣ CELERY TASK: RULE-BASED DAILY SCORES (ALLE USERS)
