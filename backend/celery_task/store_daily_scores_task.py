@@ -3,7 +3,10 @@ import json
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import get_scores_for_symbol
+from backend.utils.scoring_utils import (
+    get_scores_for_symbol,
+    generate_scores_db,
+)
 from backend.ai_agents.score_ai_agent import generate_master_score
 
 logger = logging.getLogger(__name__)
