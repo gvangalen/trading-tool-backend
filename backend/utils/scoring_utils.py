@@ -141,46 +141,38 @@ def generate_scores_db(
     # =====================================================
     # MACRO / TECHNICAL (USER-SPECIFIEK)
     # =====================================================
-    elif data is None:
-        if user_id is None:
-            raise ValueError("❌ user_id verplicht voor macro/technical")
+   elif data is None:
+    if user_id is None:
+        raise ValueError("❌ user_id verplicht")
 
-        conn = get_db_connection()
-        if not conn:
-            return {"scores": {}, "total_score": 10}
+    conn = get_db_connection()
+    if not conn:
+        return {"scores": {}, "total_score": 10}
 
-        try:
-            with conn.cursor() as cur:
+    try:
+        with conn.cursor() as cur:
 
-                if category == "macro":
-                    cur.execute("""
-                        SELECT DISTINCT ON (name) name, value
-                        FROM macro_data
-                        WHERE user_id=%s
-                        ORDER BY name, timestamp DESC
-                    """, (user_id,))
-                    rows = cur.fetchall()
-                    data = {
-                        normalize_indicator_name(r[0]): float(r[1])
-                        for r in rows
-                        if r[1] is not None
-                    }
+            if category == "macro":
+                ...
 
-                elif category == "technical":
-                    cur.execute("""
-                        SELECT DISTINCT ON (indicator) indicator, value
-                        FROM technical_indicators
-                        WHERE user_id=%s
-                        ORDER BY indicator, timestamp DESC
-                    """, (user_id,))
-                    rows = cur.fetchall()
-                    data = {
-                        normalize_indicator_name(r[0]): float(r[1])
-                        for r in rows
-                        if r[1] is not None
-                    }
-        finally:
-            conn.close()
+            elif category == "technical":
+                ...
+
+            elif category == "market":
+                cur.execute("""
+                    SELECT DISTINCT ON (indicator) indicator, value
+                    FROM market_data
+                    WHERE user_id=%s
+                    ORDER BY indicator, timestamp DESC
+                """, (user_id,))
+                rows = cur.fetchall()
+                data = {
+                    normalize_indicator_name(r[0]): float(r[1])
+                    for r in rows
+                    if r[1] is not None
+                }
+    finally:
+        conn.close()
 
     # =====================================================
     # GEEN DATA → MINIMUM SCORE
