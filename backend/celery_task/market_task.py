@@ -307,14 +307,14 @@ def fetch_and_process_market_indicators(user_id: int):
                 ORDER BY timestamp DESC
                 LIMIT 8
             """)
-            rows = [r[0] for r in cur.fetchall() if r[0] and r[0] > 0]
+            volumes = [r[0] for r in cur.fetchall() if r[0] and r[0] > 0]
 
-        if len(rows) < 2:
+        if len(volumes) < 2:
             logger.warning("⚠️ Onvoldoende volume data")
             return
 
-        volume_today = rows[0]
-        avg_volume = sum(rows[1:]) / len(rows[1:])
+        volume_today = volumes[0]
+        avg_volume = sum(volumes[1:]) / len(volumes[1:])
         volume_change_pct = round(
             ((volume_today - avg_volume) / avg_volume) * 100,
             2
@@ -344,7 +344,7 @@ def fetch_and_process_market_indicators(user_id: int):
         }
 
         # =====================================================
-        # 4️⃣ Indicator-waarden opslaan (GEEN SCORING!)
+        # 4️⃣ Indicator-waarden opslaan (RAW ONLY)
         # =====================================================
         inserted = 0
         with conn.cursor() as cur:
@@ -368,7 +368,7 @@ def fetch_and_process_market_indicators(user_id: int):
         logger.info(f"✅ Market indicator ingestie klaar | indicators={inserted}")
 
         # =====================================================
-        # 5️⃣ CENTRALE MARKET SCORING (UNIFORM!)
+        # 5️⃣ CENTRALE MARKET SCORING (BRON)
         # =====================================================
         market_scores = generate_scores_db(
             category="market",
@@ -377,16 +377,32 @@ def fetch_and_process_market_indicators(user_id: int):
 
         scores = market_scores.get("scores", {})
 
-        top_contributors = [
-            k for k, v in sorted(
-                scores.items(),
-                key=lambda x: x[1]["score"],
-                reverse=True
-            )[:3]
-        ]
+        # =====================================================
+        # 5️⃣b ENRICHMENT → score / trend / uitleg / actie
+        # =====================================================
+        with conn.cursor() as cur:
+            for name, obj in scores.items():
+                cur.execute("""
+                    UPDATE market_data_indicators
+                    SET
+                        score = %s,
+                        trend = %s,
+                        interpretation = %s,
+                        action = %s
+                    WHERE user_id = %s
+                      AND name = %s
+                      AND DATE(timestamp) = CURRENT_DATE
+                """, (
+                    obj["score"],
+                    obj["trend"],
+                    obj["interpretation"],
+                    obj["action"],
+                    user_id,
+                    name,
+                ))
 
         # =====================================================
-        # 6️⃣ Opslaan market_score + top contributors in daily_scores
+        # 6️⃣ Opslaan market_score + top contributors
         # =====================================================
         market_score = market_scores.get("total_score", 10)
         top_contributors = market_scores.get("top_contributors", [])
@@ -416,7 +432,6 @@ def fetch_and_process_market_indicators(user_id: int):
         logger.exception("❌ Fout in market indicator ingestie")
     finally:
         conn.close()
-
 
 # =====================================================
 # 🧠 MARKET AI AGENT — CELERY WRAPPER
