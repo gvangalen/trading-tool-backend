@@ -33,17 +33,41 @@ def nv(v):
 
 
 # =====================================================
-# STYLE
+# 🔒 DEFINITIEVE AI ROL — GEEN EDUCATIE, WEL BESLISCONTEXT
 # =====================================================
 REPORT_STYLE_GUIDE = """
-Je bent een professionele Bitcoin- en macro-analist.
-Schrijf in het Nederlands in de stijl van een premium nieuwsbrief
-(een mix van Glassnode, BitcoinStrategy en TIA).
+Je bent de persoonlijke trading-analist van een ervaren gebruiker.
+
+Belangrijk:
+- Je legt NOOIT basisbegrippen uit (zoals DCA, RSI, overbought/oversold).
+- Je schrijft voor iemand die dit systeem dagelijks gebruikt.
+- Je herhaalt geen bekende definities.
+- Je produceert alleen informatie die invloed heeft op beslissingen.
+
+Je rol is:
+- context duiden
+- implicaties benoemen
+- risico’s signaleren
+- aangeven of actie logisch is of juist niet
+
+Je schrijft:
+- compact
+- zonder marketingtaal
+- zonder educatieve uitleg
+- zonder herhaling van bekende concepten
+
+Als data ontbreekt:
+- benoem dat expliciet
+- verzin niets
+
+Doel:
+Dit rapport moet in 2–4 minuten gelezen kunnen worden en daarna gebruikt
+worden om wel of niet te handelen.
 """
 
 
 # =====================================================
-# 1️⃣ DAILY SCORES (SINGLE SOURCE OF TRUTH)
+# 1️⃣ DAILY SCORES — SINGLE SOURCE OF TRUTH
 # =====================================================
 def get_daily_scores(user_id: int) -> dict:
     conn = get_db_connection()
@@ -81,7 +105,7 @@ def get_daily_scores(user_id: int) -> dict:
 
 
 # =====================================================
-# 2️⃣ AI CATEGORY INSIGHTS (VALIDATED)
+# 2️⃣ AI CATEGORY INSIGHTS
 # =====================================================
 def get_ai_insights(user_id: int) -> dict:
     conn = get_db_connection()
@@ -108,13 +132,6 @@ def get_ai_insights(user_id: int) -> dict:
                 "summary": summary or "Geen data.",
             }
 
-        required = ["macro", "market", "technical", "setup"]
-        missing = [r for r in required if r not in insights]
-        if missing:
-            logger.warning(
-                f"⚠️ Ontbrekende AI insights {missing} (user_id={user_id})"
-            )
-
         return insights
 
     finally:
@@ -122,7 +139,7 @@ def get_ai_insights(user_id: int) -> dict:
 
 
 # =====================================================
-# 3️⃣ STRATEGY (LATEST PER SETUP)
+# 3️⃣ LATEST STRATEGY PER SETUP
 # =====================================================
 def get_latest_strategy(setup_id: int, user_id: int) -> dict | None:
     if not setup_id:
@@ -166,7 +183,7 @@ def get_latest_strategy(setup_id: int, user_id: int) -> dict | None:
             "targets": targets,
             "stop_loss": stop or "n.v.t.",
             "risk_reward": risk or "?",
-            "explanation": expl or "Geen uitleg beschikbaar.",
+            "explanation": expl or "Geen strategie-uitleg beschikbaar.",
         }
 
     finally:
@@ -174,7 +191,7 @@ def get_latest_strategy(setup_id: int, user_id: int) -> dict | None:
 
 
 # =====================================================
-# 4️⃣ MARKET DATA (GLOBAL SNAPSHOT)
+# 4️⃣ MARKET SNAPSHOT
 # =====================================================
 def get_latest_market_data() -> dict:
     conn = get_db_connection()
@@ -205,7 +222,7 @@ def get_latest_market_data() -> dict:
 
 
 # =====================================================
-# 5️⃣ DAILY MARKET INDICATOR SCORES
+# 5️⃣ MARKET INDICATOR SCORES
 # =====================================================
 def get_market_indicator_scores(user_id: int) -> list:
     conn = get_db_connection()
@@ -246,63 +263,100 @@ def generate_section(prompt: str) -> str:
 
 
 # =====================================================
-# 7️⃣ PROMPTS
+# 7️⃣ PROMPTS — BESLISGERICHT
 # =====================================================
-def prompt_btc_summary(setup, scores, market, indicators):
+def prompt_executive_summary(setup, scores, market, indicators):
     ind_lines = "\n".join(
-        f"- {i['indicator']}: {nv(i['value'])}, score {nv(i['score'])} → {i['interpretation']}"
+        f"- {i['indicator']}: score {nv(i['score'])} → {i['interpretation']}"
         for i in indicators[:3]
     ) or "–"
 
     return f"""
-Schrijf een krachtige opening (6–8 zinnen).
+Schrijf een executive summary (6–8 zinnen).
 
-Scores:
-- Macro: {nv(scores.get('macro_score'))}
-- Technisch: {nv(scores.get('technical_score'))}
-- Markt: {nv(scores.get('market_score'))}
-- Setup: {nv(scores.get('setup_score'))}
+Focus:
+- Wat valt vandaag op?
+- Wat ondersteunt actie?
+- Wat remt actie?
+
+Context:
+Macro score: {nv(scores.get('macro_score'))}
+Technisch score: {nv(scores.get('technical_score'))}
+Market score: {nv(scores.get('market_score'))}
+Setup score: {nv(scores.get('setup_score'))}
 
 Markt:
-- Prijs: ${nv(market.get('price'))}
-- Volume: {nv(market.get('volume'))}
-- 24h: {nv(market.get('change_24h'))}%
+Prijs: ${nv(market.get('price'))}
+24h verandering: {nv(market.get('change_24h'))}%
 
-Dagelijkse market-indicatoren:
+Belangrijkste indicator-signalen:
 {ind_lines}
 
 Actieve setup:
-- {nv(setup.get('name'))} ({nv(setup.get('timeframe'))})
+{nv(setup.get('name'))} ({nv(setup.get('timeframe'))})
 """
 
 
 def prompt_macro(ai):
     return f"""
-Maak een macro-update (5–8 zinnen).
+Vat de macro-context samen (5–7 zinnen).
+
+- Benoem richting
+- Benoem risico
+- Benoem of macro vandaag steunend of remmend werkt
 
 Trend: {ai.get('trend')}
 Bias: {ai.get('bias')}
 Risico: {ai.get('risk')}
-Samenvatting: {ai.get('summary')}
 """
 
 
-def prompt_setup_checklist(setup):
-    return f"Schrijf 6–8 bullets over de setup {setup.get('name')} ({setup.get('timeframe')})."
-
-
-def prompt_strategy(strategy):
+def prompt_setup_validation(setup, scores):
     return f"""
-Schrijf een strategie-uitleg (6–10 zinnen).
+Beoordeel of de actieve setup vandaag logisch is.
+
+Setup: {setup.get('name')} ({setup.get('timeframe')})
+
+Scores:
+Macro: {nv(scores.get('macro_score'))}
+Technisch: {nv(scores.get('technical_score'))}
+Market: {nv(scores.get('market_score'))}
+
+Geef:
+- validatie of afwijzing
+- belangrijkste reden
+- wat zou moeten veranderen voor betere odds
+"""
+
+
+def prompt_strategy_implication(strategy):
+    return f"""
+Beschrijf de implicaties van de huidige strategie.
 
 Entry: {strategy['entry']}
 Targets: {strategy['targets']}
 Stop-loss: {strategy['stop_loss']}
+
+Focus:
+- risico/return-verhouding
+- discipline
+- of actie vandaag logisch is of juist uitgesteld moet worden
 """
 
 
 def prompt_outlook():
-    return "Schrijf een 2–5 dagen outlook met bullish, bearish en sideways scenario."
+    return """
+Geef een korte vooruitblik (2–5 dagen).
+
+Scenario’s:
+- bullish
+- bearish
+- consolidatie
+
+Per scenario:
+- wat verandert
+- wat betekent dat voor actie of geduld
+"""
 
 
 # =====================================================
@@ -329,16 +383,16 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
         "targets": [],
         "stop_loss": "n.v.t.",
         "risk_reward": "?",
-        "explanation": "Geen strategy beschikbaar.",
+        "explanation": "Geen strategie beschikbaar.",
     }
 
     return {
-        "btc_summary": generate_section(
-            prompt_btc_summary(setup, scores, market, indicators)
+        "executive_summary": generate_section(
+            prompt_executive_summary(setup, scores, market, indicators)
         ),
         "macro_summary": generate_section(prompt_macro(ai.get("macro", {}))),
-        "setup_checklist": generate_section(prompt_setup_checklist(setup)),
-        "recommendations": generate_section(prompt_strategy(strategy)),
+        "setup_validation": generate_section(prompt_setup_validation(setup, scores)),
+        "strategy_implication": generate_section(prompt_strategy_implication(strategy)),
         "outlook": generate_section(prompt_outlook()),
         "scores": scores,
         "strategy": strategy,
