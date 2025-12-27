@@ -278,12 +278,9 @@ def fetch_and_process_market_indicators(user_id: int):
         logger.error("❌ Geen DB-verbinding (market indicators)")
         return
 
-    inserted = 0
-    market_scores = []  # <-- HIER verzamelen we scores
-
     try:
         # =====================================================
-        # 1️⃣ Actieve market-indicators
+        # 1️⃣ Actieve market-indicators ophalen
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -300,32 +297,28 @@ def fetch_and_process_market_indicators(user_id: int):
             return
 
         # =====================================================
-        # 2️⃣ Volume context
+        # 2️⃣ Volume context berekenen
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT DATE(timestamp), volume
+                SELECT volume
                 FROM market_data
                 WHERE volume IS NOT NULL
                 ORDER BY timestamp DESC
                 LIMIT 8
             """)
-            rows = cur.fetchall()
+            rows = [r[0] for r in cur.fetchall() if r[0] and r[0] > 0]
 
         if len(rows) < 2:
             logger.warning("⚠️ Onvoldoende volume data")
             return
 
-        volume_today = rows[0][1]
-        historical_volumes = [r[1] for r in rows[1:] if r[1] > 0]
-        avg_volume = sum(historical_volumes) / len(historical_volumes)
-
-        volume_change_pct = None
-        if avg_volume > 0 and volume_today:
-            volume_change_pct = round(
-                ((volume_today - avg_volume) / avg_volume) * 100,
-                2
-            )
+        volume_today = rows[0]
+        avg_volume = sum(rows[1:]) / len(rows[1:])
+        volume_change_pct = round(
+            ((volume_today - avg_volume) / avg_volume) * 100,
+            2
+        ) if avg_volume > 0 else None
 
         # =====================================================
         # 3️⃣ Laatste prijs + change_24h
@@ -337,12 +330,13 @@ def fetch_and_process_market_indicators(user_id: int):
                 ORDER BY timestamp DESC
                 LIMIT 1
             """)
-            price_row = cur.fetchone()
+            row = cur.fetchone()
 
-        if not price_row:
+        if not row:
+            logger.warning("⚠️ Geen market_data snapshot")
             return
 
-        price_now, change_24h = price_row
+        price_now, change_24h = row
 
         indicator_value_map = {
             "change_24h": float(change_24h),
@@ -350,62 +344,49 @@ def fetch_and_process_market_indicators(user_id: int):
         }
 
         # =====================================================
-        # 4️⃣ Scoring per indicator
+        # 4️⃣ Indicator-waarden opslaan (GEEN SCORING!)
         # =====================================================
-        for name in indicators:
-            value = indicator_value_map.get(name)
-            if value is None:
-                continue
+        inserted = 0
+        with conn.cursor() as cur:
+            for name in indicators:
+                value = indicator_value_map.get(name)
+                if value is None:
+                    continue
 
-            score_data = generate_scores_db(
-                category="market",
-                data={name: value},
-                user_id=user_id,
-            )
-
-            score_obj = (score_data or {}).get("scores", {}).get(name)
-            if not score_obj:
-                continue
-
-            score = score_obj["score"]
-
-            with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO market_data_indicators
-                        (user_id, name, value, trend, interpretation, action, score, timestamp)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                        (user_id, name, value, timestamp)
+                    VALUES (%s, %s, %s, NOW())
                 """, (
                     user_id,
                     name,
                     value,
-                    score_obj["trend"],
-                    score_obj["interpretation"],
-                    score_obj["action"],
-                    score,
                 ))
+                inserted += 1
 
-            # ⭐ Verzamel ALLE scores
-            market_scores.append({
-                "name": name,
-                "score": score
-            })
-
-            inserted += 1
+        conn.commit()
+        logger.info(f"✅ Market indicator ingestie klaar | indicators={inserted}")
 
         # =====================================================
-        # 5️⃣ TOP CONTRIBUTORS (zoals Macro & Technical)
+        # 5️⃣ CENTRALE MARKET SCORING (UNIFORM!)
         # =====================================================
+        market_scores = generate_scores_db(
+            category="market",
+            user_id=user_id
+        )
+
+        scores = market_scores.get("scores", {})
+
         top_contributors = [
-            s["name"]
-            for s in sorted(
-                market_scores,
-                key=lambda x: x["score"],
+            k for k, v in sorted(
+                scores.items(),
+                key=lambda x: x[1]["score"],
                 reverse=True
             )[:3]
         ]
 
         # =====================================================
-        # 6️⃣ Opslaan in daily_scores (JSONB FIX)
+        # 6️⃣ Opslaan top contributors in daily_scores
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -419,8 +400,6 @@ def fetch_and_process_market_indicators(user_id: int):
             ))
 
         conn.commit()
-
-        logger.info(f"✅ Market ingestie klaar | indicators={inserted}")
         logger.info(f"⭐ Market top contributors: {top_contributors}")
         logger.info("========================================")
 
@@ -429,7 +408,6 @@ def fetch_and_process_market_indicators(user_id: int):
         logger.exception("❌ Fout in market indicator ingestie")
     finally:
         conn.close()
-
 
 # =====================================================
 # 🧠 MARKET AI AGENT — CELERY WRAPPER
