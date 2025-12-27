@@ -315,10 +315,10 @@ def fetch_and_process_market_indicators(user_id: int):
 
         volume_today = volumes[0]
         avg_volume = sum(volumes[1:]) / len(volumes[1:])
-        volume_change_pct = round(
-            ((volume_today - avg_volume) / avg_volume) * 100,
-            2
-        ) if avg_volume > 0 else None
+        volume_change_pct = (
+            round(((volume_today - avg_volume) / avg_volume) * 100, 2)
+            if avg_volume > 0 else None
+        )
 
         # =====================================================
         # 3️⃣ Laatste prijs + change_24h
@@ -344,7 +344,7 @@ def fetch_and_process_market_indicators(user_id: int):
         }
 
         # =====================================================
-        # 4️⃣ Indicator-waarden opslaan (RAW ONLY)
+        # 4️⃣ RAW indicator-waarden opslaan
         # =====================================================
         inserted = 0
         with conn.cursor() as cur:
@@ -368,7 +368,7 @@ def fetch_and_process_market_indicators(user_id: int):
         logger.info(f"✅ Market indicator ingestie klaar | indicators={inserted}")
 
         # =====================================================
-        # 5️⃣ CENTRALE MARKET SCORING (BRON)
+        # 5️⃣ CENTRALE MARKET SCORING (ENIGE BRON)
         # =====================================================
         market_scores = generate_scores_db(
             category="market",
