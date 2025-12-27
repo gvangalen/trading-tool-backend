@@ -358,16 +358,11 @@ def generate_master_score_for_user(user_id: int):
         return
 
     try:
+        # 1️⃣ Lees AL bestaande data
         insights = fetch_today_insights(conn, user_id=user_id)
+        numeric = fetch_numeric_scores(conn, user_id=user_id)
 
-        # ⚠️ LET OP:
-        # Als jij daily_scores rule-based al via store_daily_scores_task vult,
-        # dan kun je deze regel UIT zetten.
-        #
-        # store_daily_scores(conn, insights, user_id=user_id)
-
-        numeric = fetch_numeric_scores(conn, user_id=user_id, insights=insights)
-
+        # 2️⃣ Denk & synthese
         prompt = build_prompt(insights, numeric)
 
         result = ask_gpt(
@@ -378,6 +373,7 @@ def generate_master_score_for_user(user_id: int):
         if not isinstance(result, dict):
             raise ValueError("❌ Master orchestrator gaf geen geldige JSON dict terug")
 
+        # 3️⃣ Opslaan
         store_master_result(conn, result, user_id=user_id)
 
         conn.commit()
@@ -385,8 +381,7 @@ def generate_master_score_for_user(user_id: int):
 
     except Exception:
         conn.rollback()
-        logger.error(f"❌ Crash in master-score voor user_id={user_id}:")
-        logger.error(traceback.format_exc())
+        logger.error("❌ Crash in master-score", exc_info=True)
 
     finally:
         conn.close()
