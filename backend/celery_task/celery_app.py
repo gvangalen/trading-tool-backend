@@ -23,6 +23,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
 logger.info(f"🔍 CELERY_BROKER_URL = {os.getenv('CELERY_BROKER_URL')}")
 
 # =========================================================
@@ -37,11 +38,14 @@ celery_app = Celery(
     backend=CELERY_BACKEND,
 )
 
-celery_app.conf.enable_utc = True
-celery_app.conf.timezone = "UTC"
+# =========================================================
+# 🕒 TIMEZONE — NEDERLAND (BELANGRIJK)
+# =========================================================
+celery_app.conf.enable_utc = False
+celery_app.conf.timezone = "Europe/Amsterdam"
 
 # =========================================================
-# 🕒 CELERY BEAT — STABIELE DAGELIJKSE PIPELINE
+# 🕒 CELERY BEAT — DAGELIJKSE PIPELINE (NL-TIJD)
 # =========================================================
 celery_app.conf.beat_schedule = {
 
@@ -64,7 +68,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 2️⃣ INDICATOR INGEST (PER USER → dispatcher)
+    # 2️⃣ INDICATOR INGEST (PER USER)
     # =====================================================
     "dispatch_macro_indicators": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -91,7 +95,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 3️⃣ RULE-BASED DAILY SCORES (ORCHESTRATOR)
+    # 3️⃣ RULE-BASED DAILY SCORES
     # =====================================================
     "run_rule_based_daily_scores": {
         "task": "backend.celery_task.store_daily_scores_task.run_rule_based_daily_scores",
@@ -99,7 +103,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 4️⃣ AI CATEGORY AGENTS (PER USER → dispatcher)
+    # 4️⃣ AI CATEGORY AGENTS
     # =====================================================
     "dispatch_macro_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -116,7 +120,7 @@ celery_app.conf.beat_schedule = {
             "task_name": "backend.celery_task.market_task.run_market_agent_daily"
         },
     },
-    
+
     "dispatch_technical_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
         "schedule": crontab(hour=3, minute=30),
@@ -126,7 +130,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 5️⃣ SETUP & STRATEGY (PER USER → dispatcher)
+    # 5️⃣ SETUP & STRATEGY
     # =====================================================
     "dispatch_setup_agent": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -145,7 +149,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 6️⃣ MASTER SCORE AI (ORCHESTRATOR)
+    # 6️⃣ MASTER SCORE AI
     # =====================================================
     "run_master_score_ai": {
         "task": "backend.celery_task.store_daily_scores_task.run_master_score_ai",
@@ -153,7 +157,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 7️⃣ DAILY REPORT (PER USER → dispatcher)
+    # 7️⃣ DAILY REPORT
     # =====================================================
     "dispatch_daily_report": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -164,7 +168,7 @@ celery_app.conf.beat_schedule = {
     },
 }
 
-logger.info("🚀 Celery Beat schedule geladen (STABIEL & PRODUCTIE-WAARDIG)")
+logger.info("🚀 Celery Beat schedule geladen (EUROPE/AMSTERDAM)")
 
 # =========================================================
 # 📌 FORCE IMPORTS — TASK REGISTRATIE
