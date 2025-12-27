@@ -65,10 +65,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
     - daily_setup_scores vullen (technisch, per setup)
     - 1 duidelijke setup-aanbeveling genereren
     - ai_category_insights (category='setup') vullen voor dashboard card
-
-    BELANGRIJK:
-    - Scores zijn RELATIEF (setup vs setup)
-    - Score kan NOOIT 0 zijn (floor = 25)
+    - 🔥 setup_score wegschrijven naar daily_scores (dashboard meter)
     """
 
     if not user_id:
@@ -220,6 +217,20 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             )
 
         # ==================================================
+        # 🔥 5b️⃣ SETUP SCORE → DAILY_SCORES (DASHBOARD)
+        # ==================================================
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE daily_scores
+                SET setup_score = %s
+                WHERE user_id = %s
+                  AND report_date = CURRENT_DATE
+                """,
+                (best["score"], user_id),
+            )
+
+        # ==================================================
         # 6️⃣ Menselijk ADVIES
         # ==================================================
         trend = "Actief" if best["score"] >= 60 else "Neutraal"
@@ -271,7 +282,6 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
 
     finally:
         conn.close()
-
 
 # ======================================================
 # 🧠 UITLEG PER SETUP (API)
