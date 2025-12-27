@@ -135,12 +135,12 @@ def generate_daily_report(user_id: int):
             today,
             user_id,
 
-            report.get("btc_summary", ""),
+            report.get("executive_summary", ""),
             report.get("macro_summary", ""),
-            report.get("setup_checklist", ""),
-            report.get("recommendations", ""),
+            report.get("setup_validation", ""),
+            report.get("strategy_implication", ""),
             report.get("outlook", ""),
-
+            
             macro_score,
             technical_score,
             setup_score,
