@@ -386,38 +386,39 @@ def fetch_and_process_market_indicators(user_id: int):
         ]
 
         # =====================================================
-        # 6️⃣ Opslaan top contributors in daily_scores
+        # 6️⃣ Opslaan market_score + top contributors in daily_scores
         # =====================================================
+        market_score = market_scores.get("total_score", 10)
+        top_contributors = market_scores.get("top_contributors", [])
+        
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE daily_scores
-                SET market_top_contributors = %s::jsonb
+                SET
+                    market_score = %s,
+                    market_top_contributors = %s::jsonb
                 WHERE user_id = %s
                   AND report_date = CURRENT_DATE
             """, (
+                market_score,
                 json.dumps(top_contributors),
                 user_id
             ))
-
+        
         conn.commit()
+        
+        logger.info(f"📊 Market score opgeslagen: {market_score}")
         logger.info(f"⭐ Market top contributors: {top_contributors}")
-        logger.info("========================================")
-
-    except Exception:
-        conn.rollback()
-        logger.exception("❌ Fout in market indicator ingestie")
-    finally:
-        conn.close()
-
-# =====================================================
-# 🧠 MARKET AI AGENT — CELERY WRAPPER
-# =====================================================
-from celery import shared_task
-import logging
-
-from backend.ai_agents.market_ai_agent import run_market_agent
-
-logger = logging.getLogger(__name__)
+        
+        # =====================================================
+        # 🧠 MARKET AI AGENT — CELERY WRAPPER
+        # =====================================================
+        from celery import shared_task
+        import logging
+        
+        from backend.ai_agents.market_ai_agent import run_market_agent
+        
+        logger = logging.getLogger(__name__)
 
 
 @shared_task(name="backend.celery_task.market_task.run_market_agent_daily")
