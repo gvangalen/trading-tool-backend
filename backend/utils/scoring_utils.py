@@ -13,7 +13,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =========================================================
-# 🧩 Naam-aliases (ALLEEN macro/technical – GEEN market!)
+# 🧩 Naam-aliases (ALLE CATEGORIEËN)
 # =========================================================
 NAME_ALIASES = {
     "fear_and_greed_index": "fear_greed_index",
@@ -65,7 +65,6 @@ def get_score_rule_from_db(
 
     try:
         with conn.cursor() as cur:
-            # 🔥 FIX: normaliseer DB-indicatornaam in SQL
             cur.execute(f"""
                 SELECT range_min, range_max, score, trend, interpretation, action
                 FROM {table}
@@ -110,40 +109,34 @@ def get_score_rule_from_db(
         conn.close()
 
 # =========================================================
-# 🔢 SCORE ENGINE (DEFINITIEF)
+# 🔢 SCORE ENGINE (UNIFORM VOOR ALLES)
 # =========================================================
 def generate_scores_db(
     category: str,
-    data: Optional[Dict[str, float]] = None,
-    user_id: Optional[int] = None
+    user_id: int
 ) -> Dict[str, Any]:
     """
-    Centrale score-engine.
+    Uniforme score-engine voor:
+    - macro
+    - technical
+    - market
 
-    REGELS:
-    - MARKET:
-        • gebruikt ALTIJD meegegeven data
-        • haalt GEEN eigen market_data op
-    - MACRO / TECHNICAL:
-        • data=None → data uit DB op basis van user_id
+    Alle categorieën:
+    - halen ZELF data uit DB
+    - zijn user-specifiek
+    - gebruiken hun eigen *_indicator_rules tabel
     """
 
-    # =====================================================
-    # MARKET (GLOBAAL — GEEN user_id)
-    # =====================================================
-    if category == "market":
-        if data is None:
-            logger.warning(
-                "⚠️ generate_scores_db(market) zonder data aangeroepen — skip"
-            )
-            return {"scores": {}, "total_score": 10}
+    table_map = {
+        "macro": ("macro_data", "name"),
+        "technical": ("technical_indicators", "indicator"),
+        "market": ("market_data", "indicator"),
+    }
 
-    # =====================================================
-    # MACRO / TECHNICAL (USER-SPECIFIEK)
-    # =====================================================
-   elif data is None:
-    if user_id is None:
-        raise ValueError("❌ user_id verplicht")
+    if category not in table_map:
+        raise ValueError(f"❌ Onbekende category: {category}")
+
+    data_table, name_col = table_map[category]
 
     conn = get_db_connection()
     if not conn:
@@ -151,38 +144,27 @@ def generate_scores_db(
 
     try:
         with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT DISTINCT ON ({name_col}) {name_col}, value
+                FROM {data_table}
+                WHERE user_id = %s
+                ORDER BY {name_col}, timestamp DESC
+            """, (user_id,))
+            rows = cur.fetchall()
 
-            if category == "macro":
-                ...
+        data = {
+            normalize_indicator_name(r[0]): float(r[1])
+            for r in rows
+            if r[1] is not None
+        }
 
-            elif category == "technical":
-                ...
-
-            elif category == "market":
-                cur.execute("""
-                    SELECT DISTINCT ON (indicator) indicator, value
-                    FROM market_data
-                    WHERE user_id=%s
-                    ORDER BY indicator, timestamp DESC
-                """, (user_id,))
-                rows = cur.fetchall()
-                data = {
-                    normalize_indicator_name(r[0]): float(r[1])
-                    for r in rows
-                    if r[1] is not None
-                }
     finally:
         conn.close()
 
-    # =====================================================
-    # GEEN DATA → MINIMUM SCORE
-    # =====================================================
     if not data:
+        logger.warning(f"⚠️ Geen data voor {category} (user_id={user_id})")
         return {"scores": {}, "total_score": 10}
 
-    # =====================================================
-    # SCORE BEREKENING
-    # =====================================================
     scores: Dict[str, Any] = {}
     total_score = 0
     count = 0
@@ -195,10 +177,6 @@ def generate_scores_db(
         )
 
         if not rule:
-            logger.warning(
-                f"⚠️ Geen scoreregel match voor {indicator} "
-                f"(value={value}, category={category})"
-            )
             continue
 
         score = int(rule["score"])
@@ -222,7 +200,7 @@ def generate_scores_db(
     }
 
 # =========================================================
-# 🔗 DASHBOARD COMBINED SCORES
+# 🔗 DASHBOARD: DAILY COMBINED SCORES
 # =========================================================
 def get_scores_for_symbol(
     user_id: int,
