@@ -82,7 +82,7 @@ def build_daily_scores_for_user(user_id: int):
 
         # fallback: geen setup agent gedraaid → score = 0 (of NULL)
         if setup_score is None:
-            setup_score = 0
+            setup_score = None
 
         with conn.cursor() as cur:
             cur.execute(
