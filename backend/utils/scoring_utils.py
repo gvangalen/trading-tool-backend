@@ -118,7 +118,7 @@ def generate_scores_db(
     table_map = {
         "macro": ("macro_data", "name"),
         "technical": ("technical_indicators", "indicator"),
-        "market": ("market_data", "indicator"),
+        "market": ("market_data_indicators", "name"),
     }
 
     if category not in table_map:
