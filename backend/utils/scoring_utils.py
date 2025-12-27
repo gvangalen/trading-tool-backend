@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from backend.utils.db import get_db_connection
 
@@ -79,30 +79,19 @@ def get_score_rule_from_db(
             """, (indicator_name,))
             rules = cur.fetchall()
 
-        if not rules:
-            logger.warning(
-                f"⚠️ Geen scoreregels voor {indicator_name} ({category})"
-            )
-            return None
-
         for r in rules:
             if r[0] <= value <= r[1]:
                 return {
-                    "score": r[2],
+                    "score": int(r[2]),
                     "trend": r[3],
                     "interpretation": r[4],
                     "action": r[5],
                 }
 
-        logger.warning(
-            f"⚠️ Waarde {value} valt buiten ranges voor {indicator_name}"
-        )
         return None
 
     except Exception:
-        logger.exception(
-            f"❌ Fout bij ophalen scoreregels ({indicator_name})"
-        )
+        logger.exception(f"❌ Fout bij scoreregels ({indicator_name})")
         return None
 
     finally:
@@ -121,10 +110,9 @@ def generate_scores_db(
     - technical
     - market
 
-    Alle categorieën:
-    - halen ZELF data uit DB
-    - zijn user-specifiek
-    - gebruiken hun eigen *_indicator_rules tabel
+    ✔ Zelf data ophalen
+    ✔ Zelf regels toepassen
+    ✔ Zelf top contributors bepalen
     """
 
     table_map = {
@@ -140,7 +128,7 @@ def generate_scores_db(
 
     conn = get_db_connection()
     if not conn:
-        return {"scores": {}, "total_score": 10}
+        return {"scores": {}, "total_score": 10, "top_contributors": []}
 
     try:
         with conn.cursor() as cur:
@@ -163,40 +151,42 @@ def generate_scores_db(
 
     if not data:
         logger.warning(f"⚠️ Geen data voor {category} (user_id={user_id})")
-        return {"scores": {}, "total_score": 10}
+        return {"scores": {}, "total_score": 10, "top_contributors": []}
 
     scores: Dict[str, Any] = {}
     total_score = 0
-    count = 0
 
     for indicator, value in data.items():
-        rule = get_score_rule_from_db(
-            category=category,
-            indicator_name=indicator,
-            value=value
-        )
-
+        rule = get_score_rule_from_db(category, indicator, value)
         if not rule:
             continue
 
-        score = int(rule["score"])
-
         scores[indicator] = {
             "value": value,
-            "score": score,
+            "score": rule["score"],
             "trend": rule["trend"],
             "interpretation": rule["interpretation"],
             "action": rule["action"],
         }
 
-        total_score += score
-        count += 1
+        total_score += rule["score"]
 
+    count = len(scores)
     avg_score = round(total_score / count) if count else 10
+
+    # 🔥 DIT WAS DE MISSENDE STAP (ook voor market)
+    top_contributors: List[str] = [
+        k for k, _ in sorted(
+            scores.items(),
+            key=lambda x: x[1]["score"],
+            reverse=True
+        )
+    ][:3]
 
     return {
         "scores": scores,
-        "total_score": avg_score
+        "total_score": avg_score,
+        "top_contributors": top_contributors,
     }
 
 # =========================================================
@@ -233,7 +223,6 @@ def get_scores_for_symbol(
                   AND report_date = CURRENT_DATE
                 LIMIT 1
             """, (user_id,))
-
             row = cur.fetchone()
 
         if not row:
