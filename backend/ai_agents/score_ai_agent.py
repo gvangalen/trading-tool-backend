@@ -3,7 +3,7 @@ import logging
 import traceback
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 from celery import shared_task
 
@@ -60,7 +60,6 @@ def stringify_top_signals(top_signals: Any) -> List[str]:
         if isinstance(item, str):
             out.append(item)
         elif isinstance(item, dict):
-            # Pak iets bruikbaars, anders fallback naar dict->string
             name = (
                 item.get("indicator")
                 or item.get("name")
@@ -119,16 +118,33 @@ def fetch_today_insights(conn, user_id: int) -> Dict[str, dict]:
 
 
 # ============================================================
-# 📊 2. Numerieke context uit daily_scores + ai_reflections
+# ✅ Helper: Setup-score ophalen (UIT SETUP AGENT)
 # ============================================================
-def fetch_numeric_scores(conn, user_id: int) -> Dict[str, Any]:
+def fetch_setup_score_from_insights(insights: Dict[str, dict]) -> Optional[float]:
+    """
+    Setup-score bron = Setup Agent → ai_category_insights(category='setup')
+    """
+    try:
+        v = insights.get("setup", {}).get("avg_score")
+        if v is None:
+            return None
+        return float(v)
+    except Exception:
+        return None
+
+
+# ============================================================
+# 📊 2. Numerieke context uit daily_scores + ai_reflections
+#    ✅ setup-score NIET uit daily_scores, maar uit setup-insights
+# ============================================================
+def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[str, Any]:
     numeric: Dict[str, Any] = {"daily_scores": {}, "ai_reflections": {}}
 
     with conn.cursor() as cur:
-        # daily_scores
+        # daily_scores (macro/market/technical ONLY)
         cur.execute(
             """
-            SELECT macro_score, market_score, technical_score, setup_score
+            SELECT macro_score, market_score, technical_score
             FROM daily_scores
             WHERE report_date = CURRENT_DATE AND user_id = %s
             LIMIT 1;
@@ -141,10 +157,12 @@ def fetch_numeric_scores(conn, user_id: int) -> Dict[str, Any]:
                 "macro": row[0],
                 "market": row[1],
                 "technical": row[2],
-                "setup": row[3],
             }
 
-        # ai_reflections aggregatie
+        # setup-score komt UIT setup agent (ai_category_insights)
+        numeric["daily_scores"]["setup"] = fetch_setup_score_from_insights(insights)
+
+        # ai_reflections aggregatie (optioneel / bestaat al bij jou)
         cur.execute(
             """
             SELECT category,
@@ -266,23 +284,30 @@ def store_master_result(conn, result: dict, user_id: int):
 
 
 # ============================================================
-# 🕗 daily_scores vullen — per user
+# 🕗 daily_scores vullen — per user (OPTIONEEL)
+# ✅ setup_score komt UIT setup agent, niet berekend
 # ============================================================
 def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
     macro = insights.get("macro", {}).get("avg_score")
     market = insights.get("market", {}).get("avg_score")
     technical = insights.get("technical", {}).get("avg_score")
+    setup_score = fetch_setup_score_from_insights(insights)  # ✅ FIX
 
     macro_sum = insights.get("macro", {}).get("summary", "")
     market_sum = insights.get("market", {}).get("summary", "")
     tech_sum = insights.get("technical", {}).get("summary", "")
 
     if macro is None or market is None or technical is None:
-        logger.error(f"❌ daily_scores NIET opgeslagen — ontbrekende macro/market/technical (user_id={user_id}).")
+        logger.error(
+            f"❌ daily_scores NIET opgeslagen — ontbrekende macro/market/technical (user_id={user_id})."
+        )
         return
 
-    # setup_score (handig voor dashboards/filters): macro+technical gemiddelde
-    setup_score = round((float(macro) + float(technical)) / 2)
+    # als setup agent nog niet gedraaid heeft: laat NULL of fallback
+    # (maar NIET zelf berekenen)
+    if setup_score is None:
+        logger.warning("⚠️ Setup-score ontbreekt (setup agent nog niet gedraaid?) → setup_score blijft NULL/0")
+        setup_score = 0  # of None als je kolom nullable is
 
     with conn.cursor() as cur:
         cur.execute(
@@ -318,7 +343,7 @@ def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
             ),
         )
 
-    logger.info(f"💾 daily_scores opgeslagen voor user_id={user_id}.")
+    logger.info(f"💾 daily_scores opgeslagen voor user_id={user_id} (setup_score uit setup agent).")
 
 
 # ============================================================
@@ -335,10 +360,13 @@ def generate_master_score_for_user(user_id: int):
     try:
         insights = fetch_today_insights(conn, user_id=user_id)
 
-        # daily_scores baseren op AI-insights (macro/market/technical)
-        store_daily_scores(conn, insights, user_id=user_id)
+        # ⚠️ LET OP:
+        # Als jij daily_scores rule-based al via store_daily_scores_task vult,
+        # dan kun je deze regel UIT zetten.
+        #
+        # store_daily_scores(conn, insights, user_id=user_id)
 
-        numeric = fetch_numeric_scores(conn, user_id=user_id)
+        numeric = fetch_numeric_scores(conn, user_id=user_id, insights=insights)
 
         prompt = build_prompt(insights, numeric)
 
