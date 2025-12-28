@@ -12,12 +12,13 @@ from backend.ai_core.ai_constraints import AI_CONSTRAINTS
 from backend.ai_core.ai_style import AI_STYLE
 
 
-def build_system_prompt(task: str) -> str:
+def build_system_prompt(task: str, agent: str = "general") -> str:
     """
     Bouwt een complete system prompt voor OpenAI.
 
     Parameters:
-    - task (str): de specifieke taak van de agent (bijv. report, strategie, validatie)
+    - task (str): de specifieke taak van de agent
+    - agent (str): type agent (report, strategy, bot, etc.)
 
     Returns:
     - str: volledige system prompt
@@ -32,6 +33,11 @@ def build_system_prompt(task: str) -> str:
 {AI_CONSTRAINTS.strip()}
 
 {AI_STYLE.strip()}
+
+------------------------------
+AGENT TYPE
+------------------------------
+{agent.upper()}
 
 ------------------------------
 SPECIFIEKE TAAK
