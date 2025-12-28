@@ -15,28 +15,54 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 REPORT_TASK = """
-Doel:
-Genereer het DAGELIJKS TRADING RAPPORT voor de gebruiker.
+Rol:
+Samenstellen van het DAGELIJKS TRADING RAPPORT.
 
-Gebruik uitsluitend:
-- bestaande scores uit daily_scores
-- bestaande AI-insights uit ai_category_insights
-- bestaande setup- en strategy-data
+INPUT:
+- daily_scores
+- ai_category_insights
+- setup (indien aanwezig)
+- strategy (indien aanwezig)
+- market snapshot
+- indicator highlights
 
-Je voert GEEN eigen analyse uit.
+REGELS:
+- Gebruik uitsluitend aangeleverde data
+- Geen eigen analyse
+- Geen aannames
 
-Verplicht op te nemen secties:
-- Executive Summary
-- Macro Context
-- Market Context
-- Technical Context
-- Setup Validatie
-- Strategie Implicatie
-- Vooruitblik
+OUTPUT STRUCTUUR + LIMIETEN:
 
-Als input voor een sectie ontbreekt:
-- schrijf letterlijk: ONVOLDOENDE DATA
-- sla geen sectie over
+1. Executive Summary
+   - Maximaal 4 zinnen
+   - Eindigt met: BESLISSING + CONFIDENCE
+
+2. Macro Context
+   - 2–3 zinnen
+   - Eindigt met: MACRO-IMPACT
+
+3. Market Context
+   - Maximaal 3 zinnen
+
+4. Technical Context
+   - Maximaal 3 zinnen
+
+5. Setup Validatie
+   - Maximaal 4 zinnen
+   - Eindigt met: SETUP-STATUS + RELEVANTIE
+
+6. Strategie Implicatie
+   - Maximaal 3 zinnen
+   - Eindigt met: STRATEGIE-STATUS
+
+7. Vooruitblik
+   - Exact 3 zinnen:
+     - bullish
+     - bearish
+     - consolidatie
+
+Als data ontbreekt:
+- Schrijf letterlijk: ONVOLDOENDE DATA
 """
 
 # =====================================================
