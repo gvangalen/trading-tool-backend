@@ -1,10 +1,11 @@
 import logging
-import traceback
 import json
+import traceback
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
 from backend.utils.scoring_utils import generate_scores_db, normalize_indicator_name
+from backend.ai_core.system_prompt_builder import build_system_prompt
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -16,12 +17,13 @@ logger.setLevel(logging.INFO)
 def run_macro_agent(user_id: int):
     """
     Genereert macro AI insights voor één gebruiker.
+
     Schrijft:
     - ai_category_insights (macro)
     - ai_reflections (macro)
 
-    ❗️Geen Celery hier
-    ❗️Geen data ingestie
+    ❗️Geen Celery
+    ❗️Geen data-ingestie
     """
 
     if user_id is None:
@@ -77,7 +79,6 @@ def run_macro_agent(user_id: int):
 
         macro_items = [
             {
-                # ✅ UPDATE 1 — normalisatie
                 "indicator": normalize_indicator_name(name),
                 "value": float(value) if value is not None else None,
                 "trend": trend,
@@ -94,7 +95,6 @@ def run_macro_agent(user_id: int):
         # =========================================================
         macro_scores = generate_scores_db("macro", user_id=user_id)
 
-        # ✅ UPDATE 2 — fallback = 10 (geen 0)
         macro_avg = macro_scores.get("total_score", 10)
 
         top_contributors = sorted(
@@ -115,7 +115,7 @@ def run_macro_agent(user_id: int):
         ]
 
         # =========================================================
-        # 4️⃣ AI SAMENVATTING
+        # 4️⃣ AI MACRO SAMENVATTING
         # =========================================================
         payload = {
             "macro_items": macro_items,
@@ -124,27 +124,27 @@ def run_macro_agent(user_id: int):
             "top_contributors": top_pretty,
         }
 
-        prompt = f"""
-Je bent een macro-economische analist gespecialiseerd in Bitcoin.
+        macro_task = """
+Analyseer macro-economische data in beslistermen voor Bitcoin.
 
-Analyseer de onderstaande macrodata.
+Geef:
+- trend
+- bias
+- risico
+- korte samenvatting
+- belangrijkste macro-signalen
 
-DATA:
-{json.dumps(payload, ensure_ascii=False, indent=2)}
-
-ANTWOORD ALLEEN GELDIGE JSON:
-{{
-  "trend": "",
-  "bias": "",
-  "risk": "",
-  "summary": "",
-  "top_signals": []
-}}
+Antwoord uitsluitend in geldige JSON.
 """
 
+        system_prompt = build_system_prompt(
+            agent="macro",
+            task=macro_task
+        )
+
         ai_context = ask_gpt(
-            prompt,
-            system_role="Je bent een professionele macro-analist. Antwoord uitsluitend in geldige JSON."
+            prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+            system_role=system_prompt
         )
 
         if not isinstance(ai_context, dict):
@@ -153,26 +153,26 @@ ANTWOORD ALLEEN GELDIGE JSON:
         # =========================================================
         # 5️⃣ AI REFLECTIES PER INDICATOR
         # =========================================================
-        reflections_prompt = f"""
-Maak reflecties per macro-indicator.
+        reflections_task = """
+Maak per macro-indicator een reflectie.
 
-DATA:
-{json.dumps(macro_items, ensure_ascii=False, indent=2)}
+Per item:
+- ai_score (0–100)
+- compliance (0–100)
+- korte comment
+- concrete aanbeveling
 
-ANTWOORD ALS JSON-LIJST:
-[
-  {{
-    "indicator": "",
-    "ai_score": 0,
-    "compliance": 0,
-    "comment": "",
-    "recommendation": ""
-  }}
-]
+Antwoord uitsluitend als JSON-lijst.
 """
+
+        reflections_prompt = build_system_prompt(
+            agent="macro",
+            task=reflections_task
+        )
+
         ai_reflections = ask_gpt(
-            reflections_prompt,
-            system_role="Je bent een macro-analist. Antwoord uitsluitend in geldige JSON."
+            prompt=json.dumps(macro_items, ensure_ascii=False, indent=2),
+            system_role=reflections_prompt
         )
 
         if not isinstance(ai_reflections, list):
@@ -212,7 +212,6 @@ ANTWOORD ALS JSON-LIJST:
             if not r.get("indicator"):
                 continue
 
-            # ✅ UPDATE 1 + 3 — normalisatie + defensieve defaults
             indicator = normalize_indicator_name(r.get("indicator"))
 
             with conn.cursor() as cur:
