@@ -3,44 +3,56 @@ import json
 from datetime import date
 from typing import Dict, List, Optional, Any
 
-from backend.utils.openai_client import ask_gpt
 from backend.utils.db import get_db_connection
+from backend.utils.openai_client import ask_gpt
+from backend.ai_core.system_prompt_builder import build_system_prompt
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+
 # ===================================================================
-# 🎯 AI analyseert BESTAANDE strategieën (GEEN generatie)
+# 🎯 AI — ANALYSE VAN BESTAANDE STRATEGIEËN (GEEN GENERATIE)
 # ===================================================================
 
 def analyze_strategies(strategies: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """
     Analyseert bestaande strategieën.
-    Maakt GEEN nieuwe strategie.
+    ❌ Maakt GEEN nieuwe strategie
     """
 
+    TASK = """
+Analyseer bestaande tradingstrategieën.
+
+Regels:
+- Maak GEEN nieuwe strategie
+- Beoordeel kwaliteit, duidelijkheid en discipline
+- Benoem risico’s en verbeterpunten
+- Geen voorspellingen
+- Geen nieuwe levels of entries
+
+Doel:
+- Korte evaluatie
+- Praktische aanbeveling
+"""
+
+    system_prompt = build_system_prompt(
+        agent="strategy",
+        task=TASK
+    )
+
     prompt = f"""
-Je bent een professionele trading-analist.
+BESTAANDE STRATEGIEËN:
+{json.dumps(strategies, ensure_ascii=False, indent=2)}
 
-Analyseer deze bestaande tradingstrategie.
-MAAK GEEN NIEUWE STRATEGIEËN.
-
-Strategieën:
-{json.dumps(strategies, indent=2)}
-
-Geef ALLEEN geldige JSON terug.
-
-JSON format:
+ANTWOORD ALLEEN GELDIGE JSON:
 {{
-  "comment": "Korte samenvatting van de kwaliteit",
-  "recommendation": "Concreet en praktisch advies"
+  "comment": "",
+  "recommendation": ""
 }}
 """
 
-    response = ask_gpt(
-        prompt,
-        system_role="Je bent een crypto-strategie analist. Alleen geldige JSON."
-    )
+    response = ask_gpt(prompt, system_role=system_prompt)
 
     if not isinstance(response, dict):
         logger.error("❌ Ongeldige JSON van AI bij strategy-analyse")
@@ -54,7 +66,7 @@ JSON format:
 
 
 # ===================================================================
-# 🟡 STRATEGY ADJUSTMENT — DAGELIJKSE BIJSTELLING
+# 🟡 DAGELIJKSE STRATEGY-AANPASSING (DETAILS, GEEN NIEUWE STRATEGIE)
 # ===================================================================
 
 def adjust_strategy_for_today(
@@ -63,12 +75,8 @@ def adjust_strategy_for_today(
     market_context: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     """
-    Past een bestaande strategy subtiel aan voor vandaag.
-    Setup blijft gelijk.
-
-    BELANGRIJK:
-    - DCA heeft GEEN entry-trigger
-    - Entry bij DCA = referentieprijs (context)
+    Past een bestaande strategie subtiel aan voor vandaag.
+    Setup blijft ongewijzigd.
     """
 
     logger.info(
@@ -77,41 +85,41 @@ def adjust_strategy_for_today(
 
     strategy_type = (setup.get("strategy_type") or "").lower()
 
-    prompt = f"""
-Je bent een professionele crypto trader.
+    TASK = """
+Pas een BESTAANDE strategie licht aan op basis van actuele marktcontext.
 
-Je krijgt:
-1. Een BESTAANDE tradingstrategie
-2. De huidige setup (blijft gelijk)
-3. De actuele marktcontext
-
-BELANGRIJKE REGELS:
+Regels:
 - Maak GEEN nieuwe strategie
-- Houd setup gelijk
-- Pas alleen details subtiel aan
+- Houd setup ongewijzigd
+- Wijzig alleen details (entry / targets / stop)
+- Geen nieuwe concepten introduceren
 
-SPECIFIEK VOOR DCA:
-- DCA heeft GEEN vaste entry-trigger
-- Gebruik "entry" als REFERENTIEPRIJS (bijv. huidige marktprijs)
-- Entry is GEEN koop-signaal
-- Geef altijd een korte uitleg waarom dit een referentie is
+Specifiek:
+- DCA:
+  - Entry = referentieprijs
+  - GEEN trigger
+  - Benoem expliciet dat het geen signaal is
+- Andere strategieën:
+  - Entry = actieprijs
+  - Kleine verfijning toegestaan
+"""
 
-VOOR ANDERE STRATEGIEËN:
-- Entry is een actieprijs
-- Entry mag licht verfijnd worden
+    system_prompt = build_system_prompt(
+        agent="strategy",
+        task=TASK
+    )
 
-Bestaande strategy:
-{json.dumps(base_strategy, indent=2)}
+    prompt = f"""
+BESTAANDE STRATEGIE:
+{json.dumps(base_strategy, ensure_ascii=False, indent=2)}
 
-Setup:
-{json.dumps(setup, indent=2)}
+SETUP:
+{json.dumps(setup, ensure_ascii=False, indent=2)}
 
-Marktcontext (vandaag):
-{json.dumps(market_context, indent=2)}
+MARKTCONTEXT VANDAAG:
+{json.dumps(market_context, ensure_ascii=False, indent=2)}
 
-Geef ALLEEN geldige JSON terug.
-
-JSON format:
+ANTWOORD ALLEEN GELDIGE JSON:
 {{
   "entry": null | number | string,
   "entry_type": "reference" | "action",
@@ -127,10 +135,7 @@ JSON format:
 }}
 """
 
-    result = ask_gpt(
-        prompt,
-        system_role="Je bent een professionele trading AI. Alleen geldige JSON."
-    )
+    result = ask_gpt(prompt, system_role=system_prompt)
 
     if not isinstance(result, dict):
         logger.error("❌ Ongeldige JSON van AI bij strategy-adjustment")
@@ -145,6 +150,7 @@ JSON format:
     if not isinstance(score, (int, float)) or not (0 <= score <= 100):
         result["confidence_score"] = 50
 
+    # 🔒 DCA-fix afdwingen
     if strategy_type == "dca":
         result["entry_type"] = "reference"
         if result.get("entry") in ("", None):
@@ -157,7 +163,7 @@ JSON format:
 
 # ===================================================================
 # 🚀 INITIËLE STRATEGY GENERATIE (SETUP → STRATEGY)
-# ⚠️ Wordt alleen gebruikt door strategy_task (NIET door analyse)
+# ⚠️ Alleen hier mag AI iets "maken"
 # ===================================================================
 
 def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
@@ -167,17 +173,27 @@ def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
 
     logger.info(f"⚙️ AI strategy generatie | setup={setup.get('id')}")
 
+    TASK = """
+Genereer een CONCRETE tradingstrategie op basis van een setup.
+
+Regels:
+- Wees concreet
+- Geen educatie
+- Geen hype
+- Geen voorspellingen
+- Focus op uitvoerbaarheid
+"""
+
+    system_prompt = build_system_prompt(
+        agent="strategy",
+        task=TASK
+    )
+
     prompt = f"""
-Je bent een professionele crypto trader.
+SETUP:
+{json.dumps(setup, ensure_ascii=False, indent=2)}
 
-Genereer een CONCRETE tradingstrategie op basis van deze setup.
-
-Setup:
-{json.dumps(setup, indent=2)}
-
-Geef ALLEEN geldige JSON terug.
-
-JSON format:
+ANTWOORD ALLEEN GELDIGE JSON:
 {{
   "entry": "",
   "targets": [],
@@ -187,10 +203,7 @@ JSON format:
 }}
 """
 
-    result = ask_gpt(
-        prompt,
-        system_role="Je bent een professionele trading AI. Alleen geldige JSON."
-    )
+    result = ask_gpt(prompt, system_role=system_prompt)
 
     if not isinstance(result, dict):
         raise ValueError("❌ AI strategy generatie gaf geen geldige JSON")
@@ -237,7 +250,7 @@ def save_ai_explanation_to_strategy(
 
 
 # ===================================================================
-# 🧠 ORCHESTRATOR — ANALYSE → OPSLAG (DIT ONTBRAK)
+# 🧠 ORCHESTRATOR — ANALYSE → OPSLAG
 # ===================================================================
 
 def analyze_and_store_strategy(
