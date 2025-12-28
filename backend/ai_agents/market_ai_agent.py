@@ -140,23 +140,42 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
             "price_7d": price_7d,
         }
 
-        market_task = """
-Analyseer marktdata voor Bitcoin in beslistermen.
+        MARKET_TASK = """
+TAK: MARKET CONTEXT SAMENVATTEN (GEEN EIGEN BEREKENINGEN)
 
-Gebruik uitsluitend:
-- gescoorde market-indicatoren
-- recente prijs- en volumecontext
+INPUT:
+- Gescoorde market-indicatoren (value, score, trend, interpretation, action)
+- Recente prijs- en volumecontext (max 7 dagen)
 
-Geef:
-- trend
-- bias
-- risico
-- momentum
-- volatiliteit
-- samenvatting
-- belangrijkste signalen
+REGELS:
+- Gebruik uitsluitend aangeleverde data
+- Geen eigen aannames
+- Geen voorspellingen buiten scenario-denken
+- Geen uitleg van indicatoren
 
-Antwoord uitsluitend in geldige JSON.
+OUTPUT — ALLEEN GELDIGE JSON:
+
+{
+  "trend": "",
+  "bias": "",
+  "risk": "",
+  "momentum": "",
+  "volatility": "",
+  "summary": "",
+  "top_signals": []
+}
+
+CONSTRAINTS PER VELD:
+- trend: 1 korte zin
+- bias: 1 korte zin
+- risk: 1 korte zin
+- momentum: max 1 zin
+- volatility: max 1 zin
+- summary: max 3 zinnen, beslisgericht
+- top_signals: max 5 bullets, elk max 12 woorden
+
+ALS DATA ONTBREEKT:
+- Gebruik exact: "ONVOLDOENDE DATA"
 """
 
         system_prompt = build_system_prompt(
