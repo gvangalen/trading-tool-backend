@@ -6,11 +6,22 @@ from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
 
+from backend.ai_core.system_prompt import build_system_prompt
+
 # =====================================================
 # Logging
 # =====================================================
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+REPORT_TASK = """
+Je taak is het schrijven van een DAGELIJKS TRADING RAPPORT.
+
+Belangrijk:
+- Je analyseert NIETS zelf
+- Je gebruikt ALLEEN aangeleverde data
+- Je herschrijft bestaande inzichten naar besliscontext
+"""
 
 # =====================================================
 # Helpers
@@ -28,34 +39,6 @@ def to_float(v):
 
 def nv(v):
     return v if v not in [None, "", "None"] else "–"
-
-
-# =====================================================
-# 🔒 AI ROLE — BESLISCONTEXT (GEEN EDUCATIE)
-# =====================================================
-REPORT_STYLE_GUIDE = """
-Je bent de persoonlijke trading-analist van een ervaren Bitcoin-trader.
-
-Regels:
-- Geen uitleg van basisbegrippen
-- Geen herhaling
-- Geen marketingtaal
-- Alleen beslisrelevante informatie
-
-Focus:
-- context
-- implicaties
-- risico's
-- actie vs geen actie
-
-Verplicht:
-- Sluit ELKE sectie af met CAPS labels
-- Gebruik vaste termen (STATUS, ACTIE, IMPACT)
-
-Als data ontbreekt:
-- benoem dit expliciet
-- verzin niets
-"""
 
 
 # =====================================================
@@ -97,7 +80,7 @@ def get_daily_scores(user_id: int) -> dict:
 
 
 # =====================================================
-# 2️⃣ AI CATEGORY INSIGHTS (MACRO / TECH / MARKET)
+# 2️⃣ AI CATEGORY INSIGHTS (MACRO / TECH / MARKET / SETUP / MASTER)
 # =====================================================
 def get_ai_insights(user_id: int) -> dict:
     conn = get_db_connection()
@@ -131,7 +114,7 @@ def get_ai_insights(user_id: int) -> dict:
 
 
 # =====================================================
-# 3️⃣ MARKET DATA (DATA ONLY)
+# 3️⃣ MARKET DATA (SNAPSHOT)
 # =====================================================
 def get_latest_market_data() -> dict:
     conn = get_db_connection()
@@ -162,7 +145,7 @@ def get_latest_market_data() -> dict:
 
 
 # =====================================================
-# 4️⃣ MARKET INDICATOR SCORES
+# 4️⃣ MARKET INDICATOR SCORES (HIGHLIGHTS)
 # =====================================================
 def get_market_indicator_scores(user_id: int) -> list:
     conn = get_db_connection()
@@ -195,15 +178,16 @@ def get_market_indicator_scores(user_id: int) -> list:
 
 
 # =====================================================
-# 5️⃣ GPT HELPER
+# 5️⃣ GPT HELPER (CENTRALE AI-ROL)
 # =====================================================
 def generate_section(prompt: str) -> str:
-    text = ask_gpt_text(prompt, system_role=REPORT_STYLE_GUIDE)
+    system_prompt = build_system_prompt(REPORT_TASK)
+    text = ask_gpt_text(prompt, system_role=system_prompt)
     return text.strip() if text else "AI-generatie mislukt."
 
 
 # =====================================================
-# 6️⃣ PROMPTS
+# 6️⃣ PROMPTS (INHOUD BLIJFT GELIJK)
 # =====================================================
 def prompt_executive_summary(scores, market):
     return f"""
@@ -279,7 +263,7 @@ Scenario’s:
 
 
 # =====================================================
-# 7️⃣ MAIN REPORT BUILDER
+# 7️⃣ MAIN REPORT BUILDER (ONGEWIJZIGD INHOUD)
 # =====================================================
 def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> dict:
     logger.info(f"📄 Rapport genereren | {symbol} | user_id={user_id}")
@@ -295,7 +279,6 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
     indicators = get_market_indicator_scores(user_id)
 
     return {
-        # 🔑 REPORT CONTENT (1-op-1 met DB + UI)
         "executive_summary": generate_section(
             prompt_executive_summary(scores, market)
         ),
@@ -312,10 +295,7 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
             prompt_outlook()
         ),
 
-        # 📊 DATA BLOKKEN
         "market_data": market,
         "indicator_highlights": indicators,
-
-        # 🔢 SCORES (optioneel, maar handig)
         "scores": scores,
     }
