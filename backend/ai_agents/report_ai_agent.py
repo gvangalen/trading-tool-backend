@@ -15,12 +15,28 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 REPORT_TASK = """
-Je taak is het schrijven van een DAGELIJKS TRADING RAPPORT.
+Doel:
+Genereer het DAGELIJKS TRADING RAPPORT voor de gebruiker.
 
-Belangrijk:
-- Je analyseert NIETS zelf
-- Je gebruikt ALLEEN aangeleverde data
-- Je herschrijft bestaande inzichten naar besliscontext
+Gebruik uitsluitend:
+- bestaande scores uit daily_scores
+- bestaande AI-insights uit ai_category_insights
+- bestaande setup- en strategy-data
+
+Je voert GEEN eigen analyse uit.
+
+Verplicht op te nemen secties:
+- Executive Summary
+- Macro Context
+- Market Context
+- Technical Context
+- Setup Validatie
+- Strategie Implicatie
+- Vooruitblik
+
+Als input voor een sectie ontbreekt:
+- schrijf letterlijk: ONVOLDOENDE DATA
+- sla geen sectie over
 """
 
 # =====================================================
