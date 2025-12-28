@@ -4,20 +4,25 @@ import json
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
 from backend.utils.scoring_utils import normalize_indicator_name
+from backend.ai_core.system_prompt_builder import build_system_prompt
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# =====================================================================
-# 📊 TECHNICAL AI AGENT — PURE LOGICA (NO CELERY) + DEDUP FIX
-# =====================================================================
 
+# =====================================================================
+# 📊 TECHNICAL AI AGENT — DB-GEDREVEN, AI = CONTEXT ONLY
+# =====================================================================
 def run_technical_agent(user_id: int):
     """
     Genereert technical AI insights voor één user.
+
     Schrijft:
     - ai_category_insights (category='technical')
     - ai_reflections (category='technical')
+
+    ❗ Geen scoring
+    ❗ Geen berekeningen
     """
 
     if user_id is None:
@@ -32,7 +37,7 @@ def run_technical_agent(user_id: int):
 
     try:
         # ------------------------------------------------------
-        # 1️⃣ Scoreregels (GLOBAAL)
+        # 1️⃣ SCOREREGELS (GLOBAAL)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -57,8 +62,7 @@ def run_technical_agent(user_id: int):
         logger.info(f"📘 Technical scoreregels geladen ({len(rule_rows)} regels)")
 
         # ------------------------------------------------------
-        # 2️⃣ Laatste technische indicatoren (PER USER)
-        # ✅ FIX: alleen indicators die in indicators-tabel als technical+active staan
+        # 2️⃣ LAATSTE TECHNISCHE INDICATOREN (PER USER)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -77,7 +81,9 @@ def run_technical_agent(user_id: int):
             logger.warning(f"⚠️ Geen technische data gevonden voor user_id={user_id}")
             return
 
-        # Dedup: alleen de nieuwste per indicator (normalised key)
+        # ------------------------------------------------------
+        # 3️⃣ DEDUP — LAATSTE METING PER INDICATOR
+        # ------------------------------------------------------
         latest = {}
         for name, value, score, advies, uitleg, ts in rows:
             key = normalize_indicator_name(name)
@@ -91,7 +97,11 @@ def run_technical_agent(user_id: int):
             score_f = float(score) if score is not None else 50.0
 
             rule_trend = next(
-                (r["trend"] for r in rules_by_indicator.get(key, []) if float(r.get("score") or -1) == score_f),
+                (
+                    r["trend"]
+                    for r in rules_by_indicator.get(key, [])
+                    if float(r.get("score") or -1) == score_f
+                ),
                 None
             )
 
@@ -103,69 +113,77 @@ def run_technical_agent(user_id: int):
                 "advies": advies or "",
                 "uitleg": uitleg or "",
                 "timestamp": ts.isoformat() if ts else None,
-                "rules": rules_by_indicator.get(key, [])
+                "rules": rules_by_indicator.get(key, []),
             })
+
             scores.append(score_f)
 
         avg_score = round(sum(scores) / len(scores), 2) if scores else 50.0
 
         # ------------------------------------------------------
-        # 3️⃣ AI CONTEXT (samenvatting)
+        # 4️⃣ AI CONTEXT — TECHNICAL SAMENVATTING
         # ------------------------------------------------------
-        prompt = f"""
-Je bent een professionele technische analyse expert.
+        TECHNICAL_TASK = """
+Analyseer technische indicatoren voor Bitcoin.
 
-Analyseer onderstaande technische indicatoren en geef een samenvattend oordeel.
+Gebruik uitsluitend:
+- indicatorwaarden
+- bijbehorende scores
+- trend per indicator
 
-DATA:
-{json.dumps(combined, ensure_ascii=False, indent=2)}
+Geef:
+- trend
+- bias
+- risico
+- momentum
+- samenvatting
+- belangrijkste technische signalen
 
-ANTWOORD ALLEEN GELDIGE JSON:
-{{
-  "trend": "",
-  "bias": "",
-  "risk": "",
-  "momentum": "",
-  "summary": "",
-  "top_signals": []
-}}
+Antwoord uitsluitend in geldige JSON.
 """
-        ai_context = ask_gpt(
-            prompt,
-            system_role="Je bent een technische analyse expert. Antwoord uitsluitend in geldige JSON."
+
+        system_prompt = build_system_prompt(
+            agent="technical",
+            task=TECHNICAL_TASK
         )
+
+        ai_context = ask_gpt(
+            prompt=json.dumps(combined, ensure_ascii=False, indent=2),
+            system_role=system_prompt
+        )
+
         if not isinstance(ai_context, dict):
             raise ValueError("❌ Technical AI response is geen geldige JSON")
 
         # ------------------------------------------------------
-        # 4️⃣ AI REFLECTIES (per indicator)
+        # 5️⃣ AI REFLECTIES (PER INDICATOR)
         # ------------------------------------------------------
-        prompt_reflections = f"""
+        REFLECTION_TASK = """
 Maak reflecties per technische indicator.
 
-DATA:
-{json.dumps(combined, ensure_ascii=False, indent=2)}
+Beoordeel:
+- of score past bij waarde
+- of interpretatie consistent is
+- waar risico of overschatting zit
 
-ANTWOORD ALS JSON-LIJST:
-[
-  {{
-    "indicator": "",
-    "ai_score": 0,
-    "compliance": 0,
-    "comment": "",
-    "recommendation": ""
-  }}
-]
+Antwoord uitsluitend in geldige JSON-lijst.
 """
-        ai_reflections = ask_gpt(
-            prompt_reflections,
-            system_role="Je bent een technische analyse expert. Antwoord uitsluitend in geldige JSON."
+
+        reflection_prompt = build_system_prompt(
+            agent="technical",
+            task=REFLECTION_TASK
         )
+
+        ai_reflections = ask_gpt(
+            prompt=json.dumps(combined, ensure_ascii=False, indent=2),
+            system_role=reflection_prompt
+        )
+
         if not isinstance(ai_reflections, list):
             ai_reflections = []
 
         # ------------------------------------------------------
-        # 🧹 FIX: verwijder oude technical reflecties van vandaag
+        # 🧹 OPSCHONEN OUDE REFLECTIES VAN VANDAAG
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -176,7 +194,7 @@ ANTWOORD ALS JSON-LIJST:
             """, (user_id,))
 
         # ------------------------------------------------------
-        # 5️⃣ Opslaan ai_category_insights
+        # 6️⃣ OPSLAAN AI_CATEGORY_INSIGHTS
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -204,7 +222,7 @@ ANTWOORD ALS JSON-LIJST:
             ))
 
         # ------------------------------------------------------
-        # 6️⃣ Opslaan ai_reflections (per indicator, 1 per dag)
+        # 7️⃣ OPSLAAN AI_REFLECTIONS (PER INDICATOR)
         # ------------------------------------------------------
         for r in ai_reflections:
             indicator = r.get("indicator")
