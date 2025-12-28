@@ -1,12 +1,13 @@
 import logging
-import traceback
 import json
+import traceback
 from datetime import date
 
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
+from backend.ai_core.system_prompt_builder import build_system_prompt
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -14,6 +15,9 @@ logger.setLevel(logging.INFO)
 SYMBOL = "BTC"
 
 
+# ======================================================
+# Helpers
+# ======================================================
 def _to_float(x):
     try:
         return float(x) if x is not None else None
@@ -29,14 +33,15 @@ def _to_int(x):
 
 
 # ======================================================
-# 🪙 MARKET AI AGENT — DB-GEDREVEN (ENIGE WAARHEID)
+# 🪙 MARKET AI AGENT — DB-GEDREVEN (SINGLE SOURCE OF TRUTH)
 # ======================================================
 def run_market_agent(user_id: int, symbol: str = SYMBOL):
     """
     Genereert market AI insights.
 
-    - Gebruikt ALLEEN market_data_indicators (reeds berekend & gescoord)
+    - Gebruikt ALLEEN market_data_indicators
     - Doet GEEN eigen berekeningen
+    - Output → ai_category_insights + daily_scores
     """
 
     if user_id is None:
@@ -51,7 +56,7 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
 
     try:
         # ======================================================
-        # 1️⃣ LAATSTE MARKET INDICATOR SCORES (USER-SPECIFIC!)
+        # 1️⃣ LAATSTE MARKET INDICATOR SCORES (USER-SPECIFIEK)
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -69,22 +74,25 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
             """, (user_id,))
             rows = cur.fetchall()
 
-        market_indicators = [{
-            "indicator": name,
-            "value": _to_float(value),
-            "score": _to_int(score),
-            "trend": trend,
-            "interpretation": interpretation,
-            "action": action,
-            "timestamp": ts.isoformat() if ts else None,
-        } for name, value, score, trend, interpretation, action, ts in rows]
+        market_indicators = [
+            {
+                "indicator": name,
+                "value": _to_float(value),
+                "score": _to_int(score),
+                "trend": trend,
+                "interpretation": interpretation,
+                "action": action,
+                "timestamp": ts.isoformat() if ts else None,
+            }
+            for name, value, score, trend, interpretation, action, ts in rows
+        ]
 
         if not market_indicators:
-            logger.warning("⚠️ Geen market indicator scores gevonden (market_data_indicators leeg)")
+            logger.warning("⚠️ Geen market indicator scores gevonden")
             return
 
         # ======================================================
-        # 2️⃣ MARKET SCORE (GEMIDDELDE VAN GELDIGE SCORES)
+        # 2️⃣ MARKET SCORE (AVG — GEEN 0 ALS FALLBACK)
         # ======================================================
         valid_scores = [i["score"] for i in market_indicators if i["score"] is not None]
         market_avg = round(sum(valid_scores) / len(valid_scores)) if valid_scores else 10
@@ -108,15 +116,18 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
             """, (symbol,))
             rows_7d = cur.fetchall()
 
-        price_7d = [{
-            "date": d.isoformat() if d else None,
-            "open": _to_float(o),
-            "high": _to_float(h),
-            "low": _to_float(l),
-            "close": _to_float(c),
-            "change_pct": _to_float(ch),
-            "volume": _to_float(v),
-        } for d, o, h, l, c, ch, v in reversed(rows_7d)]
+        price_7d = [
+            {
+                "date": d.isoformat() if d else None,
+                "open": _to_float(o),
+                "high": _to_float(h),
+                "low": _to_float(l),
+                "close": _to_float(c),
+                "change_pct": _to_float(ch),
+                "volume": _to_float(v),
+            }
+            for d, o, h, l, c, ch, v in reversed(rows_7d)
+        ]
 
         # ======================================================
         # 4️⃣ AI PAYLOAD
@@ -129,30 +140,35 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
             "price_7d": price_7d,
         }
 
-        prompt = f"""
-Je bent een professionele Bitcoin marktanalist.
+        market_task = """
+Analyseer marktdata voor Bitcoin in beslistermen.
 
-Analyseer:
-- Gescoorde market indicatoren (volume-afwijking, 24h change, etc.)
-- 7-daagse prijs en volume context
+Gebruik uitsluitend:
+- gescoorde market-indicatoren
+- recente prijs- en volumecontext
 
-Geef antwoord in GELDIGE JSON:
+Geef:
+- trend
+- bias
+- risico
+- momentum
+- volatiliteit
+- samenvatting
+- belangrijkste signalen
 
-{{
-  "trend": "",
-  "bias": "",
-  "risk": "",
-  "momentum": "",
-  "volatility": "",
-  "summary": "",
-  "top_signals": []
-}}
-
-DATA:
-{json.dumps(payload, ensure_ascii=False, indent=2)}
+Antwoord uitsluitend in geldige JSON.
 """
 
-        ai = ask_gpt(prompt, system_role="Antwoord uitsluitend in geldige JSON.")
+        system_prompt = build_system_prompt(
+            agent="market",
+            task=market_task
+        )
+
+        ai = ask_gpt(
+            prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+            system_role=system_prompt
+        )
+
         if not isinstance(ai, dict):
             ai = {}
 
