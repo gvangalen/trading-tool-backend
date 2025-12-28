@@ -26,9 +26,10 @@ load_dotenv()
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report(user_id: int):
     """
-    Genereert dagelijks rapport per user:
+    Genereert dagelijks rapport per user.
+
     - gebruikt report_ai_agent (single source of truth)
-    - slaat op in daily_reports
+    - slaat exact de report-velden op (geen legacy)
     - genereert PDF
     - verstuurt optioneel e-mail
     """
@@ -47,7 +48,7 @@ def generate_daily_report(user_id: int):
         cursor = conn.cursor()
 
         # -------------------------------------------------
-        # 1️⃣ REPORT GENEREREN (AI + DB)
+        # 1️⃣ REPORT GENEREREN (AI AGENT)
         # -------------------------------------------------
         report = generate_daily_report_sections(symbol="BTC", user_id=user_id)
 
@@ -55,109 +56,110 @@ def generate_daily_report(user_id: int):
             logger.error("❌ Report agent gaf geen geldig dict terug")
             return
 
-        scores = report.get("scores", {}) or {}
+        # ----------------------------
+        # Extract core blocks
+        # ----------------------------
+        executive_summary    = report.get("executive_summary", "")
+        macro_context        = report.get("macro_summary", "")
+        setup_validation     = report.get("setup_validation", "")
+        strategy_implication = report.get("strategy_implication", "")
+        outlook              = report.get("outlook", "")
 
+        # ----------------------------
+        # Market snapshot
+        # ----------------------------
+        market_data = report.get("market_data", {}) or {}
+        price       = market_data.get("price")
+        change_24h  = market_data.get("change_24h")
+        volume      = market_data.get("volume")
+
+        # ----------------------------
+        # Indicator highlights (JSONB)
+        # ----------------------------
+        indicator_highlights = report.get("market_indicator_scores", [])
+
+        # ----------------------------
+        # Scores
+        # ----------------------------
+        scores = report.get("scores", {}) or {}
         macro_score     = scores.get("macro_score")
         technical_score = scores.get("technical_score")
         market_score    = scores.get("market_score")
         setup_score     = scores.get("setup_score")
 
         # -------------------------------------------------
-        # 2️⃣ MASTER SCORE (OPTIONEEL)
-        # -------------------------------------------------
-        cursor.execute("""
-            SELECT avg_score, trend, bias, risk, summary
-            FROM ai_category_insights
-            WHERE user_id = %s
-              AND category = 'master'
-              AND date = CURRENT_DATE
-            LIMIT 1;
-        """, (user_id,))
-
-        row = cursor.fetchone()
-        if row:
-            ai_master_score, ai_master_trend, ai_master_bias, ai_master_risk, ai_master_summary = row
-        else:
-            ai_master_score = None
-            ai_master_trend = None
-            ai_master_bias = None
-            ai_master_risk = None
-            ai_master_summary = None
-
-        # -------------------------------------------------
-        # 3️⃣ OPSLAAN IN daily_reports (ZONDER updated_at)
+        # 2️⃣ OPSLAAN IN daily_reports (SCHONE STRUCTUUR)
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
                 report_date,
                 user_id,
 
-                btc_summary,
-                macro_summary,
-                setup_checklist,
-                recommendations,
+                executive_summary,
+                macro_context,
+                setup_validation,
+                strategy_implication,
                 outlook,
+
+                price,
+                change_24h,
+                volume,
+                indicator_highlights,
 
                 macro_score,
                 technical_score,
-                setup_score,
                 market_score,
-
-                ai_master_score,
-                ai_master_trend,
-                ai_master_bias,
-                ai_master_risk,
-                ai_master_summary
+                setup_score
             )
             VALUES (
                 %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
-                %s, %s, %s, %s, %s
+                %s, %s, %s, %s
             )
             ON CONFLICT (user_id, report_date)
             DO UPDATE SET
-                btc_summary       = EXCLUDED.btc_summary,
-                macro_summary     = EXCLUDED.macro_summary,
-                setup_checklist   = EXCLUDED.setup_checklist,
-                recommendations   = EXCLUDED.recommendations,
-                outlook           = EXCLUDED.outlook,
-                macro_score       = EXCLUDED.macro_score,
-                technical_score   = EXCLUDED.technical_score,
-                setup_score       = EXCLUDED.setup_score,
-                market_score      = EXCLUDED.market_score,
-                ai_master_score   = EXCLUDED.ai_master_score,
-                ai_master_trend   = EXCLUDED.ai_master_trend,
-                ai_master_bias    = EXCLUDED.ai_master_bias,
-                ai_master_risk    = EXCLUDED.ai_master_risk,
-                ai_master_summary = EXCLUDED.ai_master_summary;
+                executive_summary    = EXCLUDED.executive_summary,
+                macro_context        = EXCLUDED.macro_context,
+                setup_validation     = EXCLUDED.setup_validation,
+                strategy_implication = EXCLUDED.strategy_implication,
+                outlook              = EXCLUDED.outlook,
+
+                price                = EXCLUDED.price,
+                change_24h           = EXCLUDED.change_24h,
+                volume               = EXCLUDED.volume,
+                indicator_highlights = EXCLUDED.indicator_highlights,
+
+                macro_score          = EXCLUDED.macro_score,
+                technical_score      = EXCLUDED.technical_score,
+                market_score         = EXCLUDED.market_score,
+                setup_score          = EXCLUDED.setup_score;
         """, (
             today,
             user_id,
 
-            report.get("executive_summary", ""),
-            report.get("macro_summary", ""),
-            report.get("setup_validation", ""),
-            report.get("strategy_implication", ""),
-            report.get("outlook", ""),
-            
+            executive_summary,
+            macro_context,
+            setup_validation,
+            strategy_implication,
+            outlook,
+
+            price,
+            change_24h,
+            volume,
+            indicator_highlights,
+
             macro_score,
             technical_score,
-            setup_score,
             market_score,
-
-            ai_master_score,
-            ai_master_trend,
-            ai_master_bias,
-            ai_master_risk,
-            ai_master_summary,
+            setup_score,
         ))
 
         conn.commit()
         logger.info(f"💾 daily_reports opgeslagen | user_id={user_id}")
 
         # -------------------------------------------------
-        # 4️⃣ PDF GENEREREN
+        # 3️⃣ PDF GENEREREN
         # -------------------------------------------------
         cursor.execute("""
             SELECT *
@@ -184,21 +186,25 @@ def generate_daily_report(user_id: int):
         pdf_path = os.path.join(pdf_dir, f"daily_{today}_u{user_id}.pdf")
 
         with open(pdf_path, "wb") as f:
-            f.write(pdf_bytes.getbuffer() if hasattr(pdf_bytes, "getbuffer") else pdf_bytes)
+            f.write(
+                pdf_bytes.getbuffer()
+                if hasattr(pdf_bytes, "getbuffer")
+                else pdf_bytes
+            )
 
         logger.info(f"🖨️ PDF opgeslagen: {pdf_path}")
 
         # -------------------------------------------------
-        # 5️⃣ EMAIL (OPTIONEEL)
+        # 4️⃣ EMAIL (OPTIONEEL)
         # -------------------------------------------------
         try:
             subject = f"📈 BTC Daily Report – {today}"
             body = (
                 f"Dagelijks Bitcoin rapport voor {today}.\n\n"
-                f"Macro: {macro_score}\n"
-                f"Technical: {technical_score}\n"
-                f"Market: {market_score}\n"
-                f"Setup: {setup_score}\n\n"
+                f"Macro score: {macro_score}\n"
+                f"Technical score: {technical_score}\n"
+                f"Market score: {market_score}\n"
+                f"Setup score: {setup_score}\n\n"
                 "Zie bijlage voor volledige analyse."
             )
             send_email_with_attachment(subject, body, pdf_path)
