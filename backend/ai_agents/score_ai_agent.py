@@ -1,6 +1,5 @@
 import json
 import logging
-import traceback
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -8,20 +7,25 @@ from typing import Any, Dict, List, Optional
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.openai_client import ask_gpt  # JSON-engine
+from backend.utils.openai_client import ask_gpt
+from backend.ai_core.system_prompt_builder import build_system_prompt
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ============================================================
-# ✔ Domeinen die we orchestreren (MASTER sluit je uit van input)
+# ✔ Domeinen die we orchestreren (MASTER zelf is OUTPUT)
 # ============================================================
 DOMAIN_CATEGORIES = ["macro", "market", "technical", "setup", "strategy"]
 MASTER_CATEGORY = "master"
 
+# Zet dit op True als je master-agent óók daily_scores wil vullen
+# (meestal niet nodig als macro/market/technical/setup agents dat al doen)
+WRITE_DAILY_SCORES = False
+
 
 # ============================================================
-# ⚙️ Decimal → float converter
+# ⚙️ Helpers
 # ============================================================
 def convert_decimal(obj: Any) -> Any:
     if isinstance(obj, Decimal):
@@ -118,12 +122,9 @@ def fetch_today_insights(conn, user_id: int) -> Dict[str, dict]:
 
 
 # ============================================================
-# ✅ Helper: Setup-score ophalen (UIT SETUP AGENT)
+# ✅ Helper: Setup-score ophalen (UIT SETUP agent insights)
 # ============================================================
 def fetch_setup_score_from_insights(insights: Dict[str, dict]) -> Optional[float]:
-    """
-    Setup-score bron = Setup Agent → ai_category_insights(category='setup')
-    """
     try:
         v = insights.get("setup", {}).get("avg_score")
         if v is None:
@@ -135,7 +136,6 @@ def fetch_setup_score_from_insights(insights: Dict[str, dict]) -> Optional[float
 
 # ============================================================
 # 📊 2. Numerieke context uit daily_scores + ai_reflections
-#    ✅ setup-score NIET uit daily_scores, maar uit setup-insights
 # ============================================================
 def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[str, Any]:
     numeric: Dict[str, Any] = {"daily_scores": {}, "ai_reflections": {}}
@@ -162,7 +162,7 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
         # setup-score komt UIT setup agent (ai_category_insights)
         numeric["daily_scores"]["setup"] = fetch_setup_score_from_insights(insights)
 
-        # ai_reflections aggregatie (optioneel / bestaat al bij jou)
+        # ai_reflections aggregatie
         cur.execute(
             """
             SELECT category,
@@ -191,7 +191,7 @@ def build_prompt(insights: Dict[str, dict], numeric: Dict[str, Any]) -> str:
     def block(cat: str) -> str:
         i = insights.get(cat)
         if not i:
-            return f"[{cat}] — GEEN DATA"
+            return f"[{cat}] — ONVOLDOENDE DATA"
 
         sigs = stringify_top_signals(i.get("top_signals"))
         sigs_str = ", ".join(sigs) if sigs else "-"
@@ -206,8 +206,6 @@ def build_prompt(insights: Dict[str, dict], numeric: Dict[str, Any]) -> str:
     numeric_json = json.dumps(numeric, indent=2, ensure_ascii=False)
 
     return f"""
-Je bent de MASTER Orchestrator AI voor trading.
-
 Antwoord ALLEEN met geldige JSON in dit format:
 
 {{
@@ -284,42 +282,40 @@ def store_master_result(conn, result: dict, user_id: int):
 
 
 # ============================================================
-# 🕗 daily_scores vullen — per user (OPTIONEEL)
-# ✅ setup_score komt UIT setup agent, niet berekend
+# 🕗 (OPTIONEEL) daily_scores vullen
 # ============================================================
 def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
     macro = insights.get("macro", {}).get("avg_score")
     market = insights.get("market", {}).get("avg_score")
     technical = insights.get("technical", {}).get("avg_score")
-    setup_score = fetch_setup_score_from_insights(insights)  # ✅ FIX
+    setup_score = fetch_setup_score_from_insights(insights)
 
     macro_sum = insights.get("macro", {}).get("summary", "")
     market_sum = insights.get("market", {}).get("summary", "")
     tech_sum = insights.get("technical", {}).get("summary", "")
 
     if macro is None or market is None or technical is None:
-        logger.error(
-            f"❌ daily_scores NIET opgeslagen — ontbrekende macro/market/technical (user_id={user_id})."
+        logger.warning(
+            f"⚠️ daily_scores niet bijgewerkt (macro/market/technical missen) user_id={user_id}"
         )
         return
 
-    # als setup agent nog niet gedraaid heeft: laat NULL of fallback
-    # (maar NIET zelf berekenen)
-    if setup_score is None:
-        logger.warning("⚠️ Setup-score ontbreekt (setup agent nog niet gedraaid?) → setup_score blijft NULL/0")
-        setup_score = 0  # of None als je kolom nullable is
-
+    # setup mag None zijn als setup agent nog niet gedraaid heeft
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO daily_scores
-                (report_date, user_id, macro_score, market_score, technical_score,
+                (report_date, user_id,
+                 macro_score, market_score, technical_score,
                  macro_interpretation, market_interpretation, technical_interpretation,
-                 setup_score, macro_top_contributors, market_top_contributors, technical_top_contributors)
+                 setup_score,
+                 macro_top_contributors, market_top_contributors, technical_top_contributors)
             VALUES (
-                CURRENT_DATE, %s, %s, %s, %s,
+                CURRENT_DATE, %s,
                 %s, %s, %s,
-                %s, '[]', '[]', '[]'
+                %s, %s, %s,
+                %s,
+                '[]', '[]', '[]'
             )
             ON CONFLICT (report_date, user_id)
             DO UPDATE SET
@@ -330,7 +326,7 @@ def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
                 market_interpretation = EXCLUDED.market_interpretation,
                 technical_interpretation = EXCLUDED.technical_interpretation,
                 setup_score = EXCLUDED.setup_score;
-             """,
+            """,
             (
                 user_id,
                 macro,
@@ -343,14 +339,14 @@ def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
             ),
         )
 
-    logger.info(f"💾 daily_scores opgeslagen voor user_id={user_id} (setup_score uit setup agent).")
+    logger.info(f"💾 daily_scores bijgewerkt user_id={user_id} (optioneel).")
 
 
 # ============================================================
 # 🚀 Per-user runner
 # ============================================================
 def generate_master_score_for_user(user_id: int):
-    logger.info(f"🧩 MASTER Orchestrator voor user_id={user_id}")
+    logger.info(f"🧠 MASTER Orchestrator | user_id={user_id}")
 
     conn = get_db_connection()
     if not conn:
@@ -358,23 +354,34 @@ def generate_master_score_for_user(user_id: int):
         return
 
     try:
-        # 1️⃣ Lees AL bestaande data
         insights = fetch_today_insights(conn, user_id=user_id)
-        numeric = fetch_numeric_scores(conn, user_id=user_id)
+        numeric = fetch_numeric_scores(conn, user_id=user_id, insights=insights)
 
-        # 2️⃣ Denk & synthese
+        TASK = """
+Synthetiseer bestaande AI-insights tot één master-besliscontext.
+
+Regels:
+- Maak GEEN nieuwe analyses
+- Verzin GEEN data
+- Gebruik alleen aangeleverde scores & trends
+- Benoem conflicten expliciet
+- Als input ontbreekt: zet 'ONVOLDOENDE DATA' + zet data_warnings
+- Geef één heldere summary + outlook in scenario’s
+"""
+
+        system_prompt = build_system_prompt(task=TASK)
+
         prompt = build_prompt(insights, numeric)
 
-        result = ask_gpt(
-            prompt,
-            system_role="Je bent een master trading orchestrator. Antwoord uitsluitend in geldige JSON.",
-        )
+        result = ask_gpt(prompt, system_role=system_prompt)
 
         if not isinstance(result, dict):
             raise ValueError("❌ Master orchestrator gaf geen geldige JSON dict terug")
 
-        # 3️⃣ Opslaan
         store_master_result(conn, result, user_id=user_id)
+
+        if WRITE_DAILY_SCORES:
+            store_daily_scores(conn, insights, user_id=user_id)
 
         conn.commit()
         logger.info(f"✅ Master score opgeslagen voor user_id={user_id}")
@@ -403,13 +410,10 @@ def generate_master_score():
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM users;")
             users = [row[0] for row in cur.fetchall()]
-
-        logger.info(f"👥 {len(users)} gebruikers gevonden. Genereren per user...")
-
+        logger.info(f"👥 {len(users)} gebruikers gevonden.")
     except Exception:
         logger.error("❌ Kon users niet ophalen", exc_info=True)
         return
-
     finally:
         conn.close()
 
