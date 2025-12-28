@@ -190,7 +190,7 @@ def get_latest_strategy(setup_id: int, user_id: int) -> dict | None:
 
 
 # =====================================================
-# 4️⃣ MARKET SNAPSHOT
+# 4️⃣ MARKET SNAPSHOT (DATA-ONLY, GEEN AI)
 # =====================================================
 def get_latest_market_data() -> dict:
     conn = get_db_connection()
@@ -262,11 +262,11 @@ def generate_section(prompt: str) -> str:
 
 
 # =====================================================
-# 7️⃣ PROMPTS — VERSIE C (HYBRIDE)
+# 7️⃣ PROMPTS — DEFINITIEVE STRUCTUUR
 # =====================================================
-def prompt_executive_summary(setup, scores, market, indicators):
+def prompt_executive_summary(setup, scores, market):
     return f"""
-Schrijf een executive summary (4–6 zinnen).
+Schrijf een korte executive summary (max 5 zinnen).
 
 Weeg:
 - macro-context
@@ -280,7 +280,7 @@ Market: {nv(scores.get('market_score'))}
 Setup: {nv(scores.get('setup_score'))}
 
 Prijs: ${nv(market.get('price'))}
-24h: {nv(market.get('change_24h'))}%
+24h verandering: {nv(market.get('change_24h'))}%
 
 Sluit af met exact:
 BESLISSING VANDAAG: ACTIE_VANDAAG / GEEN_ACTIE / OBSERVEREN
@@ -290,7 +290,7 @@ CONFIDENCE: LAAG / MIDDEL / HOOG
 
 def prompt_macro(ai):
     return f"""
-Beschrijf de macro-context (4–6 zinnen).
+Beschrijf de macro-context in beslistermen (max 5 zinnen).
 
 Trend: {ai.get('trend')}
 Bias: {ai.get('bias')}
@@ -313,8 +313,8 @@ Technisch: {nv(scores.get('technical_score'))}
 Market: {nv(scores.get('market_score'))}
 
 Geef:
-- korte validatie
-- belangrijkste reden
+- validatie
+- belangrijkste blokkade of bevestiging
 - wat moet verbeteren
 
 Sluit af met exact:
@@ -343,7 +343,7 @@ STRATEGIE-STATUS: UITVOERBAAR_VANDAAG / WACHT_OP_TRIGGER / NIET_ACTUEEL
 
 def prompt_outlook():
     return """
-Geef een korte vooruitblik (2–4 zinnen).
+Geef een korte vooruitblik (max 4 zinnen).
 
 Scenario’s:
 - bullish
@@ -383,23 +383,26 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
     }
 
     return {
+        # 🔑 Menselijk leesbaar
         "executive_summary": generate_section(
-            prompt_executive_summary(setup, scores, market, indicators)
+            prompt_executive_summary(setup, scores, market)
         ),
-        "macro_summary": generate_section(
-            prompt_macro(ai.get("macro", {}))
-        ),
+        "market_snapshot": market,
         "setup_validation": generate_section(
             prompt_setup_validation(setup, scores)
         ),
         "strategy_implication": generate_section(
             prompt_strategy_implication(strategy)
         ),
+        "macro_summary": generate_section(
+            prompt_macro(ai.get("macro", {}))
+        ),
         "outlook": generate_section(
             prompt_outlook()
         ),
+
+        # 🤖 Machine / bot input
         "scores": scores,
         "strategy": strategy,
-        "market_data": market,
         "market_indicator_scores": indicators,
     }
