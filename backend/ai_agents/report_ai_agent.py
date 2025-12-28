@@ -1,6 +1,5 @@
 import logging
 from decimal import Decimal
-from datetime import date
 
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.json_utils import sanitize_json_input
@@ -32,31 +31,26 @@ def nv(v):
 
 
 # =====================================================
-# 🔒 DEFINITIEVE AI ROL — BESLISCONTEXT
+# 🔒 AI ROLE — BESLISCONTEXT (GEEN EDUCATIE)
 # =====================================================
 REPORT_STYLE_GUIDE = """
 Je bent de persoonlijke trading-analist van een ervaren Bitcoin-trader.
 
-Belangrijk:
-- Je legt NOOIT basisbegrippen uit.
-- Je herhaalt geen definities.
-- Je schrijft uitsluitend beslisrelevante informatie.
+Regels:
+- Geen uitleg van basisbegrippen
+- Geen herhaling
+- Geen marketingtaal
+- Alleen beslisrelevante informatie
 
-Je rol:
-- context duiden
-- implicaties benoemen
-- risico’s expliciet maken
-- aangeven of actie vandaag logisch is of niet
-
-Stijl:
-- compact
-- zakelijk
-- professioneel
-- geen marketingtaal
+Focus:
+- context
+- implicaties
+- risico's
+- actie vs geen actie
 
 Verplicht:
-- Sluit ELKE sectie af met een expliciete conclusie in CAPS.
-- Gebruik vaste labels (ACTIE, STATUS, IMPACT).
+- Sluit ELKE sectie af met CAPS labels
+- Gebruik vaste termen (STATUS, ACTIE, IMPACT)
 
 Als data ontbreekt:
 - benoem dit expliciet
@@ -65,7 +59,7 @@ Als data ontbreekt:
 
 
 # =====================================================
-# 1️⃣ DAILY SCORES — SINGLE SOURCE OF TRUTH
+# 1️⃣ DAILY SCORES (DB = SINGLE SOURCE OF TRUTH)
 # =====================================================
 def get_daily_scores(user_id: int) -> dict:
     conn = get_db_connection()
@@ -96,7 +90,6 @@ def get_daily_scores(user_id: int) -> dict:
             "technical_score": to_float(row[1]),
             "market_score": to_float(row[2]),
             "setup_score": to_float(row[3]),
-            "_meta": {"setup_score_source": "db"},
         }
 
     finally:
@@ -104,7 +97,7 @@ def get_daily_scores(user_id: int) -> dict:
 
 
 # =====================================================
-# 2️⃣ AI CATEGORY INSIGHTS
+# 2️⃣ AI CATEGORY INSIGHTS (MACRO / TECH / MARKET)
 # =====================================================
 def get_ai_insights(user_id: int) -> dict:
     conn = get_db_connection()
@@ -128,7 +121,7 @@ def get_ai_insights(user_id: int) -> dict:
                 "trend": trend or "–",
                 "bias": bias or "–",
                 "risk": risk or "–",
-                "summary": summary or "Geen data."
+                "summary": summary or "–"
             }
 
         return insights
@@ -138,59 +131,7 @@ def get_ai_insights(user_id: int) -> dict:
 
 
 # =====================================================
-# 3️⃣ LATEST STRATEGY PER SETUP
-# =====================================================
-def get_latest_strategy(setup_id: int, user_id: int) -> dict | None:
-    if not setup_id:
-        return None
-
-    conn = get_db_connection()
-    if not conn:
-        return None
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT entry, target, stop_loss, explanation, risk_profile, data
-                FROM strategies
-                WHERE setup_id = %s AND user_id = %s
-                ORDER BY created_at DESC
-                LIMIT 1;
-            """, (setup_id, user_id))
-            row = cur.fetchone()
-
-        if not row:
-            return None
-
-        entry, target, stop, expl, risk, data = row
-
-        if isinstance(data, dict):
-            entry = data.get("entry", entry)
-            target = data.get("targets", target)
-            stop = data.get("stop_loss", stop)
-            expl = data.get("explanation", expl)
-            risk = data.get("risk_reward", risk)
-
-        targets = []
-        if isinstance(target, str):
-            targets = [t.strip() for t in target.split(",") if t.strip()]
-        elif isinstance(target, list):
-            targets = target
-
-        return {
-            "entry": entry or "n.v.t.",
-            "targets": targets,
-            "stop_loss": stop or "n.v.t.",
-            "risk_reward": risk or "?",
-            "explanation": expl or "Geen strategie beschikbaar."
-        }
-
-    finally:
-        conn.close()
-
-
-# =====================================================
-# 4️⃣ MARKET SNAPSHOT (DATA-ONLY, GEEN AI)
+# 3️⃣ MARKET DATA (DATA ONLY)
 # =====================================================
 def get_latest_market_data() -> dict:
     conn = get_db_connection()
@@ -221,7 +162,7 @@ def get_latest_market_data() -> dict:
 
 
 # =====================================================
-# 5️⃣ MARKET INDICATOR SCORES
+# 4️⃣ MARKET INDICATOR SCORES
 # =====================================================
 def get_market_indicator_scores(user_id: int) -> list:
     conn = get_db_connection()
@@ -254,7 +195,7 @@ def get_market_indicator_scores(user_id: int) -> list:
 
 
 # =====================================================
-# 6️⃣ GPT HELPER
+# 5️⃣ GPT HELPER
 # =====================================================
 def generate_section(prompt: str) -> str:
     text = ask_gpt_text(prompt, system_role=REPORT_STYLE_GUIDE)
@@ -262,16 +203,11 @@ def generate_section(prompt: str) -> str:
 
 
 # =====================================================
-# 7️⃣ PROMPTS — DEFINITIEVE STRUCTUUR
+# 6️⃣ PROMPTS
 # =====================================================
-def prompt_executive_summary(setup, scores, market):
+def prompt_executive_summary(scores, market):
     return f"""
 Schrijf een korte executive summary (max 5 zinnen).
-
-Weeg:
-- macro-context
-- marktconditie
-- setup-validiteit
 
 Scores:
 Macro: {nv(scores.get('macro_score'))}
@@ -282,21 +218,21 @@ Setup: {nv(scores.get('setup_score'))}
 Prijs: ${nv(market.get('price'))}
 24h verandering: {nv(market.get('change_24h'))}%
 
-Sluit af met exact:
+Sluit exact af met:
 BESLISSING VANDAAG: ACTIE_VANDAAG / GEEN_ACTIE / OBSERVEREN
 CONFIDENCE: LAAG / MIDDEL / HOOG
 """
 
 
-def prompt_macro(ai):
+def prompt_macro_context(ai):
     return f"""
-Beschrijf de macro-context in beslistermen (max 5 zinnen).
+Beschrijf de macro-context in beslistermen.
 
 Trend: {ai.get('trend')}
 Bias: {ai.get('bias')}
 Risico: {ai.get('risk')}
 
-Sluit af met exact:
+Sluit exact af met:
 MACRO-IMPACT: STEUNEND / NEUTRAAL / REMMEND
 """
 
@@ -312,12 +248,7 @@ Macro: {nv(scores.get('macro_score'))}
 Technisch: {nv(scores.get('technical_score'))}
 Market: {nv(scores.get('market_score'))}
 
-Geef:
-- validatie
-- belangrijkste blokkade of bevestiging
-- wat moet verbeteren
-
-Sluit af met exact:
+Sluit exact af met:
 SETUP-STATUS: GO / NO-GO / CONDITIONAL
 RELEVANTIE: VANDAAG / KOMENDE_DAGEN / LATER
 """
@@ -327,35 +258,28 @@ def prompt_strategy_implication(strategy):
     return f"""
 Analyseer de strategie-implicatie.
 
-Entry: {strategy['entry']}
-Targets: {strategy['targets']}
-Stop-loss: {strategy['stop_loss']}
+Entry: {strategy.get('entry')}
+Targets: {strategy.get('targets')}
+Stop-loss: {strategy.get('stop_loss')}
 
-Beoordeel:
-- uitvoerbaarheid vandaag
-- discipline-risico
-- trigger-afhankelijkheid
-
-Sluit af met exact:
+Sluit exact af met:
 STRATEGIE-STATUS: UITVOERBAAR_VANDAAG / WACHT_OP_TRIGGER / NIET_ACTUEEL
 """
 
 
 def prompt_outlook():
     return """
-Geef een korte vooruitblik (max 4 zinnen).
+Geef een korte vooruitblik.
 
 Scenario’s:
 - bullish
 - bearish
 - consolidatie
-
-Benoem per scenario de implicatie voor actie of geduld.
 """
 
 
 # =====================================================
-# 8️⃣ MAIN REPORT BUILDER
+# 7️⃣ MAIN REPORT BUILDER
 # =====================================================
 def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> dict:
     logger.info(f"📄 Rapport genereren | {symbol} | user_id={user_id}")
@@ -370,39 +294,28 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
     market = get_latest_market_data()
     indicators = get_market_indicator_scores(user_id)
 
-    if scores.get("setup_score") is None and ai.get("setup"):
-        scores["setup_score"] = ai["setup"].get("avg_score")
-        scores["_meta"]["setup_score_source"] = "ai"
-
-    strategy = get_latest_strategy(setup.get("id"), user_id) or {
-        "entry": "n.v.t.",
-        "targets": [],
-        "stop_loss": "n.v.t.",
-        "risk_reward": "?",
-        "explanation": "Geen strategie beschikbaar."
-    }
-
     return {
-        # 🔑 Menselijk leesbaar
+        # 🔑 REPORT CONTENT (1-op-1 met DB + UI)
         "executive_summary": generate_section(
-            prompt_executive_summary(setup, scores, market)
+            prompt_executive_summary(scores, market)
         ),
-        "market_snapshot": market,
+        "macro_context": generate_section(
+            prompt_macro_context(ai.get("macro", {}))
+        ),
         "setup_validation": generate_section(
             prompt_setup_validation(setup, scores)
         ),
         "strategy_implication": generate_section(
-            prompt_strategy_implication(strategy)
-        ),
-        "macro_summary": generate_section(
-            prompt_macro(ai.get("macro", {}))
+            prompt_strategy_implication({})
         ),
         "outlook": generate_section(
             prompt_outlook()
         ),
 
-        # 🤖 Machine / bot input
+        # 📊 DATA BLOKKEN
+        "market_data": market,
+        "indicator_highlights": indicators,
+
+        # 🔢 SCORES (optioneel, maar handig)
         "scores": scores,
-        "strategy": strategy,
-        "market_indicator_scores": indicators,
     }
