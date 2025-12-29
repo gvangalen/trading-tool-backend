@@ -1,6 +1,5 @@
 import logging
 import json
-import traceback
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
@@ -61,20 +60,20 @@ def run_macro_agent(user_id: int):
             })
 
         # =========================================================
-        # 2️⃣ Macro data van vandaag (user-specifiek)
+        # 2️⃣ Macro data — LAATSTE SNAPSHOT (⚠️ FIX)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
                 WHERE user_id = %s
-                  AND timestamp::date = CURRENT_DATE
-                ORDER BY timestamp DESC;
+                ORDER BY timestamp DESC
+                LIMIT 50;
             """, (user_id,))
             macro_rows = cur.fetchall()
 
         if not macro_rows:
-            logger.info(f"ℹ️ [Macro-Agent] Geen macro_data vandaag (user_id={user_id})")
+            logger.info(f"ℹ️ [Macro-Agent] Geen macro_data beschikbaar (user_id={user_id})")
             return
 
         macro_items = [
@@ -94,7 +93,6 @@ def run_macro_agent(user_id: int):
         # 3️⃣ Macro score (DB-gedreven)
         # =========================================================
         macro_scores = generate_scores_db("macro", user_id=user_id)
-
         macro_avg = macro_scores.get("total_score", 10)
 
         top_contributors = sorted(
