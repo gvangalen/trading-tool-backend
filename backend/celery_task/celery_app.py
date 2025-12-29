@@ -64,7 +64,7 @@ celery_app.conf.beat_schedule = {
 
     "save_market_data_daily": {
         "task": "backend.celery_task.market_task.save_market_data_daily",
-        "schedule": crontab(hour=0, minute=5),
+        "schedule": crontab(hour=1, minute=5),
     },
 
     # =====================================================
@@ -72,7 +72,7 @@ celery_app.conf.beat_schedule = {
     # =====================================================
     "dispatch_macro_indicators": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=0, minute=12),
+        "schedule": crontab(hour=1, minute=12),
         "kwargs": {
             "task_name": "backend.celery_task.macro_task.fetch_macro_data"
         },
@@ -80,7 +80,7 @@ celery_app.conf.beat_schedule = {
 
     "dispatch_technical_indicators": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=0, minute=15),
+        "schedule": crontab(hour=1, minute=15),
         "kwargs": {
             "task_name": "backend.celery_task.technical_task.fetch_technical_data_day"
         },
@@ -88,7 +88,7 @@ celery_app.conf.beat_schedule = {
 
     "dispatch_market_indicators": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=0, minute=18),
+        "schedule": crontab(hour=1, minute=18),
         "kwargs": {
             "task_name": "backend.celery_task.market_task.fetch_market_indicators"
         },
