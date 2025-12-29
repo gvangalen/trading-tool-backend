@@ -29,7 +29,7 @@ def generate_daily_report(user_id: int):
     Genereert dagelijks rapport per user.
 
     - gebruikt report_ai_agent (single source of truth)
-    - slaat exact de report-velden op (geen legacy)
+    - slaat exact de daily_reports structuur op
     - genereert PDF
     - verstuurt optioneel e-mail
     """
@@ -50,45 +50,37 @@ def generate_daily_report(user_id: int):
         # -------------------------------------------------
         # 1️⃣ REPORT GENEREREN (AI AGENT)
         # -------------------------------------------------
-        report = generate_daily_report_sections(symbol="BTC", user_id=user_id)
+        report = generate_daily_report_sections(
+            symbol="BTC",
+            user_id=user_id
+        )
 
         if not isinstance(report, dict):
             logger.error("❌ Report agent gaf geen geldig dict terug")
             return
 
-        # ----------------------------
-        # Extract core blocks
-        # ----------------------------
-        executive_summary    = report.get("executive_summary", "")
-        macro_context        = report.get("macro_summary", "")
-        setup_validation     = report.get("setup_validation", "")
-        strategy_implication = report.get("strategy_implication", "")
-        outlook              = report.get("outlook", "")
+        # -------------------------------------------------
+        # 2️⃣ EXTRACT — 1-OP-1 MET daily_reports
+        # -------------------------------------------------
+        executive_summary    = report.get("executive_summary")
+        macro_context        = report.get("macro_context")
+        setup_validation     = report.get("setup_validation")
+        strategy_implication = report.get("strategy_implication")
+        outlook              = report.get("outlook")
 
-        # ----------------------------
-        # Market snapshot
-        # ----------------------------
-        market_data = report.get("market_data", {}) or {}
-        price       = market_data.get("price")
-        change_24h  = market_data.get("change_24h")
-        volume      = market_data.get("volume")
+        price       = report.get("price")
+        change_24h  = report.get("change_24h")
+        volume      = report.get("volume")
 
-        # ----------------------------
-        # Indicator highlights (JSONB)
-        # ----------------------------
-        indicator_highlights = report.get("market_indicator_scores", [])
+        indicator_highlights = report.get("indicator_highlights", [])
 
-        # ----------------------------
-        # Scores
-        # ----------------------------
-        scores = report.get("scores", {}) or {}
-        macro_score     = scores.get("macro_score")
-        technical_score = scores.get("technical_score")
-        market_score    = scores.get("market_score")
-        setup_score     = scores.get("setup_score")
+        macro_score     = report.get("macro_score")
+        technical_score = report.get("technical_score")
+        market_score    = report.get("market_score")
+        setup_score     = report.get("setup_score")
 
         # -------------------------------------------------
-        # 2️⃣ OPSLAAN IN daily_reports (SCHONE STRUCTUUR)
+        # 3️⃣ OPSLAAN IN daily_reports
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -159,7 +151,7 @@ def generate_daily_report(user_id: int):
         logger.info(f"💾 daily_reports opgeslagen | user_id={user_id}")
 
         # -------------------------------------------------
-        # 3️⃣ PDF GENEREREN
+        # 4️⃣ PDF GENEREREN
         # -------------------------------------------------
         cursor.execute("""
             SELECT *
@@ -183,7 +175,10 @@ def generate_daily_report(user_id: int):
 
         pdf_dir = os.path.join("static", "pdf", "daily")
         os.makedirs(pdf_dir, exist_ok=True)
-        pdf_path = os.path.join(pdf_dir, f"daily_{today}_u{user_id}.pdf")
+        pdf_path = os.path.join(
+            pdf_dir,
+            f"daily_{today}_u{user_id}.pdf"
+        )
 
         with open(pdf_path, "wb") as f:
             f.write(
@@ -195,7 +190,7 @@ def generate_daily_report(user_id: int):
         logger.info(f"🖨️ PDF opgeslagen: {pdf_path}")
 
         # -------------------------------------------------
-        # 4️⃣ EMAIL (OPTIONEEL)
+        # 5️⃣ EMAIL (OPTIONEEL)
         # -------------------------------------------------
         try:
             subject = f"📈 BTC Daily Report – {today}"
