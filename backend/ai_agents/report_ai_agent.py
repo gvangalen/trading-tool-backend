@@ -5,7 +5,6 @@ from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
-
 from backend.ai_core.system_prompt import build_system_prompt
 
 # =====================================================
@@ -14,6 +13,9 @@ from backend.ai_core.system_prompt import build_system_prompt
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# =====================================================
+# REPORT AGENT TASK (CENTRAAL, GEEN OVERLAP)
+# =====================================================
 REPORT_TASK = """
 Rol:
 Samenstellen van het DAGELIJKS TRADING RAPPORT.
@@ -22,14 +24,14 @@ INPUT:
 - daily_scores
 - ai_category_insights
 - setup (indien aanwezig)
-- strategy (indien aanwezig)
 - market snapshot
-- indicator highlights
+- market indicator highlights
 
 REGELS:
 - Gebruik uitsluitend aangeleverde data
 - Geen eigen analyse
 - Geen aannames
+- Geen uitleg van indicatoren
 
 OUTPUT STRUCTUUR + LIMIETEN:
 
@@ -41,21 +43,16 @@ OUTPUT STRUCTUUR + LIMIETEN:
    - 2–3 zinnen
    - Eindigt met: MACRO-IMPACT
 
-3. Market Context
-   - Maximaal 3 zinnen
-
-4. Technical Context
-   - Maximaal 3 zinnen
-
-5. Setup Validatie
+3. Setup Validatie
    - Maximaal 4 zinnen
    - Eindigt met: SETUP-STATUS + RELEVANTIE
 
-6. Strategie Implicatie
+4. Strategie Implicatie
    - Maximaal 3 zinnen
    - Eindigt met: STRATEGIE-STATUS
+   - Als geen strategie: schrijf letterlijk "ONVOLDOENDE DATA"
 
-7. Vooruitblik
+5. Vooruitblik
    - Exact 3 zinnen:
      - bullish
      - bearish
@@ -84,7 +81,7 @@ def nv(v):
 
 
 # =====================================================
-# 1️⃣ DAILY SCORES (DB = SINGLE SOURCE OF TRUTH)
+# 1️⃣ DAILY SCORES (SINGLE SOURCE OF TRUTH)
 # =====================================================
 def get_daily_scores(user_id: int) -> dict:
     conn = get_db_connection()
@@ -122,7 +119,7 @@ def get_daily_scores(user_id: int) -> dict:
 
 
 # =====================================================
-# 2️⃣ AI CATEGORY INSIGHTS (MACRO / TECH / MARKET / SETUP / MASTER)
+# 2️⃣ AI CATEGORY INSIGHTS (MACRO / MARKET / TECH)
 # =====================================================
 def get_ai_insights(user_id: int) -> dict:
     conn = get_db_connection()
@@ -146,7 +143,7 @@ def get_ai_insights(user_id: int) -> dict:
                 "trend": trend or "–",
                 "bias": bias or "–",
                 "risk": risk or "–",
-                "summary": summary or "–"
+                "summary": summary or "–",
             }
 
         return insights
@@ -156,7 +153,7 @@ def get_ai_insights(user_id: int) -> dict:
 
 
 # =====================================================
-# 3️⃣ MARKET DATA (SNAPSHOT)
+# 3️⃣ MARKET SNAPSHOT
 # =====================================================
 def get_latest_market_data() -> dict:
     conn = get_db_connection()
@@ -187,7 +184,7 @@ def get_latest_market_data() -> dict:
 
 
 # =====================================================
-# 4️⃣ MARKET INDICATOR SCORES (HIGHLIGHTS)
+# 4️⃣ MARKET INDICATOR HIGHLIGHTS (JUISTE TABEL)
 # =====================================================
 def get_market_indicator_scores(user_id: int) -> list:
     conn = get_db_connection()
@@ -197,11 +194,12 @@ def get_market_indicator_scores(user_id: int) -> list:
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT indicator, value, score, interpretation
-                FROM market_indicator_scores
+                SELECT name, value, score, interpretation
+                FROM market_data_indicators
                 WHERE user_id = %s
-                  AND timestamp::date = CURRENT_DATE
-                ORDER BY timestamp DESC;
+                  AND score IS NOT NULL
+                  AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY score DESC;
             """, (user_id,))
             rows = cur.fetchall()
 
@@ -210,7 +208,7 @@ def get_market_indicator_scores(user_id: int) -> list:
                 "indicator": r[0],
                 "value": to_float(r[1]),
                 "score": to_float(r[2]),
-                "interpretation": r[3] or "–"
+                "interpretation": r[3] or "–",
             }
             for r in rows
         ]
@@ -220,24 +218,24 @@ def get_market_indicator_scores(user_id: int) -> list:
 
 
 # =====================================================
-# 5️⃣ GPT HELPER (CENTRALE AI-ROL)
+# 5️⃣ GPT HELPER
 # =====================================================
 def generate_section(prompt: str) -> str:
-    system_prompt = build_system_prompt(REPORT_TASK)
+    system_prompt = build_system_prompt(task=REPORT_TASK, agent="report")
     text = ask_gpt_text(prompt, system_role=system_prompt)
-    return text.strip() if text else "AI-generatie mislukt."
+    return text.strip() if text else "ONVOLDOENDE DATA"
 
 
 # =====================================================
-# 6️⃣ PROMPTS (INHOUD BLIJFT GELIJK)
+# 6️⃣ PROMPTS
 # =====================================================
 def prompt_executive_summary(scores, market):
     return f"""
-Schrijf een korte executive summary (max 5 zinnen).
+Schrijf de executive summary.
 
 Scores:
 Macro: {nv(scores.get('macro_score'))}
-Technisch: {nv(scores.get('technical_score'))}
+Technical: {nv(scores.get('technical_score'))}
 Market: {nv(scores.get('market_score'))}
 Setup: {nv(scores.get('setup_score'))}
 
@@ -252,7 +250,7 @@ CONFIDENCE: LAAG / MIDDEL / HOOG
 
 def prompt_macro_context(ai):
     return f"""
-Beschrijf de macro-context in beslistermen.
+Beschrijf de macro-context.
 
 Trend: {ai.get('trend')}
 Bias: {ai.get('bias')}
@@ -264,14 +262,17 @@ MACRO-IMPACT: STEUNEND / NEUTRAAL / REMMEND
 
 
 def prompt_setup_validation(setup, scores):
+    if not setup:
+        return "ONVOLDOENDE DATA"
+
     return f"""
-Beoordeel of de setup vandaag valide is.
+Beoordeel de setup.
 
 Setup: {setup.get('name')} ({setup.get('timeframe')})
 
 Scores:
 Macro: {nv(scores.get('macro_score'))}
-Technisch: {nv(scores.get('technical_score'))}
+Technical: {nv(scores.get('technical_score'))}
 Market: {nv(scores.get('market_score'))}
 
 Sluit exact af met:
@@ -281,8 +282,11 @@ RELEVANTIE: VANDAAG / KOMENDE_DAGEN / LATER
 
 
 def prompt_strategy_implication(strategy):
+    if not strategy:
+        return "ONVOLDOENDE DATA"
+
     return f"""
-Analyseer de strategie-implicatie.
+Analyseer strategie-implicatie.
 
 Entry: {strategy.get('entry')}
 Targets: {strategy.get('targets')}
@@ -295,24 +299,22 @@ STRATEGIE-STATUS: UITVOERBAAR_VANDAAG / WACHT_OP_TRIGGER / NIET_ACTUEEL
 
 def prompt_outlook():
     return """
-Geef een korte vooruitblik.
-
-Scenario’s:
-- bullish
-- bearish
-- consolidatie
+Geef exact drie zinnen:
+1. Bullish scenario
+2. Bearish scenario
+3. Consolidatie scenario
 """
 
 
 # =====================================================
-# 7️⃣ MAIN REPORT BUILDER (ONGEWIJZIGD INHOUD)
+# 7️⃣ MAIN REPORT BUILDER
 # =====================================================
 def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> dict:
     logger.info(f"📄 Rapport genereren | {symbol} | user_id={user_id}")
 
     setup = sanitize_json_input(
         get_latest_setup_for_symbol(symbol=symbol, user_id=user_id) or {},
-        context="setup"
+        context="setup",
     )
 
     scores = get_daily_scores(user_id)
@@ -336,7 +338,6 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
         "outlook": generate_section(
             prompt_outlook()
         ),
-
         "market_data": market,
         "indicator_highlights": indicators,
         "scores": scores,
