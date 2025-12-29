@@ -151,17 +151,72 @@ def save_market_data_daily():
 # =====================================================
 @shared_task(name="backend.celery_task.market_task.fetch_market_data_7d")
 def fetch_market_data_7d():
-    logger.info("📆 Start fetch_market_data_7d...")
+    """
+    Bouwt een consistente 7-daagse market view:
+    - 6 gesloten dagen (Binance 1D candles)
+    - + vandaag (partial) uit market_data
+    """
+    logger.info("📆 Start fetch_market_data_7d (fixed logic)...")
     conn = get_db_connection()
 
     try:
+        # =====================================================
+        # 1️⃣ Binance: LAATSTE 6 GESLOTEN DAGEN
+        # =====================================================
         binance_url = "https://api.binance.com/api/v3/klines"
         candles = safe_get(binance_url, params={
             "symbol": "BTCUSDT",
             "interval": "1d",
-            "limit": 7
+            "limit": 6
         })
 
+        historical = []
+        for c in candles:
+            date = datetime.utcfromtimestamp(int(c[0]) / 1000).date()
+            open_p, high_p, low_p, close_p = map(float, c[1:5])
+            change = round(((close_p - open_p) / open_p) * 100, 2)
+
+            historical.append({
+                "date": date,
+                "open": open_p,
+                "high": high_p,
+                "low": low_p,
+                "close": close_p,
+                "change": change,
+            })
+
+        # =====================================================
+        # 2️⃣ VANDAAG (PARTIAL) UIT market_data
+        # =====================================================
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT price, volume, change_24h, timestamp
+                FROM market_data
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """)
+            row = cur.fetchone()
+
+        if not row:
+            logger.warning("⚠️ Geen live market_data gevonden — sla vandaag over")
+            today_row = None
+        else:
+            price, volume, change_24h, ts = row
+            today_date = ts.date()
+
+            today_row = {
+                "date": today_date,
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "change": float(change_24h),
+                "volume": float(volume) if volume else 0.0,
+            }
+
+        # =====================================================
+        # 3️⃣ VOLUME CONTEXT (7D) — CoinGecko
+        # =====================================================
         vol_data = safe_get(
             "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
             params={"vs_currency": "usd", "days": "7"}
@@ -169,18 +224,19 @@ def fetch_market_data_7d():
 
         volume_by_date = defaultdict(list)
         for ts, vol in vol_data.get("total_volumes", []):
-            date = datetime.utcfromtimestamp(ts / 1000).date()
-            volume_by_date[date].append(vol)
+            d = datetime.utcfromtimestamp(ts / 1000).date()
+            volume_by_date[d].append(vol)
 
-        avg_volume = {d: sum(v) / len(v) for d, v in volume_by_date.items()}
+        avg_volume = {
+            d: sum(v) / len(v)
+            for d, v in volume_by_date.items()
+        }
 
+        # =====================================================
+        # 4️⃣ OPSLAAN HISTORIE
+        # =====================================================
         with conn.cursor() as cur:
-            for c in candles:
-                date = datetime.utcfromtimestamp(int(c[0]) / 1000).date()
-                open_p, high_p, low_p, close_p = map(float, c[1:5])
-                change = round(((close_p - open_p) / open_p) * 100, 2)
-                volume = float(avg_volume.get(date, 0))
-
+            for d in historical:
                 cur.execute("""
                     INSERT INTO market_data_7d
                         (symbol, date, open, high, low, close, change, volume, created_at)
@@ -195,15 +251,51 @@ def fetch_market_data_7d():
                         volume = EXCLUDED.volume,
                         created_at = NOW();
                 """, (
-                    SYMBOL, date,
-                    open_p, high_p, low_p, close_p,
-                    change, volume
+                    SYMBOL,
+                    d["date"],
+                    d["open"],
+                    d["high"],
+                    d["low"],
+                    d["close"],
+                    d["change"],
+                    float(avg_volume.get(d["date"], 0)),
+                ))
+
+        # =====================================================
+        # 5️⃣ OPSLAAN VANDAAG (PARTIAL)
+        # =====================================================
+        if today_row:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO market_data_7d
+                        (symbol, date, open, high, low, close, change, volume, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (symbol, date)
+                    DO UPDATE SET
+                        open = EXCLUDED.open,
+                        high = EXCLUDED.high,
+                        low = EXCLUDED.low,
+                        close = EXCLUDED.close,
+                        change = EXCLUDED.change,
+                        volume = EXCLUDED.volume,
+                        created_at = NOW();
+                """, (
+                    SYMBOL,
+                    today_row["date"],
+                    today_row["open"],
+                    today_row["high"],
+                    today_row["low"],
+                    today_row["close"],
+                    today_row["change"],
+                    today_row["volume"],
                 ))
 
         conn.commit()
-        logger.info("✅ market_data_7d bijgewerkt.")
+        logger.info("✅ market_data_7d correct opgebouwd (incl. vandaag).")
+
     except Exception:
-        logger.error("❌ Fout in fetch_market_data_7d", exc_info=True)
+        logger.exception("❌ Fout in fetch_market_data_7d")
+        conn.rollback()
     finally:
         conn.close()
 
