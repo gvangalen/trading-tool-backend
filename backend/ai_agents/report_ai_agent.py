@@ -5,7 +5,7 @@ from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.json_utils import sanitize_json_input
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
-from backend.ai_core.system_prompt import build_system_prompt
+from backend.ai_core.system_prompt_builder import build_system_prompt
 
 # =====================================================
 # Logging
