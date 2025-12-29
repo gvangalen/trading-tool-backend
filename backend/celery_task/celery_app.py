@@ -59,7 +59,7 @@ celery_app.conf.beat_schedule = {
 
     "fetch_market_data_7d": {
         "task": "backend.celery_task.market_task.fetch_market_data_7d",
-        "schedule": crontab(hour=0, minute=2),
+        "schedule": crontab(hour=1, minute=20),
     },
 
     "save_market_data_daily": {
