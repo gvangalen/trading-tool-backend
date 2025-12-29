@@ -21,8 +21,9 @@ def run_technical_agent(user_id: int):
     - ai_category_insights (category='technical')
     - ai_reflections (category='technical')
 
-    ❗ Geen scoring
-    ❗ Geen berekeningen
+    ✔ Geen scoring
+    ✔ Geen berekeningen
+    ✔ Altijd laatste snapshot per indicator (timezone-safe)
     """
 
     if user_id is None:
@@ -37,7 +38,7 @@ def run_technical_agent(user_id: int):
 
     try:
         # ------------------------------------------------------
-        # 1️⃣ SCOREREGELS (GLOBAAL)
+        # 1️⃣ TECHNICAL SCOREREGELS (GLOBAAL)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -62,7 +63,7 @@ def run_technical_agent(user_id: int):
         logger.info(f"📘 Technical scoreregels geladen ({len(rule_rows)} regels)")
 
         # ------------------------------------------------------
-        # 2️⃣ LAATSTE TECHNISCHE INDICATOREN (PER USER)
+        # 2️⃣ LAATSTE TECHNICAL INDICATORS (GEEN DATUMFILTER)
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -121,15 +122,16 @@ def run_technical_agent(user_id: int):
         avg_score = round(sum(scores) / len(scores), 2) if scores else 50.0
 
         # ------------------------------------------------------
-        # 4️⃣ AI CONTEXT — TECHNICAL SAMENVATTING
+        # 4️⃣ AI TECHNICAL CONTEXT
         # ------------------------------------------------------
         TECHNICAL_TASK = """
 Analyseer technische indicatoren voor Bitcoin.
 
 Gebruik uitsluitend:
 - indicatorwaarden
-- bijbehorende scores
-- trend per indicator
+- scores
+- trends
+- uitleg + advies
 
 Geef:
 - trend
@@ -162,11 +164,11 @@ Antwoord uitsluitend in geldige JSON.
 Maak reflecties per technische indicator.
 
 Beoordeel:
-- of score past bij waarde
+- of score logisch is
 - of interpretatie consistent is
-- waar risico of overschatting zit
+- waar risico of zwakte zit
 
-Antwoord uitsluitend in geldige JSON-lijst.
+Antwoord uitsluitend als JSON-lijst.
 """
 
         reflection_prompt = build_system_prompt(
@@ -181,17 +183,6 @@ Antwoord uitsluitend in geldige JSON-lijst.
 
         if not isinstance(ai_reflections, list):
             ai_reflections = []
-
-        # ------------------------------------------------------
-        # 🧹 OPSCHONEN OUDE REFLECTIES VAN VANDAAG
-        # ------------------------------------------------------
-        with conn.cursor() as cur:
-            cur.execute("""
-                DELETE FROM ai_reflections
-                WHERE category = 'technical'
-                  AND user_id = %s
-                  AND date = CURRENT_DATE;
-            """, (user_id,))
 
         # ------------------------------------------------------
         # 6️⃣ OPSLAAN AI_CATEGORY_INSIGHTS
@@ -222,7 +213,7 @@ Antwoord uitsluitend in geldige JSON-lijst.
             ))
 
         # ------------------------------------------------------
-        # 7️⃣ OPSLAAN AI_REFLECTIONS (PER INDICATOR)
+        # 7️⃣ OPSLAAN AI_REFLECTIONS
         # ------------------------------------------------------
         for r in ai_reflections:
             indicator = r.get("indicator")
