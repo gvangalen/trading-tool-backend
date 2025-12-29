@@ -180,9 +180,10 @@ def fetch_and_process_macro(user_id: int):
         raw_name = ind["name"]
         name = normalize_indicator_name(raw_name)
 
-        if already_fetched_today(name, user_id):
-            logger.info(f"⏩ {name} al verwerkt vandaag (user_id={user_id})")
-            continue
+        # ❌ VERWIJDERD:
+        # if already_fetched_today(name, user_id):
+        #     logger.info(f"⏩ {name} al verwerkt vandaag (user_id={user_id})")
+        #     continue
 
         try:
             value = fetch_value_from_source(ind)
