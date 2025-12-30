@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from datetime import date
 from celery import shared_task
@@ -18,6 +19,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 load_dotenv()
+
+
+# =====================================================
+# 🔧 Helpers
+# =====================================================
+def safe_json(value, fallback=None):
+    """
+    Zorgt dat DB nooit dict/list krijgt.
+    """
+    if value is None:
+        return fallback
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    if isinstance(value, str):
+        return value
+    return json.dumps(str(value))
 
 
 # =====================================================
@@ -60,19 +77,21 @@ def generate_daily_report(user_id: int):
             return
 
         # -------------------------------------------------
-        # 2️⃣ EXTRACT — 1-OP-1 MET daily_reports
+        # 2️⃣ EXTRACT & NORMALISEER
         # -------------------------------------------------
-        executive_summary    = report.get("executive_summary")
-        macro_context        = report.get("macro_context")
-        setup_validation     = report.get("setup_validation")
-        strategy_implication = report.get("strategy_implication")
-        outlook              = report.get("outlook")
+        executive_summary    = safe_json(report.get("executive_summary"))
+        macro_context        = safe_json(report.get("macro_context"))
+        setup_validation     = safe_json(report.get("setup_validation"))
+        strategy_implication = safe_json(report.get("strategy_implication"))
+        outlook              = safe_json(report.get("outlook"))
 
         price       = report.get("price")
         change_24h  = report.get("change_24h")
         volume      = report.get("volume")
 
-        indicator_highlights = report.get("indicator_highlights", [])
+        indicator_highlights = safe_json(
+            report.get("indicator_highlights", [])
+        )
 
         macro_score     = report.get("macro_score")
         technical_score = report.get("technical_score")
