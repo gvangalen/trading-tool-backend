@@ -11,6 +11,48 @@ logger.setLevel(logging.INFO)
 
 
 # ======================================================
+# 🧠 Helpers
+# ======================================================
+def is_empty_macro_context(ctx: dict) -> bool:
+    """
+    Checkt of de AI wel inhoud heeft gegenereerd
+    (niet alleen geldige JSON, maar ook betekenis)
+    """
+    if not isinstance(ctx, dict):
+        return True
+
+    return not any([
+        ctx.get("summary"),
+        ctx.get("trend"),
+        ctx.get("bias"),
+        ctx.get("risk"),
+        ctx.get("top_signals"),
+    ])
+
+
+def fallback_macro_context(macro_items: list) -> dict:
+    """
+    Veilige fallback bij te weinig AI-output
+    """
+    indicators = {i["indicator"] for i in macro_items}
+
+    return {
+        "trend": "neutraal",
+        "bias": "afwachtend",
+        "risk": "gemiddeld",
+        "summary": (
+            "De macro-analyse is gebaseerd op een beperkt aantal indicatoren. "
+            "BTC-dominantie en marktsentiment geven richting, maar vragen om "
+            "voorzichtigheid en bevestiging."
+        ),
+        "top_signals": [
+            f"{ind} blijft richtinggevend"
+            for ind in sorted(indicators)
+        ] or ["Beperkte macrodata beschikbaar"],
+    }
+
+
+# ======================================================
 # 🌍 MACRO AI AGENT — PURE AI + DB LOGICA
 # ======================================================
 def run_macro_agent(user_id: int):
@@ -60,7 +102,7 @@ def run_macro_agent(user_id: int):
             })
 
         # =========================================================
-        # 2️⃣ Macro data — LAATSTE SNAPSHOT (⚠️ FIX)
+        # 2️⃣ Macro data — LAATSTE SNAPSHOT
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -123,14 +165,19 @@ def run_macro_agent(user_id: int):
         }
 
         macro_task = """
-Analyseer macro-economische data in beslistermen voor Bitcoin.
+Analyseer de beschikbare macrodata in beslistermen voor Bitcoin.
 
-Geef:
-- trend
-- bias
-- risico
-- korte samenvatting
-- belangrijkste macro-signalen
+Belangrijk:
+- Gebruik uitsluitend de indicatoren die aanwezig zijn
+- Ook bij weinig data moet je een concrete analyse geven
+- Vermijd lege antwoorden of 'onvoldoende data'
+
+Geef altijd:
+- trend (bullish / bearish / neutraal)
+- bias (positief / negatief / neutraal)
+- risico (laag / gemiddeld / hoog)
+- korte samenvatting (minstens 1 zin)
+- belangrijkste macro-signalen (minstens 1 punt)
 
 Antwoord uitsluitend in geldige JSON.
 """
@@ -147,6 +194,11 @@ Antwoord uitsluitend in geldige JSON.
 
         if not isinstance(ai_context, dict):
             raise ValueError("❌ Macro AI response geen geldige JSON")
+
+        # 🛟 Inhoudelijke fallback
+        if is_empty_macro_context(ai_context):
+            logger.warning("⚠️ Macro AI gaf lege inhoud → fallback toegepast")
+            ai_context = fallback_macro_context(macro_items)
 
         # =========================================================
         # 5️⃣ AI REFLECTIES PER INDICATOR
