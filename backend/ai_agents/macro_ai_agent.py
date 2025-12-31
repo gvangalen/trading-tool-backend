@@ -15,7 +15,7 @@ logger.setLevel(logging.INFO)
 # ======================================================
 def is_empty_macro_context(ctx: dict) -> bool:
     """
-    Checkt of de AI wel inhoud heeft gegenereerd
+    Checkt of de AI inhoud heeft gegenereerd
     (niet alleen geldige JSON, maar ook betekenis)
     """
     if not isinstance(ctx, dict):
@@ -52,6 +52,25 @@ def fallback_macro_context(macro_items: list) -> dict:
     }
 
 
+def normalize_ai_context(ai_ctx: dict, macro_items: list) -> dict:
+    """
+    Normaliseert AI-output (NL/EN keys) + fallback
+    """
+    normalized = {
+        "trend": ai_ctx.get("trend", ""),
+        "bias": ai_ctx.get("bias", ""),
+        "risk": ai_ctx.get("risk") or ai_ctx.get("risico", ""),
+        "summary": ai_ctx.get("summary") or ai_ctx.get("samenvatting", ""),
+        "top_signals": ai_ctx.get("top_signals", []),
+    }
+
+    if is_empty_macro_context(normalized):
+        logger.warning("⚠️ Macro AI gaf lege inhoud → fallback toegepast")
+        return fallback_macro_context(macro_items)
+
+    return normalized
+
+
 # ======================================================
 # 🌍 MACRO AI AGENT — PURE AI + DB LOGICA
 # ======================================================
@@ -79,7 +98,7 @@ def run_macro_agent(user_id: int):
 
     try:
         # =========================================================
-        # 1️⃣ Macro scoreregels (globaal)
+        # 1️⃣ Macro scoreregels
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -102,7 +121,7 @@ def run_macro_agent(user_id: int):
             })
 
         # =========================================================
-        # 2️⃣ Macro data — LAATSTE SNAPSHOT
+        # 2️⃣ Macro data (laatste snapshot)
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -115,7 +134,7 @@ def run_macro_agent(user_id: int):
             macro_rows = cur.fetchall()
 
         if not macro_rows:
-            logger.info(f"ℹ️ [Macro-Agent] Geen macro_data beschikbaar (user_id={user_id})")
+            logger.info(f"ℹ️ [Macro-Agent] Geen macro_data (user_id={user_id})")
             return
 
         macro_items = [
@@ -132,7 +151,7 @@ def run_macro_agent(user_id: int):
         ]
 
         # =========================================================
-        # 3️⃣ Macro score (DB-gedreven)
+        # 3️⃣ Macro score
         # =========================================================
         macro_scores = generate_scores_db("macro", user_id=user_id)
         macro_avg = macro_scores.get("total_score", 10)
@@ -155,7 +174,7 @@ def run_macro_agent(user_id: int):
         ]
 
         # =========================================================
-        # 4️⃣ AI MACRO SAMENVATTING
+        # 4️⃣ AI MACRO ANALYSE
         # =========================================================
         payload = {
             "macro_items": macro_items,
@@ -168,7 +187,7 @@ def run_macro_agent(user_id: int):
 Analyseer de beschikbare macrodata in beslistermen voor Bitcoin.
 
 Belangrijk:
-- Gebruik uitsluitend de indicatoren die aanwezig zijn
+- Gebruik uitsluitend de aanwezige indicatoren
 - Ook bij weinig data moet je een concrete analyse geven
 - Vermijd lege antwoorden of 'onvoldoende data'
 
@@ -182,26 +201,20 @@ Geef altijd:
 Antwoord uitsluitend in geldige JSON.
 """
 
-        system_prompt = build_system_prompt(
-            agent="macro",
-            task=macro_task
-        )
+        system_prompt = build_system_prompt(agent="macro", task=macro_task)
 
-        ai_context = ask_gpt(
+        raw_ai_context = ask_gpt(
             prompt=json.dumps(payload, ensure_ascii=False, indent=2),
             system_role=system_prompt
         )
 
-        if not isinstance(ai_context, dict):
+        if not isinstance(raw_ai_context, dict):
             raise ValueError("❌ Macro AI response geen geldige JSON")
 
-        # 🛟 Inhoudelijke fallback
-        if is_empty_macro_context(ai_context):
-            logger.warning("⚠️ Macro AI gaf lege inhoud → fallback toegepast")
-            ai_context = fallback_macro_context(macro_items)
+        ai_context = normalize_ai_context(raw_ai_context, macro_items)
 
         # =========================================================
-        # 5️⃣ AI REFLECTIES PER INDICATOR
+        # 5️⃣ AI REFLECTIES
         # =========================================================
         reflections_task = """
 Maak per macro-indicator een reflectie.
@@ -215,10 +228,7 @@ Per item:
 Antwoord uitsluitend als JSON-lijst.
 """
 
-        reflections_prompt = build_system_prompt(
-            agent="macro",
-            task=reflections_task
-        )
+        reflections_prompt = build_system_prompt(agent="macro", task=reflections_task)
 
         ai_reflections = ask_gpt(
             prompt=json.dumps(macro_items, ensure_ascii=False, indent=2),
@@ -248,11 +258,11 @@ Antwoord uitsluitend als JSON-lijst.
             """, (
                 user_id,
                 macro_avg,
-                ai_context.get("trend", ""),
-                ai_context.get("bias", ""),
-                ai_context.get("risk", ""),
-                ai_context.get("summary", ""),
-                json.dumps(ai_context.get("top_signals", [])),
+                ai_context["trend"],
+                ai_context["bias"],
+                ai_context["risk"],
+                ai_context["summary"],
+                json.dumps(ai_context["top_signals"]),
             ))
 
         # =========================================================
