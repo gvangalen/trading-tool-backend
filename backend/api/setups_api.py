@@ -292,16 +292,24 @@ async def update_setup(
     user_id = current_user["id"]
     data = await request.json()
 
+    # -------------------------------
+    # ✅ Validatie min/max scores
+    # -------------------------------
     for cat in ["macro", "technical", "market"]:
         mn = data.get(f"min_{cat}_score")
         mx = data.get(f"max_{cat}_score")
         if mn is not None and mx is not None and int(mn) > int(mx):
-            raise HTTPException(400, f"min_{cat}_score mag niet hoger zijn dan max_{cat}_score")
+            raise HTTPException(
+                400, f"min_{cat}_score mag niet hoger zijn dan max_{cat}_score"
+            )
 
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
+            # -------------------------------
+            # 🔐 Ownership check
+            # -------------------------------
             cur.execute(
                 "SELECT id FROM setups WHERE id=%s AND user_id=%s",
                 (setup_id, user_id),
@@ -309,47 +317,63 @@ async def update_setup(
             if not cur.fetchone():
                 raise HTTPException(403, "Geen toegang")
 
+            # -------------------------------
+            # 🏷️ Tags normaliseren
+            # -------------------------------
             tags = data.get("tags", [])
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",") if t.strip()]
 
-            cur.execute("""
+            # -------------------------------
+            # 🧠 Dynamische UPDATE (BELANGRIJK)
+            # -------------------------------
+            update_fields = []
+            values = []
+
+            def add(field, value):
+                update_fields.append(f"{field}=%s")
+                values.append(value)
+
+            add("name", data.get("name"))
+            add("symbol", data.get("symbol"))
+            add("timeframe", data.get("timeframe"))
+            add("account_type", data.get("account_type"))
+            add("strategy_type", data.get("strategy_type"))
+            add("min_investment", data.get("min_investment"))
+            add("dynamic_investment", data.get("dynamic_investment"))
+            add("tags", tags)
+            add("trend", data.get("trend"))
+            add("score_logic", data.get("score_logic"))
+            add("favorite", data.get("favorite"))
+            add("description", data.get("description"))
+            add("action", data.get("action"))
+            add("category", data.get("category"))
+
+            add("min_macro_score", data.get("min_macro_score"))
+            add("max_macro_score", data.get("max_macro_score"))
+            add("min_technical_score", data.get("min_technical_score"))
+            add("max_technical_score", data.get("max_technical_score"))
+            add("min_market_score", data.get("min_market_score"))
+            add("max_market_score", data.get("max_market_score"))
+
+            add("last_validated", datetime.utcnow())
+
+            # 🚨 CRUCIAAL:
+            # explanation ALLEEN aanpassen als frontend hem expliciet stuurt
+            if "explanation" in data:
+                add("explanation", data["explanation"])
+
+            # -------------------------------
+            # 🧱 SQL uitvoeren
+            # -------------------------------
+            query = f"""
                 UPDATE setups SET
-                    name=%s, symbol=%s, timeframe=%s, account_type=%s,
-                    strategy_type=%s, min_investment=%s, dynamic_investment=%s,
-                    tags=%s, trend=%s, score_logic=%s, favorite=%s,
-                    explanation=%s, description=%s, action=%s, category=%s,
-                    min_macro_score=%s, max_macro_score=%s,
-                    min_technical_score=%s, max_technical_score=%s,
-                    min_market_score=%s, max_market_score=%s,
-                    last_validated=%s
+                    {", ".join(update_fields)}
                 WHERE id=%s AND user_id=%s
-            """, (
-                data.get("name"),
-                data.get("symbol"),
-                data.get("timeframe"),
-                data.get("account_type"),
-                data.get("strategy_type"),
-                data.get("min_investment"),
-                data.get("dynamic_investment"),
-                tags,
-                data.get("trend"),
-                data.get("score_logic"),
-                data.get("favorite"),
-                data.get("explanation"),
-                data.get("description"),
-                data.get("action"),
-                data.get("category"),
-                data.get("min_macro_score"),
-                data.get("max_macro_score"),
-                data.get("min_technical_score"),
-                data.get("max_technical_score"),
-                data.get("min_market_score"),
-                data.get("max_market_score"),
-                datetime.utcnow(),
-                setup_id,
-                user_id,
-            ))
+            """
+
+            values.extend([setup_id, user_id])
+            cur.execute(query, tuple(values))
 
             conn.commit()
 
