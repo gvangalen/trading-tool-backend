@@ -208,14 +208,51 @@ def get_market_indicator_scores(user_id: int) -> list:
 # =====================================================
 # GPT SECTION GENERATOR
 # =====================================================
+import json
+
 def generate_section(prompt: str) -> Dict[str, Any]:
-    system_prompt = build_system_prompt(agent="report", task=REPORT_TASK)
-    text = ask_gpt_text(prompt, system_role=system_prompt)
+    """
+    Normaliseert AI-output naar ÉÉN SCHONE STRING.
+    - Accepteert plain text
+    - Accepteert JSON
+    - Verwijdert dubbele nesting
+    - Geen markdown
+    """
 
-    if not text:
-        return {"text": "ONVOLDOENDE DATA"}
+    system_prompt = build_system_prompt(
+        agent="report",
+        task=REPORT_TASK
+    )
 
-    return {"text": text.strip()}
+    raw = ask_gpt_text(prompt, system_role=system_prompt)
+
+    if not raw:
+        return "ONVOLDOENDE DATA"
+
+    text = raw.strip()
+
+    # 1️⃣ Probeer JSON te parsen (AI houdt zich soms aan contract)
+    try:
+        parsed = json.loads(text)
+
+        # Als AI `{ "text": "..." }` teruggeeft
+        if isinstance(parsed, dict):
+            if "text" in parsed and isinstance(parsed["text"], str):
+                return parsed["text"].strip()
+
+            # Anders: stringify inhoud netjes
+            return "\n".join(
+                str(v).strip()
+                for v in parsed.values()
+                if isinstance(v, str)
+            )
+
+        # Onverwacht type
+        return str(parsed)
+
+    except Exception:
+        # 2️⃣ Geen JSON → plain text (dit is oké)
+        return text
 
 
 # =====================================================
