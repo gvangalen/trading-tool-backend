@@ -1,8 +1,12 @@
 import os
+import json
 import logging
 from datetime import date
+from decimal import Decimal
+
 from celery import shared_task
 from dotenv import load_dotenv
+from psycopg2.extras import Json
 
 from backend.utils.db import get_db_connection
 from backend.ai_agents.report_ai_agent import generate_daily_report_sections
@@ -19,17 +23,91 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 load_dotenv()
 
+
+# =====================================================
+# Helpers
+# =====================================================
+def to_float(v):
+    if v is None:
+        return None
+    if isinstance(v, Decimal):
+        return float(v)
+    try:
+        return float(v)
+    except Exception:
+        return None
+
+
+def jsonb(v, fallback=None):
+    """
+    ✅ Altijd veilige psycopg2 json adapter voor jsonb kolommen.
+    - dict/list → Json(dict/list)
+    - string/number/bool → Json(value)
+    - None → Json(fallback) of None
+    """
+    if v is None:
+        return Json(fallback) if fallback is not None else None
+
+    # Als het al dict/list is → direct
+    if isinstance(v, (dict, list)):
+        return Json(v)
+
+    # Als het string is → proberen JSON te parsen, anders als string opslaan (jsonb string)
+    if isinstance(v, str):
+        s = v.strip()
+        if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+            try:
+                return Json(json.loads(s))
+            except Exception:
+                pass
+        return Json(v)
+
+    # numbers/bool/whatever
+    return Json(v)
+
+
+def pick_market(report: dict) -> dict:
+    """
+    Nieuwe agent geeft vaak market_data; fallback naar oude keys.
+    """
+    m = report.get("market_data")
+    if isinstance(m, dict):
+        return m
+
+    # fallback oude structuur
+    return {
+        "price": report.get("price"),
+        "change_24h": report.get("change_24h"),
+        "volume": report.get("volume"),
+    }
+
+
+def pick_scores(report: dict) -> dict:
+    """
+    Nieuwe agent geeft scores dict; fallback naar oude keys.
+    """
+    s = report.get("scores")
+    if isinstance(s, dict):
+        return s
+
+    return {
+        "macro_score": report.get("macro_score"),
+        "technical_score": report.get("technical_score"),
+        "market_score": report.get("market_score"),
+        "setup_score": report.get("setup_score"),
+    }
+
+
 # =====================================================
 # 🧾 DAILY REPORT TASK (PER USER)
 # =====================================================
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report(user_id: int):
     """
-    Genereert dagelijks rapport per user.
+    Genereert daily report per user.
 
-    - gebruikt report_ai_agent als single source of truth
-    - slaat JSONB direct op (geen conversies)
-    - sluit exact aan op daily_reports tabel
+    - gebruikt report_ai_agent (single source of truth)
+    - slaat exact daily_reports structuur op (jsonb)
     - genereert PDF
     - verstuurt optioneel e-mail
     """
@@ -48,7 +126,7 @@ def generate_daily_report(user_id: int):
         cursor = conn.cursor()
 
         # -------------------------------------------------
-        # 1️⃣ REPORT GENEREREN (AI REPORT AGENT)
+        # 1️⃣ REPORT GENEREREN (AI AGENT)
         # -------------------------------------------------
         report = generate_daily_report_sections(user_id=user_id)
 
@@ -57,27 +135,34 @@ def generate_daily_report(user_id: int):
             return
 
         # -------------------------------------------------
-        # 2️⃣ EXTRACT — EXACTE STRUCTUUR
+        # 2️⃣ NORMALISEER (nieuw schema)
         # -------------------------------------------------
-        executive_summary    = report.get("executive_summary")
-        macro_context        = report.get("macro_context")
-        setup_validation     = report.get("setup_validation")
-        strategy_implication = report.get("strategy_implication")
-        outlook              = report.get("outlook")
+        market = pick_market(report)
+        scores = pick_scores(report)
 
-        price       = report.get("price")
-        change_24h  = report.get("change_24h")
-        volume      = report.get("volume")
+        # jsonb secties (kunnen string of dict zijn → jsonb() regelt dat)
+        executive_summary    = jsonb(report.get("executive_summary"), fallback={})
+        macro_context        = jsonb(report.get("macro_context"), fallback={})
+        setup_validation     = jsonb(report.get("setup_validation"), fallback={})
+        strategy_implication = jsonb(report.get("strategy_implication"), fallback={})
+        outlook              = jsonb(report.get("outlook"), fallback={})
 
-        indicator_highlights = report.get("indicator_highlights", [])
+        # market fields
+        price      = to_float(market.get("price"))
+        change_24h = to_float(market.get("change_24h"))
+        volume     = to_float(market.get("volume"))
 
-        macro_score     = report.get("macro_score")
-        technical_score = report.get("technical_score")
-        market_score    = report.get("market_score")
-        setup_score     = report.get("setup_score")
+        # indicator highlights jsonb
+        indicator_highlights = jsonb(report.get("indicator_highlights") or [], fallback=[])
+
+        # scores
+        macro_score     = to_float(scores.get("macro_score") or scores.get("macro"))
+        technical_score = to_float(scores.get("technical_score") or scores.get("technical"))
+        market_score    = to_float(scores.get("market_score") or scores.get("market"))
+        setup_score     = to_float(scores.get("setup_score") or scores.get("setup"))
 
         # -------------------------------------------------
-        # 3️⃣ OPSLAAN IN daily_reports (JSONB FIRST)
+        # 3️⃣ OPSLAAN IN daily_reports (jsonb compatible)
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -148,7 +233,7 @@ def generate_daily_report(user_id: int):
         logger.info(f"💾 daily_reports opgeslagen | user_id={user_id}")
 
         # -------------------------------------------------
-        # 4️⃣ PDF GENEREREN
+        # 4️⃣ PDF GENEREREN (uit DB row)
         # -------------------------------------------------
         cursor.execute("""
             SELECT *
@@ -165,29 +250,18 @@ def generate_daily_report(user_id: int):
         cols = [d[0] for d in cursor.description]
         report_row = dict(zip(cols, row))
 
-        pdf_bytes = generate_pdf_report(
-            report_row,
-            report_type="daily",
-            save_to_disk=False,
-        )
-
-        if not pdf_bytes:
+        # generate_pdf_report returnt BytesIO
+        pdf_buffer = generate_pdf_report(report_row, report_type="daily", save_to_disk=False)
+        if not pdf_buffer:
             logger.error("❌ PDF generatie mislukt")
             return
 
         pdf_dir = os.path.join("static", "pdf", "daily")
         os.makedirs(pdf_dir, exist_ok=True)
-        pdf_path = os.path.join(
-            pdf_dir,
-            f"daily_{today}_u{user_id}.pdf"
-        )
+        pdf_path = os.path.join(pdf_dir, f"daily_{today}_u{user_id}.pdf")
 
         with open(pdf_path, "wb") as f:
-            f.write(
-                pdf_bytes.getbuffer()
-                if hasattr(pdf_bytes, "getbuffer")
-                else pdf_bytes
-            )
+            f.write(pdf_buffer.getvalue())
 
         logger.info(f"🖨️ PDF opgeslagen: {pdf_path}")
 
@@ -211,7 +285,10 @@ def generate_daily_report(user_id: int):
 
     except Exception:
         logger.error("❌ Fout in daily_report_task", exc_info=True)
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
     finally:
         try:
