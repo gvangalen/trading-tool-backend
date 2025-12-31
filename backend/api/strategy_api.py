@@ -246,11 +246,41 @@ async def delete_strategy(strategy_id: int, current_user: dict = Depends(get_cur
 # 6. AI STRATEGY ANALYSE
 # ==========================================================
 @router.post("/strategies/analyze/{strategy_id}")
-async def analyze_strategy(strategy_id: int, current_user: dict = Depends(get_current_user)):
-    from backend.ai_agents.strategy_ai_agent import analyze_strategy_ai
-    task = analyze_strategy_ai.delay(strategy_id=strategy_id, user_id=current_user["id"])
-    return {"task_id": task.id}
+async def analyze_strategy(
+    strategy_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["id"]
 
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT data
+                FROM strategies
+                WHERE id = %s AND user_id = %s
+            """, (strategy_id, user_id))
+            row = cur.fetchone()
+
+        if not row:
+            raise HTTPException(404, "Strategie niet gevonden")
+
+        strategy_data = row[0]
+
+    finally:
+        conn.close()
+
+    from backend.ai_agents.strategy_ai_agent import analyze_and_store_strategy
+
+    # 🔑 ORCHESTRATOR AANROEP
+    analyze_and_store_strategy(
+        strategy_id=strategy_id,
+        strategies=[strategy_data],  # verwacht LIST
+    )
+
+    return {
+        "message": "🧠 Strategy AI analyse uitgevoerd en opgeslagen"
+    }
 
 # ==========================================================
 # 7. GET STRATEGY BY SETUP
