@@ -1,5 +1,4 @@
 import os
-import json
 import logging
 from datetime import date
 from celery import shared_task
@@ -20,23 +19,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 load_dotenv()
 
-
-# =====================================================
-# 🔧 Helpers
-# =====================================================
-def safe_json(value, fallback=None):
-    """
-    Zorgt dat DB nooit dict/list krijgt.
-    """
-    if value is None:
-        return fallback
-    if isinstance(value, (dict, list)):
-        return json.dumps(value)
-    if isinstance(value, str):
-        return value
-    return json.dumps(str(value))
-
-
 # =====================================================
 # 🧾 DAILY REPORT TASK (PER USER)
 # =====================================================
@@ -45,8 +27,9 @@ def generate_daily_report(user_id: int):
     """
     Genereert dagelijks rapport per user.
 
-    - gebruikt report_ai_agent (single source of truth)
-    - slaat exact de daily_reports structuur op
+    - gebruikt report_ai_agent als single source of truth
+    - slaat JSONB direct op (geen conversies)
+    - sluit exact aan op daily_reports tabel
     - genereert PDF
     - verstuurt optioneel e-mail
     """
@@ -65,33 +48,28 @@ def generate_daily_report(user_id: int):
         cursor = conn.cursor()
 
         # -------------------------------------------------
-        # 1️⃣ REPORT GENEREREN (AI AGENT)
+        # 1️⃣ REPORT GENEREREN (AI REPORT AGENT)
         # -------------------------------------------------
-        report = generate_daily_report_sections(
-            symbol="BTC",
-            user_id=user_id
-        )
+        report = generate_daily_report_sections(user_id=user_id)
 
         if not isinstance(report, dict):
             logger.error("❌ Report agent gaf geen geldig dict terug")
             return
 
         # -------------------------------------------------
-        # 2️⃣ EXTRACT & NORMALISEER
+        # 2️⃣ EXTRACT — EXACTE STRUCTUUR
         # -------------------------------------------------
-        executive_summary    = safe_json(report.get("executive_summary"))
-        macro_context        = safe_json(report.get("macro_context"))
-        setup_validation     = safe_json(report.get("setup_validation"))
-        strategy_implication = safe_json(report.get("strategy_implication"))
-        outlook              = safe_json(report.get("outlook"))
+        executive_summary    = report.get("executive_summary")
+        macro_context        = report.get("macro_context")
+        setup_validation     = report.get("setup_validation")
+        strategy_implication = report.get("strategy_implication")
+        outlook              = report.get("outlook")
 
         price       = report.get("price")
         change_24h  = report.get("change_24h")
         volume      = report.get("volume")
 
-        indicator_highlights = safe_json(
-            report.get("indicator_highlights", [])
-        )
+        indicator_highlights = report.get("indicator_highlights", [])
 
         macro_score     = report.get("macro_score")
         technical_score = report.get("technical_score")
@@ -99,7 +77,7 @@ def generate_daily_report(user_id: int):
         setup_score     = report.get("setup_score")
 
         # -------------------------------------------------
-        # 3️⃣ OPSLAAN IN daily_reports
+        # 3️⃣ OPSLAAN IN daily_reports (JSONB FIRST)
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -187,7 +165,12 @@ def generate_daily_report(user_id: int):
         cols = [d[0] for d in cursor.description]
         report_row = dict(zip(cols, row))
 
-        pdf_bytes = generate_pdf_report(report_row, report_type="daily")
+        pdf_bytes = generate_pdf_report(
+            report_row,
+            report_type="daily",
+            save_to_disk=False,
+        )
+
         if not pdf_bytes:
             logger.error("❌ PDF generatie mislukt")
             return
