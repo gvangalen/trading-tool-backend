@@ -15,7 +15,7 @@ logger.setLevel(logging.INFO)
 # ======================================================
 def is_empty_technical_context(ctx: dict) -> bool:
     """
-    Controleert of AI wel inhoud heeft gegenereerd
+    Checkt of de AI inhoudelijk iets heeft gezegd
     (niet alleen geldige JSON)
     """
     if not isinstance(ctx, dict):
@@ -23,17 +23,32 @@ def is_empty_technical_context(ctx: dict) -> bool:
 
     return not any([
         ctx.get("summary"),
+        ctx.get("samenvatting"),
         ctx.get("trend"),
         ctx.get("bias"),
         ctx.get("risk"),
+        ctx.get("risico"),
         ctx.get("momentum"),
         ctx.get("top_signals"),
     ])
 
 
+def normalize_top_signals(val):
+    """
+    Zorgt dat top_signals altijd een JSON-serialiseerbare lijst is
+    """
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, dict):
+        return [f"{k}: {v}" for k, v in val.items()]
+    return [str(val)]
+
+
 def fallback_technical_context(combined: list) -> dict:
     """
-    Veilige fallback bij lege AI-output
+    Veilige fallback als AI te weinig of lege output geeft
     """
     indicators = {i["indicator"] for i in combined}
 
@@ -55,19 +70,19 @@ def fallback_technical_context(combined: list) -> dict:
 
 
 # =====================================================================
-# 📊 TECHNICAL AI AGENT — ROBUUST + FAILSAFE
+# 📊 TECHNICAL AI AGENT — ROBUUST & FAILSAFE
 # =====================================================================
 def run_technical_agent(user_id: int):
     """
-    Genereert technical AI insights voor één user.
+    Genereert technical AI insights voor één gebruiker.
 
     Schrijft:
-    - ai_category_insights (category='technical')
-    - ai_reflections (category='technical')
+    - ai_category_insights (technical)
+    - ai_reflections (technical)
 
-    ✔ Geen scoring
     ✔ Geen berekeningen
-    ✔ Altijd laatste snapshot per indicator
+    ✔ DB is leidend
+    ✔ AI = interpretatie
     """
 
     if user_id is None:
@@ -77,7 +92,7 @@ def run_technical_agent(user_id: int):
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding.")
+        logger.error("❌ Geen DB-verbinding")
         return
 
     try:
@@ -123,11 +138,11 @@ def run_technical_agent(user_id: int):
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning(f"⚠️ Geen technische data gevonden voor user_id={user_id}")
+            logger.warning(f"⚠️ Geen technische data voor user_id={user_id}")
             return
 
         # ------------------------------------------------------
-        # 3️⃣ DEDUP → LAATSTE METING PER INDICATOR
+        # 3️⃣ DEDUP — LAATSTE METING PER INDICATOR
         # ------------------------------------------------------
         latest = {}
         for name, value, score, advies, uitleg, ts in rows:
@@ -145,7 +160,7 @@ def run_technical_agent(user_id: int):
                 (
                     r["trend"]
                     for r in rules_by_indicator.get(key, [])
-                    if float(r.get("score") or -1) == score_f
+                    if r.get("score") == int(score_f)
                 ),
                 None
             )
@@ -177,12 +192,12 @@ Gebruik uitsluitend:
 - trends
 - uitleg en advies
 
-Geef:
+Geef altijd:
 - trend
 - bias
 - risico
 - momentum
-- samenvatting
+- korte samenvatting
 - belangrijkste technische signalen
 
 Antwoord uitsluitend in geldige JSON.
@@ -201,12 +216,15 @@ Antwoord uitsluitend in geldige JSON.
         if not isinstance(ai_context, dict):
             raise ValueError("❌ Technical AI response is geen geldige JSON")
 
-        # ======================================================
-        # 🔧 🔥 FIX: NORMALISEER AI-OUTPUT
-        # ======================================================
+        # 🔧 Normaliseer geneste output
         if "analyse" in ai_context and isinstance(ai_context["analyse"], dict):
-            logger.info("🔧 Technical AI output genest onder 'analyse' → normaliseren")
+            logger.info("🔧 AI output genest onder 'analyse' → genormaliseerd")
             ai_context = ai_context["analyse"]
+
+        # 🛟 Inhoudelijke fallback
+        if is_empty_technical_context(ai_context):
+            logger.warning("⚠️ Technical AI gaf lege inhoud → fallback gebruikt")
+            ai_context = fallback_technical_context(combined)
 
         # ------------------------------------------------------
         # 5️⃣ AI REFLECTIES
@@ -214,10 +232,11 @@ Antwoord uitsluitend in geldige JSON.
         REFLECTION_TASK = """
 Maak reflecties per technische indicator.
 
-Beoordeel:
-- of score logisch is
-- of interpretatie consistent is
-- waar risico of zwakte zit
+Per indicator:
+- ai_score (0–100)
+- compliance (0–100)
+- korte comment
+- concrete aanbeveling
 
 Antwoord uitsluitend als JSON-lijst.
 """
@@ -258,9 +277,9 @@ Antwoord uitsluitend als JSON-lijst.
                 avg_score,
                 ai_context.get("trend", ""),
                 ai_context.get("bias", ""),
-                ai_context.get("risk", ""),
-                ai_context.get("samenvatting", ""),
-                json.dumps(ai_context.get("top_signals", [])),
+                ai_context.get("risico", ai_context.get("risk", "")),
+                ai_context.get("samenvatting", ai_context.get("summary", "")),
+                json.dumps(normalize_top_signals(ai_context.get("top_signals"))),
             ))
 
         # ------------------------------------------------------
