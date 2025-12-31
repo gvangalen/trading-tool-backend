@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ======================================================
-# 🧠 Helpers (IDENTIEK AAN MACRO, +1 unwrap)
+# 🧠 Helpers (IDENTIEK AAN MACRO + 1 unwrap-fix)
 # ======================================================
 def is_empty_technical_context(ctx: dict) -> bool:
     if not isinstance(ctx, dict):
@@ -47,9 +47,12 @@ def normalize_ai_context(ai_ctx: dict, items: list) -> dict:
     if not isinstance(ai_ctx, dict):
         return fallback_technical_context(items)
 
-    # 🔧 enige extra t.o.v. macro
-    if "analysis" in ai_ctx and isinstance(ai_ctx["analysis"], dict):
-        ai_ctx = ai_ctx["analysis"]
+    # 🔧 ENIGE FIX T.O.V. MACRO
+    # accepteer EN + NL wrappers
+    for key in ("analysis", "analyse"):
+        if key in ai_ctx and isinstance(ai_ctx[key], dict):
+            ai_ctx = ai_ctx[key]
+            break
 
     normalized = {
         "trend": ai_ctx.get("trend", ""),
@@ -66,21 +69,20 @@ def normalize_ai_context(ai_ctx: dict, items: list) -> dict:
     return normalized
 
 
-
 # =====================================================================
-# 📊 TECHNICAL AI AGENT — ORIGINEEL + MINIMALE FIX
+# 📊 TECHNICAL AI AGENT — ZELFDE STRUCTUUR ALS MACRO (7 STAPPEN)
 # =====================================================================
 def run_technical_agent(user_id: int):
     """
     Genereert technical AI insights voor één user.
 
     Schrijft:
-    - ai_category_insights (category='technical')
-    - ai_reflections (category='technical')
+    - ai_category_insights (technical)
+    - ai_reflections (technical)
 
-    ✔ 7 stappen (zoals origineel)
-    ✔ technical_indicator_rules blijven leidend
-    ✔ AI = interpretatie
+    ✔ 7 stappen
+    ✔ Zelfde structuur als macro
+    ✔ DB leidend, AI = interpretatie
     """
 
     if user_id is None:
@@ -90,24 +92,24 @@ def run_technical_agent(user_id: int):
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding.")
+        logger.error("❌ Geen DB-verbinding")
         return
 
     try:
-        # ------------------------------------------------------
+        # =====================================================
         # 1️⃣ TECHNICAL SCOREREGELS
-        # ------------------------------------------------------
+        # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT indicator, range_min, range_max, score, trend, interpretation, action
                 FROM technical_indicator_rules
-                ORDER BY indicator ASC, range_min ASC;
+                ORDER BY indicator, range_min;
             """)
-            rule_rows = cur.fetchall()
+            rows = cur.fetchall()
 
         rules_by_indicator = {}
-        for indicator, rmin, rmax, score, trend, interp, action in rule_rows:
-            key = normalize_indicator_name(indicator)
+        for ind, rmin, rmax, score, trend, interp, action in rows:
+            key = normalize_indicator_name(ind)
             rules_by_indicator.setdefault(key, []).append({
                 "range_min": float(rmin) if rmin is not None else None,
                 "range_max": float(rmax) if rmax is not None else None,
@@ -117,11 +119,9 @@ def run_technical_agent(user_id: int):
                 "action": action,
             })
 
-        logger.info(f"📘 Technical scoreregels geladen ({len(rule_rows)} regels)")
-
-        # ------------------------------------------------------
-        # 2️⃣ LAATSTE TECHNICAL DATA
-        # ------------------------------------------------------
+        # =====================================================
+        # 2️⃣ TECHNICAL DATA (LAATSTE SNAPSHOT)
+        # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT ti.indicator, ti.value, ti.score, ti.advies, ti.uitleg, ti.timestamp
@@ -131,94 +131,72 @@ def run_technical_agent(user_id: int):
                  AND i.category = 'technical'
                  AND i.active = TRUE
                 WHERE ti.user_id = %s
-                ORDER BY ti.indicator ASC, ti.timestamp DESC;
+                ORDER BY ti.indicator, ti.timestamp DESC;
             """, (user_id,))
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning(f"⚠️ Geen technische data gevonden voor user_id={user_id}")
+            logger.info("ℹ️ Geen technical data beschikbaar")
             return
 
-        # ------------------------------------------------------
-        # 3️⃣ DEDUP — LAATSTE METING PER INDICATOR
-        # ------------------------------------------------------
         latest = {}
         for name, value, score, advies, uitleg, ts in rows:
             key = normalize_indicator_name(name)
             if key not in latest:
-                latest[key] = (name, value, score, advies, uitleg, ts)
+                latest[key] = {
+                    "indicator": key,
+                    "value": float(value) if value is not None else None,
+                    "score": float(score) if score is not None else None,
+                    "advies": advies,
+                    "uitleg": uitleg,
+                    "timestamp": ts.isoformat() if ts else None,
+                }
 
-        combined = []
-        scores = []
+        combined = list(latest.values())
 
-        for key, (name, value, score, advies, uitleg, ts) in latest.items():
-            score_f = float(score) if score is not None else 50.0
+        avg_score = (
+            round(sum(i["score"] for i in combined if i["score"] is not None) / len(combined), 2)
+            if combined else 50
+        )
 
-            rule_trend = next(
-                (r["trend"] for r in rules_by_indicator.get(key, []) if r.get("score") == int(score_f)),
-                None
-            )
-
-            combined.append({
-                "indicator": normalize_indicator_name(name),
-                "value": float(value) if value is not None else None,
-                "score": score_f,
-                "trend": rule_trend,
-                "advies": advies or "",
-                "uitleg": uitleg or "",
-                "timestamp": ts.isoformat() if ts else None,
-                "rules": rules_by_indicator.get(key, []),
-            })
-
-            scores.append(score_f)
-
-        avg_score = round(sum(scores) / len(scores), 2) if scores else 50.0
-
-        # ------------------------------------------------------
-        # 4️⃣ AI TECHNICAL CONTEXT
-        # ------------------------------------------------------
-        TECHNICAL_TASK = """
+        # =====================================================
+        # 3️⃣ AI TECHNICAL ANALYSE
+        # =====================================================
+        technical_task = """
 Analyseer technische indicatoren voor Bitcoin.
-
-Gebruik uitsluitend:
-- indicatorwaarden
-- scores
-- trends
-- uitleg en advies
 
 Geef altijd:
 - trend
 - bias
 - risico
-- momentum
 - korte samenvatting
 - belangrijkste technische signalen
 
 Antwoord uitsluitend in geldige JSON.
 """
 
-        system_prompt = build_system_prompt(agent="technical", task=TECHNICAL_TASK)
+        system_prompt = build_system_prompt(
+            agent="technical",
+            task=technical_task
+        )
 
-        ai_context = ask_gpt(
+        raw_ai_context = ask_gpt(
             prompt=json.dumps(combined, ensure_ascii=False, indent=2),
             system_role=system_prompt
         )
 
-        if not isinstance(ai_context, dict):
-            raise ValueError("❌ Technical AI response is geen geldige JSON")
+        if not isinstance(raw_ai_context, dict):
+            raise ValueError("❌ Technical AI response geen geldige JSON")
 
-        # 🔧 🔥 ENIGE FIX T.O.V. OUDE FILE
-        if "analysis" in ai_context and isinstance(ai_context["analysis"], dict):
-            ai_context = ai_context["analysis"]
+        ai_context = normalize_ai_context(raw_ai_context, combined)
 
-        # ------------------------------------------------------
-        # 5️⃣ AI REFLECTIES (PER INDICATOR)
-        # ------------------------------------------------------
-        REFLECTION_TASK = """
-Maak reflecties per technische indicator.
+        # =====================================================
+        # 4️⃣ AI REFLECTIES
+        # =====================================================
+        reflections_task = """
+Maak per technische indicator een reflectie.
 
-Per indicator:
-- indicator
+Per item:
 - ai_score (0–100)
 - compliance (0–100)
 - korte comment
@@ -227,81 +205,85 @@ Per indicator:
 Antwoord uitsluitend als JSON-lijst.
 """
 
-        reflection_prompt = build_system_prompt(agent="technical", task=REFLECTION_TASK)
+        reflections_prompt = build_system_prompt(
+            agent="technical",
+            task=reflections_task
+        )
 
         ai_reflections = ask_gpt(
             prompt=json.dumps(combined, ensure_ascii=False, indent=2),
-            system_role=reflection_prompt
+            system_role=reflections_prompt
         )
 
         if not isinstance(ai_reflections, list):
             ai_reflections = []
 
-        # ------------------------------------------------------
-        # 6️⃣ OPSLAAN AI_CATEGORY_INSIGHTS
-        # ------------------------------------------------------
+        # =====================================================
+        # 5️⃣ OPSLAAN ai_category_insights
+        # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO ai_category_insights
                     (category, user_id, avg_score, trend, bias, risk, summary, top_signals)
-                VALUES
-                    ('technical', %s, %s, %s, %s, %s, %s, %s)
+                VALUES ('technical', %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (user_id, category, date)
                 DO UPDATE SET
-                    avg_score   = EXCLUDED.avg_score,
-                    trend       = EXCLUDED.trend,
-                    bias        = EXCLUDED.bias,
-                    risk        = EXCLUDED.risk,
-                    summary     = EXCLUDED.summary,
+                    avg_score = EXCLUDED.avg_score,
+                    trend = EXCLUDED.trend,
+                    bias = EXCLUDED.bias,
+                    risk = EXCLUDED.risk,
+                    summary = EXCLUDED.summary,
                     top_signals = EXCLUDED.top_signals,
-                    created_at  = NOW();
+                    created_at = NOW();
             """, (
                 user_id,
                 avg_score,
-                ai_context.get("trend", ""),
-                ai_context.get("bias", ""),
-                ai_context.get("risk", ""),
-                ai_context.get("summary", ""),
-                json.dumps(ai_context.get("top_signals", [])),
+                ai_context["trend"],
+                ai_context["bias"],
+                ai_context["risk"],
+                ai_context["summary"],
+                json.dumps(ai_context["top_signals"]),
             ))
 
-        # ------------------------------------------------------
-        # 7️⃣ OPSLAAN AI_REFLECTIONS
-        # ------------------------------------------------------
+        # =====================================================
+        # 6️⃣ OPSLAAN ai_reflections
+        # =====================================================
         for r in ai_reflections:
             if not r.get("indicator"):
                 continue
 
-            indicator_norm = normalize_indicator_name(r.get("indicator"))
+            indicator = normalize_indicator_name(r["indicator"])
 
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO ai_reflections
                         (category, user_id, indicator, raw_score, ai_score, compliance, comment, recommendation)
-                    VALUES
-                        ('technical', %s, %s, NULL, %s, %s, %s, %s)
+                    VALUES ('technical', %s, %s, NULL, %s, %s, %s, %s)
                     ON CONFLICT (category, user_id, indicator, date)
                     DO UPDATE SET
-                        ai_score       = EXCLUDED.ai_score,
-                        compliance     = EXCLUDED.compliance,
-                        comment        = EXCLUDED.comment,
+                        ai_score = EXCLUDED.ai_score,
+                        compliance = EXCLUDED.compliance,
+                        comment = EXCLUDED.comment,
                         recommendation = EXCLUDED.recommendation,
-                        timestamp      = NOW();
+                        timestamp = NOW();
                 """, (
                     user_id,
-                    indicator_norm,
+                    indicator,
                     r.get("ai_score", 50),
                     r.get("compliance", 50),
                     r.get("comment", ""),
                     r.get("recommendation", ""),
                 ))
 
+        # =====================================================
+        # 7️⃣ COMMIT
+        # =====================================================
         conn.commit()
         logger.info(f"✅ [Technical-Agent] Voltooid voor user_id={user_id}")
 
     except Exception:
         conn.rollback()
-        logger.error("❌ [Technical-Agent] FOUT", exc_info=True)
+        logger.error("❌ [Technical-Agent] Fout", exc_info=True)
         raise
 
     finally:
