@@ -438,9 +438,47 @@ async def check_name(name: str, current_user: dict = Depends(get_current_user)):
 # 7️⃣ AI explanation
 # ============================================================
 @router.post("/setups/explanation/{setup_id}")
-async def ai_explanation(setup_id: int, current_user: dict = Depends(get_current_user)):
-    explanation = generate_setup_explanation(setup_id, current_user["id"])
-    return {"explanation": explanation}
+async def ai_explanation(
+    setup_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user["id"]
+    conn = get_db_connection()
+
+    try:
+        # 1️⃣ AI tekst genereren
+        explanation = generate_setup_explanation(setup_id, user_id)
+
+        if not explanation:
+            raise HTTPException(500, "AI uitleg kon niet worden gegenereerd")
+
+        # 2️⃣ OPSLAAN IN DB  ✅ DIT ONTBRAK
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE setups
+                SET explanation = %s,
+                    last_validated = NOW()
+                WHERE id = %s AND user_id = %s
+                """,
+                (explanation, setup_id, user_id),
+            )
+
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Setup niet gevonden")
+
+        conn.commit()
+
+        # 3️⃣ Teruggeven aan frontend
+        return {"explanation": explanation}
+
+    except Exception:
+        conn.rollback()
+        logger.exception("❌ AI setup explanation failed")
+        raise
+
+    finally:
+        conn.close()
 
 
 # ============================================================
