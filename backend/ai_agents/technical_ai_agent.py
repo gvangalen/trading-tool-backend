@@ -65,9 +65,9 @@ def run_technical_agent(user_id: int):
     - ai_category_insights (category='technical')
     - ai_reflections (category='technical')
 
-    ✔ DB-gedreven
-    ✔ AI = context & interpretatie
-    ✔ Fallback bij lege AI-output
+    ✔ Geen scoring
+    ✔ Geen berekeningen
+    ✔ Altijd laatste snapshot per indicator
     """
 
     if user_id is None:
@@ -123,11 +123,11 @@ def run_technical_agent(user_id: int):
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning(f"⚠️ Geen technische data voor user_id={user_id}")
+            logger.warning(f"⚠️ Geen technische data gevonden voor user_id={user_id}")
             return
 
         # ------------------------------------------------------
-        # 3️⃣ DEDUP — LAATSTE PER INDICATOR
+        # 3️⃣ DEDUP → LAATSTE METING PER INDICATOR
         # ------------------------------------------------------
         latest = {}
         for name, value, score, advies, uitleg, ts in rows:
@@ -169,20 +169,21 @@ def run_technical_agent(user_id: int):
         # 4️⃣ AI TECHNICAL CONTEXT
         # ------------------------------------------------------
         TECHNICAL_TASK = """
-Analyseer de beschikbare technische indicatoren voor Bitcoin.
+Analyseer technische indicatoren voor Bitcoin.
 
-Belangrijk:
-- Gebruik uitsluitend aanwezige indicatoren
-- Ook bij weinig data moet je een concrete analyse geven
-- Vermijd lege of nietszeggende antwoorden
+Gebruik uitsluitend:
+- indicatorwaarden
+- scores
+- trends
+- uitleg en advies
 
-Geef altijd:
-- trend (bullish / bearish / neutraal)
-- bias (positief / negatief / neutraal)
-- risico (laag / gemiddeld / hoog)
-- momentum (sterk / zwak / neutraal)
-- korte samenvatting (minstens 1 zin)
-- belangrijkste technische signalen (minstens 1 punt)
+Geef:
+- trend
+- bias
+- risico
+- momentum
+- samenvatting
+- belangrijkste technische signalen
 
 Antwoord uitsluitend in geldige JSON.
 """
@@ -198,12 +199,14 @@ Antwoord uitsluitend in geldige JSON.
         )
 
         if not isinstance(ai_context, dict):
-            raise ValueError("❌ Technical AI response geen geldige JSON")
+            raise ValueError("❌ Technical AI response is geen geldige JSON")
 
-        # 🛟 FALLBACK BIJ LEEGTE
-        if is_empty_technical_context(ai_context):
-            logger.warning("⚠️ Technical AI gaf lege inhoud → fallback toegepast")
-            ai_context = fallback_technical_context(combined)
+        # ======================================================
+        # 🔧 🔥 FIX: NORMALISEER AI-OUTPUT
+        # ======================================================
+        if "analyse" in ai_context and isinstance(ai_context["analyse"], dict):
+            logger.info("🔧 Technical AI output genest onder 'analyse' → normaliseren")
+            ai_context = ai_context["analyse"]
 
         # ------------------------------------------------------
         # 5️⃣ AI REFLECTIES
@@ -256,7 +259,7 @@ Antwoord uitsluitend als JSON-lijst.
                 ai_context.get("trend", ""),
                 ai_context.get("bias", ""),
                 ai_context.get("risk", ""),
-                ai_context.get("summary", ""),
+                ai_context.get("samenvatting", ""),
                 json.dumps(ai_context.get("top_signals", [])),
             ))
 
