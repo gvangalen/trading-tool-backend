@@ -9,6 +9,63 @@ from backend.ai_core.system_prompt_builder import build_system_prompt
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# ======================================================
+# 🧠 Helpers (IDENTIEK AAN MACRO, +1 unwrap)
+# ======================================================
+def is_empty_technical_context(ctx: dict) -> bool:
+    if not isinstance(ctx, dict):
+        return True
+
+    return not any([
+        ctx.get("summary"),
+        ctx.get("trend"),
+        ctx.get("bias"),
+        ctx.get("risk"),
+        ctx.get("top_signals"),
+    ])
+
+
+def fallback_technical_context(items: list) -> dict:
+    indicators = {i["indicator"] for i in items if i.get("indicator")}
+
+    return {
+        "trend": "neutraal",
+        "bias": "afwachtend",
+        "risk": "gemiddeld",
+        "summary": (
+            "De technische analyse is gebaseerd op een beperkt aantal indicatoren. "
+            "Gebruik scores en trends als leidraad."
+        ),
+        "top_signals": [
+            f"{ind} blijft technisch richtinggevend"
+            for ind in sorted(indicators)
+        ] or ["Beperkte technische data beschikbaar"],
+    }
+
+
+def normalize_ai_context(ai_ctx: dict, items: list) -> dict:
+    if not isinstance(ai_ctx, dict):
+        return fallback_technical_context(items)
+
+    # 🔧 enige extra t.o.v. macro
+    if "analysis" in ai_ctx and isinstance(ai_ctx["analysis"], dict):
+        ai_ctx = ai_ctx["analysis"]
+
+    normalized = {
+        "trend": ai_ctx.get("trend", ""),
+        "bias": ai_ctx.get("bias", ""),
+        "risk": ai_ctx.get("risk") or ai_ctx.get("risico", ""),
+        "summary": ai_ctx.get("summary") or ai_ctx.get("samenvatting", ""),
+        "top_signals": ai_ctx.get("top_signals", []),
+    }
+
+    if is_empty_technical_context(normalized):
+        logger.warning("⚠️ Technical AI gaf lege inhoud → fallback toegepast")
+        return fallback_technical_context(items)
+
+    return normalized
+
+
 
 # =====================================================================
 # 📊 TECHNICAL AI AGENT — ORIGINEEL + MINIMALE FIX
