@@ -1,9 +1,10 @@
 import logging
 from decimal import Decimal
+from typing import Dict, Any
 
+from backend.utils.db import get_db_connection
 from backend.utils.setup_utils import get_latest_setup_for_symbol
 from backend.utils.json_utils import sanitize_json_input
-from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
 from backend.ai_core.system_prompt_builder import build_system_prompt
 
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # =====================================================
-# REPORT AGENT TASK (CENTRAAL, GEEN OVERLAP)
+# REPORT AGENT INSTRUCTIE (HARD CONTRACT)
 # =====================================================
 REPORT_TASK = """
 Rol:
@@ -33,33 +34,41 @@ REGELS:
 - Geen aannames
 - Geen uitleg van indicatoren
 
-OUTPUT STRUCTUUR + LIMIETEN:
+OUTPUT:
+- Altijd geldige JSON
+- Geen markdown
+- Geen opsmuk
+
+SECTIES:
 
 1. Executive Summary
-   - Maximaal 4 zinnen
-   - Eindigt met: BESLISSING + CONFIDENCE
+   - Max 4 zinnen
+   - Eindigt met:
+     BESLISSING
+     CONFIDENCE
 
 2. Macro Context
    - 2–3 zinnen
-   - Eindigt met: MACRO-IMPACT
+   - Eindigt met:
+     MACRO-IMPACT
 
 3. Setup Validatie
-   - Maximaal 4 zinnen
-   - Eindigt met: SETUP-STATUS + RELEVANTIE
+   - Max 4 zinnen
+   - Eindigt met:
+     SETUP-STATUS
+     RELEVANTIE
 
 4. Strategie Implicatie
-   - Maximaal 3 zinnen
-   - Eindigt met: STRATEGIE-STATUS
-   - Als geen strategie: schrijf letterlijk "ONVOLDOENDE DATA"
+   - Max 3 zinnen
+   - Eindigt met:
+     STRATEGIE-STATUS
+   - Als data ontbreekt: "ONVOLDOENDE DATA"
 
 5. Vooruitblik
    - Exact 3 zinnen:
-     - bullish
-     - bearish
-     - consolidatie
-
-Als data ontbreekt:
-- Schrijf letterlijk: ONVOLDOENDE DATA
+     bullish
+     bearish
+     consolidatie
 """
 
 # =====================================================
@@ -76,18 +85,11 @@ def to_float(v):
         return None
 
 
-def nv(v):
-    return v if v not in [None, "", "None"] else "–"
-
-
 # =====================================================
 # 1️⃣ DAILY SCORES (SINGLE SOURCE OF TRUTH)
 # =====================================================
-def get_daily_scores(user_id: int) -> dict:
+def get_daily_scores(user_id: int) -> Dict[str, Any]:
     conn = get_db_connection()
-    if not conn:
-        return {}
-
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -104,7 +106,6 @@ def get_daily_scores(user_id: int) -> dict:
             row = cur.fetchone()
 
         if not row:
-            logger.warning(f"⚠️ Geen daily_scores gevonden (user_id={user_id})")
             return {}
 
         return {
@@ -113,19 +114,15 @@ def get_daily_scores(user_id: int) -> dict:
             "market_score": to_float(row[2]),
             "setup_score": to_float(row[3]),
         }
-
     finally:
         conn.close()
 
 
 # =====================================================
-# 2️⃣ AI CATEGORY INSIGHTS (MACRO / MARKET / TECH)
+# 2️⃣ AI CATEGORY INSIGHTS
 # =====================================================
-def get_ai_insights(user_id: int) -> dict:
+def get_ai_insights(user_id: int) -> Dict[str, Any]:
     conn = get_db_connection()
-    if not conn:
-        return {}
-
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -136,18 +133,17 @@ def get_ai_insights(user_id: int) -> dict:
             """, (user_id,))
             rows = cur.fetchall()
 
-        insights = {}
+        result = {}
         for cat, avg, trend, bias, risk, summary in rows:
-            insights[cat] = {
+            result[cat] = {
                 "avg_score": to_float(avg),
-                "trend": trend or "–",
-                "bias": bias or "–",
-                "risk": risk or "–",
-                "summary": summary or "–",
+                "trend": trend,
+                "bias": bias,
+                "risk": risk,
+                "summary": summary,
             }
 
-        return insights
-
+        return result
     finally:
         conn.close()
 
@@ -155,11 +151,8 @@ def get_ai_insights(user_id: int) -> dict:
 # =====================================================
 # 3️⃣ MARKET SNAPSHOT
 # =====================================================
-def get_latest_market_data() -> dict:
+def get_latest_market_data() -> Dict[str, Any]:
     conn = get_db_connection()
-    if not conn:
-        return {}
-
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -178,19 +171,15 @@ def get_latest_market_data() -> dict:
             "volume": to_float(row[1]),
             "change_24h": to_float(row[2]),
         }
-
     finally:
         conn.close()
 
 
 # =====================================================
-# 4️⃣ MARKET INDICATOR HIGHLIGHTS (JUISTE TABEL)
+# 4️⃣ MARKET INDICATOR HIGHLIGHTS
 # =====================================================
 def get_market_indicator_scores(user_id: int) -> list:
     conn = get_db_connection()
-    if not conn:
-        return []
-
     try:
         with conn.cursor() as cur:
             cur.execute("""
@@ -208,56 +197,52 @@ def get_market_indicator_scores(user_id: int) -> list:
                 "indicator": r[0],
                 "value": to_float(r[1]),
                 "score": to_float(r[2]),
-                "interpretation": r[3] or "–",
+                "interpretation": r[3],
             }
             for r in rows
         ]
-
     finally:
         conn.close()
 
 
 # =====================================================
-# 5️⃣ GPT HELPER
+# GPT SECTION GENERATOR
 # =====================================================
-def generate_section(prompt: str) -> str:
-    system_prompt = build_system_prompt(task=REPORT_TASK, agent="report")
+def generate_section(prompt: str) -> Dict[str, Any]:
+    system_prompt = build_system_prompt(agent="report", task=REPORT_TASK)
     text = ask_gpt_text(prompt, system_role=system_prompt)
-    return text.strip() if text else "ONVOLDOENDE DATA"
+
+    if not text:
+        return {"text": "ONVOLDOENDE DATA"}
+
+    return {"text": text.strip()}
 
 
 # =====================================================
-# 6️⃣ PROMPTS
+# PROMPTS
 # =====================================================
 def prompt_executive_summary(scores, market):
     return f"""
-Schrijf de executive summary.
-
 Scores:
-Macro: {nv(scores.get('macro_score'))}
-Technical: {nv(scores.get('technical_score'))}
-Market: {nv(scores.get('market_score'))}
-Setup: {nv(scores.get('setup_score'))}
+Macro: {scores.get('macro_score')}
+Technical: {scores.get('technical_score')}
+Market: {scores.get('market_score')}
+Setup: {scores.get('setup_score')}
 
-Prijs: ${nv(market.get('price'))}
-24h verandering: {nv(market.get('change_24h'))}%
+Prijs: {market.get('price')}
+24h verandering: {market.get('change_24h')}
 
-Sluit exact af met:
-BESLISSING VANDAAG: ACTIE_VANDAAG / GEEN_ACTIE / OBSERVEREN
-CONFIDENCE: LAAG / MIDDEL / HOOG
+Schrijf executive summary.
 """
 
 
-def prompt_macro_context(ai):
+def prompt_macro_context(macro_ai):
     return f"""
-Beschrijf de macro-context.
+Trend: {macro_ai.get('trend')}
+Bias: {macro_ai.get('bias')}
+Risico: {macro_ai.get('risk')}
 
-Trend: {ai.get('trend')}
-Bias: {ai.get('bias')}
-Risico: {ai.get('risk')}
-
-Sluit exact af met:
-MACRO-IMPACT: STEUNEND / NEUTRAAL / REMMEND
+Beschrijf macro-context.
 """
 
 
@@ -266,18 +251,13 @@ def prompt_setup_validation(setup, scores):
         return "ONVOLDOENDE DATA"
 
     return f"""
-Beoordeel de setup.
-
-Setup: {setup.get('name')} ({setup.get('timeframe')})
+Setup: {setup.get('name')}
+Timeframe: {setup.get('timeframe')}
 
 Scores:
-Macro: {nv(scores.get('macro_score'))}
-Technical: {nv(scores.get('technical_score'))}
-Market: {nv(scores.get('market_score'))}
-
-Sluit exact af met:
-SETUP-STATUS: GO / NO-GO / CONDITIONAL
-RELEVANTIE: VANDAAG / KOMENDE_DAGEN / LATER
+Macro: {scores.get('macro_score')}
+Technical: {scores.get('technical_score')}
+Market: {scores.get('market_score')}
 """
 
 
@@ -286,34 +266,29 @@ def prompt_strategy_implication(strategy):
         return "ONVOLDOENDE DATA"
 
     return f"""
-Analyseer strategie-implicatie.
-
 Entry: {strategy.get('entry')}
 Targets: {strategy.get('targets')}
 Stop-loss: {strategy.get('stop_loss')}
-
-Sluit exact af met:
-STRATEGIE-STATUS: UITVOERBAAR_VANDAAG / WACHT_OP_TRIGGER / NIET_ACTUEEL
 """
 
 
 def prompt_outlook():
     return """
-Geef exact drie zinnen:
-1. Bullish scenario
-2. Bearish scenario
-3. Consolidatie scenario
+Geef exact 3 zinnen:
+1 bullish
+2 bearish
+3 consolidatie
 """
 
 
 # =====================================================
-# 7️⃣ MAIN REPORT BUILDER
+# 🚀 MAIN BUILDER — SINGLE SOURCE OF TRUTH
 # =====================================================
-def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> dict:
-    logger.info(f"📄 Rapport genereren | {symbol} | user_id={user_id}")
+def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
+    logger.info(f"📄 Daily report genereren | user_id={user_id}")
 
     setup = sanitize_json_input(
-        get_latest_setup_for_symbol(symbol=symbol, user_id=user_id) or {},
+        get_latest_setup_for_symbol(symbol="BTC", user_id=user_id) or {},
         context="setup",
     )
 
@@ -323,6 +298,7 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
     indicators = get_market_indicator_scores(user_id)
 
     return {
+        # JSONB SECTIES
         "executive_summary": generate_section(
             prompt_executive_summary(scores, market)
         ),
@@ -338,7 +314,16 @@ def generate_daily_report_sections(symbol: str = "BTC", user_id: int = None) -> 
         "outlook": generate_section(
             prompt_outlook()
         ),
-        "market_data": market,
+
+        # MARKTDATA
+        "price": market.get("price"),
+        "change_24h": market.get("change_24h"),
+        "volume": market.get("volume"),
+
+        # HIGHLIGHTS & SCORES
         "indicator_highlights": indicators,
-        "scores": scores,
+        "macro_score": scores.get("macro_score"),
+        "technical_score": scores.get("technical_score"),
+        "market_score": scores.get("market_score"),
+        "setup_score": scores.get("setup_score"),
     }
