@@ -13,11 +13,54 @@ logger.setLevel(logging.INFO)
 # ======================================================
 # 🧠 HELPERS
 # ======================================================
+EXPECTED_KEYS = {
+    "trend", "bias", "risk", "risico", "momentum",
+    "summary", "samenvatting", "top_signals"
+}
+
+
+def normalize_top_signals(val):
+    """Zorgt dat top_signals altijd JSON-serialiseerbaar is (list)."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, dict):
+        return [f"{k}: {v}" for k, v in val.items()]
+    return [str(val)]
+
+
+def find_best_analysis_dict(obj):
+    """
+    Zoek recursief in de AI response naar een dict die de meeste
+    'EXPECTED_KEYS' bevat. Dit lost nesting op zoals:
+    - {"analyse": {...}}
+    - {"technical_analysis": {...}}
+    - {"result": {...}}
+    - {"technical_analysis": {"indicators": {...}}}
+    """
+    best = None
+    best_score = 0
+
+    def walk(x):
+        nonlocal best, best_score
+        if isinstance(x, dict):
+            score = len(set(x.keys()) & EXPECTED_KEYS)
+            if score > best_score:
+                best_score = score
+                best = x
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(obj)
+    return best, best_score
+
+
 def is_empty_technical_context(ctx: dict) -> bool:
-    """
-    Checkt of de AI inhoudelijk iets heeft gezegd
-    (niet alleen geldige JSON)
-    """
+    """Checkt inhoudelijk: heeft AI iets bruikbaars gezegd?"""
     if not isinstance(ctx, dict):
         return True
 
@@ -33,23 +76,83 @@ def is_empty_technical_context(ctx: dict) -> bool:
     ])
 
 
-def normalize_top_signals(val):
+def build_overall_from_indicators(indicators_dict: dict) -> dict:
     """
-    Zorgt dat top_signals altijd een JSON-serialiseerbare lijst is
+    Als de AI alleen per-indicator output geeft (bijv. technical_analysis.indicators),
+    bouwen we een overall trend/bias/risk + summary + top_signals.
     """
-    if val is None:
-        return []
-    if isinstance(val, list):
-        return val
-    if isinstance(val, dict):
-        return [f"{k}: {v}" for k, v in val.items()]
-    return [str(val)]
+    if not isinstance(indicators_dict, dict) or not indicators_dict:
+        return {}
+
+    # Pak 1-3 bullets uit indicatoren
+    bullets = []
+    bias_notes = []
+    risk_notes = []
+    trend_votes = {"bullish": 0, "bearish": 0, "neutraal": 0, "neutral": 0}
+
+    for ind, data in indicators_dict.items():
+        if not isinstance(data, dict):
+            continue
+
+        t = (data.get("trend") or "").lower()
+        b = (data.get("bias") or "").lower()
+        r = (data.get("risk") or data.get("risico") or "").lower()
+
+        if "bull" in t:
+            trend_votes["bullish"] += 1
+        elif "bear" in t:
+            trend_votes["bearish"] += 1
+        elif "neut" in t or "neutral" in t:
+            trend_votes["neutraal"] += 1
+
+        if b:
+            bias_notes.append(f"{ind}: {b}")
+        if r:
+            risk_notes.append(f"{ind}: {r}")
+
+        # probeer een bullet te maken
+        expl = data.get("uitleg") or data.get("interpretation") or data.get("comment") or ""
+        if expl:
+            bullets.append(f"{ind}: {str(expl)[:160]}")
+        else:
+            bullets.append(f"{ind}: signaal actief")
+
+    # overall trend
+    if trend_votes["bullish"] > trend_votes["bearish"]:
+        overall_trend = "bullish"
+    elif trend_votes["bearish"] > trend_votes["bullish"]:
+        overall_trend = "bearish"
+    else:
+        overall_trend = "neutraal"
+
+    # overall bias/risk simpel
+    overall_bias = "neutraal"
+    if any("neg" in x or "bear" in x for x in bias_notes):
+        overall_bias = "negatief"
+    if any("pos" in x or "bull" in x for x in bias_notes) and overall_bias != "negatief":
+        overall_bias = "positief"
+
+    overall_risk = "gemiddeld"
+    if any("hoog" in x or "high" in x for x in risk_notes):
+        overall_risk = "hoog"
+    elif any("laag" in x or "low" in x for x in risk_notes):
+        overall_risk = "laag"
+
+    return {
+        "trend": overall_trend,
+        "bias": overall_bias,
+        "risk": overall_risk,
+        "momentum": "gemengd" if overall_trend == "neutraal" else ("sterk" if overall_trend == "bullish" else "zwak"),
+        "summary": (
+            "Technische analyse is opgebouwd uit per-indicator signalen. "
+            f"Overal beeld: {overall_trend} met {overall_risk} risico."
+        ),
+        "top_signals": bullets[:5],
+    }
 
 
 def fallback_technical_context(combined: list) -> dict:
-    """
-    Veilige fallback als AI te weinig of lege output geeft
-    """
+    """Fallback als we echt niks bruikbaars hebben."""
     indicators = {i["indicator"] for i in combined}
 
     return {
@@ -69,22 +172,70 @@ def fallback_technical_context(combined: list) -> dict:
     }
 
 
+def normalize_ai_context(ai_context: dict) -> dict:
+    """
+    Normaliseert AI-output naar vlak formaat met keys:
+    trend/bias/risk/momentum/summary/top_signals
+    Ongeacht nesting: analyse / technical_analysis / result etc.
+    """
+    if not isinstance(ai_context, dict):
+        return {}
+
+    # 1) bekende wrappers
+    for wrapper_key in ("analyse", "analysis", "technical_analysis", "result", "output", "data"):
+        if wrapper_key in ai_context and isinstance(ai_context[wrapper_key], dict):
+            ai_context = ai_context[wrapper_key]
+
+    # 2) als nog steeds geen expected keys: zoek recursief best match
+    best, best_score = find_best_analysis_dict(ai_context)
+    if best and best_score >= 2:
+        ai_context = best
+
+    # 3) als het per-indicator is (zoals technical_analysis.indicators)
+    indicators = None
+    if isinstance(ai_context, dict):
+        # nested indicators
+        if "indicators" in ai_context and isinstance(ai_context["indicators"], dict):
+            indicators = ai_context["indicators"]
+        # soms heet dit "signals"
+        if indicators is None and "signals" in ai_context and isinstance(ai_context["signals"], dict):
+            indicators = ai_context["signals"]
+
+    if indicators:
+        overall = build_overall_from_indicators(indicators)
+        if overall:
+            return overall
+
+    # 4) map NL/EN keys naar unified
+    out = {
+        "trend": ai_context.get("trend") or "",
+        "bias": ai_context.get("bias") or "",
+        "risk": ai_context.get("risk") or ai_context.get("risico") or "",
+        "momentum": ai_context.get("momentum") or "",
+        "summary": ai_context.get("summary") or ai_context.get("samenvatting") or "",
+        "top_signals": normalize_top_signals(ai_context.get("top_signals")),
+    }
+    return out
+
+
+def normalize_reflection_item(r: dict) -> dict:
+    """Mapt verschillende key-namen naar wat wij opslaan."""
+    if not isinstance(r, dict):
+        return {}
+
+    return {
+        "indicator": r.get("indicator") or r.get("name"),
+        "ai_score": r.get("ai_score", r.get("score", 50)),
+        "compliance": r.get("compliance", r.get("discipline", 50)),
+        "comment": r.get("comment", r.get("korte_comment", r.get("uitleg", ""))),
+        "recommendation": r.get("recommendation", r.get("aanbeveling", r.get("actie", ""))),
+    }
+
+
 # =====================================================================
 # 📊 TECHNICAL AI AGENT — ROBUUST & FAILSAFE
 # =====================================================================
 def run_technical_agent(user_id: int):
-    """
-    Genereert technical AI insights voor één gebruiker.
-
-    Schrijft:
-    - ai_category_insights (technical)
-    - ai_reflections (technical)
-
-    ✔ Geen berekeningen
-    ✔ DB is leidend
-    ✔ AI = interpretatie
-    """
-
     if user_id is None:
         raise ValueError("❌ Technical AI Agent vereist een user_id")
 
@@ -92,7 +243,7 @@ def run_technical_agent(user_id: int):
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen DB-verbinding")
+        logger.error("❌ Geen DB-verbinding.")
         return
 
     try:
@@ -138,11 +289,11 @@ def run_technical_agent(user_id: int):
             rows = cur.fetchall()
 
         if not rows:
-            logger.warning(f"⚠️ Geen technische data voor user_id={user_id}")
+            logger.warning(f"⚠️ Geen technische data gevonden voor user_id={user_id}")
             return
 
         # ------------------------------------------------------
-        # 3️⃣ DEDUP — LAATSTE METING PER INDICATOR
+        # 3️⃣ DEDUP → LAATSTE METING PER INDICATOR
         # ------------------------------------------------------
         latest = {}
         for name, value, score, advies, uitleg, ts in rows:
@@ -181,49 +332,39 @@ def run_technical_agent(user_id: int):
         avg_score = round(sum(scores) / len(scores), 2) if scores else 50.0
 
         # ------------------------------------------------------
-        # 4️⃣ AI TECHNICAL CONTEXT
+        # 4️⃣ AI CONTEXT
         # ------------------------------------------------------
         TECHNICAL_TASK = """
 Analyseer technische indicatoren voor Bitcoin.
 
-Gebruik uitsluitend:
-- indicatorwaarden
-- scores
-- trends
-- uitleg en advies
+Geef altijd als JSON (geen nesting):
+{
+  "trend": "bullish/bearish/neutraal",
+  "bias": "positief/negatief/neutraal",
+  "risk": "laag/gemiddeld/hoog",
+  "momentum": "...",
+  "summary": "...",
+  "top_signals": ["...", "..."]
+}
 
-Geef altijd:
-- trend
-- bias
-- risico
-- momentum
-- korte samenvatting
-- belangrijkste technische signalen
-
-Antwoord uitsluitend in geldige JSON.
+Gebruik uitsluitend de aangeleverde indicatoren.
 """
 
-        system_prompt = build_system_prompt(
-            agent="technical",
-            task=TECHNICAL_TASK
-        )
+        system_prompt = build_system_prompt(agent="technical", task=TECHNICAL_TASK)
 
-        ai_context = ask_gpt(
+        raw_ai_context = ask_gpt(
             prompt=json.dumps(combined, ensure_ascii=False, indent=2),
             system_role=system_prompt
         )
 
-        if not isinstance(ai_context, dict):
-            raise ValueError("❌ Technical AI response is geen geldige JSON")
+        if not isinstance(raw_ai_context, dict):
+            raise ValueError("❌ Technical AI response is geen dict")
 
-        # 🔧 Normaliseer geneste output
-        if "analyse" in ai_context and isinstance(ai_context["analyse"], dict):
-            logger.info("🔧 AI output genest onder 'analyse' → genormaliseerd")
-            ai_context = ai_context["analyse"]
+        ai_context = normalize_ai_context(raw_ai_context)
 
-        # 🛟 Inhoudelijke fallback
+        # fallback als nog leeg
         if is_empty_technical_context(ai_context):
-            logger.warning("⚠️ Technical AI gaf lege inhoud → fallback gebruikt")
+            logger.warning("⚠️ Technical AI gaf alsnog lege inhoud → fallback gebruikt")
             ai_context = fallback_technical_context(combined)
 
         # ------------------------------------------------------
@@ -232,30 +373,34 @@ Antwoord uitsluitend in geldige JSON.
         REFLECTION_TASK = """
 Maak reflecties per technische indicator.
 
-Per indicator:
-- ai_score (0–100)
-- compliance (0–100)
-- korte comment
-- concrete aanbeveling
+Per item (JSON):
+- indicator
+- ai_score (0-100)
+- compliance (0-100)
+- comment (korte uitleg)
+- recommendation (concrete actie)
 
 Antwoord uitsluitend als JSON-lijst.
 """
 
-        reflection_prompt = build_system_prompt(
-            agent="technical",
-            task=REFLECTION_TASK
-        )
+        reflection_prompt = build_system_prompt(agent="technical", task=REFLECTION_TASK)
 
-        ai_reflections = ask_gpt(
+        raw_reflections = ask_gpt(
             prompt=json.dumps(combined, ensure_ascii=False, indent=2),
             system_role=reflection_prompt
         )
 
-        if not isinstance(ai_reflections, list):
-            ai_reflections = []
+        if not isinstance(raw_reflections, list):
+            raw_reflections = []
+
+        ai_reflections = []
+        for r in raw_reflections:
+            norm = normalize_reflection_item(r)
+            if norm.get("indicator"):
+                ai_reflections.append(norm)
 
         # ------------------------------------------------------
-        # 6️⃣ OPSLAAN AI_CATEGORY_INSIGHTS
+        # 6️⃣ OPSLAAN ai_category_insights
         # ------------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
@@ -277,20 +422,16 @@ Antwoord uitsluitend als JSON-lijst.
                 avg_score,
                 ai_context.get("trend", ""),
                 ai_context.get("bias", ""),
-                ai_context.get("risico", ai_context.get("risk", "")),
-                ai_context.get("samenvatting", ai_context.get("summary", "")),
+                ai_context.get("risk", ""),
+                ai_context.get("summary", ""),
                 json.dumps(normalize_top_signals(ai_context.get("top_signals"))),
             ))
 
         # ------------------------------------------------------
-        # 7️⃣ OPSLAAN AI_REFLECTIONS
+        # 7️⃣ OPSLAAN ai_reflections
         # ------------------------------------------------------
         for r in ai_reflections:
-            indicator = r.get("indicator")
-            if not indicator:
-                continue
-
-            indicator_norm = normalize_indicator_name(indicator)
+            indicator_norm = normalize_indicator_name(r.get("indicator"))
 
             with conn.cursor() as cur:
                 cur.execute("""
@@ -308,10 +449,10 @@ Antwoord uitsluitend als JSON-lijst.
                 """, (
                     user_id,
                     indicator_norm,
-                    r.get("ai_score", 50),
-                    r.get("compliance", 50),
-                    r.get("comment", ""),
-                    r.get("recommendation", ""),
+                    float(r.get("ai_score", 50)),
+                    float(r.get("compliance", 50)),
+                    r.get("comment", "") or "",
+                    r.get("recommendation", "") or "",
                 ))
 
         conn.commit()
