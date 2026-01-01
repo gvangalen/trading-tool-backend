@@ -140,29 +140,27 @@ def generate_daily_report(user_id: int):
         market = pick_market(report)
         scores = pick_scores(report)
 
-        # jsonb secties (kunnen string of dict zijn → jsonb() regelt dat)
         executive_summary    = jsonb(report.get("executive_summary"), fallback={})
         macro_context        = jsonb(report.get("macro_context"), fallback={})
         setup_validation     = jsonb(report.get("setup_validation"), fallback={})
         strategy_implication = jsonb(report.get("strategy_implication"), fallback={})
         outlook              = jsonb(report.get("outlook"), fallback={})
 
-        # market fields
         price      = to_float(market.get("price"))
         change_24h = to_float(market.get("change_24h"))
         volume     = to_float(market.get("volume"))
 
-        # indicator highlights jsonb
-        indicator_highlights = jsonb(report.get("indicator_highlights") or [], fallback=[])
+        indicator_highlights = jsonb(
+            report.get("indicator_highlights") or [], fallback=[]
+        )
 
-        # scores
         macro_score     = to_float(scores.get("macro_score") or scores.get("macro"))
         technical_score = to_float(scores.get("technical_score") or scores.get("technical"))
         market_score    = to_float(scores.get("market_score") or scores.get("market"))
         setup_score     = to_float(scores.get("setup_score") or scores.get("setup"))
 
         # -------------------------------------------------
-        # 3️⃣ OPSLAAN IN daily_reports (jsonb compatible)
+        # 3️⃣ OPSLAAN IN daily_reports  (🔥 FIX HIER)
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -207,7 +205,9 @@ def generate_daily_report(user_id: int):
                 macro_score          = EXCLUDED.macro_score,
                 technical_score      = EXCLUDED.technical_score,
                 market_score         = EXCLUDED.market_score,
-                setup_score          = EXCLUDED.setup_score;
+                setup_score          = EXCLUDED.setup_score,
+
+                generated_at         = NOW()   -- 🔥 ESSENTIËLE FIX
         """, (
             today,
             user_id,
@@ -233,7 +233,7 @@ def generate_daily_report(user_id: int):
         logger.info(f"💾 daily_reports opgeslagen | user_id={user_id}")
 
         # -------------------------------------------------
-        # 4️⃣ PDF GENEREREN (uit DB row)
+        # 4️⃣ PDF GENEREREN
         # -------------------------------------------------
         cursor.execute("""
             SELECT *
@@ -250,8 +250,12 @@ def generate_daily_report(user_id: int):
         cols = [d[0] for d in cursor.description]
         report_row = dict(zip(cols, row))
 
-        # generate_pdf_report returnt BytesIO
-        pdf_buffer = generate_pdf_report(report_row, report_type="daily", save_to_disk=False)
+        pdf_buffer = generate_pdf_report(
+            report_row,
+            report_type="daily",
+            save_to_disk=False
+        )
+
         if not pdf_buffer:
             logger.error("❌ PDF generatie mislukt")
             return
@@ -266,7 +270,7 @@ def generate_daily_report(user_id: int):
         logger.info(f"🖨️ PDF opgeslagen: {pdf_path}")
 
         # -------------------------------------------------
-        # 5️⃣ EMAIL (OPTIONEEL)
+        # 5️⃣ EMAIL (optioneel, mag falen)
         # -------------------------------------------------
         try:
             subject = f"📈 BTC Daily Report – {today}"
