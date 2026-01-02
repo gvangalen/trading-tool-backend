@@ -1,4 +1,5 @@
 import logging
+import json
 from decimal import Decimal
 from typing import Dict, Any
 
@@ -15,60 +16,60 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # =====================================================
-# REPORT AGENT INSTRUCTIE (HARD CONTRACT)
+# 🎯 REPORT AGENT — NIEUWE ROL & STIJL
 # =====================================================
 REPORT_TASK = """
 Rol:
-Samenstellen van het DAGELIJKS TRADING RAPPORT.
+Je bent een ervaren Bitcoin market analyst.
+Je schrijft een dagelijks briefingdocument voor een ervaren gebruiker.
 
-INPUT:
-- daily_scores
-- ai_category_insights
-- setup (indien aanwezig)
-- market snapshot
-- market indicator highlights
+Context:
+- De lezer kent Bitcoin.
+- De lezer heeft toegang tot een dashboard met scores en data.
+- Jij schrijft de samenvatting NA het bekijken van dat dashboard.
 
-REGELS:
-- Gebruik uitsluitend aangeleverde data
-- Geen eigen analyse
-- Geen aannames
-- Geen uitleg van indicatoren
+Belangrijk:
+- Schrijf in normaal, vloeiend Nederlands.
+- Geen labels, geen CAPS, geen AI-achtige termen.
+- Geen herhaling van exacte cijfers tenzij functioneel.
+- Gebruik data als context, niet als opsomming.
+- Klink als een analist, niet als een checklist.
 
-OUTPUT:
-- Altijd geldige JSON
-- Geen markdown
-- Geen opsmuk
+Regels:
+- Gebruik uitsluitend aangeleverde data.
+- Geen aannames.
+- Geen educatieve uitleg.
+- Geen opsommingen tenzij expliciet gevraagd.
+- Geen markdown.
 
-SECTIES:
+Output:
+- Altijd geldige JSON.
+- Elke sectie is één string (geen nested objecten).
+
+Structuur:
 
 1. Executive Summary
-   - Max 4 zinnen
-   - Eindigt met:
-     BESLISSING
-     CONFIDENCE
+   - 3–5 zinnen
+   - Samenvatting van de marktsituatie
+   - Sluit af met een duidelijke conclusie in normale taal
 
-2. Macro Context
-   - 2–3 zinnen
-   - Eindigt met:
-     MACRO-IMPACT
+2. Market Context
+   - 1–2 korte alinea’s
+   - Beschrijf hoe macro, markt en techniek zich tot elkaar verhouden
 
-3. Setup Validatie
-   - Max 4 zinnen
-   - Eindigt met:
-     SETUP-STATUS
-     RELEVANTIE
+3. Setups & Positionering
+   - Alleen bespreken als setup-data aanwezig is
+   - Anders: benoem expliciet dat er geen valide setup is
 
-4. Strategie Implicatie
-   - Max 3 zinnen
-   - Eindigt met:
-     STRATEGIE-STATUS
-   - Als data ontbreekt: "ONVOLDOENDE DATA"
+4. Strategie & Implicaties
+   - Wat betekent dit praktisch voor positionering?
+   - Geen trade-instructies, wel richting
 
 5. Vooruitblik
    - Exact 3 zinnen:
-     bullish
-     bearish
-     consolidatie
+     • bullish scenario
+     • bearish scenario
+     • consolidatie scenario
 """
 
 # =====================================================
@@ -86,7 +87,7 @@ def to_float(v):
 
 
 # =====================================================
-# 1️⃣ DAILY SCORES (SINGLE SOURCE OF TRUTH)
+# 1️⃣ DAILY SCORES
 # =====================================================
 def get_daily_scores(user_id: int) -> Dict[str, Any]:
     conn = get_db_connection()
@@ -208,51 +209,28 @@ def get_market_indicator_scores(user_id: int) -> list:
 # =====================================================
 # GPT SECTION GENERATOR
 # =====================================================
-import json
-
-def generate_section(prompt: str) -> Dict[str, Any]:
-    """
-    Normaliseert AI-output naar ÉÉN SCHONE STRING.
-    - Accepteert plain text
-    - Accepteert JSON
-    - Verwijdert dubbele nesting
-    - Geen markdown
-    """
-
+def generate_section(prompt: str) -> str:
     system_prompt = build_system_prompt(
         agent="report",
         task=REPORT_TASK
     )
 
     raw = ask_gpt_text(prompt, system_role=system_prompt)
-
     if not raw:
-        return "ONVOLDOENDE DATA"
+        return "Onvoldoende data om hier een zinvolle analyse van te maken."
 
     text = raw.strip()
 
-    # 1️⃣ Probeer JSON te parsen (AI houdt zich soms aan contract)
     try:
         parsed = json.loads(text)
-
-        # Als AI `{ "text": "..." }` teruggeeft
         if isinstance(parsed, dict):
-            if "text" in parsed and isinstance(parsed["text"], str):
-                return parsed["text"].strip()
-
-            # Anders: stringify inhoud netjes
-            return "\n".join(
-                str(v).strip()
-                for v in parsed.values()
-                if isinstance(v, str)
+            return "\n\n".join(
+                v.strip() for v in parsed.values() if isinstance(v, str)
             )
-
-        # Onverwacht type
-        return str(parsed)
-
     except Exception:
-        # 2️⃣ Geen JSON → plain text (dit is oké)
-        return text
+        pass
+
+    return text
 
 
 # =====================================================
@@ -260,66 +238,67 @@ def generate_section(prompt: str) -> Dict[str, Any]:
 # =====================================================
 def prompt_executive_summary(scores, market):
     return f"""
-Scores:
-Macro: {scores.get('macro_score')}
-Technical: {scores.get('technical_score')}
-Market: {scores.get('market_score')}
-Setup: {scores.get('setup_score')}
+Macro score: {scores.get('macro_score')}
+Technisch score: {scores.get('technical_score')}
+Markt score: {scores.get('market_score')}
+Setup score: {scores.get('setup_score')}
 
 Prijs: {market.get('price')}
 24h verandering: {market.get('change_24h')}
 
-Schrijf executive summary.
+Schrijf een executive summary.
 """
 
 
-def prompt_macro_context(macro_ai):
+def prompt_market_context(macro_ai):
     return f"""
 Trend: {macro_ai.get('trend')}
 Bias: {macro_ai.get('bias')}
 Risico: {macro_ai.get('risk')}
 
-Beschrijf macro-context.
+Beschrijf de bredere marktomgeving.
 """
 
 
-def prompt_setup_validation(setup, scores):
+def prompt_setup_positioning(setup, scores):
     if not setup:
-        return "ONVOLDOENDE DATA"
+        return "Er is momenteel geen valide setup actief. Beschrijf wat dat betekent voor positionering."
 
     return f"""
-Setup: {setup.get('name')}
+Setup naam: {setup.get('name')}
 Timeframe: {setup.get('timeframe')}
 
 Scores:
 Macro: {scores.get('macro_score')}
-Technical: {scores.get('technical_score')}
-Market: {scores.get('market_score')}
+Technisch: {scores.get('technical_score')}
+Markt: {scores.get('market_score')}
+
+Beschrijf of deze setup op dit moment relevant is.
 """
 
 
-def prompt_strategy_implication(strategy):
-    if not strategy:
-        return "ONVOLDOENDE DATA"
-
+def prompt_strategy_implication(scores):
     return f"""
-Entry: {strategy.get('entry')}
-Targets: {strategy.get('targets')}
-Stop-loss: {strategy.get('stop_loss')}
+Macro score: {scores.get('macro_score')}
+Technisch score: {scores.get('technical_score')}
+Markt score: {scores.get('market_score')}
+Setup score: {scores.get('setup_score')}
+
+Wat betekent dit praktisch voor strategie en houding?
 """
 
 
 def prompt_outlook():
     return """
-Geef exact 3 zinnen:
-1 bullish
-2 bearish
-3 consolidatie
+Geef exact drie zinnen:
+1. bullish scenario
+2. bearish scenario
+3. consolidatie scenario
 """
 
 
 # =====================================================
-# 🚀 MAIN BUILDER — SINGLE SOURCE OF TRUTH
+# 🚀 MAIN BUILDER
 # =====================================================
 def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     logger.info(f"📄 Daily report genereren | user_id={user_id}")
@@ -335,18 +314,17 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     indicators = get_market_indicator_scores(user_id)
 
     return {
-        # JSONB SECTIES
         "executive_summary": generate_section(
             prompt_executive_summary(scores, market)
         ),
         "macro_context": generate_section(
-            prompt_macro_context(ai.get("macro", {}))
+            prompt_market_context(ai.get("macro", {}))
         ),
         "setup_validation": generate_section(
-            prompt_setup_validation(setup, scores)
+            prompt_setup_positioning(setup, scores)
         ),
         "strategy_implication": generate_section(
-            prompt_strategy_implication({})
+            prompt_strategy_implication(scores)
         ),
         "outlook": generate_section(
             prompt_outlook()
