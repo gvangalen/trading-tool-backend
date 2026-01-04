@@ -145,7 +145,7 @@ def get_market_snapshot() -> Dict[str, Any]:
 
 
 # =====================================================
-# INDICATOR HIGHLIGHTS (CORRECT PER TABEL)
+# INDICATOR HIGHLIGHTS — PER CATEGORIE
 # =====================================================
 def get_market_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
@@ -189,6 +189,41 @@ def get_technical_indicator_highlights(user_id: int) -> List[dict]:
                     score,
                     COALESCE(uitleg, advies)
                 FROM technical_indicators
+                WHERE user_id = %s
+                  AND score IS NOT NULL
+                  AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY score DESC;
+            """, (user_id,))
+            rows = cur.fetchall()
+
+        return [
+            {
+                "indicator": r[0],
+                "value": to_float(r[1]),
+                "score": to_float(r[2]),
+                "interpretation": r[3],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_macro_indicator_highlights(user_id: int) -> List[dict]:
+    """
+    Macro werkt IDENTIEK aan market & technical,
+    maar leest uit macro_data (jullie bewuste architectuur).
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    indicator,
+                    value,
+                    score,
+                    interpretation
+                FROM macro_data
                 WHERE user_id = %s
                   AND score IS NOT NULL
                   AND DATE(timestamp) = CURRENT_DATE
@@ -312,9 +347,10 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
 
         # 📋 INDICATOR CARDS
         "market_indicator_highlights": get_market_indicator_highlights(user_id),
+        "macro_indicator_highlights": get_macro_indicator_highlights(user_id),
         "technical_indicator_highlights": get_technical_indicator_highlights(user_id),
 
-        # 🧩 SETUP & STRATEGY — HISTORISCH OPSLAAN
+        # 🧩 SETUP & STRATEGY — HISTORISCH
         "best_setup": setup_data.get("best_setup"),
         "top_setups": setup_data.get("top_setups", []),
         "active_strategy": setup_data.get("active_strategy"),
