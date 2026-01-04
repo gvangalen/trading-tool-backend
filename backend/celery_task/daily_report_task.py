@@ -39,15 +39,24 @@ def to_float(v):
 
 
 def jsonb(v, fallback=None):
+    """
+    Veilige jsonb writer:
+    - dict/list -> Json
+    - string -> proberen te parsen, anders string opslaan
+    - None -> fallback of NULL
+    """
     if v is None:
         return Json(fallback) if fallback is not None else None
+
     if isinstance(v, (dict, list)):
         return Json(v)
+
     if isinstance(v, str):
         try:
             return Json(json.loads(v))
         except Exception:
             return Json(v)
+
     return Json(v)
 
 
@@ -71,7 +80,7 @@ def generate_daily_report(user_id: int):
         cursor = conn.cursor()
 
         # -------------------------------------------------
-        # 1️⃣ REPORT GENEREREN (AI = SOURCE OF TRUTH)
+        # 1️⃣ REPORT GENEREREN (AI = single source of truth)
         # -------------------------------------------------
         report = generate_daily_report_sections(user_id=user_id)
 
@@ -79,7 +88,7 @@ def generate_daily_report(user_id: int):
             raise ValueError("Report agent gaf geen geldig dict terug")
 
         # -------------------------------------------------
-        # 2️⃣ NORMALISEER DATA
+        # 2️⃣ NORMALISEREN (exact DB-schema)
         # -------------------------------------------------
         executive_summary    = jsonb(report.get("executive_summary"), {})
         market_analysis      = jsonb(report.get("market_analysis"), {})
@@ -106,7 +115,7 @@ def generate_daily_report(user_id: int):
         active_strategy = jsonb(report.get("active_strategy"))
 
         # -------------------------------------------------
-        # 3️⃣ OPSLAAN
+        # 3️⃣ UPSERT daily_reports
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -147,31 +156,31 @@ def generate_daily_report(user_id: int):
             )
             ON CONFLICT (user_id, report_date)
             DO UPDATE SET
-                executive_summary              = EXCLUDED.executive_summary,
-                market_analysis                = EXCLUDED.market_analysis,
-                macro_context                  = EXCLUDED.macro_context,
-                technical_analysis             = EXCLUDED.technical_analysis,
-                setup_validation               = EXCLUDED.setup_validation,
-                strategy_implication           = EXCLUDED.strategy_implication,
+                executive_summary             = EXCLUDED.executive_summary,
+                market_analysis               = EXCLUDED.market_analysis,
+                macro_context                 = EXCLUDED.macro_context,
+                technical_analysis            = EXCLUDED.technical_analysis,
+                setup_validation              = EXCLUDED.setup_validation,
+                strategy_implication          = EXCLUDED.strategy_implication,
 
-                price                           = EXCLUDED.price,
-                change_24h                      = EXCLUDED.change_24h,
-                volume                          = EXCLUDED.volume,
+                price                          = EXCLUDED.price,
+                change_24h                     = EXCLUDED.change_24h,
+                volume                         = EXCLUDED.volume,
 
-                macro_score                     = EXCLUDED.macro_score,
-                technical_score                 = EXCLUDED.technical_score,
-                market_score                    = EXCLUDED.market_score,
-                setup_score                     = EXCLUDED.setup_score,
+                macro_score                    = EXCLUDED.macro_score,
+                technical_score                = EXCLUDED.technical_score,
+                market_score                   = EXCLUDED.market_score,
+                setup_score                    = EXCLUDED.setup_score,
 
-                market_indicator_highlights     = EXCLUDED.market_indicator_highlights,
-                macro_indicator_highlights      = EXCLUDED.macro_indicator_highlights,
-                technical_indicator_highlights  = EXCLUDED.technical_indicator_highlights,
+                market_indicator_highlights    = EXCLUDED.market_indicator_highlights,
+                macro_indicator_highlights     = EXCLUDED.macro_indicator_highlights,
+                technical_indicator_highlights = EXCLUDED.technical_indicator_highlights,
 
-                best_setup                      = EXCLUDED.best_setup,
-                top_setups                      = EXCLUDED.top_setups,
-                active_strategy                 = EXCLUDED.active_strategy,
+                best_setup                     = EXCLUDED.best_setup,
+                top_setups                     = EXCLUDED.top_setups,
+                active_strategy                = EXCLUDED.active_strategy,
 
-                generated_at                    = NOW();
+                generated_at                   = NOW();
         """, (
             today, user_id,
 
@@ -204,7 +213,7 @@ def generate_daily_report(user_id: int):
         logger.info("💾 daily_reports opgeslagen")
 
         # -------------------------------------------------
-        # 4️⃣ PDF
+        # 4️⃣ PDF GENEREREN
         # -------------------------------------------------
         cursor.execute("""
             SELECT *
@@ -217,7 +226,12 @@ def generate_daily_report(user_id: int):
         cols = [d[0] for d in cursor.description]
         report_row = dict(zip(cols, row))
 
-        pdf_buffer = generate_pdf_report(report_row, "daily", save_to_disk=False)
+        pdf_buffer = generate_pdf_report(
+            report_row,
+            report_type="daily",
+            save_to_disk=False
+        )
+
         if not pdf_buffer:
             raise RuntimeError("PDF generatie mislukt")
 
@@ -227,6 +241,8 @@ def generate_daily_report(user_id: int):
 
         with open(pdf_path, "wb") as f:
             f.write(pdf_buffer.getvalue())
+
+        logger.info(f"🖨️ PDF opgeslagen: {pdf_path}")
 
         # -------------------------------------------------
         # 5️⃣ EMAIL (optioneel)
