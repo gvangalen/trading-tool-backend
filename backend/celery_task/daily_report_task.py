@@ -23,7 +23,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 load_dotenv()
 
-
 # =====================================================
 # Helpers
 # =====================================================
@@ -42,7 +41,7 @@ def jsonb(v, fallback=None):
     """
     Veilige jsonb writer:
     - dict/list -> Json
-    - string -> proberen te parsen, anders string opslaan
+    - string -> proberen te parsen, anders raw string
     - None -> fallback of NULL
     """
     if v is None:
@@ -80,7 +79,7 @@ def generate_daily_report(user_id: int):
         cursor = conn.cursor()
 
         # -------------------------------------------------
-        # 1️⃣ REPORT GENEREREN (AI = single source of truth)
+        # 1️⃣ REPORT GENEREREN
         # -------------------------------------------------
         report = generate_daily_report_sections(user_id=user_id)
 
@@ -88,7 +87,7 @@ def generate_daily_report(user_id: int):
             raise ValueError("Report agent gaf geen geldig dict terug")
 
         # -------------------------------------------------
-        # 2️⃣ NORMALISEREN (exact DB-schema)
+        # 2️⃣ NORMALISEREN (exact daily_reports schema)
         # -------------------------------------------------
         executive_summary    = jsonb(report.get("executive_summary"), {})
         market_analysis      = jsonb(report.get("market_analysis"), {})
@@ -156,31 +155,31 @@ def generate_daily_report(user_id: int):
             )
             ON CONFLICT (user_id, report_date)
             DO UPDATE SET
-                executive_summary             = EXCLUDED.executive_summary,
-                market_analysis               = EXCLUDED.market_analysis,
-                macro_context                 = EXCLUDED.macro_context,
-                technical_analysis            = EXCLUDED.technical_analysis,
-                setup_validation              = EXCLUDED.setup_validation,
-                strategy_implication          = EXCLUDED.strategy_implication,
+                executive_summary              = EXCLUDED.executive_summary,
+                market_analysis                = EXCLUDED.market_analysis,
+                macro_context                  = EXCLUDED.macro_context,
+                technical_analysis             = EXCLUDED.technical_analysis,
+                setup_validation               = EXCLUDED.setup_validation,
+                strategy_implication           = EXCLUDED.strategy_implication,
 
-                price                          = EXCLUDED.price,
-                change_24h                     = EXCLUDED.change_24h,
-                volume                         = EXCLUDED.volume,
+                price                           = EXCLUDED.price,
+                change_24h                      = EXCLUDED.change_24h,
+                volume                          = EXCLUDED.volume,
 
-                macro_score                    = EXCLUDED.macro_score,
-                technical_score                = EXCLUDED.technical_score,
-                market_score                   = EXCLUDED.market_score,
-                setup_score                    = EXCLUDED.setup_score,
+                macro_score                     = EXCLUDED.macro_score,
+                technical_score                 = EXCLUDED.technical_score,
+                market_score                    = EXCLUDED.market_score,
+                setup_score                     = EXCLUDED.setup_score,
 
-                market_indicator_highlights    = EXCLUDED.market_indicator_highlights,
-                macro_indicator_highlights     = EXCLUDED.macro_indicator_highlights,
-                technical_indicator_highlights = EXCLUDED.technical_indicator_highlights,
+                market_indicator_highlights     = EXCLUDED.market_indicator_highlights,
+                macro_indicator_highlights      = EXCLUDED.macro_indicator_highlights,
+                technical_indicator_highlights  = EXCLUDED.technical_indicator_highlights,
 
-                best_setup                     = EXCLUDED.best_setup,
-                top_setups                     = EXCLUDED.top_setups,
-                active_strategy                = EXCLUDED.active_strategy,
+                best_setup                      = EXCLUDED.best_setup,
+                top_setups                      = EXCLUDED.top_setups,
+                active_strategy                 = EXCLUDED.active_strategy,
 
-                generated_at                   = NOW();
+                generated_at                    = NOW();
         """, (
             today, user_id,
 
