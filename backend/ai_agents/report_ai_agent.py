@@ -31,7 +31,7 @@ Stijl:
 - Normaal, vloeiend Nederlands
 - Geen AI-termen, geen labels
 - Geen herhaling van exacte cijfers tenzij functioneel
-- Geen educatie, geen basisuitleg
+- Geen educatie of uitleg van basisbegrippen
 - Klink als een menselijke analist
 
 Regels:
@@ -95,7 +95,11 @@ def get_daily_scores(user_id: int) -> Dict[str, Any]:
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT macro_score, technical_score, market_score, setup_score
+                SELECT
+                    macro_score,
+                    technical_score,
+                    market_score,
+                    setup_score
                 FROM daily_scores
                 WHERE user_id = %s
                   AND report_date = CURRENT_DATE
@@ -140,14 +144,53 @@ def get_market_snapshot() -> Dict[str, Any]:
         conn.close()
 
 
-def get_indicator_highlights(table: str, user_id: int) -> List[dict]:
+# =====================================================
+# INDICATOR HIGHLIGHTS (CORRECT PER TABEL)
+# =====================================================
+def get_market_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT indicator, value, score, interpretation
-                FROM {table}
+            cur.execute("""
+                SELECT
+                    name AS indicator,
+                    value,
+                    score,
+                    interpretation
+                FROM market_data_indicators
                 WHERE user_id = %s
+                  AND score IS NOT NULL
+                  AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY score DESC;
+            """, (user_id,))
+            rows = cur.fetchall()
+
+        return [
+            {
+                "indicator": r[0],
+                "value": to_float(r[1]),
+                "score": to_float(r[2]),
+                "interpretation": r[3],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_technical_indicator_highlights(user_id: int) -> List[dict]:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    indicator,
+                    value,
+                    score,
+                    COALESCE(uitleg, advies)
+                FROM technical_indicators
+                WHERE user_id = %s
+                  AND score IS NOT NULL
                   AND DATE(timestamp) = CURRENT_DATE
                 ORDER BY score DESC;
             """, (user_id,))
@@ -171,14 +214,13 @@ def get_indicator_highlights(table: str, user_id: int) -> List[dict]:
 # =====================================================
 def p_exec(scores, market):
     return f"""
-Scores:
-Macro {scores.get('macro_score')}
-Technisch {scores.get('technical_score')}
-Markt {scores.get('market_score')}
-Setup {scores.get('setup_score')}
+Macro score: {scores.get('macro_score')}
+Technische score: {scores.get('technical_score')}
+Markt score: {scores.get('market_score')}
+Setup score: {scores.get('setup_score')}
 
-Prijs {market.get('price')}
-24h {market.get('change_24h')}
+Prijs: {market.get('price')}
+24h verandering: {market.get('change_24h')}
 
 Schrijf een executive summary.
 """
@@ -186,9 +228,9 @@ Schrijf een executive summary.
 
 def p_market(scores, market):
     return f"""
-Prijs {market.get('price')}
-24h {market.get('change_24h')}
-Markt score {scores.get('market_score')}
+Prijs: {market.get('price')}
+24h verandering: {market.get('change_24h')}
+Markt score: {scores.get('market_score')}
 
 Beschrijf de huidige marktstructuur en dynamiek.
 """
@@ -196,7 +238,7 @@ Beschrijf de huidige marktstructuur en dynamiek.
 
 def p_macro(scores):
     return f"""
-Macro score {scores.get('macro_score')}
+Macro score: {scores.get('macro_score')}
 
 Beschrijf de macro-context en invloed op Bitcoin.
 """
@@ -204,9 +246,9 @@ Beschrijf de macro-context en invloed op Bitcoin.
 
 def p_technical(scores):
     return f"""
-Technische score {scores.get('technical_score')}
+Technische score: {scores.get('technical_score')}
 
-Beschrijf de technische structuur, trend en bevestiging.
+Beschrijf de technische structuur en bevestiging.
 """
 
 
@@ -215,9 +257,9 @@ def p_setup(setup, scores):
         return "Er is geen valide setup actief. Beschrijf wat dit betekent."
 
     return f"""
-Setup {setup.get('name')}
-Timeframe {setup.get('timeframe')}
-Setup score {scores.get('setup_score')}
+Setup: {setup.get('name')}
+Timeframe: {setup.get('timeframe')}
+Setup score: {scores.get('setup_score')}
 
 Beoordeel of deze setup valide is.
 """
@@ -225,10 +267,10 @@ Beoordeel of deze setup valide is.
 
 def p_strategy(scores):
     return f"""
-Macro {scores.get('macro_score')}
-Technisch {scores.get('technical_score')}
-Markt {scores.get('market_score')}
-Setup {scores.get('setup_score')}
+Macro score: {scores.get('macro_score')}
+Technische score: {scores.get('technical_score')}
+Markt score: {scores.get('market_score')}
+Setup score: {scores.get('setup_score')}
 
 Beschrijf de strategische implicaties.
 """
@@ -243,7 +285,7 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     scores = get_daily_scores(user_id)
     market = get_market_snapshot()
 
-    setup = sanitize_json_input(
+    setup_data = sanitize_json_input(
         get_latest_setup_for_symbol("BTC", user_id) or {},
         context="setup",
     )
@@ -254,10 +296,10 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
         "market_analysis": generate_text(p_market(scores, market)),
         "macro_context": generate_text(p_macro(scores)),
         "technical_analysis": generate_text(p_technical(scores)),
-        "setup_validation": generate_text(p_setup(setup, scores)),
+        "setup_validation": generate_text(p_setup(setup_data, scores)),
         "strategy_implication": generate_text(p_strategy(scores)),
 
-        # 📊 SNAPSHOT
+        # 📊 MARKET SNAPSHOT
         "price": market.get("price"),
         "change_24h": market.get("change_24h"),
         "volume": market.get("volume"),
@@ -269,18 +311,11 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
         "setup_score": scores.get("setup_score"),
 
         # 📋 INDICATOR CARDS
-        "market_indicator_highlights": get_indicator_highlights(
-            "market_data_indicators", user_id
-        ),
-        "macro_indicator_highlights": get_indicator_highlights(
-            "macro_indicator_data", user_id
-        ),
-        "technical_indicator_highlights": get_indicator_highlights(
-            "technical_indicator_data", user_id
-        ),
+        "market_indicator_highlights": get_market_indicator_highlights(user_id),
+        "technical_indicator_highlights": get_technical_indicator_highlights(user_id),
 
-        # 🧩 SETUP & STRATEGY (HISTORISCH!)
-        "best_setup": setup.get("best_setup"),
-        "top_setups": setup.get("top_setups", []),
-        "active_strategy": setup.get("active_strategy"),
+        # 🧩 SETUP & STRATEGY — HISTORISCH OPSLAAN
+        "best_setup": setup_data.get("best_setup"),
+        "top_setups": setup_data.get("top_setups", []),
+        "active_strategy": setup_data.get("active_strategy"),
     }
