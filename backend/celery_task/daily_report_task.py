@@ -39,81 +39,26 @@ def to_float(v):
 
 
 def jsonb(v, fallback=None):
-    """
-    ✅ Altijd veilige psycopg2 json adapter voor jsonb kolommen.
-    - dict/list → Json(dict/list)
-    - string/number/bool → Json(value)
-    - None → Json(fallback) of None
-    """
     if v is None:
         return Json(fallback) if fallback is not None else None
-
-    # Als het al dict/list is → direct
     if isinstance(v, (dict, list)):
         return Json(v)
-
-    # Als het string is → proberen JSON te parsen, anders als string opslaan (jsonb string)
     if isinstance(v, str):
-        s = v.strip()
-        if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
-            try:
-                return Json(json.loads(s))
-            except Exception:
-                pass
-        return Json(v)
-
-    # numbers/bool/whatever
+        try:
+            return Json(json.loads(v))
+        except Exception:
+            return Json(v)
     return Json(v)
 
 
-def pick_market(report: dict) -> dict:
-    """
-    Nieuwe agent geeft vaak market_data; fallback naar oude keys.
-    """
-    m = report.get("market_data")
-    if isinstance(m, dict):
-        return m
-
-    # fallback oude structuur
-    return {
-        "price": report.get("price"),
-        "change_24h": report.get("change_24h"),
-        "volume": report.get("volume"),
-    }
-
-
-def pick_scores(report: dict) -> dict:
-    """
-    Nieuwe agent geeft scores dict; fallback naar oude keys.
-    """
-    s = report.get("scores")
-    if isinstance(s, dict):
-        return s
-
-    return {
-        "macro_score": report.get("macro_score"),
-        "technical_score": report.get("technical_score"),
-        "market_score": report.get("market_score"),
-        "setup_score": report.get("setup_score"),
-    }
-
-
 # =====================================================
-# 🧾 DAILY REPORT TASK (PER USER)
+# 🧾 DAILY REPORT TASK
 # =====================================================
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report(user_id: int):
-    """
-    Genereert daily report per user.
-
-    - gebruikt report_ai_agent (single source of truth)
-    - slaat exact daily_reports structuur op (jsonb)
-    - genereert PDF
-    - verstuurt optioneel e-mail
-    """
 
     today = date.today()
-    logger.info(f"📄 Daily report task gestart | user_id={user_id} | {today}")
+    logger.info(f"📄 Daily report | user_id={user_id} | {today}")
 
     conn = get_db_connection()
     if not conn:
@@ -126,41 +71,42 @@ def generate_daily_report(user_id: int):
         cursor = conn.cursor()
 
         # -------------------------------------------------
-        # 1️⃣ REPORT GENEREREN (AI AGENT)
+        # 1️⃣ REPORT GENEREREN (AI = SOURCE OF TRUTH)
         # -------------------------------------------------
         report = generate_daily_report_sections(user_id=user_id)
 
         if not isinstance(report, dict):
-            logger.error("❌ Report agent gaf geen geldig dict terug")
-            return
+            raise ValueError("Report agent gaf geen geldig dict terug")
 
         # -------------------------------------------------
-        # 2️⃣ NORMALISEER (nieuw schema)
+        # 2️⃣ NORMALISEER DATA
         # -------------------------------------------------
-        market = pick_market(report)
-        scores = pick_scores(report)
+        executive_summary    = jsonb(report.get("executive_summary"), {})
+        market_analysis      = jsonb(report.get("market_analysis"), {})
+        macro_context        = jsonb(report.get("macro_context"), {})
+        technical_analysis   = jsonb(report.get("technical_analysis"), {})
+        setup_validation     = jsonb(report.get("setup_validation"), {})
+        strategy_implication = jsonb(report.get("strategy_implication"), {})
 
-        executive_summary    = jsonb(report.get("executive_summary"), fallback={})
-        macro_context        = jsonb(report.get("macro_context"), fallback={})
-        setup_validation     = jsonb(report.get("setup_validation"), fallback={})
-        strategy_implication = jsonb(report.get("strategy_implication"), fallback={})
-        outlook              = jsonb(report.get("outlook"), fallback={})
+        price      = to_float(report.get("price"))
+        change_24h = to_float(report.get("change_24h"))
+        volume     = to_float(report.get("volume"))
 
-        price      = to_float(market.get("price"))
-        change_24h = to_float(market.get("change_24h"))
-        volume     = to_float(market.get("volume"))
+        macro_score     = to_float(report.get("macro_score"))
+        technical_score = to_float(report.get("technical_score"))
+        market_score    = to_float(report.get("market_score"))
+        setup_score     = to_float(report.get("setup_score"))
 
-        indicator_highlights = jsonb(
-            report.get("indicator_highlights") or [], fallback=[]
-        )
+        market_indicators    = jsonb(report.get("market_indicator_highlights"), [])
+        macro_indicators     = jsonb(report.get("macro_indicator_highlights"), [])
+        technical_indicators = jsonb(report.get("technical_indicator_highlights"), [])
 
-        macro_score     = to_float(scores.get("macro_score") or scores.get("macro"))
-        technical_score = to_float(scores.get("technical_score") or scores.get("technical"))
-        market_score    = to_float(scores.get("market_score") or scores.get("market"))
-        setup_score     = to_float(scores.get("setup_score") or scores.get("setup"))
+        best_setup      = jsonb(report.get("best_setup"))
+        top_setups      = jsonb(report.get("top_setups"), [])
+        active_strategy = jsonb(report.get("active_strategy"))
 
         # -------------------------------------------------
-        # 3️⃣ OPSLAAN IN daily_reports  (🔥 FIX HIER)
+        # 3️⃣ OPSLAAN
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -168,72 +114,97 @@ def generate_daily_report(user_id: int):
                 user_id,
 
                 executive_summary,
+                market_analysis,
                 macro_context,
+                technical_analysis,
                 setup_validation,
                 strategy_implication,
-                outlook,
 
                 price,
                 change_24h,
                 volume,
-                indicator_highlights,
 
                 macro_score,
                 technical_score,
                 market_score,
-                setup_score
+                setup_score,
+
+                market_indicator_highlights,
+                macro_indicator_highlights,
+                technical_indicator_highlights,
+
+                best_setup,
+                top_setups,
+                active_strategy
             )
             VALUES (
                 %s, %s,
-                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s,
                 %s, %s, %s, %s,
-                %s, %s, %s, %s
+                %s, %s, %s,
+                %s, %s, %s
             )
             ON CONFLICT (user_id, report_date)
             DO UPDATE SET
-                executive_summary    = EXCLUDED.executive_summary,
-                macro_context        = EXCLUDED.macro_context,
-                setup_validation     = EXCLUDED.setup_validation,
-                strategy_implication = EXCLUDED.strategy_implication,
-                outlook              = EXCLUDED.outlook,
+                executive_summary              = EXCLUDED.executive_summary,
+                market_analysis                = EXCLUDED.market_analysis,
+                macro_context                  = EXCLUDED.macro_context,
+                technical_analysis             = EXCLUDED.technical_analysis,
+                setup_validation               = EXCLUDED.setup_validation,
+                strategy_implication           = EXCLUDED.strategy_implication,
 
-                price                = EXCLUDED.price,
-                change_24h           = EXCLUDED.change_24h,
-                volume               = EXCLUDED.volume,
-                indicator_highlights = EXCLUDED.indicator_highlights,
+                price                           = EXCLUDED.price,
+                change_24h                      = EXCLUDED.change_24h,
+                volume                          = EXCLUDED.volume,
 
-                macro_score          = EXCLUDED.macro_score,
-                technical_score      = EXCLUDED.technical_score,
-                market_score         = EXCLUDED.market_score,
-                setup_score          = EXCLUDED.setup_score,
+                macro_score                     = EXCLUDED.macro_score,
+                technical_score                 = EXCLUDED.technical_score,
+                market_score                    = EXCLUDED.market_score,
+                setup_score                     = EXCLUDED.setup_score,
 
-                generated_at         = NOW()   -- 🔥 ESSENTIËLE FIX
+                market_indicator_highlights     = EXCLUDED.market_indicator_highlights,
+                macro_indicator_highlights      = EXCLUDED.macro_indicator_highlights,
+                technical_indicator_highlights  = EXCLUDED.technical_indicator_highlights,
+
+                best_setup                      = EXCLUDED.best_setup,
+                top_setups                      = EXCLUDED.top_setups,
+                active_strategy                 = EXCLUDED.active_strategy,
+
+                generated_at                    = NOW();
         """, (
-            today,
-            user_id,
+            today, user_id,
 
             executive_summary,
+            market_analysis,
             macro_context,
+            technical_analysis,
             setup_validation,
             strategy_implication,
-            outlook,
 
             price,
             change_24h,
             volume,
-            indicator_highlights,
 
             macro_score,
             technical_score,
             market_score,
             setup_score,
+
+            market_indicators,
+            macro_indicators,
+            technical_indicators,
+
+            best_setup,
+            top_setups,
+            active_strategy,
         ))
 
         conn.commit()
-        logger.info(f"💾 daily_reports opgeslagen | user_id={user_id}")
+        logger.info("💾 daily_reports opgeslagen")
 
         # -------------------------------------------------
-        # 4️⃣ PDF GENEREREN
+        # 4️⃣ PDF
         # -------------------------------------------------
         cursor.execute("""
             SELECT *
@@ -243,22 +214,12 @@ def generate_daily_report(user_id: int):
         """, (today, user_id))
 
         row = cursor.fetchone()
-        if not row:
-            logger.warning("⚠️ Geen rapport gevonden voor PDF")
-            return
-
         cols = [d[0] for d in cursor.description]
         report_row = dict(zip(cols, row))
 
-        pdf_buffer = generate_pdf_report(
-            report_row,
-            report_type="daily",
-            save_to_disk=False
-        )
-
+        pdf_buffer = generate_pdf_report(report_row, "daily", save_to_disk=False)
         if not pdf_buffer:
-            logger.error("❌ PDF generatie mislukt")
-            return
+            raise RuntimeError("PDF generatie mislukt")
 
         pdf_dir = os.path.join("static", "pdf", "daily")
         os.makedirs(pdf_dir, exist_ok=True)
@@ -267,38 +228,22 @@ def generate_daily_report(user_id: int):
         with open(pdf_path, "wb") as f:
             f.write(pdf_buffer.getvalue())
 
-        logger.info(f"🖨️ PDF opgeslagen: {pdf_path}")
-
         # -------------------------------------------------
-        # 5️⃣ EMAIL (optioneel, mag falen)
+        # 5️⃣ EMAIL (optioneel)
         # -------------------------------------------------
         try:
             subject = f"📈 BTC Daily Report – {today}"
-            body = (
-                f"Dagelijks Bitcoin rapport voor {today}.\n\n"
-                f"Macro score: {macro_score}\n"
-                f"Technical score: {technical_score}\n"
-                f"Market score: {market_score}\n"
-                f"Setup score: {setup_score}\n\n"
-                "Zie bijlage voor volledige analyse."
-            )
+            body = "Je dagelijkse Bitcoin rapport is beschikbaar."
             send_email_with_attachment(subject, body, pdf_path)
-            logger.info("📤 Rapport per e-mail verzonden")
         except Exception:
-            logger.warning("⚠️ E-mail verzenden mislukt", exc_info=True)
+            logger.warning("⚠️ Email verzenden mislukt", exc_info=True)
 
     except Exception:
         logger.error("❌ Fout in daily_report_task", exc_info=True)
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        conn.rollback()
 
     finally:
-        try:
-            if cursor:
-                cursor.close()
-        except Exception:
-            pass
+        if cursor:
+            cursor.close()
         conn.close()
-        logger.info(f"✅ Daily report task afgerond | user_id={user_id}")
+        logger.info("✅ Daily report task afgerond")
