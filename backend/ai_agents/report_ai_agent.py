@@ -126,13 +126,30 @@ def get_market_snapshot() -> Dict[str, Any]:
 
 
 # =====================================================
-# INDICATOR HIGHLIGHTS
+# INDICATOR HIGHLIGHTS — PER CATEGORIE (FIXED!)
 # =====================================================
-def _simple_highlight(query: str, user_id: int) -> List[dict]:
+def get_market_indicator_highlights(user_id: int) -> List[dict]:
+    """
+    market_data_indicators heeft kolom: name, value, score, interpretation, ...
+    """
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(query, (user_id,))
+            cur.execute(
+                """
+                SELECT
+                    name AS indicator,
+                    value,
+                    score,
+                    interpretation
+                FROM market_data_indicators
+                WHERE user_id = %s
+                  AND score IS NOT NULL
+                  AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY score DESC;
+                """,
+                (user_id,),
+            )
             rows = cur.fetchall()
 
         return [
@@ -148,34 +165,79 @@ def _simple_highlight(query: str, user_id: int) -> List[dict]:
         conn.close()
 
 
-def get_market_indicator_highlights(user_id: int):
-    return _simple_highlight("""
-        SELECT name, value, score, COALESCE(interpretation, action)
-        FROM market_data_indicators
-        WHERE user_id = %s
-          AND DATE(timestamp) = CURRENT_DATE
-        ORDER BY score DESC;
-    """, user_id)
+def get_technical_indicator_highlights(user_id: int) -> List[dict]:
+    """
+    technical_indicators heeft kolom: indicator, value, score, advies, uitleg
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    indicator AS indicator,
+                    value,
+                    score,
+                    COALESCE(uitleg, advies)
+                FROM technical_indicators
+                WHERE user_id = %s
+                  AND score IS NOT NULL
+                  AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY score DESC;
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
+
+        return [
+            {
+                "indicator": r[0],
+                "value": to_float(r[1]),
+                "score": to_float(r[2]),
+                "interpretation": r[3],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
 
 
-def get_macro_indicator_highlights(user_id: int):
-    return _simple_highlight("""
-        SELECT indicator, value, score, COALESCE(interpretation, action, advies, uitleg)
-        FROM macro_data
-        WHERE user_id = %s
-          AND DATE(timestamp) = CURRENT_DATE
-        ORDER BY score DESC;
-    """, user_id)
+def get_macro_indicator_highlights(user_id: int) -> List[dict]:
+    """
+    ✅ FIX: macro_data gebruikt (net als market) meestal 'name' als indicator naam.
+    Jullie UI verwacht exact dezelfde structuur als market/technical.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    name AS indicator,
+                    value,
+                    score,
+                    COALESCE(interpretation, action)
+                FROM macro_data
+                WHERE user_id = %s
+                  AND score IS NOT NULL
+                  AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY score DESC;
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
 
-
-def get_technical_indicator_highlights(user_id: int):
-    return _simple_highlight("""
-        SELECT indicator, value, score, COALESCE(uitleg, advies)
-        FROM technical_indicators
-        WHERE user_id = %s
-          AND DATE(timestamp) = CURRENT_DATE
-        ORDER BY score DESC;
-    """, user_id)
+        return [
+            {
+                "indicator": r[0],
+                "value": to_float(r[1]),
+                "score": to_float(r[2]),
+                "interpretation": r[3],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
 
 
 # =====================================================
