@@ -169,17 +169,24 @@ def _indicator_list(cur, sql, user_id):
     } for r in rows]
 
 # =====================================================
-# INDICATOR HIGHLIGHTS (UNIFORM STRUCTUUR)
+# INDICATOR HIGHLIGHTS (UNIFORM STRUCTUUR – GEEN DUPLICATEN)
 # =====================================================
+
 def get_market_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
             return _indicator_list(cur, """
-                SELECT name, value, score, interpretation
+                SELECT DISTINCT ON (name)
+                    name,
+                    value,
+                    score,
+                    interpretation
                 FROM market_data_indicators
                 WHERE user_id = %s
-                ORDER BY score DESC
+                  AND score IS NOT NULL
+                  AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY name, timestamp DESC
                 LIMIT 5;
             """, user_id)
     finally:
@@ -191,10 +198,16 @@ def get_macro_indicator_highlights(user_id: int) -> List[dict]:
     try:
         with conn.cursor() as cur:
             return _indicator_list(cur, """
-                SELECT name, value, score, COALESCE(interpretation, action)
+                SELECT DISTINCT ON (name)
+                    name,
+                    value,
+                    score,
+                    COALESCE(interpretation, action)
                 FROM macro_data
                 WHERE user_id = %s
-                ORDER BY score DESC
+                  AND score IS NOT NULL
+                  AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY name, timestamp DESC
                 LIMIT 5;
             """, user_id)
     finally:
@@ -206,10 +219,16 @@ def get_technical_indicator_highlights(user_id: int) -> List[dict]:
     try:
         with conn.cursor() as cur:
             return _indicator_list(cur, """
-                SELECT indicator, value, score, COALESCE(uitleg, advies)
+                SELECT DISTINCT ON (indicator)
+                    indicator,
+                    value,
+                    score,
+                    COALESCE(uitleg, advies)
                 FROM technical_indicators
                 WHERE user_id = %s
-                ORDER BY score DESC
+                  AND score IS NOT NULL
+                  AND DATE(timestamp) = CURRENT_DATE
+                ORDER BY indicator, timestamp DESC
                 LIMIT 5;
             """, user_id)
     finally:
