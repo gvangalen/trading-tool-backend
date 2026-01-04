@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # =====================================================
-# 🎯 REPORT AGENT — DEFINITIEVE ROL
+# REPORT AGENT ROLE
 # =====================================================
 REPORT_TASK = """
 Je bent een ervaren Bitcoin market analyst.
@@ -22,22 +22,23 @@ Je schrijft een dagelijks rapport voor een ervaren gebruiker.
 
 Context:
 - De lezer kent Bitcoin
-- De lezer ziet scores en indicatoren in een dashboard
-- Jij vat dit samen tot een professioneel dagrapport
+- De lezer ziet macro-, market-, technical- en setup-scores
+- De lezer ziet indicator-cards in een dashboard
+- Jij vat dit alles samen tot één professioneel dagrapport
 
 Stijl:
 - Normaal, vloeiend Nederlands
-- Volledige zinnen en korte alinea’s
-- Geen AI-termen, geen labels, geen bullets
-- Geen educatie of uitleg van basisbegrippen
-- Geen herhaling van exacte cijfers tenzij functioneel
-- Klinkt als een menselijke analist
+- Volledige zinnen, korte alinea’s
+- Geen AI-termen, geen labels, geen opsommingen
+- Geen uitleg van basisbegrippen
+- Geen exacte cijfers herhalen tenzij functioneel
+- Schrijf als een menselijke analist
 
 Regels:
 - Gebruik uitsluitend aangeleverde data
 - Geen aannames
 - Geen markdown
-- Elke sectie is één samenhangende tekst
+- Elke sectie is één doorlopende tekst
 
 Output = geldige JSON
 """
@@ -57,40 +58,31 @@ def to_float(v):
 
 
 def _flatten_text(obj) -> List[str]:
-    """
-    Haalt ALLE bruikbare tekst uit nested AI JSON.
-    Lost lege Market Analyse en rommel-output definitief op.
-    """
     out = []
-
     if obj is None:
         return out
-
     if isinstance(obj, str):
         t = obj.strip()
         if t:
             out.append(t)
         return out
-
     if isinstance(obj, dict):
         for v in obj.values():
             out.extend(_flatten_text(v))
         return out
-
     if isinstance(obj, list):
         for v in obj:
             out.extend(_flatten_text(v))
         return out
-
     return out
 
 
-def generate_text(prompt: str) -> str:
+def generate_text(prompt: str, fallback: str) -> str:
     system_prompt = build_system_prompt(agent="report", task=REPORT_TASK)
     raw = ask_gpt_text(prompt, system_role=system_prompt)
 
     if not raw:
-        return "Onvoldoende data om hier een zinvolle analyse van te maken."
+        return fallback
 
     try:
         parsed = json.loads(raw)
@@ -98,7 +90,7 @@ def generate_text(prompt: str) -> str:
 
         blacklist = {
             "GO", "NO-GO", "STATUS", "RISICO", "IMPACT",
-            "ACTIE", "ONVOLDOENDE DATA"
+            "ACTIE", "ONVOLDOENDE DATA", "CONDITIONAL"
         }
 
         cleaned = [
@@ -115,7 +107,8 @@ def generate_text(prompt: str) -> str:
     except Exception:
         pass
 
-    return raw.strip()
+    text = raw.strip()
+    return text if len(text) > 5 else fallback
 
 
 # =====================================================
@@ -129,19 +122,16 @@ def get_daily_scores(user_id: int) -> Dict[str, Any]:
                 SELECT macro_score, technical_score, market_score, setup_score
                 FROM daily_scores
                 WHERE user_id = %s
-                  AND report_date = CURRENT_DATE
+                ORDER BY report_date DESC
                 LIMIT 1;
             """, (user_id,))
             row = cur.fetchone()
 
-        if not row:
-            return {}
-
         return {
-            "macro_score": to_float(row[0]),
-            "technical_score": to_float(row[1]),
-            "market_score": to_float(row[2]),
-            "setup_score": to_float(row[3]),
+            "macro_score": to_float(row[0]) if row else None,
+            "technical_score": to_float(row[1]) if row else None,
+            "market_score": to_float(row[2]) if row else None,
+            "setup_score": to_float(row[3]) if row else None,
         }
     finally:
         conn.close()
@@ -159,17 +149,24 @@ def get_market_snapshot() -> Dict[str, Any]:
             """)
             row = cur.fetchone()
 
-        if not row:
-            return {}
-
         return {
-            "price": to_float(row[0]),
-            "change_24h": to_float(row[1]),
-            "volume": to_float(row[2]),
+            "price": to_float(row[0]) if row else None,
+            "change_24h": to_float(row[1]) if row else None,
+            "volume": to_float(row[2]) if row else None,
         }
     finally:
         conn.close()
 
+
+def _indicator_list(cur, sql, user_id):
+    cur.execute(sql, (user_id,))
+    rows = cur.fetchall()
+    return [{
+        "indicator": r[0],
+        "value": to_float(r[1]),
+        "score": to_float(r[2]),
+        "interpretation": r[3],
+    } for r in rows]
 
 # =====================================================
 # INDICATOR HIGHLIGHTS (UNIFORM STRUCTUUR)
@@ -178,46 +175,13 @@ def get_market_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            return _indicator_list(cur, """
                 SELECT name, value, score, interpretation
                 FROM market_data_indicators
                 WHERE user_id = %s
-                  AND score IS NOT NULL
-                  AND DATE(timestamp) = CURRENT_DATE
-                ORDER BY score DESC;
-            """, (user_id,))
-            rows = cur.fetchall()
-
-        return [{
-            "indicator": r[0],
-            "value": to_float(r[1]),
-            "score": to_float(r[2]),
-            "interpretation": r[3],
-        } for r in rows]
-    finally:
-        conn.close()
-
-
-def get_technical_indicator_highlights(user_id: int) -> List[dict]:
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT indicator, value, score, COALESCE(uitleg, advies)
-                FROM technical_indicators
-                WHERE user_id = %s
-                  AND score IS NOT NULL
-                  AND DATE(timestamp) = CURRENT_DATE
-                ORDER BY score DESC;
-            """, (user_id,))
-            rows = cur.fetchall()
-
-        return [{
-            "indicator": r[0],
-            "value": to_float(r[1]),
-            "score": to_float(r[2]),
-            "interpretation": r[3],
-        } for r in rows]
+                ORDER BY score DESC
+                LIMIT 5;
+            """, user_id)
     finally:
         conn.close()
 
@@ -226,25 +190,30 @@ def get_macro_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            return _indicator_list(cur, """
                 SELECT name, value, score, COALESCE(interpretation, action)
                 FROM macro_data
                 WHERE user_id = %s
-                  AND score IS NOT NULL
-                  AND DATE(timestamp) = CURRENT_DATE
-                ORDER BY score DESC;
-            """, (user_id,))
-            rows = cur.fetchall()
-
-        return [{
-            "indicator": r[0],
-            "value": to_float(r[1]),
-            "score": to_float(r[2]),
-            "interpretation": r[3],
-        } for r in rows]
+                ORDER BY score DESC
+                LIMIT 5;
+            """, user_id)
     finally:
         conn.close()
 
+
+def get_technical_indicator_highlights(user_id: int) -> List[dict]:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            return _indicator_list(cur, """
+                SELECT indicator, value, score, COALESCE(uitleg, advies)
+                FROM technical_indicators
+                WHERE user_id = %s
+                ORDER BY score DESC
+                LIMIT 5;
+            """, user_id)
+    finally:
+        conn.close()
 
 # =====================================================
 # SETUP SNAPSHOT
@@ -258,8 +227,7 @@ def get_setup_snapshot(user_id: int) -> Dict[str, Any]:
                 FROM daily_setup_scores d
                 JOIN setups s ON s.id = d.setup_id
                 WHERE d.user_id = %s
-                  AND d.report_date = CURRENT_DATE
-                ORDER BY d.is_best DESC, d.score DESC
+                ORDER BY d.report_date DESC, d.is_best DESC, d.score DESC
                 LIMIT 1;
             """, (user_id,))
             best = cur.fetchone()
@@ -269,8 +237,7 @@ def get_setup_snapshot(user_id: int) -> Dict[str, Any]:
                 FROM daily_setup_scores d
                 JOIN setups s ON s.id = d.setup_id
                 WHERE d.user_id = %s
-                  AND d.report_date = CURRENT_DATE
-                ORDER BY d.score DESC
+                ORDER BY d.report_date DESC, d.score DESC
                 LIMIT 5;
             """, (user_id,))
             rows = cur.fetchall()
@@ -293,7 +260,7 @@ def get_setup_snapshot(user_id: int) -> Dict[str, Any]:
         }
     finally:
         conn.close()
-
+        
 
 # =====================================================
 # STRATEGY SNAPSHOT
@@ -304,19 +271,13 @@ def get_active_strategy_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
-                    s.name,
-                    s.symbol,
-                    s.timeframe,
-                    a.entry,
-                    a.targets,
-                    a.stop_loss,
-                    a.adjustment_reason,
-                    a.confidence_score
+                    s.name, s.symbol, s.timeframe,
+                    a.entry, a.targets, a.stop_loss,
+                    a.adjustment_reason, a.confidence_score
                 FROM active_strategy_snapshot a
                 JOIN setups s ON s.id = a.setup_id
                 WHERE a.user_id = %s
-                  AND a.snapshot_date = CURRENT_DATE
-                ORDER BY a.created_at DESC
+                ORDER BY a.snapshot_date DESC, a.created_at DESC
                 LIMIT 1;
             """, (user_id,))
             row = cur.fetchone()
@@ -339,61 +300,60 @@ def get_active_strategy_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
 
 
 # =====================================================
-# PROMPTS (FUNCTIONEEL & INFORMATIEF)
+# PROMPTS
 # =====================================================
 def p_exec(scores, market):
     return f"""
-Macro score: {scores.get('macro_score')}
-Technische score: {scores.get('technical_score')}
-Markt score: {scores.get('market_score')}
-Setup score: {scores.get('setup_score')}
-Prijs: {market.get('price')}
-24h verandering: {market.get('change_24h')}
+Macro score {scores.get('macro_score')}, technische score {scores.get('technical_score')},
+markt score {scores.get('market_score')} en setup score {scores.get('setup_score')}.
+De prijs beweegt recent met beperkte volatiliteit.
+Vat de huidige situatie samen en geef een duidelijk handelsoordeel.
 """
 
 
-def p_market(scores, market):
+def p_market(scores, market, indicators):
+    names = ", ".join(i["indicator"] for i in indicators)
     return f"""
-Prijs: {market.get('price')}
-24h verandering: {market.get('change_24h')}
-Markt score: {scores.get('market_score')}
-Beschrijf wat dit zegt over volatiliteit, richting en activiteit.
+De markt toont een markt score van {scores.get('market_score')}.
+Belangrijke indicatoren vandaag zijn {names}.
+Beschrijf volatiliteit, richting en activiteit.
 """
 
 
-def p_macro(scores):
+def p_macro(scores, indicators):
+    names = ", ".join(i["indicator"] for i in indicators)
     return f"""
-Macro score: {scores.get('macro_score')}
-Beschrijf de macro-omgeving en implicaties voor Bitcoin.
+Macro score is {scores.get('macro_score')}.
+Belangrijke macrofactoren zijn {names}.
+Beschrijf de macro-context en relevantie voor Bitcoin.
 """
 
 
-def p_technical(scores):
+def p_technical(scores, indicators):
+    weak = ", ".join(i["indicator"] for i in indicators if i["score"] < 40)
     return f"""
-Technische score: {scores.get('technical_score')}
-Beschrijf trend, momentum en technische betrouwbaarheid.
+Technische score is {scores.get('technical_score')}.
+Zwakke indicatoren zijn {weak}.
+Beschrijf trend, momentum en betrouwbaarheid.
 """
 
 
 def p_setup(best_setup):
     if not best_setup:
-        return "Er is vandaag geen setup die voldoende aansluit bij de huidige marktomstandigheden."
+        return "Er is vandaag geen setup die voldoende aansluit bij de marktomstandigheden."
     return f"""
-Beste setup: {best_setup.get('name')} ({best_setup.get('timeframe')})
-Score: {best_setup.get('score')}
-Beoordeel de bruikbaarheid van deze setup vandaag.
+De beste setup is {best_setup.get('name')} op timeframe {best_setup.get('timeframe')}.
+De score ligt op {best_setup.get('score')}.
+Beoordeel de praktische inzetbaarheid vandaag.
 """
 
 
 def p_strategy(scores, active_strategy):
     if not active_strategy:
-        return """
-Er is geen actieve strategie op deze rapportdatum.
-De huidige scores rechtvaardigen geen concrete handelsactie.
-"""
-    return f"""
-Er is een actieve strategie gekoppeld aan de huidige setup.
-Beoordeel deze strategie in relatie tot de macro-, markt- en technische scores.
+        return "Er is geen actieve strategie omdat de huidige scorecombinatie geen duidelijke actie ondersteunt."
+    return """
+Er is een actieve strategie aanwezig.
+Beoordeel deze strategie in relatie tot het huidige marktbeeld en de risico’s.
 """
 
 
@@ -403,20 +363,39 @@ Beoordeel deze strategie in relatie tot de macro-, markt- en technische scores.
 def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     scores = get_daily_scores(user_id)
     market = get_market_snapshot()
+
+    market_ind = get_market_indicator_highlights(user_id)
+    macro_ind = get_macro_indicator_highlights(user_id)
+    tech_ind = get_technical_indicator_highlights(user_id)
+
     setup_snapshot = get_setup_snapshot(user_id)
     active_strategy = get_active_strategy_snapshot(user_id)
 
     return {
         # Narrative
-        "executive_summary": generate_text(p_exec(scores, market)),
-        "market_analysis": generate_text(p_market(scores, market)),
-        "macro_context": generate_text(p_macro(scores)),
-        "technical_analysis": generate_text(p_technical(scores)),
+        "executive_summary": generate_text(
+            p_exec(scores, market),
+            "De markt bevindt zich in een afwachtende fase met gemengde signalen."
+        ),
+        "market_analysis": generate_text(
+            p_market(scores, market, market_ind),
+            "De markt toont beperkte richting en gematigde activiteit."
+        ),
+        "macro_context": generate_text(
+            p_macro(scores, macro_ind),
+            "De macro-omgeving blijft ondersteunend maar vraagt alertheid."
+        ),
+        "technical_analysis": generate_text(
+            p_technical(scores, tech_ind),
+            "De technische structuur biedt momenteel onvoldoende bevestiging."
+        ),
         "setup_validation": generate_text(
-            p_setup(setup_snapshot.get("best_setup"))
+            p_setup(setup_snapshot.get("best_setup")),
+            "De huidige setups bieden onvoldoende kwaliteit voor actie."
         ),
         "strategy_implication": generate_text(
-            p_strategy(scores, active_strategy)
+            p_strategy(scores, active_strategy),
+            "Er is geen actieve strategie vanwege gebrek aan bevestiging."
         ),
 
         # Snapshot
@@ -430,12 +409,12 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
         "market_score": scores.get("market_score"),
         "setup_score": scores.get("setup_score"),
 
-        # Indicator cards
-        "market_indicator_highlights": get_market_indicator_highlights(user_id),
-        "macro_indicator_highlights": get_macro_indicator_highlights(user_id),
-        "technical_indicator_highlights": get_technical_indicator_highlights(user_id),
+        # Cards
+        "market_indicator_highlights": market_ind,
+        "macro_indicator_highlights": macro_ind,
+        "technical_indicator_highlights": tech_ind,
 
-        # Setup & strategy cards
+        # Setup & strategy
         "best_setup": setup_snapshot.get("best_setup"),
         "top_setups": setup_snapshot.get("top_setups", []),
         "active_strategy": active_strategy,
