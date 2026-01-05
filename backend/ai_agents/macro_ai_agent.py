@@ -5,6 +5,7 @@ from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
 from backend.utils.scoring_utils import generate_scores_db, normalize_indicator_name
 from backend.ai_core.system_prompt_builder import build_system_prompt
+from backend.ai_core.agent_context import build_agent_context  # ✅ NIEUW
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -14,10 +15,6 @@ logger.setLevel(logging.INFO)
 # 🧠 Helpers
 # ======================================================
 def is_empty_macro_context(ctx: dict) -> bool:
-    """
-    Checkt of de AI inhoud heeft gegenereerd
-    (niet alleen geldige JSON, maar ook betekenis)
-    """
     if not isinstance(ctx, dict):
         return True
 
@@ -31,9 +28,6 @@ def is_empty_macro_context(ctx: dict) -> bool:
 
 
 def fallback_macro_context(macro_items: list) -> dict:
-    """
-    Veilige fallback bij te weinig AI-output
-    """
     indicators = {i["indicator"] for i in macro_items}
 
     return {
@@ -42,8 +36,8 @@ def fallback_macro_context(macro_items: list) -> dict:
         "risk": "gemiddeld",
         "summary": (
             "De macro-analyse is gebaseerd op een beperkt aantal indicatoren. "
-            "BTC-dominantie en marktsentiment geven richting, maar vragen om "
-            "voorzichtigheid en bevestiging."
+            "De huidige signalen vragen om bevestiging voordat er agressieve "
+            "positionering logisch wordt."
         ),
         "top_signals": [
             f"{ind} blijft richtinggevend"
@@ -53,9 +47,6 @@ def fallback_macro_context(macro_items: list) -> dict:
 
 
 def normalize_ai_context(ai_ctx: dict, macro_items: list) -> dict:
-    """
-    Normaliseert AI-output (NL/EN keys) + fallback
-    """
     normalized = {
         "trend": ai_ctx.get("trend", ""),
         "bias": ai_ctx.get("bias", ""),
@@ -72,7 +63,7 @@ def normalize_ai_context(ai_ctx: dict, macro_items: list) -> dict:
 
 
 # ======================================================
-# 🌍 MACRO AI AGENT — PURE AI + DB LOGICA
+# 🌍 MACRO AI AGENT
 # ======================================================
 def run_macro_agent(user_id: int):
     """
@@ -81,9 +72,6 @@ def run_macro_agent(user_id: int):
     Schrijft:
     - ai_category_insights (macro)
     - ai_reflections (macro)
-
-    ❗️Geen Celery
-    ❗️Geen data-ingestie
     """
 
     if user_id is None:
@@ -174,9 +162,21 @@ def run_macro_agent(user_id: int):
         ]
 
         # =========================================================
-        # 4️⃣ AI MACRO ANALYSE
+        # 4️⃣ 🧠 SHARED AGENT CONTEXT (NIEUW)
+        # =========================================================
+        agent_context = build_agent_context(
+            user_id=user_id,
+            category="macro",
+            current_score=macro_avg,
+            current_items=top_pretty,
+            lookback_days=1,  # 👈 bewust 1 dag
+        )
+
+        # =========================================================
+        # 5️⃣ AI MACRO ANALYSE
         # =========================================================
         payload = {
+            "context": agent_context,
             "macro_items": macro_items,
             "macro_rules": rules_by_indicator,
             "macro_avg_score": macro_avg,
@@ -184,12 +184,12 @@ def run_macro_agent(user_id: int):
         }
 
         macro_task = """
-Analyseer de beschikbare macrodata in beslistermen voor Bitcoin.
+Analyseer de macro-omgeving voor Bitcoin.
 
-Belangrijk:
-- Gebruik uitsluitend de aanwezige indicatoren
-- Ook bij weinig data moet je een concrete analyse geven
-- Vermijd lege antwoorden of 'onvoldoende data'
+Gebruik expliciet:
+- verschillen t.o.v. gisteren
+- verandering in score en bias
+- consistentie of breuk in macro-trend
 
 Geef altijd:
 - trend (bullish / bearish / neutraal)
@@ -214,7 +214,7 @@ Antwoord uitsluitend in geldige JSON.
         ai_context = normalize_ai_context(raw_ai_context, macro_items)
 
         # =========================================================
-        # 5️⃣ AI REFLECTIES
+        # 6️⃣ AI REFLECTIES
         # =========================================================
         reflections_task = """
 Maak per macro-indicator een reflectie.
@@ -239,7 +239,7 @@ Antwoord uitsluitend als JSON-lijst.
             ai_reflections = []
 
         # =========================================================
-        # 6️⃣ Opslaan ai_category_insights
+        # 7️⃣ Opslaan ai_category_insights
         # =========================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -266,7 +266,7 @@ Antwoord uitsluitend als JSON-lijst.
             ))
 
         # =========================================================
-        # 7️⃣ Opslaan ai_reflections
+        # 8️⃣ Opslaan ai_reflections
         # =========================================================
         for r in ai_reflections:
             if not r.get("indicator"):
