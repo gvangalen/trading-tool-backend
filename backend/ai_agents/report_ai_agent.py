@@ -455,12 +455,16 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     def _safe_json(obj):
         if obj is None:
             return None
+
         if isinstance(obj, Decimal):
             return float(obj)
+
         if isinstance(obj, dict):
             return {k: _safe_json(v) for k, v in obj.items()}
-        if isinstance(obj, list):
+
+        if isinstance(obj, (list, tuple)):
             return [_safe_json(v) for v in obj]
+
         return obj
 
     # -------------------------------------------------
