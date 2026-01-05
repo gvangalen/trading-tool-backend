@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # ======================================================
-# 🧠 Helpers (IDENTIEK AAN MACRO + 1 unwrap-fix)
+# 🧠 Helpers
 # ======================================================
 def is_empty_technical_context(ctx: dict) -> bool:
     if not isinstance(ctx, dict):
@@ -47,8 +47,7 @@ def normalize_ai_context(ai_ctx: dict, items: list) -> dict:
     if not isinstance(ai_ctx, dict):
         return fallback_technical_context(items)
 
-    # 🔧 ENIGE FIX T.O.V. MACRO
-    # accepteer EN + NL wrappers
+    # accepteer NL/EN wrappers
     for key in ("analysis", "analyse"):
         if key in ai_ctx and isinstance(ai_ctx[key], dict):
             ai_ctx = ai_ctx[key]
@@ -70,19 +69,16 @@ def normalize_ai_context(ai_ctx: dict, items: list) -> dict:
 
 
 # =====================================================================
-# 📊 TECHNICAL AI AGENT — ZELFDE STRUCTUUR ALS MACRO (7 STAPPEN)
+# 📊 TECHNICAL AI AGENT (MET GEHEUGEN)
 # =====================================================================
 def run_technical_agent(user_id: int):
     """
     Genereert technical AI insights voor één user.
 
-    Schrijft:
-    - ai_category_insights (technical)
-    - ai_reflections (technical)
-
-    ✔ 7 stappen
-    ✔ Zelfde structuur als macro
-    ✔ DB leidend, AI = interpretatie
+    ✔ context van gisteren
+    ✔ score-verandering
+    ✔ AI-geheugen
+    ✔ verklarende analyse
     """
 
     if user_id is None:
@@ -97,30 +93,7 @@ def run_technical_agent(user_id: int):
 
     try:
         # =====================================================
-        # 1️⃣ TECHNICAL SCOREREGELS
-        # =====================================================
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT indicator, range_min, range_max, score, trend, interpretation, action
-                FROM technical_indicator_rules
-                ORDER BY indicator, range_min;
-            """)
-            rows = cur.fetchall()
-
-        rules_by_indicator = {}
-        for ind, rmin, rmax, score, trend, interp, action in rows:
-            key = normalize_indicator_name(ind)
-            rules_by_indicator.setdefault(key, []).append({
-                "range_min": float(rmin) if rmin is not None else None,
-                "range_max": float(rmax) if rmax is not None else None,
-                "score": int(score) if score is not None else None,
-                "trend": trend,
-                "interpretation": interp,
-                "action": action,
-            })
-
-        # =====================================================
-        # 2️⃣ TECHNICAL DATA (LAATSTE SNAPSHOT)
+        # 1️⃣ TECHNICAL DATA (LAATSTE SNAPSHOT)
         # =====================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -154,25 +127,70 @@ def run_technical_agent(user_id: int):
 
         combined = list(latest.values())
 
-        avg_score = (
-            round(sum(i["score"] for i in combined if i["score"] is not None) / len(combined), 2)
-            if combined else 50
+        avg_score = round(
+            sum(i["score"] for i in combined if i["score"] is not None) / len(combined),
+            2
         )
 
         # =====================================================
-        # 3️⃣ AI TECHNICAL ANALYSE
+        # 2️⃣ VORIGE TECHNICAL AI CONTEXT
+        # =====================================================
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT avg_score, trend, bias, risk, summary, top_signals
+                FROM ai_category_insights
+                WHERE user_id = %s
+                  AND category = 'technical'
+                  AND date < CURRENT_DATE
+                ORDER BY date DESC
+                LIMIT 1;
+            """, (user_id,))
+            prev = cur.fetchone()
+
+        prev_context = None
+        prev_score = None
+
+        if prev:
+            prev_score = float(prev[0])
+            prev_context = {
+                "avg_score": prev[0],
+                "trend": prev[1],
+                "bias": prev[2],
+                "risk": prev[3],
+                "summary": prev[4],
+                "top_signals": prev[5],
+            }
+
+        score_delta = (
+            round(avg_score - prev_score, 2)
+            if prev_score is not None else None
+        )
+
+        # =====================================================
+        # 3️⃣ AI TECHNICAL ANALYSE (MET CONTEXT)
         # =====================================================
         technical_task = """
-Analyseer technische indicatoren voor Bitcoin.
+Je bent een ervaren technische marktanalist.
 
-Geef altijd:
+Je krijgt:
+- de huidige technische indicatoren
+- de technische score van vandaag
+- het verschil t.o.v. gisteren
+- jouw vorige technische analyse
+
+BELANGRIJK:
+- Leg expliciet uit WAT is veranderd t.o.v. gisteren
+- Verklaar WAAROM indicatoren sterker of zwakker zijn
+- Benoem of dit voortzetting is of een omslag
+- Geen algemene termen
+- Geen uitleg van basisbegrippen
+
+Antwoord uitsluitend in geldige JSON met:
 - trend
 - bias
 - risico
-- korte samenvatting
-- belangrijkste technische signalen
-
-Antwoord uitsluitend in geldige JSON.
+- samenvatting
+- top_signals
 """
 
         system_prompt = build_system_prompt(
@@ -180,8 +198,15 @@ Antwoord uitsluitend in geldige JSON.
             task=technical_task
         )
 
+        analysis_input = {
+            "current_indicators": combined,
+            "avg_score_today": avg_score,
+            "score_change_vs_yesterday": score_delta,
+            "previous_ai_view": prev_context,
+        }
+
         raw_ai_context = ask_gpt(
-            prompt=json.dumps(combined, ensure_ascii=False, indent=2),
+            prompt=json.dumps(analysis_input, ensure_ascii=False, indent=2),
             system_role=system_prompt
         )
 
@@ -191,7 +216,7 @@ Antwoord uitsluitend in geldige JSON.
         ai_context = normalize_ai_context(raw_ai_context, combined)
 
         # =====================================================
-        # 4️⃣ AI REFLECTIES
+        # 4️⃣ AI REFLECTIES (ONGEWIJZIGD)
         # =====================================================
         reflections_task = """
 Maak per technische indicator een reflectie.
