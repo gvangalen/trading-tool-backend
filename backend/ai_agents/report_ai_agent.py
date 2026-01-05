@@ -452,20 +452,28 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     # -------------------------------------------------
     # 0) JSON-safe helper (CRUCIAAL)
     # -------------------------------------------------
-    def _safe_json(obj):
-        if obj is None:
-            return None
+    from datetime import date, datetime
 
-        if isinstance(obj, Decimal):
-            return float(obj)
+def _safe_json(obj):
+    if obj is None:
+        return None
 
-        if isinstance(obj, dict):
-            return {k: _safe_json(v) for k, v in obj.items()}
+    # Numerics
+    if isinstance(obj, Decimal):
+        return float(obj)
 
-        if isinstance(obj, (list, tuple)):
-            return [_safe_json(v) for v in obj]
+    # Dates & times
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
 
-        return obj
+    # Containers
+    if isinstance(obj, dict):
+        return {k: _safe_json(v) for k, v in obj.items()}
+
+    if isinstance(obj, (list, tuple)):
+        return [_safe_json(v) for v in obj]
+
+    return obj
 
     # -------------------------------------------------
     # 1) Basis data (ongewijzigd)
