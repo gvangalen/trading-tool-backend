@@ -79,7 +79,7 @@ def generate_daily_report(user_id: int):
         cursor = conn.cursor()
 
         # -------------------------------------------------
-        # 1️⃣ REPORT GENEREREN
+        # 1️⃣ REPORT GENEREREN (AI)
         # -------------------------------------------------
         report = generate_daily_report_sections(user_id=user_id)
 
@@ -95,6 +95,7 @@ def generate_daily_report(user_id: int):
         technical_analysis   = jsonb(report.get("technical_analysis"), {})
         setup_validation     = jsonb(report.get("setup_validation"), {})
         strategy_implication = jsonb(report.get("strategy_implication"), {})
+        outlook              = jsonb(report.get("outlook"), {})   # ✅ FIX
 
         price      = to_float(report.get("price"))
         change_24h = to_float(report.get("change_24h"))
@@ -114,7 +115,7 @@ def generate_daily_report(user_id: int):
         active_strategy = jsonb(report.get("active_strategy"))
 
         # -------------------------------------------------
-        # 3️⃣ UPSERT daily_reports
+        # 3️⃣ UPSERT daily_reports (MET OUTLOOK)
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -127,6 +128,7 @@ def generate_daily_report(user_id: int):
                 technical_analysis,
                 setup_validation,
                 strategy_implication,
+                outlook,
 
                 price,
                 change_24h,
@@ -147,7 +149,7 @@ def generate_daily_report(user_id: int):
             )
             VALUES (
                 %s, %s,
-                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s,
                 %s, %s, %s, %s,
                 %s, %s, %s,
@@ -161,6 +163,7 @@ def generate_daily_report(user_id: int):
                 technical_analysis             = EXCLUDED.technical_analysis,
                 setup_validation               = EXCLUDED.setup_validation,
                 strategy_implication           = EXCLUDED.strategy_implication,
+                outlook                        = EXCLUDED.outlook,
 
                 price                           = EXCLUDED.price,
                 change_24h                      = EXCLUDED.change_24h,
@@ -189,6 +192,7 @@ def generate_daily_report(user_id: int):
             technical_analysis,
             setup_validation,
             strategy_implication,
+            outlook,                    # ✅ FIX
 
             price,
             change_24h,
@@ -209,7 +213,7 @@ def generate_daily_report(user_id: int):
         ))
 
         conn.commit()
-        logger.info("💾 daily_reports opgeslagen")
+        logger.info("💾 daily_reports opgeslagen (incl. outlook)")
 
         # -------------------------------------------------
         # 4️⃣ PDF GENEREREN
