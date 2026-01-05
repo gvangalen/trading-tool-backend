@@ -21,24 +21,28 @@ Je bent een ervaren Bitcoin market analyst.
 Je schrijft een dagelijks rapport voor een ervaren gebruiker.
 
 Context:
-- De lezer kent Bitcoin
-- De lezer ziet macro-, market-, technical- en setup-scores
-- De lezer ziet indicator-cards in een dashboard
-- Jij vat dit alles samen tot één professioneel dagrapport
+- Je krijgt dashboard-data (scores, indicatoren, setups, strategie)
+- Je krijgt AI-insights en AI-reflections als extra context
+- Je krijgt het rapport van de vorige dag
+- Deze informatie gebruik je om samenhang en continuïteit te creëren
+
+Belangrijk:
+- Bouw expliciet voort op gisteren
+- Verklaar waarom indicatoren vandaag hoger/lager zijn
+- Trek geen nieuwe conclusies zonder data
+- Gebruik geen absolute prijsniveaus behalve de actuele prijs
 
 Stijl:
-- Normaal, vloeiend Nederlands
-- Volledige zinnen, korte alinea’s
+- Vloeiend, professioneel Nederlands
+- Doorlopend verhaal, geen losse blokken
 - Geen AI-termen, geen labels, geen opsommingen
 - Geen uitleg van basisbegrippen
-- Geen exacte cijfers herhalen tenzij functioneel
-- Schrijf als een menselijke analist
+- Geen herhaling van cijfers zonder reden
+- Klinkt als één analist, niet als meerdere losse modules
 
-Regels:
-- Gebruik uitsluitend aangeleverde data
-- Geen aannames
-- Geen markdown
-- Elke sectie is één doorlopende tekst
+Structuur:
+- Elke sectie is één logisch doorlopend stuk tekst
+- Secties moeten inhoudelijk op elkaar aansluiten
 
 Output = geldige JSON
 """
@@ -319,60 +323,113 @@ def get_active_strategy_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
 
 
 # =====================================================
-# PROMPTS
+# PROMPTS (REPORT AGENT 2.0 — SAMENHANG & VERKLARING)
 # =====================================================
+
 def p_exec(scores, market):
     return f"""
-Macro score {scores.get('macro_score')}, technische score {scores.get('technical_score')},
-markt score {scores.get('market_score')} en setup score {scores.get('setup_score')}.
-De prijs beweegt recent met beperkte volatiliteit.
-Vat de huidige situatie samen en geef een duidelijk handelsoordeel.
+Vat de huidige marktsituatie samen tot één helder dagoverzicht.
+
+Gebruik hierbij:
+- de combinatie van macro-, market-, technical- en setup-scores
+- de actuele prijs en recente marktactiviteit
+- de context van gisteren indien relevant
+
+Doel:
+- schets het grotere plaatje
+- benoem of de markt vandaag uitnodigt tot actie of juist terughoudendheid
+- geef één duidelijk, professioneel handelsoordeel
 """
 
 
 def p_market(scores, market, indicators):
     names = ", ".join(i["indicator"] for i in indicators)
+
     return f"""
-De markt toont een markt score van {scores.get('market_score')}.
-Belangrijke indicatoren vandaag zijn {names}.
-Beschrijf volatiliteit, richting en activiteit.
+De market score staat vandaag op {scores.get('market_score')}.
+
+Belangrijke marktindicatoren zijn: {names}.
+
+Ga inhoudelijk in op:
+- waarom deze indicatoren vandaag hoger of lager scoren
+- wat dit zegt over volatiliteit, liquiditeit en richting
+- of dit een voortzetting is van gisteren of juist een verandering
+
+Beschrijf dit als één logisch verhaal, geen losse observaties.
 """
 
 
 def p_macro(scores, indicators):
     names = ", ".join(i["indicator"] for i in indicators)
+
     return f"""
-Macro score is {scores.get('macro_score')}.
-Belangrijke macrofactoren zijn {names}.
-Beschrijf de macro-context en relevantie voor Bitcoin.
+De macro score staat vandaag op {scores.get('macro_score')}.
+
+Relevante macro-indicatoren zijn: {names}.
+
+Leg uit:
+- welke krachten vandaag dominant zijn in de macro-omgeving
+- waarom deze indicatoren zo scoren
+- hoe dit het bredere speelveld voor Bitcoin beïnvloedt
+
+Koppel expliciet terug naar risico, timing en positionering.
 """
 
 
 def p_technical(scores, indicators):
-    weak = ", ".join(i["indicator"] for i in indicators if i["score"] < 40)
+    weak = ", ".join(i["indicator"] for i in indicators if i.get("score") is not None and i["score"] < 40)
+    strong = ", ".join(i["indicator"] for i in indicators if i.get("score") is not None and i["score"] >= 60)
+
     return f"""
-Technische score is {scores.get('technical_score')}.
-Zwakke indicatoren zijn {weak}.
-Beschrijf trend, momentum en betrouwbaarheid.
+De technische score komt vandaag uit op {scores.get('technical_score')}.
+
+Analyseer de technische structuur door:
+- uit te leggen waarom bepaalde indicatoren zwakker zijn ({weak})
+- te verklaren waarom andere indicatoren steun geven ({strong})
+- te beschrijven wat dit zegt over trend, momentum en betrouwbaarheid
+
+Vermijd algemene termen en koppel alles aan de huidige marktconditie.
 """
 
 
 def p_setup(best_setup):
     if not best_setup:
-        return "Er is vandaag geen setup die voldoende aansluit bij de marktomstandigheden."
+        return """
+Er is vandaag geen setup die voldoende aansluit bij de huidige marktomstandigheden.
+
+Leg uit:
+- waarom setups momenteel niet goed passen
+- wat er zou moeten veranderen voordat dat wel zo is
+"""
+
     return f"""
-De beste setup is {best_setup.get('name')} op timeframe {best_setup.get('timeframe')}.
-De score ligt op {best_setup.get('score')}.
-Beoordeel de praktische inzetbaarheid vandaag.
+De best scorende setup vandaag is {best_setup.get('name')}
+op timeframe {best_setup.get('timeframe')} met een score van {best_setup.get('score')}.
+
+Beoordeel:
+- waarom deze setup relatief beter scoort dan de rest
+- of de marktomstandigheden deze setup daadwerkelijk ondersteunen
+- of dit een setup is om actief te gebruiken of slechts te monitoren
 """
 
 
 def p_strategy(scores, active_strategy):
     if not active_strategy:
-        return "Er is geen actieve strategie omdat de huidige scorecombinatie geen duidelijke actie ondersteunt."
+        return """
+Er is momenteel geen actieve strategie.
+
+Licht toe:
+- waarom de huidige scorecombinatie geen duidelijke strategie rechtvaardigt
+- welke voorwaarden eerst vervuld moeten worden voordat actie logisch wordt
+"""
+
     return """
 Er is een actieve strategie aanwezig.
-Beoordeel deze strategie in relatie tot het huidige marktbeeld en de risico’s.
+
+Analyseer deze strategie door:
+- haar te plaatsen binnen de huidige macro-, market- en technische context
+- de belangrijkste risico’s en aannames te benoemen
+- te beoordelen of deze strategie vandaag ongewijzigd geldig blijft
 """
 
 
