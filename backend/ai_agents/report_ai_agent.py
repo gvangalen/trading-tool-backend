@@ -436,17 +436,35 @@ Analyseer deze strategie door:
 # =====================================================
 # MAIN BUILDER
 # =====================================================
+# =====================================================
+# MAIN BUILDER — REPORT AGENT 2.0 (SAFE + CONTEXT-AWARE)
+# =====================================================
 def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     """
     Report Agent 2.0
     - Leest ALLE bestaande data (scores, market, indicators, setups, strategy)
     - Leest bestaande AI-context (ai_category_insights, ai_reflections)
     - Leest vorig rapport
-    - Schrijft één samenhangend dagverhaal
+    - Bouwt één samenhangend dagverhaal
+    - JSON-safe (geen Decimal crashes)
     """
 
     # -------------------------------------------------
-    # 1) Data ophalen (ongewijzigd gedrag)
+    # 0) JSON-safe helper (CRUCIAAL)
+    # -------------------------------------------------
+    def _safe_json(obj):
+        if obj is None:
+            return None
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, dict):
+            return {k: _safe_json(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_safe_json(v) for v in obj]
+        return obj
+
+    # -------------------------------------------------
+    # 1) Basis data (ongewijzigd)
     # -------------------------------------------------
     scores = get_daily_scores(user_id)
     market = get_market_snapshot()
@@ -460,13 +478,13 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     active_strategy = get_active_strategy_snapshot(user_id)
 
     # -------------------------------------------------
-    # 2) Extra context ophalen (AI + gisteren)
+    # 2) Extra context ophalen (AI + vorig rapport)
     # -------------------------------------------------
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
 
-            # Laatste report vóór vandaag
+            # Vorig rapport
             cur.execute("""
                 SELECT report_date, executive_summary, market_analysis,
                        macro_context, technical_analysis,
@@ -503,7 +521,7 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
         conn.close()
 
     # -------------------------------------------------
-    # 3) Context blob (DE ENIGE extra intelligentie)
+    # 3) CONTEXT BLOB (enige plek waar alles samenkomt)
     # -------------------------------------------------
     context_blob = f"""
 Je schrijft het rapport voor vandaag.
@@ -521,28 +539,28 @@ Market: {scores.get("market_score")}
 Setup: {scores.get("setup_score")}
 
 === MARKET INDICATORS ===
-{json.dumps(market_ind, ensure_ascii=False)}
+{json.dumps(_safe_json(market_ind), ensure_ascii=False)}
 
 === MACRO INDICATORS ===
-{json.dumps(macro_ind, ensure_ascii=False)}
+{json.dumps(_safe_json(macro_ind), ensure_ascii=False)}
 
 === TECHNICAL INDICATORS ===
-{json.dumps(tech_ind, ensure_ascii=False)}
+{json.dumps(_safe_json(tech_ind), ensure_ascii=False)}
 
 === BESTE SETUP ===
-{json.dumps(best_setup, ensure_ascii=False)}
+{json.dumps(_safe_json(best_setup), ensure_ascii=False)}
 
 === ACTIEVE STRATEGIE ===
-{json.dumps(active_strategy, ensure_ascii=False)}
+{json.dumps(_safe_json(active_strategy), ensure_ascii=False)}
 
 === AI CATEGORY INSIGHTS (context, niet kopiëren) ===
-{json.dumps(ai_insights, ensure_ascii=False)}
+{json.dumps(_safe_json(ai_insights), ensure_ascii=False)}
 
 === AI REFLECTIONS (context, niet kopiëren) ===
-{json.dumps(ai_reflections, ensure_ascii=False)}
+{json.dumps(_safe_json(ai_reflections), ensure_ascii=False)}
 
 === VORIG RAPPORT ===
-{json.dumps(prev_report, ensure_ascii=False)}
+{json.dumps(_safe_json(prev_report), ensure_ascii=False)}
 
 BELANGRIJK:
 - Geen absolute prijsniveaus noemen
@@ -552,7 +570,7 @@ BELANGRIJK:
 """.strip()
 
     # -------------------------------------------------
-    # 4) Tekst genereren (zelfde prompts, extra context)
+    # 4) Tekst genereren (zelfde prompts, rijkere context)
     # -------------------------------------------------
     executive_summary = generate_text(
         context_blob + "\n\n" + p_exec(scores, market),
@@ -594,7 +612,7 @@ Koppel scenario’s aan indicator-gedrag.
     )
 
     # -------------------------------------------------
-    # 5) Return payload (frontend blijft exact werken)
+    # 5) RETURN PAYLOAD (frontend blijft exact werken)
     # -------------------------------------------------
     return {
         "executive_summary": executive_summary,
