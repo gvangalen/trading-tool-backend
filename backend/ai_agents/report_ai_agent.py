@@ -380,6 +380,17 @@ Beoordeel deze strategie in relatie tot het huidige marktbeeld en de risico’s.
 # MAIN BUILDER
 # =====================================================
 def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
+    """
+    Report Agent 2.0
+    - Leest ALLE bestaande data (scores, market, indicators, setups, strategy)
+    - Leest bestaande AI-context (ai_category_insights, ai_reflections)
+    - Leest vorig rapport
+    - Schrijft één samenhangend dagverhaal
+    """
+
+    # -------------------------------------------------
+    # 1) Data ophalen (ongewijzigd gedrag)
+    # -------------------------------------------------
     scores = get_daily_scores(user_id)
     market = get_market_snapshot()
 
@@ -388,53 +399,169 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     tech_ind = get_technical_indicator_highlights(user_id)
 
     setup_snapshot = get_setup_snapshot(user_id)
+    best_setup = setup_snapshot.get("best_setup")
     active_strategy = get_active_strategy_snapshot(user_id)
 
-    return {
-        # Narrative
-        "executive_summary": generate_text(
-            p_exec(scores, market),
-            "De markt bevindt zich in een afwachtende fase met gemengde signalen."
-        ),
-        "market_analysis": generate_text(
-            p_market(scores, market, market_ind),
-            "De markt toont beperkte richting en gematigde activiteit."
-        ),
-        "macro_context": generate_text(
-            p_macro(scores, macro_ind),
-            "De macro-omgeving blijft ondersteunend maar vraagt alertheid."
-        ),
-        "technical_analysis": generate_text(
-            p_technical(scores, tech_ind),
-            "De technische structuur biedt momenteel onvoldoende bevestiging."
-        ),
-        "setup_validation": generate_text(
-            p_setup(setup_snapshot.get("best_setup")),
-            "De huidige setups bieden onvoldoende kwaliteit voor actie."
-        ),
-        "strategy_implication": generate_text(
-            p_strategy(scores, active_strategy),
-            "Er is geen actieve strategie vanwege gebrek aan bevestiging."
-        ),
+    # -------------------------------------------------
+    # 2) Extra context ophalen (AI + gisteren)
+    # -------------------------------------------------
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
 
-        # Snapshot
+            # Laatste report vóór vandaag
+            cur.execute("""
+                SELECT report_date, executive_summary, market_analysis,
+                       macro_context, technical_analysis,
+                       setup_validation, strategy_implication, outlook
+                FROM daily_reports
+                WHERE user_id = %s
+                  AND report_date < CURRENT_DATE
+                ORDER BY report_date DESC
+                LIMIT 1;
+            """, (user_id,))
+            prev_report = cur.fetchone()
+
+            # AI category insights
+            cur.execute("""
+                SELECT category, avg_score, trend, bias, risk, summary
+                FROM ai_category_insights
+                WHERE user_id = %s
+                ORDER BY date DESC
+                LIMIT 10;
+            """, (user_id,))
+            ai_insights = cur.fetchall()
+
+            # AI reflections
+            cur.execute("""
+                SELECT category, indicator, ai_score, comment, recommendation
+                FROM ai_reflections
+                WHERE user_id = %s
+                ORDER BY date DESC
+                LIMIT 10;
+            """, (user_id,))
+            ai_reflections = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    # -------------------------------------------------
+    # 3) Context blob (DE ENIGE extra intelligentie)
+    # -------------------------------------------------
+    context_blob = f"""
+Je schrijft het rapport voor vandaag.
+Gebruik UITSLUITEND onderstaande data.
+
+=== ACTUELE MARKT (enige geldige prijsbron) ===
+Prijs: {market.get("price")}
+24h verandering: {market.get("change_24h")}
+Volume: {market.get("volume")}
+
+=== SCORES ===
+Macro: {scores.get("macro_score")}
+Technisch: {scores.get("technical_score")}
+Market: {scores.get("market_score")}
+Setup: {scores.get("setup_score")}
+
+=== MARKET INDICATORS ===
+{json.dumps(market_ind, ensure_ascii=False)}
+
+=== MACRO INDICATORS ===
+{json.dumps(macro_ind, ensure_ascii=False)}
+
+=== TECHNICAL INDICATORS ===
+{json.dumps(tech_ind, ensure_ascii=False)}
+
+=== BESTE SETUP ===
+{json.dumps(best_setup, ensure_ascii=False)}
+
+=== ACTIEVE STRATEGIE ===
+{json.dumps(active_strategy, ensure_ascii=False)}
+
+=== AI CATEGORY INSIGHTS (context, niet kopiëren) ===
+{json.dumps(ai_insights, ensure_ascii=False)}
+
+=== AI REFLECTIONS (context, niet kopiëren) ===
+{json.dumps(ai_reflections, ensure_ascii=False)}
+
+=== VORIG RAPPORT ===
+{json.dumps(prev_report, ensure_ascii=False)}
+
+BELANGRIJK:
+- Geen absolute prijsniveaus noemen
+- Verklaar WAAROM indicatoren vandaag hoger/lager zijn
+- Bouw logisch voort op gisteren
+- Schrijf als één doorlopend verhaal
+""".strip()
+
+    # -------------------------------------------------
+    # 4) Tekst genereren (zelfde prompts, extra context)
+    # -------------------------------------------------
+    executive_summary = generate_text(
+        context_blob + "\n\n" + p_exec(scores, market),
+        "De markt bevindt zich in een afwachtende fase."
+    )
+
+    market_analysis = generate_text(
+        context_blob + "\n\n" + p_market(scores, market, market_ind),
+        "De markt toont beperkte richting."
+    )
+
+    macro_context = generate_text(
+        context_blob + "\n\n" + p_macro(scores, macro_ind),
+        "De macro-omgeving blijft gemengd."
+    )
+
+    technical_analysis = generate_text(
+        context_blob + "\n\n" + p_technical(scores, tech_ind),
+        "Technisch ontbreekt overtuiging."
+    )
+
+    setup_validation = generate_text(
+        context_blob + "\n\n" + p_setup(best_setup),
+        "De huidige setups zijn selectief inzetbaar."
+    )
+
+    strategy_implication = generate_text(
+        context_blob + "\n\n" + p_strategy(scores, active_strategy),
+        "Voorzichtigheid blijft gepast."
+    )
+
+    outlook = generate_text(
+        context_blob + """
+Schrijf een vooruitblik in scenario-vorm (bullish / bearish / range),
+zonder absolute prijsniveaus te noemen.
+Koppel scenario’s aan indicator-gedrag.
+""",
+        "Vooruitblik: geduld tot bevestiging."
+    )
+
+    # -------------------------------------------------
+    # 5) Return payload (frontend blijft exact werken)
+    # -------------------------------------------------
+    return {
+        "executive_summary": executive_summary,
+        "market_analysis": market_analysis,
+        "macro_context": macro_context,
+        "technical_analysis": technical_analysis,
+        "setup_validation": setup_validation,
+        "strategy_implication": strategy_implication,
+        "outlook": outlook,
+
         "price": market.get("price"),
         "change_24h": market.get("change_24h"),
         "volume": market.get("volume"),
 
-        # Scores
         "macro_score": scores.get("macro_score"),
         "technical_score": scores.get("technical_score"),
         "market_score": scores.get("market_score"),
         "setup_score": scores.get("setup_score"),
 
-        # Cards
         "market_indicator_highlights": market_ind,
         "macro_indicator_highlights": macro_ind,
         "technical_indicator_highlights": tech_ind,
 
-        # Setup & strategy
-        "best_setup": setup_snapshot.get("best_setup"),
+        "best_setup": best_setup,
         "top_setups": setup_snapshot.get("top_setups", []),
         "active_strategy": active_strategy,
     }
