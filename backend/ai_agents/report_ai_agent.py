@@ -434,19 +434,16 @@ Analyseer deze strategie door:
 
 
 # =====================================================
-# MAIN BUILDER
-# =====================================================
-# =====================================================
 # MAIN BUILDER — REPORT AGENT 2.0 (SAFE + CONTEXT-AWARE)
 # =====================================================
 def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     """
     Report Agent 2.0
-    - Leest ALLE bestaande data (scores, market, indicators, setups, strategy)
-    - Leest bestaande AI-context (ai_category_insights, ai_reflections)
+    - Leest ALLE bestaande data
+    - Leest AI-insights & reflections
     - Leest vorig rapport
     - Bouwt één samenhangend dagverhaal
-    - JSON-safe (geen Decimal crashes)
+    - JSON-safe (Decimal / date proof)
     """
 
     # -------------------------------------------------
@@ -454,29 +451,21 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     # -------------------------------------------------
     from datetime import date, datetime
 
-def _safe_json(obj):
-    if obj is None:
-        return None
-
-    # Numerics
-    if isinstance(obj, Decimal):
-        return float(obj)
-
-    # Dates & times
-    if isinstance(obj, (date, datetime)):
-        return obj.isoformat()
-
-    # Containers
-    if isinstance(obj, dict):
-        return {k: _safe_json(v) for k, v in obj.items()}
-
-    if isinstance(obj, (list, tuple)):
-        return [_safe_json(v) for v in obj]
-
-    return obj
+    def _safe_json(obj):
+        if obj is None:
+            return None
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, (date, datetime)):
+            return obj.isoformat()
+        if isinstance(obj, dict):
+            return {k: _safe_json(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_safe_json(v) for v in obj]
+        return obj
 
     # -------------------------------------------------
-    # 1) Basis data (ongewijzigd)
+    # 1) Basis data
     # -------------------------------------------------
     scores = get_daily_scores(user_id)
     market = get_market_snapshot()
@@ -490,13 +479,12 @@ def _safe_json(obj):
     active_strategy = get_active_strategy_snapshot(user_id)
 
     # -------------------------------------------------
-    # 2) Extra context ophalen (AI + vorig rapport)
+    # 2) Extra context (AI + vorig rapport)
     # -------------------------------------------------
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
 
-            # Vorig rapport
             cur.execute("""
                 SELECT report_date, executive_summary, market_analysis,
                        macro_context, technical_analysis,
@@ -509,7 +497,6 @@ def _safe_json(obj):
             """, (user_id,))
             prev_report = cur.fetchone()
 
-            # AI category insights
             cur.execute("""
                 SELECT category, avg_score, trend, bias, risk, summary
                 FROM ai_category_insights
@@ -519,7 +506,6 @@ def _safe_json(obj):
             """, (user_id,))
             ai_insights = cur.fetchall()
 
-            # AI reflections
             cur.execute("""
                 SELECT category, indicator, ai_score, comment, recommendation
                 FROM ai_reflections
@@ -533,13 +519,13 @@ def _safe_json(obj):
         conn.close()
 
     # -------------------------------------------------
-    # 3) CONTEXT BLOB (enige plek waar alles samenkomt)
+    # 3) Context blob
     # -------------------------------------------------
     context_blob = f"""
 Je schrijft het rapport voor vandaag.
 Gebruik UITSLUITEND onderstaande data.
 
-=== ACTUELE MARKT (enige geldige prijsbron) ===
+=== ACTUELE MARKT ===
 Prijs: {market.get("price")}
 24h verandering: {market.get("change_24h")}
 Volume: {market.get("volume")}
@@ -565,10 +551,10 @@ Setup: {scores.get("setup_score")}
 === ACTIEVE STRATEGIE ===
 {json.dumps(_safe_json(active_strategy), ensure_ascii=False)}
 
-=== AI CATEGORY INSIGHTS (context, niet kopiëren) ===
+=== AI INSIGHTS ===
 {json.dumps(_safe_json(ai_insights), ensure_ascii=False)}
 
-=== AI REFLECTIONS (context, niet kopiëren) ===
+=== AI REFLECTIONS ===
 {json.dumps(_safe_json(ai_reflections), ensure_ascii=False)}
 
 === VORIG RAPPORT ===
@@ -578,55 +564,26 @@ BELANGRIJK:
 - Geen absolute prijsniveaus noemen
 - Verklaar WAAROM indicatoren vandaag hoger/lager zijn
 - Bouw logisch voort op gisteren
-- Schrijf als één doorlopend verhaal
 """.strip()
 
     # -------------------------------------------------
-    # 4) Tekst genereren (zelfde prompts, rijkere context)
+    # 4) Tekst genereren
     # -------------------------------------------------
-    executive_summary = generate_text(
-        context_blob + "\n\n" + p_exec(scores, market),
-        "De markt bevindt zich in een afwachtende fase."
-    )
-
-    market_analysis = generate_text(
-        context_blob + "\n\n" + p_market(scores, market, market_ind),
-        "De markt toont beperkte richting."
-    )
-
-    macro_context = generate_text(
-        context_blob + "\n\n" + p_macro(scores, macro_ind),
-        "De macro-omgeving blijft gemengd."
-    )
-
-    technical_analysis = generate_text(
-        context_blob + "\n\n" + p_technical(scores, tech_ind),
-        "Technisch ontbreekt overtuiging."
-    )
-
-    setup_validation = generate_text(
-        context_blob + "\n\n" + p_setup(best_setup),
-        "De huidige setups zijn selectief inzetbaar."
-    )
-
-    strategy_implication = generate_text(
-        context_blob + "\n\n" + p_strategy(scores, active_strategy),
-        "Voorzichtigheid blijft gepast."
-    )
-
+    executive_summary = generate_text(context_blob + "\n\n" + p_exec(scores, market), "Markt in afwachting.")
+    market_analysis = generate_text(context_blob + "\n\n" + p_market(scores, market, market_ind), "Beperkte richting.")
+    macro_context = generate_text(context_blob + "\n\n" + p_macro(scores, macro_ind), "Macro gemengd.")
+    technical_analysis = generate_text(context_blob + "\n\n" + p_technical(scores, tech_ind), "Technisch voorzichtig.")
+    setup_validation = generate_text(context_blob + "\n\n" + p_setup(best_setup), "Selectieve setups.")
+    strategy_implication = generate_text(context_blob + "\n\n" + p_strategy(scores, active_strategy), "Voorzichtigheid.")
     outlook = generate_text(
-        context_blob + """
-Schrijf een vooruitblik in scenario-vorm (bullish / bearish / range),
-zonder absolute prijsniveaus te noemen.
-Koppel scenario’s aan indicator-gedrag.
-""",
-        "Vooruitblik: geduld tot bevestiging."
+        context_blob + "\n\nSchrijf een scenario-vooruitblik zonder prijsniveaus.",
+        "Vooruitblik: wachten op bevestiging."
     )
 
     # -------------------------------------------------
-    # 5) RETURN PAYLOAD (frontend blijft exact werken)
+    # 5) RETURN (DIT WAS EERDER NOOIT BEREIKT)
     # -------------------------------------------------
-    return {
+    result = {
         "executive_summary": executive_summary,
         "market_analysis": market_analysis,
         "macro_context": macro_context,
@@ -652,3 +609,6 @@ Koppel scenario’s aan indicator-gedrag.
         "top_setups": setup_snapshot.get("top_setups", []),
         "active_strategy": active_strategy,
     }
+
+    logger.info("✅ Report agent OK, return keys=%s", list(result.keys()))
+    return result
