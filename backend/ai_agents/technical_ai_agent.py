@@ -153,25 +153,34 @@ def run_technical_agent(user_id: int):
         # 3️⃣ AI TECHNICAL ANALYSE (MET CONTEXT)
         # =====================================================
         technical_task = """
-Je bent een ervaren technische marktanalist.
+Je bent een ervaren technische marktanalist voor Bitcoin.
 
-Gebruik expliciet:
-- verschillen t.o.v. gisteren
-- verandering in score en bias
-- voortzetting of breuk in trend
+Je krijgt:
+- actuele technische indicatoren
+- de technische score van vandaag
+- het verschil t.o.v. gisteren
+- je vorige technische analyse
 
-Vermijd:
-- algemene termen
-- uitleg van basisbegrippen
+Analyseer dit op STRUCTUUR, niet alleen signalen.
 
-Geef altijd:
+Verplicht behandelen:
+1. Trendstructuur
+   - voortzetting, verzwakking of omslag
+2. Momentum & timing
+   - is oververhitting gevaarlijk of contextueel logisch?
+3. Betrouwbaarheid
+   - hoe betrouwbaar zijn de huidige signalen?
+4. Implicatie
+   - wat betekent dit voor handelen vandaag?
+
+Schrijf GEEN algemene uitleg van indicatoren.
+
+Antwoord uitsluitend in geldige JSON met:
 - trend
 - bias
 - risico
-- samenvatting
-- belangrijkste technische signalen
-
-Antwoord uitsluitend in geldige JSON.
+- samenvatting (minstens 3 zinnen, samenhangend)
+- top_signals (max 5, inhoudelijk, geen herhaling)
 """
 
         system_prompt = build_system_prompt(
