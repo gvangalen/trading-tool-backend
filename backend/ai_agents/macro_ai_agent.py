@@ -193,7 +193,7 @@ def run_macro_agent(user_id: int):
         # =========================================================
         # 5️⃣ AI MACRO ANALYSE
         # =========================================================
-        payload = {
+                payload = {
             "context": agent_context,
             "macro_items": macro_items,
             "macro_rules": rules_by_indicator,
@@ -201,7 +201,7 @@ def run_macro_agent(user_id: int):
             "top_contributors": top_pretty,
         }
 
-       macro_task = """
+        macro_task = """
 Je bent een ervaren macro-analist voor Bitcoin.
 
 Je krijgt:
