@@ -8,6 +8,7 @@ from celery import shared_task
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
 from backend.ai_core.system_prompt_builder import build_system_prompt
+from backend.ai_core.agent_context import build_agent_context  # ✅ NIEUW
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -32,6 +33,73 @@ def _to_int(x):
         return None
 
 
+def _is_empty_market_context(ctx: dict) -> bool:
+    if not isinstance(ctx, dict):
+        return True
+
+    return not any([
+        ctx.get("summary"),
+        ctx.get("trend"),
+        ctx.get("bias"),
+        ctx.get("risk"),
+        ctx.get("top_signals"),
+    ])
+
+
+def _fallback_market_context(items: list) -> dict:
+    indicators = {i.get("indicator") for i in items if i.get("indicator")}
+
+    return {
+        "trend": "neutraal",
+        "bias": "afwachtend",
+        "risk": "gemiddeld",
+        "momentum": "",
+        "volatility": "",
+        "summary": (
+            "De market-context is gebaseerd op een beperkt aantal market-indicatoren. "
+            "Gebruik de score als richting, maar wacht op bevestiging voordat je agressief positioneert."
+        ),
+        "top_signals": [
+            f"{ind} blijft richtinggevend"
+            for ind in sorted(indicators)
+        ] or ["Beperkte marketdata beschikbaar"],
+    }
+
+
+def normalize_ai_context(ai_ctx: dict, market_items: list) -> dict:
+    """
+    Normaliseert AI-output (incl. unwrap van analysis/analyse) + fallback.
+    """
+    if not isinstance(ai_ctx, dict):
+        return _fallback_market_context(market_items)
+
+    # ✅ unwrap-fix: accepteer EN + NL wrappers
+    for key in ("analysis", "analyse"):
+        if key in ai_ctx and isinstance(ai_ctx[key], dict):
+            ai_ctx = ai_ctx[key]
+            break
+
+    normalized = {
+        "trend": ai_ctx.get("trend", ""),
+        "bias": ai_ctx.get("bias", ""),
+        "risk": ai_ctx.get("risk") or ai_ctx.get("risico", ""),
+        "momentum": ai_ctx.get("momentum", ""),
+        "volatility": ai_ctx.get("volatility") or ai_ctx.get("volatiliteit", ""),
+        "summary": ai_ctx.get("summary") or ai_ctx.get("samenvatting", ""),
+        "top_signals": ai_ctx.get("top_signals", []),
+    }
+
+    if not isinstance(normalized["top_signals"], list):
+        normalized["top_signals"] = []
+
+    if _is_empty_market_context(normalized):
+        logger.warning("⚠️ Market AI gaf lege inhoud → fallback toegepast")
+        return _fallback_market_context(market_items)
+
+    # keep keys consistent for DB writes
+    return normalized
+
+
 # ======================================================
 # 🪙 MARKET AI AGENT — DB-GEDREVEN (ENIGE WAARHEID)
 # ======================================================
@@ -40,8 +108,9 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
     Genereert market AI insights.
 
     - Gebruikt ALLEEN market_data_indicators (reeds berekend & gescoord)
-    - Doet GEEN eigen berekeningen
-    - Functioneel IDENTIEK aan oude agent
+    - Doet GEEN eigen berekeningen (behalve het gemiddelde zoals eerder)
+    - + Gedeelde context (gisteren) via build_agent_context
+    - + AI reflections per indicator
     """
 
     if user_id is None:
@@ -124,9 +193,21 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
         } for d, o, h, l, c, ch, v in reversed(rows_7d)]
 
         # ======================================================
-        # 4️⃣ AI PAYLOAD
+        # 4️⃣ 🧠 SHARED AGENT CONTEXT (GISTEREN + DELTA)
+        # ======================================================
+        agent_context = build_agent_context(
+            user_id=user_id,
+            category="market",
+            current_score=market_avg,
+            current_items=top_contributors,
+            lookback_days=1,  # bewust 1 dag
+        )
+
+        # ======================================================
+        # 5️⃣ AI ANALYSE (MET CONTEXT)
         # ======================================================
         payload = {
+            "context": agent_context,
             "symbol": symbol,
             "market_avg_score": market_avg,
             "top_contributors": top_contributors,
@@ -135,16 +216,18 @@ def run_market_agent(user_id: int, symbol: str = SYMBOL):
         }
 
         MARKET_TASK = """
-Vat de MARKET CONTEXT samen in beslistermen.
+Je bent een ervaren Bitcoin market analyst.
 
-Gebruik uitsluitend:
-- aangeleverde gescoorde market-indicatoren
-- 7-daagse prijs- en volumecontext
+Je krijgt:
+- gescoorde market-indicatoren (leidend)
+- 7-daagse prijs/volume context
+- context van gisteren (score + samenvatting + top signals + delta)
 
-GEEN:
-- eigen berekeningen
-- uitleg van indicatoren
-- marketingtaal
+Belangrijk:
+- Gebruik expliciet verschillen t.o.v. gisteren (score/bias/trend)
+- Leg uit WAAROM de belangrijkste signalen vandaag sterker/zwakker zijn
+- Geen uitleg van basisbegrippen, geen marketingtaal
+- Geen eigen berekeningen (behalve interpretatie op basis van score/indicatoren)
 
 OUTPUT — ALLEEN GELDIGE JSON:
 
@@ -159,31 +242,54 @@ OUTPUT — ALLEEN GELDIGE JSON:
 }
 
 REGELS:
-- trend/bias/risk: 1 korte zin
-- summary: max 3 zinnen, beslisgericht
+- trend/bias/risk/momentum/volatility: kort en beslisgericht
+- summary: max 3 zinnen, met verandering t.o.v. gisteren
 - top_signals: max 5 bullets
-- bij ontbrekende data: gebruik exact "ONVOLDOENDE DATA"
+- Bij ontbrekende data: gebruik exact "ONVOLDOENDE DATA"
 """
 
-        system_prompt = build_system_prompt(
-            agent="market",
-            task=MARKET_TASK
-        )
+        system_prompt = build_system_prompt(agent="market", task=MARKET_TASK)
 
-        ai = ask_gpt(
+        raw_ai_context = ask_gpt(
             prompt=json.dumps(payload, ensure_ascii=False, indent=2),
             system_role=system_prompt
         )
 
-        if not isinstance(ai, dict):
-            ai = {}
-
-        top_signals = ai.get("top_signals", [])
-        if not isinstance(top_signals, list):
-            top_signals = []
+        ai_context = normalize_ai_context(raw_ai_context, market_indicators)
 
         # ======================================================
-        # 5️⃣ OPSLAAN AI INSIGHT (IDENTIEK AAN OUDE FILE)
+        # 6️⃣ AI REFLECTIES (UITGEBREID)
+        # ======================================================
+        reflections_task = """
+Maak per market-indicator een reflectie.
+
+Per item:
+- indicator (naam)
+- ai_score (0–100)
+- compliance (0–100)
+- korte comment (1–2 zinnen, beslisgericht)
+- concrete aanbeveling (1 zin)
+
+Antwoord uitsluitend als JSON-lijst.
+"""
+
+        reflections_prompt = build_system_prompt(agent="market", task=reflections_task)
+
+        ai_reflections = ask_gpt(
+            prompt=json.dumps({
+                "context": agent_context,
+                "market_indicators": market_indicators,
+                "top_contributors": top_contributors,
+                "market_avg_score": market_avg,
+            }, ensure_ascii=False, indent=2),
+            system_role=reflections_prompt
+        )
+
+        if not isinstance(ai_reflections, list):
+            ai_reflections = []
+
+        # ======================================================
+        # 7️⃣ OPSLAAN AI INSIGHT (ai_category_insights)
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -203,15 +309,44 @@ REGELS:
             """, (
                 user_id,
                 market_avg,
-                ai.get("trend", ""),
-                ai.get("bias", ""),
-                ai.get("risk", ""),
-                ai.get("summary", ""),
-                json.dumps(top_signals),
+                ai_context.get("trend", ""),
+                ai_context.get("bias", ""),
+                ai_context.get("risk", ""),
+                ai_context.get("summary", ""),
+                json.dumps(ai_context.get("top_signals", [])),
             ))
 
         # ======================================================
-        # 6️⃣ DAILY_SCORES BIJWERKEN (IDENTIEK AAN OUDE FILE)
+        # 8️⃣ OPSLAAN ai_reflections (market)
+        # ======================================================
+        for r in ai_reflections:
+            indicator = r.get("indicator") or r.get("name")
+            if not indicator:
+                continue
+
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO ai_reflections
+                        (category, user_id, indicator, raw_score, ai_score, compliance, comment, recommendation)
+                    VALUES ('market', %s, %s, NULL, %s, %s, %s, %s)
+                    ON CONFLICT (category, user_id, indicator, date)
+                    DO UPDATE SET
+                        ai_score = EXCLUDED.ai_score,
+                        compliance = EXCLUDED.compliance,
+                        comment = EXCLUDED.comment,
+                        recommendation = EXCLUDED.recommendation,
+                        timestamp = NOW();
+                """, (
+                    user_id,
+                    str(indicator),
+                    r.get("ai_score", 50),
+                    r.get("compliance", 50),
+                    r.get("comment", "") or r.get("opmerking", ""),
+                    r.get("recommendation", "") or r.get("aanbeveling", ""),
+                ))
+
+        # ======================================================
+        # 9️⃣ DAILY_SCORES BIJWERKEN (IDENTIEK AAN OUDE FILE)
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -223,7 +358,7 @@ REGELS:
                   AND report_date = CURRENT_DATE
             """, (
                 market_avg,
-                ai.get("summary", ""),
+                ai_context.get("summary", ""),
                 user_id
             ))
 
