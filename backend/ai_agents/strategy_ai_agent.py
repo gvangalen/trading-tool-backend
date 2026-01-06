@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Any
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
 from backend.ai_core.system_prompt_builder import build_system_prompt
+from backend.ai_core.agent_context import build_agent_context
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -15,25 +16,52 @@ logger.setLevel(logging.INFO)
 # 🎯 AI — ANALYSE VAN BESTAANDE STRATEGIEËN (GEEN GENERATIE)
 # ===================================================================
 
-def analyze_strategies(strategies: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def analyze_strategies(
+    *,
+    user_id: int,
+    strategies: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
     """
     Analyseert bestaande strategieën.
     ❌ Maakt GEEN nieuwe strategie
+    ✔ Gebruikt historisch besliscontext
     """
 
+    agent_context = build_agent_context(
+        user_id=user_id,
+        category="strategy",
+        current_score=None,
+        current_items=strategies,
+        lookback_days=3,  # strategie = trager geheugen
+    )
+
     TASK = """
-Analyseer bestaande tradingstrategieën.
+Je bent een senior trading coach.
 
-Regels:
-- Maak GEEN nieuwe strategie
-- Beoordeel kwaliteit, duidelijkheid en discipline
-- Benoem risico’s en verbeterpunten
-- Geen voorspellingen
-- Geen nieuwe levels of entries
+Je krijgt:
+- huidige strategieën
+- eerdere AI-analyse(s) van strategiebeslissingen
 
-Doel:
-- Korte evaluatie
-- Praktische aanbeveling
+Beoordeel:
+- consistentie in besluitvorming
+- discipline (entries, stops, targets)
+- of aanpassingen logisch voortbouwen op eerdere keuzes
+
+GEEN:
+- nieuwe strategieën
+- nieuwe levels
+- marktvoorspellingen
+- scoreberekeningen
+
+OUTPUT — ALLEEN GELDIGE JSON:
+{
+  "comment": "",
+  "recommendation": ""
+}
+
+REGELS:
+- comment: 2–3 zinnen, evaluatief
+- recommendation: concreet, uitvoerbaar, niet adviserend
 """
 
     system_prompt = build_system_prompt(
@@ -41,18 +69,15 @@ Doel:
         task=TASK
     )
 
-    prompt = f"""
-BESTAANDE STRATEGIEËN:
-{json.dumps(strategies, ensure_ascii=False, indent=2)}
+    payload = {
+        "context": agent_context,
+        "strategies": strategies,
+    }
 
-ANTWOORD ALLEEN GELDIGE JSON:
-{{
-  "comment": "",
-  "recommendation": ""
-}}
-"""
-
-    response = ask_gpt(prompt, system_role=system_prompt)
+    response = ask_gpt(
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        system_role=system_prompt
+    )
 
     if not isinstance(response, dict):
         logger.error("❌ Ongeldige JSON van AI bij strategy-analyse")
@@ -70,6 +95,8 @@ ANTWOORD ALLEEN GELDIGE JSON:
 # ===================================================================
 
 def adjust_strategy_for_today(
+    *,
+    user_id: int,
     base_strategy: Dict[str, Any],
     setup: Dict[str, Any],
     market_context: Dict[str, Any],
@@ -85,23 +112,52 @@ def adjust_strategy_for_today(
 
     strategy_type = (setup.get("strategy_type") or "").lower()
 
+    agent_context = build_agent_context(
+        user_id=user_id,
+        category="strategy",
+        current_score=None,
+        current_items=[base_strategy],
+        lookback_days=3,
+    )
+
     TASK = """
-Pas een BESTAANDE strategie licht aan op basis van actuele marktcontext.
+Je past een BESTAANDE tradingstrategie licht aan.
 
-Regels:
+Je krijgt:
+- huidige strategie
+- setup (onveranderlijk)
+- marktcontext van vandaag
+- context van eerdere strategy-aanpassingen
+
+Gebruik expliciet:
+- of deze aanpassing consistent is met eerdere beslissingen
+- of dit een voortzetting, verzwakking of correctie is
+- risico-discipline (stop/targets)
+
+REGELS:
 - Maak GEEN nieuwe strategie
+- Introduceer GEEN nieuwe concepten
 - Houd setup ongewijzigd
-- Wijzig alleen details (entry / targets / stop)
-- Geen nieuwe concepten introduceren
 
-Specifiek:
-- DCA:
-  - Entry = referentieprijs
-  - GEEN trigger
-  - Benoem expliciet dat het geen signaal is
-- Andere strategieën:
-  - Entry = actieprijs
-  - Kleine verfijning toegestaan
+DCA-SPECIFIEK:
+- Entry = referentieprijs
+- Geen triggers
+- Benoem expliciet dat dit geen signaal is
+
+OUTPUT — ALLEEN GELDIGE JSON:
+{
+  "entry": null | number | string,
+  "entry_type": "reference" | "action",
+  "targets": [],
+  "stop_loss": null | number | string,
+  "adjustment_reason": "",
+  "confidence_score": 0,
+  "changes": {
+    "entry": "unchanged | refined | reference",
+    "targets": "raised | lowered | unchanged",
+    "stop_loss": "tightened | loosened | unchanged"
+  }
+}
 """
 
     system_prompt = build_system_prompt(
@@ -109,33 +165,17 @@ Specifiek:
         task=TASK
     )
 
-    prompt = f"""
-BESTAANDE STRATEGIE:
-{json.dumps(base_strategy, ensure_ascii=False, indent=2)}
+    payload = {
+        "context": agent_context,
+        "base_strategy": base_strategy,
+        "setup": setup,
+        "market_context": market_context,
+    }
 
-SETUP:
-{json.dumps(setup, ensure_ascii=False, indent=2)}
-
-MARKTCONTEXT VANDAAG:
-{json.dumps(market_context, ensure_ascii=False, indent=2)}
-
-ANTWOORD ALLEEN GELDIGE JSON:
-{{
-  "entry": null | number | string,
-  "entry_type": "reference" | "action",
-  "targets": [],
-  "stop_loss": null | number | string,
-  "adjustment_reason": "",
-  "confidence_score": 0,
-  "changes": {{
-    "entry": "unchanged | refined | reference",
-    "targets": "raised | lowered | unchanged",
-    "stop_loss": "tightened | loosened | unchanged"
-  }}
-}}
-"""
-
-    result = ask_gpt(prompt, system_role=system_prompt)
+    result = ask_gpt(
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        system_role=system_prompt
+    )
 
     if not isinstance(result, dict):
         logger.error("❌ Ongeldige JSON van AI bij strategy-adjustment")
@@ -150,7 +190,7 @@ ANTWOORD ALLEEN GELDIGE JSON:
     if not isinstance(score, (int, float)) or not (0 <= score <= 100):
         result["confidence_score"] = 50
 
-    # 🔒 DCA-fix afdwingen
+    # 🔒 DCA-regels afdwingen
     if strategy_type == "dca":
         result["entry_type"] = "reference"
         if result.get("entry") in ("", None):
@@ -254,6 +294,8 @@ def save_ai_explanation_to_strategy(
 # ===================================================================
 
 def analyze_and_store_strategy(
+    *,
+    user_id: int,
     strategy_id: int,
     strategies: List[Dict[str, Any]],
 ):
@@ -264,7 +306,10 @@ def analyze_and_store_strategy(
 
     logger.info(f"🧠 Strategy AI analyse gestart | strategy_id={strategy_id}")
 
-    ai_result = analyze_strategies(strategies)
+    ai_result = analyze_strategies(
+        user_id=user_id,
+        strategies=strategies
+    )
 
     if not ai_result:
         logger.error("❌ Geen AI-resultaat bij strategy-analyse")
