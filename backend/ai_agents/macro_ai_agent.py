@@ -201,32 +201,40 @@ def run_macro_agent(user_id: int):
             "top_contributors": top_pretty,
         }
 
-        macro_task = """
+       macro_task = """
 Je bent een ervaren macro-analist voor Bitcoin.
 
 Je krijgt:
-- actuele macro-indicatoren
+- macro-indicatoren met scores
 - macro score van vandaag
-- score en bias van gisteren
+- macro score + bias van gisteren
 - dominante contributors
 
-Analyseer de macro-omgeving als REGIME, niet als losse signalen.
+Belangrijk:
+- Gebruik expliciet verschillen t.o.v. gisteren (score, bias, regime)
+- Benoem welke macro-kracht dominant is (risk-on, risk-off, flight to quality)
+- Leg uit of dit een voortzetting, verzwakking of intensivering is
+- Plaats dit in een bredere macro-fase (defensief / transitief / expansief)
 
-Verplicht behandelen:
-1. Wat is vandaag structureel veranderd t.o.v. gisteren?
-2. Welke macro-kracht is dominant (risk-off, risk-on, flight to quality)?
-3. Is dit een voortzetting of intensivering?
-4. Wat betekent dit voor positionering en timing?
+GEEN:
+- uitleg van indicatoren
+- headline-achtige samenvattingen
+- algemene marktcommentaren
 
-Schrijf GEEN samenvatting in headline-stijl.
-Schrijf GEEN uitleg van indicatoren.
+OUTPUT — ALLEEN GELDIGE JSON:
 
-Antwoord uitsluitend in geldige JSON met:
-- trend
-- bias
-- risico
-- samenvatting (minstens 3 zinnen, inhoudelijk verbonden)
-- top_signals (max 5, verklarend)
+{
+  "trend": "",
+  "bias": "",
+  "risk": "",
+  "summary": "",
+  "top_signals": []
+}
+
+REGELS:
+- trend/bias/risk: beslisgericht, max 1 zin
+- summary: 3–4 zinnen, logisch doorlopend, met verandering t.o.v. gisteren
+- top_signals: max 5, verklarend (geen herhaling van summary)
 """
 
         system_prompt = build_system_prompt(agent="macro", task=macro_task)
