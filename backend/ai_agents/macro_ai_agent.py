@@ -202,21 +202,31 @@ def run_macro_agent(user_id: int):
         }
 
         macro_task = """
-Analyseer de macro-omgeving voor Bitcoin.
+Je bent een ervaren macro-analist voor Bitcoin.
 
-Gebruik expliciet:
-- verschillen t.o.v. gisteren
-- verandering in score en bias
-- consistentie of breuk in macro-trend
+Je krijgt:
+- actuele macro-indicatoren
+- macro score van vandaag
+- score en bias van gisteren
+- dominante contributors
 
-Geef altijd:
-- trend (bullish / bearish / neutraal)
-- bias (positief / negatief / neutraal)
-- risico (laag / gemiddeld / hoog)
-- korte samenvatting (minstens 1 zin)
-- belangrijkste macro-signalen (minstens 1 punt)
+Analyseer de macro-omgeving als REGIME, niet als losse signalen.
 
-Antwoord uitsluitend in geldige JSON.
+Verplicht behandelen:
+1. Wat is vandaag structureel veranderd t.o.v. gisteren?
+2. Welke macro-kracht is dominant (risk-off, risk-on, flight to quality)?
+3. Is dit een voortzetting of intensivering?
+4. Wat betekent dit voor positionering en timing?
+
+Schrijf GEEN samenvatting in headline-stijl.
+Schrijf GEEN uitleg van indicatoren.
+
+Antwoord uitsluitend in geldige JSON met:
+- trend
+- bias
+- risico
+- samenvatting (minstens 3 zinnen, inhoudelijk verbonden)
+- top_signals (max 5, verklarend)
 """
 
         system_prompt = build_system_prompt(agent="macro", task=macro_task)
