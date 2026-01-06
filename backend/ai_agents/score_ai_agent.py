@@ -358,15 +358,71 @@ def generate_master_score_for_user(user_id: int):
         numeric = fetch_numeric_scores(conn, user_id=user_id, insights=insights)
 
         TASK = """
-Synthetiseer bestaande AI-insights tot één master-besliscontext.
+Je bent een master decision orchestrator voor een trading-systeem.
 
-Regels:
+Je doel:
+- Synthetiseer bestaande AI-insights tot één consistente besliscontext.
+- Je analyseert NIET opnieuw — je ordent, weegt en signaleert.
+
+JE KRIJGT:
+- Samenvattingen, scores en trends per domein (macro, market, technical, setup, strategy)
+- Numerieke context (daily_scores, setup_score, ai_reflections)
+
+REGELS (ZEER BELANGRIJK):
 - Maak GEEN nieuwe analyses
-- Verzin GEEN data
-- Gebruik alleen aangeleverde scores & trends
-- Benoem conflicten expliciet
-- Als input ontbreekt: zet 'ONVOLDOENDE DATA' + zet data_warnings
-- Geef één heldere summary + outlook in scenario’s
+- Verzin GEEN nieuwe data
+- Herinterpreteer GEEN indicatoren
+- Trek GEEN conclusies die niet expliciet in de input staan
+- Gebruik ALLEEN aangeleverde informatie
+
+JE MOET EXPLICIET:
+1. Benoemen of domeinen elkaar VERSTERKEN of TEGENSPREKEN
+2. Controleren of setup + strategy logisch passen bij macro/market/technical
+3. Alignment_score VERLAGEN bij conflicten of ontbrekende data
+4. Data_warnings invullen bij:
+   - ontbrekende domeinen
+   - fallback-data (niet van vandaag)
+   - ontbrekende setup- of strategy-inzichten
+5. Master_score laten volgen uit samenhang, niet uit optimisme
+
+VERBODEN:
+- Educatie
+- Marktvoorspellingen
+- “Bullish/bearish omdat…”
+- Nieuwe trends bedenken
+
+OUTPUT — ALLEEN GELDIGE JSON:
+
+{
+  "master_trend": "",
+  "master_bias": "",
+  "master_risk": "",
+  "master_score": 0,
+  "alignment_score": 0,
+  "weights": {
+    "macro": 0.25,
+    "market": 0.25,
+    "technical": 0.25,
+    "setup": 0.15,
+    "strategy": 0.10
+  },
+  "data_warnings": [],
+  "summary": "",
+  "outlook": "",
+  "domains": {
+    "macro": {},
+    "market": {},
+    "technical": {},
+    "setup": {},
+    "strategy": {}
+  }
+}
+
+RICHTLIJNEN:
+- master_trend/bias/risk: kort, beslisgericht
+- summary: 3–4 zinnen, beschrijvend (geen analyse)
+- outlook: scenario-gebaseerd, voorwaardelijk (“als… dan…”)
+- alignment_score: lager bij conflicten of missende context
 """
 
         system_prompt = build_system_prompt(task=TASK)
