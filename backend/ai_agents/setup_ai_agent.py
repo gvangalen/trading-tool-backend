@@ -6,6 +6,7 @@ from typing import Optional
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
 from backend.ai_core.system_prompt_builder import build_system_prompt
+from backend.ai_core.agent_context import build_agent_context  # ✅ gedeelde context
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -29,9 +30,6 @@ def to_float(v) -> Optional[float]:
 def score_overlap(value, min_v, max_v) -> int:
     """
     Overlap-score (0–100)
-    - NULL min/max = geen filter = 100
-    - Buiten range = 0
-    - Binnen range = relatieve score
     """
     value = to_float(value)
     min_v = to_float(min_v)
@@ -58,16 +56,19 @@ def score_overlap(value, min_v, max_v) -> int:
 
 
 # ======================================================
-# 🤖 SETUP AI AGENT — BESLISLOGICA + AI CONTEXT
+# 🤖 SETUP AI AGENT — MET GEHEUGEN
 # ======================================================
 
 def run_setup_agent(*, user_id: int, asset: str = "BTC"):
     """
-    Doel:
-    - daily_setup_scores vullen (per setup)
-    - 1 duidelijke setup-aanbeveling bepalen
-    - ai_category_insights (category='setup')
-    - setup_score wegschrijven naar daily_scores
+    - daily_setup_scores
+    - beste setup bepalen
+    - ai_category_insights (setup)
+    - setup_score → daily_scores
+
+    ✔ context van gisteren
+    ✔ setup-rotatie / continuatie
+    ✔ beslisgerichte AI-uitleg
     """
 
     if not user_id:
@@ -95,7 +96,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
             row = cur.fetchone()
 
         if not row:
-            logger.warning("⚠️ Geen daily_scores gevonden — setup agent stopt")
+            logger.warning("⚠️ Geen daily_scores gevonden")
             return
 
         macro, technical, market = map(to_float, row)
@@ -139,27 +140,34 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         evaluations = []
 
         # ==================================================
-        # 4️⃣ PER SETUP: SCORE + AI UITLEG
+        # 4️⃣ SETUP AI TASK
         # ==================================================
         SETUP_TASK = """
-Leg uit of een setup logisch past bij de huidige marktscores.
+Je bent een trading decision agent.
 
 Gebruik:
-- macro score
-- technical score
-- market score
+- macro / technical / market scores
+- overlap-scores per setup
+- context t.o.v. gisteren
 
-Doel:
-- verklaren waarom de setup geschikt of ongeschikt is
-- geen voorspellingen
-- geen nieuwe data
+Leg uit:
+- of deze setup sterker / zwakker / gelijk is t.o.v. gisteren
+- of dit een voortzetting of rotatie is
+- waarom deze setup NU logisch is (of niet)
+
+GEEN:
+- voorspellingen
+- educatie
+- algemene tradingtips
+
+Output: 2–3 zinnen, beslisgericht.
 """
 
-        system_prompt = build_system_prompt(
-            agent="setup",
-            task=SETUP_TASK
-        )
+        system_prompt = build_system_prompt(agent="setup", task=SETUP_TASK)
 
+        # ==================================================
+        # 5️⃣ PER SETUP: SCORE + AI-UITLEG
+        # ==================================================
         for row in setups:
             setup_id, name, min_macro, max_macro, min_tech, max_tech, min_market, max_market = row
 
@@ -168,16 +176,20 @@ Doel:
             mk = score_overlap(market, min_market, max_market)
 
             raw_score = round((m + t + mk) / 3)
-            score = max(25, raw_score)  # 🔒 FLOOR
+            score = max(25, raw_score)
 
             explanation = ask_gpt_text(
-                prompt=(
-                    f"Setup: {name}\n"
-                    f"Macro score: {macro}\n"
-                    f"Technical score: {technical}\n"
-                    f"Market score: {market}\n"
-                    f"Component scores: macro={m}, technical={t}, market={mk}"
-                ),
+                prompt=json.dumps({
+                    "setup": name,
+                    "macro_score": macro,
+                    "technical_score": technical,
+                    "market_score": market,
+                    "component_overlap": {
+                        "macro": m,
+                        "technical": t,
+                        "market": mk
+                    }
+                }, ensure_ascii=False, indent=2),
                 system_role=system_prompt
             )
 
@@ -201,10 +213,18 @@ Doel:
                 """, (setup_id, user_id, score, explanation))
 
         # ==================================================
-        # 5️⃣ BESTE SETUP
+        # 6️⃣ BESTE SETUP + CONTEXT
         # ==================================================
         ranked = sorted(evaluations, key=lambda x: x["score"], reverse=True)
         best = ranked[0]
+
+        agent_context = build_agent_context(
+            user_id=user_id,
+            category="setup",
+            current_score=best["score"],
+            current_items=ranked[:3],
+            lookback_days=1
+        )
 
         with conn.cursor() as cur:
             cur.execute("""
@@ -216,7 +236,7 @@ Doel:
             """, (best["setup_id"], user_id))
 
         # ==================================================
-        # 🔥 5b️⃣ SETUP SCORE → DAILY_SCORES
+        # 7️⃣ SETUP SCORE → DAILY_SCORES
         # ==================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -227,17 +247,17 @@ Doel:
             """, (best["score"], user_id))
 
         # ==================================================
-        # 6️⃣ AI CATEGORY INSIGHT — DASHBOARD
+        # 8️⃣ AI CATEGORY INSIGHT (SETUP)
         # ==================================================
-        trend = "Actief" if best["score"] >= 60 else "Neutraal"
-        bias  = "Kansrijk" if best["score"] >= 60 else "Afwachten"
-
-        summary = f"Beste {asset}-setup vandaag: {best['name']}."
+        summary = (
+            f"Beste {asset}-setup vandaag: {best['name']}. "
+            f"{'Ongewijzigd t.o.v. gisteren' if agent_context.get('delta') == 0 else 'Nieuwe voorkeur op basis van scoreverandering.'}"
+        )
 
         top_signals = [
             f"{best['name']} sluit het best aan bij huidige marktscores",
-            "Technische en macrocontext beperken agressie",
-            "Relatief hoogste setup-score vandaag",
+            f"Setup-score verandering: {agent_context.get('delta')}",
+            "Setup past binnen huidige risico-context",
         ]
 
         with conn.cursor() as cur:
@@ -256,8 +276,8 @@ Doel:
             """, (
                 user_id,
                 best["score"],
-                trend,
-                bias,
+                "Actief" if best["score"] >= 60 else "Neutraal",
+                "Kansrijk" if best["score"] >= 60 else "Afwachten",
                 "Gemiddeld",
                 summary,
                 json.dumps(top_signals, ensure_ascii=False),
@@ -279,6 +299,11 @@ Doel:
 # ======================================================
 
 def generate_setup_explanation(setup_id: int, user_id: int) -> str:
+    """
+    Wordt gebruikt door frontend / setup-detail view.
+    Los van daily scores.
+    """
+
     conn = get_db_connection()
     if not conn:
         return ""
@@ -302,10 +327,7 @@ Leg beknopt uit waarom deze setup logisch is.
 Geen educatie, geen hype, geen voorspellingen.
 """
 
-        system_prompt = build_system_prompt(
-            agent="setup",
-            task=TASK
-        )
+        system_prompt = build_system_prompt(agent="setup", task=TASK)
 
         return ask_gpt_text(
             prompt=(
