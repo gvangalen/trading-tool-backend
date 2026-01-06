@@ -22,11 +22,20 @@ def analyze_strategies(
     strategies: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """
-    Analyseert bestaande strategieën.
-    ❌ Maakt GEEN nieuwe strategie
+    Analyseert BESTAANDE strategieën vanuit execution-perspectief.
+
+    ❌ GEEN nieuwe strategie
+    ❌ GEEN nieuwe setup
+    ❌ GEEN marktvoorspellingen
+
+    ✔ Optimaliseert execution-details
     ✔ Gebruikt historisch besliscontext
+    ✔ Voorkomt herhaling van eerdere fouten
     """
 
+    # ======================================================
+    # 🧠 HISTORISCHE STRATEGY CONTEXT
+    # ======================================================
     agent_context = build_agent_context(
         user_id=user_id,
         category="strategy",
@@ -35,23 +44,33 @@ def analyze_strategies(
         lookback_days=3,  # strategie = trager geheugen
     )
 
+    # ======================================================
+    # 🎯 STRATEGY EXECUTION TASK
+    # ======================================================
     TASK = """
-Je bent een senior trading coach.
+Je bent een senior execution strategist.
+
+Doel:
+- Optimaliseer een BESTAANDE tradingstrategie voor de huidige marktcontext.
+- De kernstrategie blijft ongewijzigd.
 
 Je krijgt:
 - huidige strategieën
-- eerdere AI-analyse(s) van strategiebeslissingen
+- historische AI-inzichten over eerdere strategiebeslissingen
+- execution-patronen uit recente dagen
 
-Beoordeel:
-- consistentie in besluitvorming
-- discipline (entries, stops, targets)
-- of aanpassingen logisch voortbouwen op eerdere keuzes
+Regels:
+- GEEN nieuwe strategie
+- GEEN nieuwe setup
+- GEEN nieuwe entries, targets of levels
+- GEEN marktvoorspellingen
+- GEEN scoreberekeningen
 
-GEEN:
-- nieuwe strategieën
-- nieuwe levels
-- marktvoorspellingen
-- scoreberekeningen
+Je mag:
+- execution-logica aanscherpen
+- inconsistenties benoemen
+- aangeven waar discipline ontbreekt
+- aangeven of huidige aanpassingen logisch voortbouwen op eerdere keuzes
 
 OUTPUT — ALLEEN GELDIGE JSON:
 {
@@ -60,8 +79,16 @@ OUTPUT — ALLEEN GELDIGE JSON:
 }
 
 REGELS:
-- comment: 2–3 zinnen, evaluatief
-- recommendation: concreet, uitvoerbaar, niet adviserend
+- comment:
+  - 2–3 zinnen
+  - evaluatief
+  - gericht op consistentie & discipline
+
+- recommendation:
+  - concreet en uitvoerbaar
+  - procesmatig (timing, volgorde, rust, bevestiging)
+  - GEEN trade-actie
+  - GEEN marktadvies
 """
 
     system_prompt = build_system_prompt(
@@ -69,6 +96,9 @@ REGELS:
         task=TASK
     )
 
+    # ======================================================
+    # 📦 AI PAYLOAD
+    # ======================================================
     payload = {
         "context": agent_context,
         "strategies": strategies,
@@ -79,12 +109,15 @@ REGELS:
         system_role=system_prompt
     )
 
+    # ======================================================
+    # 🧪 VALIDATIE
+    # ======================================================
     if not isinstance(response, dict):
-        logger.error("❌ Ongeldige JSON van AI bij strategy-analyse")
+        logger.error("❌ Ongeldige JSON van AI bij strategy-execution-analyse")
         return None
 
     if not {"comment", "recommendation"}.issubset(response.keys()):
-        logger.error("❌ Strategy-analyse mist verplichte velden")
+        logger.error("❌ Strategy-execution-analyse mist verplichte velden")
         return None
 
     return response
