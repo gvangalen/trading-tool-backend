@@ -197,7 +197,8 @@ def build_prompt(insights: Dict[str, dict], numeric: Dict[str, Any]) -> str:
         sigs_str = ", ".join(sigs) if sigs else "-"
 
         return (
-            f"[{cat}] score={i.get('avg_score')} | trend={i.get('trend')} | bias={i.get('bias')} | risk={i.get('risk')}\n"
+            f"[{cat}] score={i.get('avg_score')} | trend={i.get('trend')} | "
+            f"bias={i.get('bias')} | risk={i.get('risk')}\n"
             f"summary: {i.get('summary')}\n"
             f"signals: {sigs_str}"
         )
@@ -245,12 +246,26 @@ Antwoord ALLEEN met geldige JSON in dit format:
 # 💾 4. Opslaan → ai_category_insights (categorie: 'master')
 # ============================================================
 def store_master_result(conn, result: dict, user_id: int):
+    # 🔒 Sanity defaults
+    master_score = result.get("master_score")
+    alignment_score = result.get("alignment_score")
+
+    if not isinstance(master_score, (int, float)):
+        master_score = None
+    else:
+        master_score = max(0, min(100, master_score))
+
+    if not isinstance(alignment_score, (int, float)):
+        alignment_score = None
+    else:
+        alignment_score = max(0, min(100, alignment_score))
+
     meta = {
         "weights": result.get("weights"),
-        "alignment_score": result.get("alignment_score"),
-        "data_warnings": result.get("data_warnings"),
-        "domains": result.get("domains"),
-        "outlook": result.get("outlook"),
+        "alignment_score": alignment_score,
+        "data_warnings": result.get("data_warnings", []),
+        "domains": result.get("domains", {}),
+        "outlook": result.get("outlook", ""),
     }
 
     with conn.cursor() as cur:
@@ -271,11 +286,11 @@ def store_master_result(conn, result: dict, user_id: int):
             """,
             (
                 user_id,
-                result.get("master_score"),
-                result.get("master_trend"),
-                result.get("master_bias"),
-                result.get("master_risk"),
-                result.get("summary"),
+                master_score,
+                result.get("master_trend", ""),
+                result.get("master_bias", ""),
+                result.get("master_risk", ""),
+                result.get("summary", ""),
                 json.dumps(meta, ensure_ascii=False),
             ),
         )
@@ -354,9 +369,48 @@ def generate_master_score_for_user(user_id: int):
         return
 
     try:
+        # ======================================================
+        # 1️⃣ DATA OPHALEN
+        # ======================================================
         insights = fetch_today_insights(conn, user_id=user_id)
         numeric = fetch_numeric_scores(conn, user_id=user_id, insights=insights)
 
+        # ======================================================
+        # 2️⃣ PRE-FLIGHT DATA WARNINGS (TECHNISCH AFDWINGEN)
+        # ======================================================
+        data_warnings = []
+
+        # Ontbrekende domeinen
+        missing_domains = [
+            cat for cat in DOMAIN_CATEGORIES if cat not in insights
+        ]
+        if missing_domains:
+            data_warnings.append(
+                f"Ontbrekende domeinen: {', '.join(missing_domains)}"
+            )
+
+        # Fallback / niet-verse data
+        stale_domains = [
+            cat for cat, i in insights.items()
+            if i.get("date") != str(date.today())
+        ]
+        if stale_domains:
+            data_warnings.append(
+                f"Niet-verse data (fallback): {', '.join(stale_domains)}"
+            )
+
+        # Setup / strategy expliciet checken
+        if "setup" not in insights:
+            data_warnings.append("Geen setup-inzicht beschikbaar")
+        if "strategy" not in insights:
+            data_warnings.append("Geen strategy-inzicht beschikbaar")
+
+        # Doorgeven aan AI (mag NIET verdwijnen)
+        numeric.setdefault("data_warnings", []).extend(data_warnings)
+
+        # ======================================================
+        # 3️⃣ MASTER TASK (JOUW DEFINITIEVE VERSIE)
+        # ======================================================
         TASK = """
 Je bent een master decision orchestrator voor een trading-systeem.
 
@@ -425,15 +479,27 @@ RICHTLIJNEN:
 - alignment_score: lager bij conflicten of missende context
 """
 
-        system_prompt = build_system_prompt(task=TASK)
+        system_prompt = build_system_prompt(
+            agent="master",
+            task=TASK
+        )
 
+        # ======================================================
+        # 4️⃣ PROMPT BOUWEN + AI CALL
+        # ======================================================
         prompt = build_prompt(insights, numeric)
 
-        result = ask_gpt(prompt, system_role=system_prompt)
+        result = ask_gpt(
+            prompt=prompt,
+            system_role=system_prompt
+        )
 
         if not isinstance(result, dict):
             raise ValueError("❌ Master orchestrator gaf geen geldige JSON dict terug")
 
+        # ======================================================
+        # 5️⃣ OPSLAAN
+        # ======================================================
         store_master_result(conn, result, user_id=user_id)
 
         if WRITE_DAILY_SCORES:
