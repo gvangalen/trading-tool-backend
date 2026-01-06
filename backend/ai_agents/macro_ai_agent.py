@@ -5,7 +5,7 @@ from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
 from backend.utils.scoring_utils import generate_scores_db, normalize_indicator_name
 from backend.ai_core.system_prompt_builder import build_system_prompt
-from backend.ai_core.agent_context import build_agent_context  # ✅ NIEUW
+from backend.ai_core.agent_context import build_agent_context  # ✅ gedeelde context
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -47,6 +47,21 @@ def fallback_macro_context(macro_items: list) -> dict:
 
 
 def normalize_ai_context(ai_ctx: dict, macro_items: list) -> dict:
+    """
+    ✅ Unwrap-fix:
+    accepteert geneste AI-responses zoals:
+    { analysis: {...} } / { analyse: {...} } / { context: {...} }
+    """
+
+    if not isinstance(ai_ctx, dict):
+        return fallback_macro_context(macro_items)
+
+    # 🔧 unwrap bekende wrappers
+    for key in ("analysis", "analyse", "context"):
+        if key in ai_ctx and isinstance(ai_ctx[key], dict):
+            ai_ctx = ai_ctx[key]
+            break
+
     normalized = {
         "trend": ai_ctx.get("trend", ""),
         "bias": ai_ctx.get("bias", ""),
@@ -72,6 +87,9 @@ def run_macro_agent(user_id: int):
     Schrijft:
     - ai_category_insights (macro)
     - ai_reflections (macro)
+
+    ✔ gedeelde agent-context
+    ✔ tijdsbewust (t.o.v. gisteren)
     """
 
     if user_id is None:
@@ -162,14 +180,14 @@ def run_macro_agent(user_id: int):
         ]
 
         # =========================================================
-        # 4️⃣ 🧠 SHARED AGENT CONTEXT (NIEUW)
+        # 4️⃣ 🧠 SHARED AGENT CONTEXT
         # =========================================================
         agent_context = build_agent_context(
             user_id=user_id,
             category="macro",
             current_score=macro_avg,
             current_items=top_pretty,
-            lookback_days=1,  # 👈 bewust 1 dag
+            lookback_days=1,  # bewust 1 dag
         )
 
         # =========================================================
@@ -214,10 +232,14 @@ Antwoord uitsluitend in geldige JSON.
         ai_context = normalize_ai_context(raw_ai_context, macro_items)
 
         # =========================================================
-        # 6️⃣ AI REFLECTIES
+        # 6️⃣ AI REFLECTIES (✅ MET CONTEXT)
         # =========================================================
         reflections_task = """
 Maak per macro-indicator een reflectie.
+
+Gebruik expliciet:
+- verandering t.o.v. gisteren
+- rol van deze indicator in het macrobeeld
 
 Per item:
 - ai_score (0–100)
@@ -228,10 +250,16 @@ Per item:
 Antwoord uitsluitend als JSON-lijst.
 """
 
-        reflections_prompt = build_system_prompt(agent="macro", task=reflections_task)
+        reflections_prompt = build_system_prompt(
+            agent="macro",
+            task=reflections_task
+        )
 
         ai_reflections = ask_gpt(
-            prompt=json.dumps(macro_items, ensure_ascii=False, indent=2),
+            prompt=json.dumps({
+                "context": agent_context,
+                "items": macro_items
+            }, ensure_ascii=False, indent=2),
             system_role=reflections_prompt
         )
 
