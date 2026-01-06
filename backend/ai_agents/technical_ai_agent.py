@@ -5,9 +5,11 @@ from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt
 from backend.utils.scoring_utils import normalize_indicator_name
 from backend.ai_core.system_prompt_builder import build_system_prompt
+from backend.ai_core.agent_context import build_agent_context  # ✅ gedeelde context
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
 
 # ======================================================
 # 🧠 Helpers
@@ -34,7 +36,7 @@ def fallback_technical_context(items: list) -> dict:
         "risk": "gemiddeld",
         "summary": (
             "De technische analyse is gebaseerd op een beperkt aantal indicatoren. "
-            "Gebruik scores en trends als leidraad."
+            "Gebruik scores en trendveranderingen als leidraad."
         ),
         "top_signals": [
             f"{ind} blijft technisch richtinggevend"
@@ -44,11 +46,15 @@ def fallback_technical_context(items: list) -> dict:
 
 
 def normalize_ai_context(ai_ctx: dict, items: list) -> dict:
+    """
+    ✅ Unwrap-fix:
+    accepteert {analysis:{…}}, {analyse:{…}}, {context:{…}}
+    """
+
     if not isinstance(ai_ctx, dict):
         return fallback_technical_context(items)
 
-    # accepteer NL/EN wrappers
-    for key in ("analysis", "analyse"):
+    for key in ("analysis", "analyse", "context"):
         if key in ai_ctx and isinstance(ai_ctx[key], dict):
             ai_ctx = ai_ctx[key]
             break
@@ -69,16 +75,16 @@ def normalize_ai_context(ai_ctx: dict, items: list) -> dict:
 
 
 # =====================================================================
-# 📊 TECHNICAL AI AGENT (MET GEHEUGEN)
+# 📊 TECHNICAL AI AGENT (MET GEDEELD GEHEUGEN)
 # =====================================================================
 def run_technical_agent(user_id: int):
     """
-    Genereert technical AI insights voor één user.
+    Genereert technical AI insights voor één gebruiker.
 
-    ✔ context van gisteren
-    ✔ score-verandering
-    ✔ AI-geheugen
-    ✔ verklarende analyse
+    ✔ gebruikt gedeelde agent-context
+    ✔ vergelijkt met gisteren
+    ✔ verklaart score-veranderingen
+    ✔ schrijft ai_category_insights + ai_reflections
     """
 
     if user_id is None:
@@ -133,37 +139,14 @@ def run_technical_agent(user_id: int):
         )
 
         # =====================================================
-        # 2️⃣ VORIGE TECHNICAL AI CONTEXT
+        # 2️⃣ 🧠 SHARED AGENT CONTEXT (GISTEREN)
         # =====================================================
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT avg_score, trend, bias, risk, summary, top_signals
-                FROM ai_category_insights
-                WHERE user_id = %s
-                  AND category = 'technical'
-                  AND date < CURRENT_DATE
-                ORDER BY date DESC
-                LIMIT 1;
-            """, (user_id,))
-            prev = cur.fetchone()
-
-        prev_context = None
-        prev_score = None
-
-        if prev:
-            prev_score = float(prev[0])
-            prev_context = {
-                "avg_score": prev[0],
-                "trend": prev[1],
-                "bias": prev[2],
-                "risk": prev[3],
-                "summary": prev[4],
-                "top_signals": prev[5],
-            }
-
-        score_delta = (
-            round(avg_score - prev_score, 2)
-            if prev_score is not None else None
+        agent_context = build_agent_context(
+            user_id=user_id,
+            category="technical",
+            current_score=avg_score,
+            current_items=combined,
+            lookback_days=1,
         )
 
         # =====================================================
@@ -172,25 +155,23 @@ def run_technical_agent(user_id: int):
         technical_task = """
 Je bent een ervaren technische marktanalist.
 
-Je krijgt:
-- de huidige technische indicatoren
-- de technische score van vandaag
-- het verschil t.o.v. gisteren
-- jouw vorige technische analyse
+Gebruik expliciet:
+- verschillen t.o.v. gisteren
+- verandering in score en bias
+- voortzetting of breuk in trend
 
-BELANGRIJK:
-- Leg expliciet uit WAT is veranderd t.o.v. gisteren
-- Verklaar WAAROM indicatoren sterker of zwakker zijn
-- Benoem of dit voortzetting is of een omslag
-- Geen algemene termen
-- Geen uitleg van basisbegrippen
+Vermijd:
+- algemene termen
+- uitleg van basisbegrippen
 
-Antwoord uitsluitend in geldige JSON met:
+Geef altijd:
 - trend
 - bias
 - risico
 - samenvatting
-- top_signals
+- belangrijkste technische signalen
+
+Antwoord uitsluitend in geldige JSON.
 """
 
         system_prompt = build_system_prompt(
@@ -198,15 +179,14 @@ Antwoord uitsluitend in geldige JSON met:
             task=technical_task
         )
 
-        analysis_input = {
+        payload = {
+            "context": agent_context,
             "current_indicators": combined,
             "avg_score_today": avg_score,
-            "score_change_vs_yesterday": score_delta,
-            "previous_ai_view": prev_context,
         }
 
         raw_ai_context = ask_gpt(
-            prompt=json.dumps(analysis_input, ensure_ascii=False, indent=2),
+            prompt=json.dumps(payload, ensure_ascii=False, indent=2),
             system_role=system_prompt
         )
 
@@ -216,10 +196,15 @@ Antwoord uitsluitend in geldige JSON met:
         ai_context = normalize_ai_context(raw_ai_context, combined)
 
         # =====================================================
-        # 4️⃣ AI REFLECTIES (ONGEWIJZIGD)
+        # 4️⃣ AI REFLECTIES (MET CONTEXT)
         # =====================================================
         reflections_task = """
 Maak per technische indicator een reflectie.
+
+Gebruik:
+- huidige waarde
+- verandering t.o.v. gisteren
+- rol in het totaalbeeld
 
 Per item:
 - ai_score (0–100)
@@ -236,7 +221,10 @@ Antwoord uitsluitend als JSON-lijst.
         )
 
         ai_reflections = ask_gpt(
-            prompt=json.dumps(combined, ensure_ascii=False, indent=2),
+            prompt=json.dumps({
+                "context": agent_context,
+                "items": combined
+            }, ensure_ascii=False, indent=2),
             system_role=reflections_prompt
         )
 
@@ -300,9 +288,6 @@ Antwoord uitsluitend als JSON-lijst.
                     r.get("recommendation", ""),
                 ))
 
-        # =====================================================
-        # 7️⃣ COMMIT
-        # =====================================================
         conn.commit()
         logger.info(f"✅ [Technical-Agent] Voltooid voor user_id={user_id}")
 
