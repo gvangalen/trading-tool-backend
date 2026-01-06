@@ -193,7 +193,7 @@ def run_macro_agent(user_id: int):
         # =========================================================
         # 5️⃣ AI MACRO ANALYSE
         # =========================================================
-                payload = {
+        payload = {
             "context": agent_context,
             "macro_items": macro_items,
             "macro_rules": rules_by_indicator,
