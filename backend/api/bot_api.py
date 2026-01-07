@@ -86,27 +86,62 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
         if not _table_exists(conn, "bot_configs"):
             return []
 
-        cols = _get_table_columns(conn, "bot_configs")
-        pick = [c for c in ["id", "name", "symbol", "active", "mode", "rules_json", "allocation_json", "config_json", "created_at"] if c in cols]
-
-        if "id" not in pick:
-            return []
-
-        q = f"SELECT {', '.join(pick)} FROM bot_configs WHERE user_id=%s"
-        if "active" in cols:
-            q += " AND active = TRUE"
-        q += " ORDER BY id ASC"
-
-        cur.execute(q, (user_id,))
+        cur.execute(
+            """
+            SELECT
+              id,
+              name,
+              bot_type,
+              symbol,
+              is_active,
+              mode,
+              cadence,
+              rules_json,
+              allocation_json,
+              risk_json,
+              created_at,
+              updated_at
+            FROM bot_configs
+            WHERE user_id=%s
+            ORDER BY id ASC
+            """,
+            (user_id,),
+        )
         rows = cur.fetchall()
 
         out = []
         for r in rows:
-            d = {pick[i]: r[i] for i in range(len(pick))}
-            d["rules"] = _safe_json(d.get("rules_json"), {}) if "rules_json" in d else {}
-            d["allocation"] = _safe_json(d.get("allocation_json"), {}) if "allocation_json" in d else {}
-            d["config"] = _safe_json(d.get("config_json"), {}) if "config_json" in d else {}
-            out.append(d)
+            (
+                bot_id,
+                name,
+                bot_type,
+                symbol,
+                is_active,
+                mode,
+                cadence,
+                rules_json,
+                allocation_json,
+                risk_json,
+                created_at,
+                updated_at,
+            ) = r
+
+            out.append(
+                {
+                    "id": bot_id,
+                    "name": name,
+                    "bot_type": bot_type,
+                    "symbol": symbol,
+                    "is_active": bool(is_active),
+                    "mode": mode,
+                    "cadence": cadence,
+                    "rules": rules_json or {},
+                    "allocation": allocation_json or {},
+                    "risk": risk_json or {},
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                }
+            )
 
         return out
 
