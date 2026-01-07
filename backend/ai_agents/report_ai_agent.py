@@ -1,5 +1,7 @@
 import logging
 import json
+import re
+from difflib import SequenceMatcher
 from decimal import Decimal
 from typing import Dict, Any, List, Optional
 
@@ -92,6 +94,31 @@ def generate_text(prompt: str, fallback: str) -> str:
 
     if not raw:
         return fallback
+
+def _normalize_sentence(s: str) -> str:
+    s = s.lower().strip()
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"[^\w\s]", "", s)
+    return s
+
+def _is_too_similar(a: str, b: str, threshold: float = 0.82) -> bool:
+    return SequenceMatcher(None, a, b).ratio() >= threshold  
+def reduce_repetition(text: str, seen: list[str]) -> str:
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    output = []
+
+    for s in sentences:
+        norm = _normalize_sentence(s)
+        if not norm or len(norm) < 20:
+            continue
+
+        if any(_is_too_similar(norm, prev) for prev in seen):
+            continue
+
+        output.append(s)
+        seen.append(norm)
+
+    return " ".join(output)   
 
     # -------------------------------------------------
     # 1) Hard strip van code fences / markdown
@@ -607,14 +634,43 @@ BELANGRIJK:
     # 5) RETURN (DIT WAS EERDER NOOIT BEREIKT)
     # -------------------------------------------------
     result = {
-        "executive_summary": executive_summary,
-        "market_analysis": market_analysis,
-        "macro_context": macro_context,
-        "technical_analysis": technical_analysis,
-        "setup_validation": setup_validation,
-        "strategy_implication": strategy_implication,
-        "outlook": outlook,
+        executive_summary = reduce_repetition(
+    generate_text(context_blob + "\n\n" + p_exec(scores, market), "Markt in afwachting."),
+    seen_sentences
+)
 
+market_analysis = reduce_repetition(
+    generate_text(context_blob + "\n\n" + p_market(scores, market, market_ind), "Beperkte richting."),
+    seen_sentences
+)
+
+macro_context = reduce_repetition(
+    generate_text(context_blob + "\n\n" + p_macro(scores, macro_ind), "Macro gemengd."),
+    seen_sentences
+)
+
+technical_analysis = reduce_repetition(
+    generate_text(context_blob + "\n\n" + p_technical(scores, tech_ind), "Technisch voorzichtig."),
+    seen_sentences
+)
+
+setup_validation = reduce_repetition(
+    generate_text(context_blob + "\n\n" + p_setup(best_setup), "Selectieve setups."),
+    seen_sentences
+)
+
+strategy_implication = reduce_repetition(
+    generate_text(context_blob + "\n\n" + p_strategy(scores, active_strategy), "Voorzichtigheid."),
+    seen_sentences
+)
+
+outlook = reduce_repetition(
+    generate_text(
+        context_blob + "\n\nSchrijf een scenario-vooruitblik zonder prijsniveaus.",
+        "Vooruitblik: wachten op bevestiging."
+    ),
+    seen_sentences
+)
         "price": market.get("price"),
         "change_24h": market.get("change_24h"),
         "volume": market.get("volume"),
