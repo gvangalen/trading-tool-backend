@@ -57,6 +57,7 @@ Output:
 # =====================================================
 # Helpers
 # =====================================================
+
 def to_float(v):
     if v is None:
         return None
@@ -69,72 +70,51 @@ def to_float(v):
 
 
 def _flatten_text(obj) -> List[str]:
-    out = []
+    out: List[str] = []
     if obj is None:
         return out
+
     if isinstance(obj, str):
         t = obj.strip()
         if t:
             out.append(t)
         return out
+
     if isinstance(obj, dict):
         for v in obj.values():
             out.extend(_flatten_text(v))
         return out
+
     if isinstance(obj, list):
         for v in obj:
             out.extend(_flatten_text(v))
         return out
+
     return out
 
 
 def generate_text(prompt: str, fallback: str) -> str:
+    """
+    Verantwoordelijk voor:
+    - AI-call
+    - opschonen output
+    - JSON-defensieve parsing
+    GEEN deduplicatie (doen we hogerop)
+    """
     system_prompt = build_system_prompt(agent="report", task=REPORT_TASK)
     raw = ask_gpt_text(prompt, system_role=system_prompt)
 
     if not raw:
         return fallback
 
-def _normalize_sentence(s: str) -> str:
-    s = s.lower().strip()
-    s = re.sub(r"\s+", " ", s)
-    s = re.sub(r"[^\w\s]", "", s)
-    return s
-
-def _is_too_similar(a: str, b: str, threshold: float = 0.82) -> bool:
-    return SequenceMatcher(None, a, b).ratio() >= threshold  
-def reduce_repetition(text: str, seen: list[str]) -> str:
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    output = []
-
-    for s in sentences:
-        norm = _normalize_sentence(s)
-        if not norm or len(norm) < 20:
-            continue
-
-        if any(_is_too_similar(norm, prev) for prev in seen):
-            continue
-
-        output.append(s)
-        seen.append(norm)
-
-    return " ".join(output)   
-
-    # -------------------------------------------------
-    # 1) Hard strip van code fences / markdown
-    # -------------------------------------------------
+    # 1) Strip code fences / markdown
     text = raw.replace("```json", "").replace("```", "").strip()
 
-    # -------------------------------------------------
-    # 2) Als het duidelijke normale tekst is → direct terug
-    #    (geen JSON-structuur detecteerbaar)
-    # -------------------------------------------------
+    # 2) Als het normale tekst is → direct terug
     if not text.lstrip().startswith("{"):
         return text if len(text) > 5 else fallback
 
-    # -------------------------------------------------
-    # 3) Defensieve JSON fallback (voor het geval AI tóch JSON stuurt)
-    # -------------------------------------------------
+    # 3) Defensieve JSON-parse (als AI zich niet houdt aan instructies)
     try:
         parsed = json.loads(text)
         parts = _flatten_text(parsed)
@@ -156,13 +136,47 @@ def reduce_repetition(text: str, seen: list[str]) -> str:
             return "\n\n".join(parts)
 
     except Exception:
-        # Als JSON faalt, val terug op ruwe tekst
         pass
 
-    # -------------------------------------------------
-    # 4) Absolute fallback
-    # -------------------------------------------------
     return text if len(text) > 5 else fallback
+
+
+# =====================================================
+# Repetition control (cross-section deduplication)
+# =====================================================
+
+def _normalize_sentence(s: str) -> str:
+    s = s.lower().strip()
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"[^\w\s]", "", s)
+    return s
+
+
+def _is_too_similar(a: str, b: str, threshold: float = 0.82) -> bool:
+    return SequenceMatcher(None, a, b).ratio() >= threshold
+
+
+def reduce_repetition(text: str, seen: list[str]) -> str:
+    """
+    Verwijdert zinnen die semantisch te sterk lijken
+    op eerder geschreven zinnen in andere secties.
+    """
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    output: List[str] = []
+
+    for s in sentences:
+        norm = _normalize_sentence(s)
+
+        if not norm or len(norm) < 20:
+            continue
+
+        if any(_is_too_similar(norm, prev) for prev in seen):
+            continue
+
+        output.append(s)
+        seen.append(norm)
+
+    return " ".join(output)
 
 
 # =====================================================
@@ -497,7 +511,7 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     """
 
     # -------------------------------------------------
-    # 0) JSON-safe helper (CRUCIAAL)
+    # 0) JSON-safe helper
     # -------------------------------------------------
     from datetime import date, datetime
 
@@ -534,7 +548,6 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-
             cur.execute("""
                 SELECT report_date, executive_summary, market_analysis,
                        macro_context, technical_analysis,
@@ -564,12 +577,11 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
                 LIMIT 10;
             """, (user_id,))
             ai_reflections = cur.fetchall()
-
     finally:
         conn.close()
 
     # -------------------------------------------------
-    # 3) Context blob
+    # 3) Context blob (ENIGE input voor AI)
     # -------------------------------------------------
     context_blob = f"""
 Je schrijft het rapport voor vandaag.
@@ -617,60 +629,60 @@ BELANGRIJK:
 """.strip()
 
     # -------------------------------------------------
-    # 4) Tekst genereren
+    # 4) Tekst genereren + herhaling reduceren
     # -------------------------------------------------
-    executive_summary = generate_text(context_blob + "\n\n" + p_exec(scores, market), "Markt in afwachting.")
-    market_analysis = generate_text(context_blob + "\n\n" + p_market(scores, market, market_ind), "Beperkte richting.")
-    macro_context = generate_text(context_blob + "\n\n" + p_macro(scores, macro_ind), "Macro gemengd.")
-    technical_analysis = generate_text(context_blob + "\n\n" + p_technical(scores, tech_ind), "Technisch voorzichtig.")
-    setup_validation = generate_text(context_blob + "\n\n" + p_setup(best_setup), "Selectieve setups.")
-    strategy_implication = generate_text(context_blob + "\n\n" + p_strategy(scores, active_strategy), "Voorzichtigheid.")
-    outlook = generate_text(
-        context_blob + "\n\nSchrijf een scenario-vooruitblik zonder prijsniveaus.",
-        "Vooruitblik: wachten op bevestiging."
+    seen_sentences: List[str] = []
+
+    executive_summary = reduce_repetition(
+        generate_text(context_blob + "\n\n" + p_exec(scores, market), "Markt in afwachting."),
+        seen_sentences
+    )
+
+    market_analysis = reduce_repetition(
+        generate_text(context_blob + "\n\n" + p_market(scores, market, market_ind), "Beperkte richting."),
+        seen_sentences
+    )
+
+    macro_context = reduce_repetition(
+        generate_text(context_blob + "\n\n" + p_macro(scores, macro_ind), "Macro gemengd."),
+        seen_sentences
+    )
+
+    technical_analysis = reduce_repetition(
+        generate_text(context_blob + "\n\n" + p_technical(scores, tech_ind), "Technisch voorzichtig."),
+        seen_sentences
+    )
+
+    setup_validation = reduce_repetition(
+        generate_text(context_blob + "\n\n" + p_setup(best_setup), "Selectieve setups."),
+        seen_sentences
+    )
+
+    strategy_implication = reduce_repetition(
+        generate_text(context_blob + "\n\n" + p_strategy(scores, active_strategy), "Voorzichtigheid."),
+        seen_sentences
+    )
+
+    outlook = reduce_repetition(
+        generate_text(
+            context_blob + "\n\nSchrijf een scenario-vooruitblik zonder prijsniveaus.",
+            "Vooruitblik: wachten op bevestiging."
+        ),
+        seen_sentences
     )
 
     # -------------------------------------------------
-    # 5) RETURN (DIT WAS EERDER NOOIT BEREIKT)
+    # 5) RESULT
     # -------------------------------------------------
     result = {
-        executive_summary = reduce_repetition(
-    generate_text(context_blob + "\n\n" + p_exec(scores, market), "Markt in afwachting."),
-    seen_sentences
-)
+        "executive_summary": executive_summary,
+        "market_analysis": market_analysis,
+        "macro_context": macro_context,
+        "technical_analysis": technical_analysis,
+        "setup_validation": setup_validation,
+        "strategy_implication": strategy_implication,
+        "outlook": outlook,
 
-market_analysis = reduce_repetition(
-    generate_text(context_blob + "\n\n" + p_market(scores, market, market_ind), "Beperkte richting."),
-    seen_sentences
-)
-
-macro_context = reduce_repetition(
-    generate_text(context_blob + "\n\n" + p_macro(scores, macro_ind), "Macro gemengd."),
-    seen_sentences
-)
-
-technical_analysis = reduce_repetition(
-    generate_text(context_blob + "\n\n" + p_technical(scores, tech_ind), "Technisch voorzichtig."),
-    seen_sentences
-)
-
-setup_validation = reduce_repetition(
-    generate_text(context_blob + "\n\n" + p_setup(best_setup), "Selectieve setups."),
-    seen_sentences
-)
-
-strategy_implication = reduce_repetition(
-    generate_text(context_blob + "\n\n" + p_strategy(scores, active_strategy), "Voorzichtigheid."),
-    seen_sentences
-)
-
-outlook = reduce_repetition(
-    generate_text(
-        context_blob + "\n\nSchrijf een scenario-vooruitblik zonder prijsniveaus.",
-        "Vooruitblik: wachten op bevestiging."
-    ),
-    seen_sentences
-)
         "price": market.get("price"),
         "change_24h": market.get("change_24h"),
         "volume": market.get("volume"),
