@@ -93,8 +93,23 @@ def generate_text(prompt: str, fallback: str) -> str:
     if not raw:
         return fallback
 
+    # -------------------------------------------------
+    # 1) Hard strip van code fences / markdown
+    # -------------------------------------------------
+    text = raw.replace("```json", "").replace("```", "").strip()
+
+    # -------------------------------------------------
+    # 2) Als het duidelijke normale tekst is → direct terug
+    #    (geen JSON-structuur detecteerbaar)
+    # -------------------------------------------------
+    if not text.lstrip().startswith("{"):
+        return text if len(text) > 5 else fallback
+
+    # -------------------------------------------------
+    # 3) Defensieve JSON fallback (voor het geval AI tóch JSON stuurt)
+    # -------------------------------------------------
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(text)
         parts = _flatten_text(parsed)
 
         blacklist = {
@@ -114,9 +129,12 @@ def generate_text(prompt: str, fallback: str) -> str:
             return "\n\n".join(parts)
 
     except Exception:
+        # Als JSON faalt, val terug op ruwe tekst
         pass
 
-    text = raw.strip()
+    # -------------------------------------------------
+    # 4) Absolute fallback
+    # -------------------------------------------------
     return text if len(text) > 5 else fallback
 
 
