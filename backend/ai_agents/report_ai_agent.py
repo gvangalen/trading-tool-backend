@@ -44,7 +44,12 @@ Structuur:
 - Elke sectie is één logisch doorlopend stuk tekst
 - Secties moeten inhoudelijk op elkaar aansluiten
 
-Output = geldige JSON
+Output:
+- Schrijf ALLEEN doorlopende tekst
+- GEEN JSON
+- GEEN codeblokken
+- GEEN markdown
+- GEEN labels of keys
 """
 
 # =====================================================
