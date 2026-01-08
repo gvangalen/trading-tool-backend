@@ -166,24 +166,29 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         if not _table_exists(conn, "bot_decisions"):
             return {"date": str(today), "decisions": [], "orders": []}
 
-        # decisions
-        dcols = _get_table_columns(conn, "bot_decisions")
-        date_col = "date" if "date" in dcols else ("report_date" if "report_date" in dcols else None)
-        if not date_col:
-            return {"date": str(today), "decisions": [], "orders": []}
-
-        pick_d = [c for c in [
-            "id", "bot_id", "symbol", date_col, "action", "amount_eur", "confidence",
-            "reason_json", "reasons_json", "scores_json", "setup_id", "strategy_id",
-            "status", "created_at", "updated_at", "timestamp"
-        ] if c in dcols]
-
+        # --------------------------
+        # decisions (bot_decisions)
+        # --------------------------
         cur.execute(
-            f"""
-            SELECT {', '.join(pick_d)}
+            """
+            SELECT
+              id,
+              bot_id,
+              symbol,
+              decision_ts,
+              decision_date,
+              action,
+              confidence,
+              scores_json,
+              reason_json,
+              setup_id,
+              strategy_id,
+              status,
+              created_at,
+              updated_at
             FROM bot_decisions
             WHERE user_id=%s
-              AND {date_col}=%s
+              AND decision_date=%s
             ORDER BY bot_id ASC NULLS LAST, id DESC
             """,
             (user_id, today),
@@ -191,59 +196,129 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         drows = cur.fetchall()
 
         decisions = []
+        decision_ids = []
         for r in drows:
-            d = {pick_d[i]: r[i] for i in range(len(pick_d))}
-            d["date"] = d.get(date_col)
-            if date_col != "date":
-                d.pop(date_col, None)
+            (
+                decision_id,
+                bot_id,
+                symbol,
+                decision_ts,
+                decision_date,
+                action,
+                confidence,
+                scores_json,
+                reason_json,
+                setup_id,
+                strategy_id,
+                status,
+                created_at,
+                updated_at,
+            ) = r
 
-            reasons = []
-            if "reason_json" in d:
-                reasons = _safe_json(d.get("reason_json"), [])
-            elif "reasons_json" in d:
-                reasons = _safe_json(d.get("reasons_json"), [])
-            d["reasons"] = reasons or []
-            d["scores"] = _safe_json(d.get("scores_json"), {}) if "scores_json" in d else {}
+            decision_ids.append(decision_id)
 
-            decisions.append(d)
+            decisions.append(
+                {
+                    "id": decision_id,
+                    "bot_id": bot_id,
+                    "symbol": symbol,
+                    "decision_ts": decision_ts,
+                    "date": decision_date,  # frontend verwacht vaak "date"
+                    "action": action,
+                    "confidence": confidence,
+                    "scores": scores_json or {},
+                    "reasons": reason_json or {},
+                    "setup_id": setup_id,
+                    "strategy_id": strategy_id,
+                    "status": status,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                }
+            )
 
-        # orders
+        # --------------------------
+        # orders (bot_orders) via decision_id
+        # --------------------------
         orders = []
-        if _table_exists(conn, "bot_orders"):
-            ocols = _get_table_columns(conn, "bot_orders")
-            o_date_col = "date" if "date" in ocols else ("report_date" if "report_date" in ocols else None)
+        if decision_ids and _table_exists(conn, "bot_orders"):
+            cur.execute(
+                f"""
+                SELECT
+                  id,
+                  bot_id,
+                  decision_id,
+                  symbol,
+                  side,
+                  order_type,
+                  quantity,
+                  quote_amount_eur,
+                  limit_price,
+                  time_in_force,
+                  reduce_only,
+                  exchange,
+                  order_payload,
+                  dry_run_payload,
+                  status,
+                  last_error,
+                  created_at,
+                  updated_at
+                FROM bot_orders
+                WHERE user_id=%s
+                  AND decision_id = ANY(%s)
+                ORDER BY bot_id ASC NULLS LAST, id DESC
+                """,
+                (user_id, decision_ids),
+            )
+            orows = cur.fetchall()
 
-            if o_date_col:
-                pick_o = [c for c in [
-                    "id", "bot_id", "symbol", o_date_col, "side", "amount_eur", "status",
-                    "order_json", "order_payload", "order_payload_json", "created_at", "timestamp"
-                ] if c in ocols]
+            for r in orows:
+                (
+                    order_id,
+                    bot_id,
+                    decision_id,
+                    symbol,
+                    side,
+                    order_type,
+                    quantity,
+                    quote_amount_eur,
+                    limit_price,
+                    tif,
+                    reduce_only,
+                    exchange,
+                    order_payload,
+                    dry_run_payload,
+                    status,
+                    last_error,
+                    created_at,
+                    updated_at,
+                ) = r
 
-                cur.execute(
-                    f"""
-                    SELECT {', '.join(pick_o)}
-                    FROM bot_orders
-                    WHERE user_id=%s
-                      AND {o_date_col}=%s
-                    ORDER BY bot_id ASC NULLS LAST, id DESC
-                    """,
-                    (user_id, today),
+                # 👇 voor compat: veel frontend code verwacht "amount_eur"
+                amount_eur = float(quote_amount_eur) if quote_amount_eur is not None else None
+
+                orders.append(
+                    {
+                        "id": order_id,
+                        "bot_id": bot_id,
+                        "decision_id": decision_id,
+                        "symbol": symbol,
+                        "side": side,
+                        "order_type": order_type,
+                        "quantity": float(quantity) if quantity is not None else None,
+                        "quote_amount_eur": float(quote_amount_eur) if quote_amount_eur is not None else None,
+                        "amount_eur": amount_eur,  # compat
+                        "limit_price": float(limit_price) if limit_price is not None else None,
+                        "time_in_force": tif,
+                        "reduce_only": bool(reduce_only) if reduce_only is not None else False,
+                        "exchange": exchange,
+                        "order_payload": order_payload or {},
+                        "dry_run_payload": dry_run_payload or {},
+                        "status": status,
+                        "last_error": last_error,
+                        "created_at": created_at,
+                        "updated_at": updated_at,
+                    }
                 )
-                orows = cur.fetchall()
-
-                for r in orows:
-                    o = {pick_o[i]: r[i] for i in range(len(pick_o))}
-                    o["date"] = o.get(o_date_col)
-                    if o_date_col != "date":
-                        o.pop(o_date_col, None)
-
-                    payload = None
-                    for k in ["order_payload_json", "order_payload", "order_json"]:
-                        if k in o:
-                            payload = _safe_json(o.get(k), None)
-                            break
-                    o["order_payload"] = payload or {}
-                    orders.append(o)
 
         return {"date": str(today), "decisions": decisions, "orders": orders}
 
@@ -252,7 +327,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Bot today ophalen mislukt.")
     finally:
         conn.close()
-
 
 # =====================================
 # 📜 BOT HISTORY (laatste N dagen)
@@ -275,24 +349,27 @@ async def get_bot_history(days: int = 30, current_user: dict = Depends(get_curre
         if not _table_exists(conn, "bot_decisions"):
             return []
 
-        cols = _get_table_columns(conn, "bot_decisions")
-        date_col = "date" if "date" in cols else ("report_date" if "report_date" in cols else None)
-        if not date_col:
-            return []
-
-        pick = [c for c in [
-            "id", "bot_id", "symbol", date_col, "action", "amount_eur", "confidence",
-            "reason_json", "reasons_json", "scores_json", "setup_id", "strategy_id",
-            "status", "created_at", "updated_at", "timestamp"
-        ] if c in cols]
-
         cur.execute(
-            f"""
-            SELECT {', '.join(pick)}
+            """
+            SELECT
+              id,
+              bot_id,
+              symbol,
+              decision_ts,
+              decision_date,
+              action,
+              confidence,
+              scores_json,
+              reason_json,
+              setup_id,
+              strategy_id,
+              status,
+              created_at,
+              updated_at
             FROM bot_decisions
             WHERE user_id=%s
-              AND {date_col} BETWEEN %s AND %s
-            ORDER BY {date_col} DESC, bot_id ASC NULLS LAST, id DESC
+              AND decision_date BETWEEN %s AND %s
+            ORDER BY decision_date DESC, bot_id ASC NULLS LAST, id DESC
             """,
             (user_id, start, end),
         )
@@ -300,20 +377,41 @@ async def get_bot_history(days: int = 30, current_user: dict = Depends(get_curre
 
         out = []
         for r in rows:
-            d = {pick[i]: r[i] for i in range(len(pick))}
-            d["date"] = d.get(date_col)
-            if date_col != "date":
-                d.pop(date_col, None)
+            (
+                decision_id,
+                bot_id,
+                symbol,
+                decision_ts,
+                decision_date,
+                action,
+                confidence,
+                scores_json,
+                reason_json,
+                setup_id,
+                strategy_id,
+                status,
+                created_at,
+                updated_at,
+            ) = r
 
-            reasons = []
-            if "reason_json" in d:
-                reasons = _safe_json(d.get("reason_json"), [])
-            elif "reasons_json" in d:
-                reasons = _safe_json(d.get("reasons_json"), [])
-            d["reasons"] = reasons or []
-            d["scores"] = _safe_json(d.get("scores_json"), {}) if "scores_json" in d else {}
-
-            out.append(d)
+            out.append(
+                {
+                    "id": decision_id,
+                    "bot_id": bot_id,
+                    "symbol": symbol,
+                    "decision_ts": decision_ts,
+                    "date": decision_date,
+                    "action": action,
+                    "confidence": confidence,
+                    "scores": scores_json or {},
+                    "reasons": reason_json or {},
+                    "setup_id": setup_id,
+                    "strategy_id": strategy_id,
+                    "status": status,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                }
+            )
 
         return out
 
@@ -383,11 +481,8 @@ async def mark_bot_executed(
         except Exception:
             raise HTTPException(status_code=400, detail="❌ report_date moet YYYY-MM-DD zijn.")
 
-    symbol = body.get("symbol")
-    side = body.get("side")
-    amount_eur = body.get("amount_eur")
-    price = body.get("price")
     exchange = body.get("exchange")
+    price = body.get("price")
     notes = body.get("notes")
 
     conn = get_db_connection()
@@ -395,96 +490,80 @@ async def mark_bot_executed(
         raise HTTPException(status_code=500, detail="❌ DB niet beschikbaar.")
 
     try:
-        # --- bot_decisions
-        if _table_exists(conn, "bot_decisions"):
-            cols = _get_table_columns(conn, "bot_decisions")
-            date_col = "date" if "date" in cols else ("report_date" if "report_date" in cols else None)
-            if date_col and "status" in cols and "bot_id" in cols:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        UPDATE bot_decisions
-                        SET status='executed',
-                            updated_at=NOW()
-                        WHERE user_id=%s
-                          AND bot_id=%s
-                          AND {date_col}=%s
-                        """,
-                        (user_id, bot_id, run_date),
-                    )
+        with conn.cursor() as cur:
+            # 1) decision -> executed
+            cur.execute(
+                """
+                UPDATE bot_decisions
+                SET status='executed',
+                    updated_at=NOW()
+                WHERE user_id=%s
+                  AND bot_id=%s
+                  AND decision_date=%s
+                """,
+                (user_id, bot_id, run_date),
+            )
 
-        # --- bot_orders
-        if _table_exists(conn, "bot_orders"):
-            cols = _get_table_columns(conn, "bot_orders")
-            date_col = "date" if "date" in cols else ("report_date" if "report_date" in cols else None)
-            if date_col and "status" in cols and "bot_id" in cols:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        UPDATE bot_orders
-                        SET status='executed'
-                        WHERE user_id=%s
-                          AND bot_id=%s
-                          AND {date_col}=%s
-                        """,
-                        (user_id, bot_id, run_date),
-                    )
+            # 2) haal decision_id (nodig voor orders)
+            cur.execute(
+                """
+                SELECT id
+                FROM bot_decisions
+                WHERE user_id=%s
+                  AND bot_id=%s
+                  AND decision_date=%s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (user_id, bot_id, run_date),
+            )
+            drow = cur.fetchone()
+            decision_id = drow[0] if drow else None
 
-        # --- bot_executions (optioneel)
-        if _table_exists(conn, "bot_executions"):
-            cols = _get_table_columns(conn, "bot_executions")
+            bot_order_id = None
 
-            payload = {}
-            if "user_id" in cols:
-                payload["user_id"] = user_id
-            if "bot_id" in cols:
-                payload["bot_id"] = bot_id
-            if "date" in cols:
-                payload["date"] = run_date
-
-            if "symbol" in cols and symbol:
-                payload["symbol"] = symbol
-            if "side" in cols and side:
-                payload["side"] = side
-            if "amount_eur" in cols and amount_eur is not None:
-                payload["amount_eur"] = float(amount_eur)
-            if "price" in cols and price is not None:
-                payload["price"] = float(price)
-            if "exchange" in cols and exchange:
-                payload["exchange"] = exchange
-            if "notes" in cols and notes:
-                payload["notes"] = notes
-
-            if "created_at" in cols:
-                payload["created_at"] = datetime.utcnow()
-            if "timestamp" in cols and "created_at" not in cols:
-                payload["timestamp"] = datetime.utcnow()
-
-            if payload:
-                keys = list(payload.keys())
-                vals = [payload[k] for k in keys]
-                placeholders = ", ".join(["%s"] * len(keys))
-
-                conflict = None
-                if {"user_id", "bot_id", "date"}.issubset(set(cols)):
-                    conflict = "(user_id, bot_id, date)"
-
-                if conflict:
-                    updates = ", ".join([f"{k}=EXCLUDED.{k}" for k in keys if k not in ("user_id", "bot_id", "date")])
-                    sql = f"""
-                        INSERT INTO bot_executions ({", ".join(keys)})
-                        VALUES ({placeholders})
-                        ON CONFLICT {conflict}
-                        DO UPDATE SET {updates}
+            # 3) orders -> filled (NIET executed!)
+            if decision_id and _table_exists(conn, "bot_orders"):
+                cur.execute(
                     """
-                else:
-                    sql = f"""
-                        INSERT INTO bot_executions ({", ".join(keys)})
-                        VALUES ({placeholders})
-                    """
+                    UPDATE bot_orders
+                    SET status='filled',
+                        updated_at=NOW()
+                    WHERE user_id=%s
+                      AND bot_id=%s
+                      AND decision_id=%s
+                    RETURNING id
+                    """,
+                    (user_id, bot_id, decision_id),
+                )
+                orow = cur.fetchone()
+                bot_order_id = orow[0] if orow else None
 
-                with conn.cursor() as cur:
-                    cur.execute(sql, tuple(vals))
+            # 4) executions record (koppelt aan bot_order_id)
+            if bot_order_id and _table_exists(conn, "bot_executions"):
+                raw = {"notes": notes, "price": price}
+
+                cur.execute(
+                    """
+                    INSERT INTO bot_executions
+                      (user_id, bot_order_id, exchange, status, avg_fill_price, raw_response, created_at, updated_at)
+                    VALUES (%s, %s, %s, 'filled', %s, %s, NOW(), NOW())
+                    ON CONFLICT (bot_order_id)
+                    DO UPDATE SET
+                      exchange=EXCLUDED.exchange,
+                      status='filled',
+                      avg_fill_price=EXCLUDED.avg_fill_price,
+                      raw_response=EXCLUDED.raw_response,
+                      updated_at=NOW()
+                    """,
+                    (
+                        user_id,
+                        bot_order_id,
+                        exchange,
+                        float(price) if price is not None else None,
+                        json.dumps(raw),
+                    ),
+                )
 
         conn.commit()
         return {"ok": True, "bot_id": bot_id, "date": str(run_date), "status": "executed"}
@@ -520,63 +599,54 @@ async def skip_bot_today(
         except Exception:
             raise HTTPException(status_code=400, detail="❌ report_date moet YYYY-MM-DD zijn.")
 
-    notes = body.get("notes")
-
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="❌ DB niet beschikbaar.")
 
     try:
-        # --- bot_decisions
-        if _table_exists(conn, "bot_decisions"):
-            cols = _get_table_columns(conn, "bot_decisions")
-            date_col = "date" if "date" in cols else ("report_date" if "report_date" in cols else None)
+        with conn.cursor() as cur:
+            # 1) decision -> skipped
+            cur.execute(
+                """
+                UPDATE bot_decisions
+                SET status='skipped',
+                    updated_at=NOW()
+                WHERE user_id=%s
+                  AND bot_id=%s
+                  AND decision_date=%s
+                """,
+                (user_id, bot_id, run_date),
+            )
 
-            if date_col and "status" in cols and "bot_id" in cols:
-                with conn.cursor() as cur:
-                    if "notes" in cols and notes:
-                        cur.execute(
-                            f"""
-                            UPDATE bot_decisions
-                            SET status='skipped',
-                                notes=%s,
-                                updated_at=NOW()
-                            WHERE user_id=%s
-                              AND bot_id=%s
-                              AND {date_col}=%s
-                            """,
-                            (notes, user_id, bot_id, run_date),
-                        )
-                    else:
-                        cur.execute(
-                            f"""
-                            UPDATE bot_decisions
-                            SET status='skipped',
-                                updated_at=NOW()
-                            WHERE user_id=%s
-                              AND bot_id=%s
-                              AND {date_col}=%s
-                            """,
-                            (user_id, bot_id, run_date),
-                        )
+            # 2) decision_id ophalen
+            cur.execute(
+                """
+                SELECT id
+                FROM bot_decisions
+                WHERE user_id=%s
+                  AND bot_id=%s
+                  AND decision_date=%s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (user_id, bot_id, run_date),
+            )
+            drow = cur.fetchone()
+            decision_id = drow[0] if drow else None
 
-        # --- bot_orders
-        if _table_exists(conn, "bot_orders"):
-            cols = _get_table_columns(conn, "bot_orders")
-            date_col = "date" if "date" in cols else ("report_date" if "report_date" in cols else None)
-
-            if date_col and "status" in cols and "bot_id" in cols:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"""
-                        UPDATE bot_orders
-                        SET status='skipped'
-                        WHERE user_id=%s
-                          AND bot_id=%s
-                          AND {date_col}=%s
-                        """,
-                        (user_id, bot_id, run_date),
-                    )
+            # 3) orders -> cancelled (NIET skipped!)
+            if decision_id and _table_exists(conn, "bot_orders"):
+                cur.execute(
+                    """
+                    UPDATE bot_orders
+                    SET status='cancelled',
+                        updated_at=NOW()
+                    WHERE user_id=%s
+                      AND bot_id=%s
+                      AND decision_id=%s
+                    """,
+                    (user_id, bot_id, decision_id),
+                )
 
         conn.commit()
         return {"ok": True, "bot_id": bot_id, "date": str(run_date), "status": "skipped"}
