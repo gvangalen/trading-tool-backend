@@ -157,6 +157,17 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
+    # 6️⃣.5 🤖 TRADING BOT (PER USER)
+    # =====================================================
+    "dispatch_trading_bot": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+        "schedule": crontab(hour=4, minute=20),
+        "kwargs": {
+            "task_name": "backend.celery_task.trading_bot_task.run_daily_trading_bot"
+        },
+    },
+
+    # =====================================================
     # 7️⃣ DAILY REPORT
     # =====================================================
     "dispatch_daily_report": {
@@ -181,6 +192,7 @@ try:
     import backend.celery_task.store_daily_scores_task
     import backend.celery_task.setup_task
     import backend.celery_task.strategy_task
+    import backend.celery_task.trading_bot_task
     import backend.celery_task.daily_report_task
 
     logger.info("✅ Alle Celery TASKS succesvol geïmporteerd")
