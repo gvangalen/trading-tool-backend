@@ -577,6 +577,66 @@ async def mark_bot_executed(
 
 
 # =====================================
+# ⏭️ BOT CONFIG
+# =====================================
+@router.post("/bot/configs")
+async def create_bot_config(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+    body = await request.json()
+
+    name = body.get("name")
+    symbol = body.get("symbol", "BTC")
+    mode = body.get("mode", "manual")
+    active = body.get("active", True)
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Bot name is verplicht")
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO bot_configs (
+                    user_id,
+                    name,
+                    symbol,
+                    mode,
+                    active,
+                    created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, NOW())
+                RETURNING id
+                """,
+                (user_id, name, symbol, mode, active),
+            )
+            bot_id = cur.fetchone()[0]
+
+        conn.commit()
+        return {
+            "ok": True,
+            "bot_id": bot_id,
+            "name": name,
+            "symbol": symbol,
+            "mode": mode,
+            "active": active,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        logger.error("❌ create bot error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Bot aanmaken mislukt")
+    finally:
+        conn.close()
+
+
+# =====================================
 # ⏭️ SKIP TODAY
 # =====================================
 @router.post("/bot/skip")
