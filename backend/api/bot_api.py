@@ -577,7 +577,7 @@ async def mark_bot_executed(
 
 
 # =====================================
-# ⏭️ BOT CONFIG
+# ⏭️ ADD BOT 
 # =====================================
 @router.post("/bot/configs")
 async def create_bot_config(
