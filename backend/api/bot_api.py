@@ -717,3 +717,77 @@ async def skip_bot_today(
         raise HTTPException(status_code=500, detail="Bot skip mislukt.")
     finally:
         conn.close()
+
+@router.put("/bot/configs/{bot_id}")
+async def update_bot_config(
+    bot_id: int,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+    body = await request.json()
+
+    name = body.get("name")
+    symbol = body.get("symbol")
+    mode = body.get("mode")
+    active = body.get("active", True)
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE bot_configs
+                SET name=%s,
+                    symbol=%s,
+                    mode=%s,
+                    active=%s,
+                    updated_at=NOW()
+                WHERE id=%s
+                  AND user_id=%s
+                """,
+                (name, symbol, mode, active, bot_id, user_id),
+            )
+
+        conn.commit()
+        return {"ok": True, "bot_id": bot_id}
+
+    except Exception:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail="Bot bijwerken mislukt")
+    finally:
+        conn.close()
+
+@router.delete("/bot/configs/{bot_id}")
+async def delete_bot_config(
+    bot_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM bot_configs
+                WHERE id=%s
+                  AND user_id=%s
+                """,
+                (bot_id, user_id),
+            )
+
+        conn.commit()
+        return {"ok": True, "bot_id": bot_id}
+
+    except Exception:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail="Bot verwijderen mislukt")
+    finally:
+        conn.close()
