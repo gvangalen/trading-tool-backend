@@ -590,7 +590,7 @@ async def create_bot_config(
     name = body.get("name")
     symbol = body.get("symbol", "BTC")
     mode = body.get("mode", "manual")
-    active = body.get("active", True)
+    is_active = body.get("is_active", True)
 
     if not name:
         raise HTTPException(status_code=400, detail="Bot name is verplicht")
@@ -608,13 +608,14 @@ async def create_bot_config(
                     name,
                     symbol,
                     mode,
-                    active,
-                    created_at
+                    is_active,
+                    created_at,
+                    updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
                 RETURNING id
                 """,
-                (user_id, name, symbol, mode, active),
+                (user_id, name, symbol, mode, is_active),
             )
             bot_id = cur.fetchone()[0]
 
@@ -625,7 +626,7 @@ async def create_bot_config(
             "name": name,
             "symbol": symbol,
             "mode": mode,
-            "active": active,
+            "is_active": is_active,
         }
 
     except Exception as e:
@@ -730,7 +731,10 @@ async def update_bot_config(
     name = body.get("name")
     symbol = body.get("symbol")
     mode = body.get("mode")
-    active = body.get("active", True)
+    is_active = body.get("is_active", True)
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Bot name is verplicht")
 
     conn = get_db_connection()
     if not conn:
@@ -744,19 +748,20 @@ async def update_bot_config(
                 SET name=%s,
                     symbol=%s,
                     mode=%s,
-                    active=%s,
+                    is_active=%s,
                     updated_at=NOW()
                 WHERE id=%s
                   AND user_id=%s
                 """,
-                (name, symbol, mode, active, bot_id, user_id),
+                (name, symbol, mode, is_active, bot_id, user_id),
             )
 
         conn.commit()
         return {"ok": True, "bot_id": bot_id}
 
-    except Exception:
+    except Exception as e:
         conn.rollback()
+        logger.error("❌ update bot error", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot bijwerken mislukt")
     finally:
         conn.close()
