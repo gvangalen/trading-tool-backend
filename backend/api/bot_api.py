@@ -590,10 +590,13 @@ async def create_bot_config(
     name = body.get("name")
     symbol = body.get("symbol", "BTC")
     mode = body.get("mode", "manual")
-    is_active = body.get("is_active", True)
+    bot_type = body.get("bot_type")  # 🔥 VERPLICHT
 
     if not name:
         raise HTTPException(status_code=400, detail="Bot name is verplicht")
+
+    if bot_type not in ["dca", "swing", "trade"]:
+        raise HTTPException(status_code=400, detail="Ongeldig bot_type")
 
     conn = get_db_connection()
     if not conn:
@@ -606,16 +609,16 @@ async def create_bot_config(
                 INSERT INTO bot_configs (
                     user_id,
                     name,
+                    bot_type,
                     symbol,
                     mode,
-                    is_active,
                     created_at,
                     updated_at
                 )
                 VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
                 RETURNING id
                 """,
-                (user_id, name, symbol, mode, is_active),
+                (user_id, name, bot_type, symbol, mode),
             )
             bot_id = cur.fetchone()[0]
 
@@ -624,14 +627,13 @@ async def create_bot_config(
             "ok": True,
             "bot_id": bot_id,
             "name": name,
+            "bot_type": bot_type,
             "symbol": symbol,
             "mode": mode,
-            "is_active": is_active,
         }
 
-    except Exception as e:
+    except Exception:
         conn.rollback()
-        logger.error("❌ create bot error", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot aanmaken mislukt")
     finally:
         conn.close()
@@ -731,10 +733,10 @@ async def update_bot_config(
     name = body.get("name")
     symbol = body.get("symbol")
     mode = body.get("mode")
-    is_active = body.get("is_active", True)
+    bot_type = body.get("bot_type")
 
-    if not name:
-        raise HTTPException(status_code=400, detail="Bot name is verplicht")
+    if bot_type not in ["dca", "swing", "trade"]:
+        raise HTTPException(status_code=400, detail="Ongeldig bot_type")
 
     conn = get_db_connection()
     if not conn:
@@ -745,23 +747,23 @@ async def update_bot_config(
             cur.execute(
                 """
                 UPDATE bot_configs
-                SET name=%s,
+                SET
+                    name=%s,
                     symbol=%s,
                     mode=%s,
-                    is_active=%s,
+                    bot_type=%s,
                     updated_at=NOW()
                 WHERE id=%s
                   AND user_id=%s
                 """,
-                (name, symbol, mode, is_active, bot_id, user_id),
+                (name, symbol, mode, bot_type, bot_id, user_id),
             )
 
         conn.commit()
         return {"ok": True, "bot_id": bot_id}
 
-    except Exception as e:
+    except Exception:
         conn.rollback()
-        logger.error("❌ update bot error", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot bijwerken mislukt")
     finally:
         conn.close()
