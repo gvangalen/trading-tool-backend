@@ -93,13 +93,17 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
               b.created_at,
               b.updated_at,
 
-              s.id AS strategy_id,
-              s.name AS strategy_name,
-              s.strategy_type,
-              s.symbol,
-              s.timeframe
+              s.id            AS strategy_id,
+              s.strategy_type AS strategy_type,
+
+              st.id           AS setup_id,
+              st.name         AS setup_name,
+              st.symbol       AS symbol,
+              st.timeframe    AS timeframe
+
             FROM bot_configs b
             LEFT JOIN strategies s ON s.id = b.strategy_id
+            LEFT JOIN setups st    ON st.id = s.setup_id
             WHERE b.user_id = %s
             ORDER BY b.id ASC
             """,
@@ -119,11 +123,23 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                 created_at,
                 updated_at,
                 strategy_id,
-                strategy_name,
                 strategy_type,
+                setup_id,
+                setup_name,
                 symbol,
                 timeframe,
             ) = r
+
+            strategy = None
+            if strategy_id:
+                strategy = {
+                    "id": strategy_id,
+                    "name": setup_name or f"{strategy_type.upper()} strategy",
+                    "type": strategy_type,
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "setup_id": setup_id,
+                }
 
             out.append(
                 {
@@ -134,17 +150,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                     "cadence": cadence,
                     "created_at": created_at,
                     "updated_at": updated_at,
-                    "strategy": (
-                        {
-                            "id": strategy_id,
-                            "name": strategy_name,
-                            "type": strategy_type,
-                            "symbol": symbol,
-                            "timeframe": timeframe,
-                        }
-                        if strategy_id
-                        else None
-                    ),
+                    "strategy": strategy,
                 }
             )
 
@@ -155,7 +161,6 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Bot configs ophalen mislukt.")
     finally:
         conn.close()
-
 
 # =====================================
 # 📄 BOT TODAY (decisions + orders)
