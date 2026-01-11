@@ -79,67 +79,72 @@ def _get_table_columns(conn, table_name: str):
 @router.get("/bot/configs")
 async def get_bot_configs(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
-    logger.info(f"🤖 [get/configs] bot_configs voor user_id={user_id}")
 
     conn, cur = get_db_cursor()
     try:
-        if not _table_exists(conn, "bot_configs"):
-            return []
-
         cur.execute(
             """
             SELECT
-              id,
-              name,
-              bot_type,
-              symbol,
-              is_active,
-              mode,
-              cadence,
-              rules_json,
-              allocation_json,
-              risk_json,
-              created_at,
-              updated_at
-            FROM bot_configs
-            WHERE user_id=%s
-            ORDER BY id ASC
+              b.id,
+              b.name,
+              b.is_active,
+              b.mode,
+              b.cadence,
+              b.created_at,
+              b.updated_at,
+
+              s.id AS strategy_id,
+              s.name AS strategy_name,
+              s.strategy_type,
+              s.symbol,
+              s.timeframe
+            FROM bot_configs b
+            LEFT JOIN strategies s ON s.id = b.strategy_id
+            WHERE b.user_id = %s
+            ORDER BY b.id ASC
             """,
             (user_id,),
         )
-        rows = cur.fetchall()
 
+        rows = cur.fetchall()
         out = []
+
         for r in rows:
             (
                 bot_id,
                 name,
-                bot_type,
-                symbol,
                 is_active,
                 mode,
                 cadence,
-                rules_json,
-                allocation_json,
-                risk_json,
                 created_at,
                 updated_at,
+                strategy_id,
+                strategy_name,
+                strategy_type,
+                symbol,
+                timeframe,
             ) = r
 
             out.append(
                 {
                     "id": bot_id,
                     "name": name,
-                    "bot_type": bot_type,
-                    "symbol": symbol,
                     "is_active": bool(is_active),
                     "mode": mode,
                     "cadence": cadence,
-                    "rules": rules_json or {},
-                    "allocation": allocation_json or {},
-                    "risk": risk_json or {},
                     "created_at": created_at,
                     "updated_at": updated_at,
+                    "strategy": (
+                        {
+                            "id": strategy_id,
+                            "name": strategy_name,
+                            "type": strategy_type,
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                        }
+                        if strategy_id
+                        else None
+                    ),
                 }
             )
 
@@ -588,15 +593,14 @@ async def create_bot_config(
     body = await request.json()
 
     name = body.get("name")
-    symbol = body.get("symbol", "BTC")
+    strategy_id = body.get("strategy_id")
     mode = body.get("mode", "manual")
-    bot_type = body.get("bot_type")  # 🔥 VERPLICHT
 
     if not name:
-        raise HTTPException(status_code=400, detail="Bot name is verplicht")
+        raise HTTPException(status_code=400, detail="Bot naam is verplicht")
 
-    if bot_type not in ["dca", "swing", "trade"]:
-        raise HTTPException(status_code=400, detail="Ongeldig bot_type")
+    if not strategy_id:
+        raise HTTPException(status_code=400, detail="strategy_id is verplicht")
 
     conn = get_db_connection()
     if not conn:
@@ -609,35 +613,33 @@ async def create_bot_config(
                 INSERT INTO bot_configs (
                     user_id,
                     name,
-                    bot_type,
-                    symbol,
+                    strategy_id,
                     mode,
                     created_at,
                     updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, NOW(), NOW())
                 RETURNING id
                 """,
-                (user_id, name, bot_type, symbol, mode),
+                (user_id, name, strategy_id, mode),
             )
             bot_id = cur.fetchone()[0]
 
         conn.commit()
         return {
             "ok": True,
-            "bot_id": bot_id,
+            "id": bot_id,
             "name": name,
-            "bot_type": bot_type,
-            "symbol": symbol,
+            "strategy_id": strategy_id,
             "mode": mode,
         }
 
-    except Exception:
+    except Exception as e:
         conn.rollback()
+        logger.error(f"❌ create bot error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot aanmaken mislukt")
     finally:
         conn.close()
-
 
 # =====================================
 # ⏭️ SKIP TODAY
@@ -721,6 +723,9 @@ async def skip_bot_today(
     finally:
         conn.close()
 
+# =====================================
+# ⏭️ UPDATE BOT 
+# =====================================
 @router.put("/bot/configs/{bot_id}")
 async def update_bot_config(
     bot_id: int,
@@ -731,12 +736,11 @@ async def update_bot_config(
     body = await request.json()
 
     name = body.get("name")
-    symbol = body.get("symbol")
+    strategy_id = body.get("strategy_id")
     mode = body.get("mode")
-    bot_type = body.get("bot_type")
 
-    if bot_type not in ["dca", "swing", "trade"]:
-        raise HTTPException(status_code=400, detail="Ongeldig bot_type")
+    if not strategy_id:
+        raise HTTPException(status_code=400, detail="strategy_id is verplicht")
 
     conn = get_db_connection()
     if not conn:
@@ -748,26 +752,29 @@ async def update_bot_config(
                 """
                 UPDATE bot_configs
                 SET
-                    name=%s,
-                    symbol=%s,
-                    mode=%s,
-                    bot_type=%s,
-                    updated_at=NOW()
-                WHERE id=%s
-                  AND user_id=%s
+                    name = %s,
+                    strategy_id = %s,
+                    mode = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                  AND user_id = %s
                 """,
-                (name, symbol, mode, bot_type, bot_id, user_id),
+                (name, strategy_id, mode, bot_id, user_id),
             )
 
         conn.commit()
         return {"ok": True, "bot_id": bot_id}
 
-    except Exception:
+    except Exception as e:
         conn.rollback()
+        logger.error(f"❌ update bot error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot bijwerken mislukt")
     finally:
         conn.close()
 
+# =====================================
+# ⏭️ DELETE BOT 
+# =====================================
 @router.delete("/bot/configs/{bot_id}")
 async def delete_bot_config(
     bot_id: int,
