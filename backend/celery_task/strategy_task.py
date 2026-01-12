@@ -494,6 +494,7 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
 @shared_task(name="backend.celery_task.strategy_task.run_daily_strategy_snapshot")
 def run_daily_strategy_snapshot(user_id: int):
     logger.info(f"🟡 Daily strategy snapshot | user={user_id}")
+
     conn = get_db_connection()
     if not conn:
         logger.error("❌ Geen databaseverbinding")
@@ -501,7 +502,7 @@ def run_daily_strategy_snapshot(user_id: int):
 
     try:
         # ==================================================
-        # 1️⃣ Best-of-day setup
+        # 1️⃣ Best-of-day setup bepalen
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -525,12 +526,11 @@ def run_daily_strategy_snapshot(user_id: int):
         setup = load_setup_from_db(setup_id, user_id)
 
         # ==================================================
-        # 🔥 DCA SPLIT (DIT IS DE FIX)
+        # 🔥 DCA SPLIT — aparte flow
         # ==================================================
         if setup.get("strategy_type") == "dca":
             return run_dca_strategy_snapshot(user_id, setup)
 
-        
         # ==================================================
         # 2️⃣ Market context (scores van vandaag)
         # ==================================================
@@ -558,17 +558,15 @@ def run_daily_strategy_snapshot(user_id: int):
         }
 
         # ==================================================
-        # 3️⃣ Setup + base strategy
+        # 3️⃣ Setup + bestaande base strategy
         # ==================================================
-        setup = load_setup_from_db(setup_id, user_id)
         base_strategy = load_latest_strategy(setup_id, user_id)
-
         if not base_strategy:
             logger.warning("⚠️ Geen base strategy gevonden")
             return
 
         # ==================================================
-        # 4️⃣ AI adjustment (SUBTIEL)
+        # 4️⃣ AI adjustment (subtiele aanpassing)
         # ==================================================
         adjustment = adjust_strategy_for_today(
             base_strategy=base_strategy,
@@ -581,27 +579,24 @@ def run_daily_strategy_snapshot(user_id: int):
             return
 
         # ==================================================
-        # 5️⃣ FALLBACK LOGICA (DIT WAS DE BUG 🔥)
+        # 5️⃣ Fallback-logica (NOOIT lege DB-velden)
         # ==================================================
         entry_value = adjustment.get("entry")
         targets_value = adjustment.get("targets")
         stop_value = adjustment.get("stop_loss")
 
-        # Entry → fallback naar bestaande strategy
         if entry_value is None:
             entry_value = base_strategy.get("entry")
 
-        # Targets zijn verplicht
         if not targets_value:
             logger.warning("⚠️ Geen targets uit AI — snapshot overgeslagen")
             return
 
-        # Stop-loss → fallback
         if stop_value is None:
             stop_value = base_strategy.get("stop_loss")
 
         # ==================================================
-        # 6️⃣ Type-safety voor DB
+        # 6️⃣ TYPE-SAFETY & NORMALISATIE (BELANGRIJK)
         # ==================================================
         entry_num = safe_numeric(entry_value)
         stop_num = safe_numeric(stop_value)
@@ -610,7 +605,7 @@ def run_daily_strategy_snapshot(user_id: int):
         )
 
         # ==================================================
-        # 7️⃣ Snapshot opslaan
+        # 7️⃣ Snapshot opslaan (DB)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -628,9 +623,9 @@ def run_daily_strategy_snapshot(user_id: int):
                     market_context,
                     changes
                 ) VALUES (
-                    %s,%s,%s,CURRENT_DATE,
-                    %s,%s,%s,
-                    %s,%s,
+                    %s, %s, %s, CURRENT_DATE,
+                    %s, %s, %s,
+                    %s, %s,
                     %s::jsonb,
                     %s::jsonb
                 )
@@ -660,10 +655,11 @@ def run_daily_strategy_snapshot(user_id: int):
             )
 
         # ==================================================
-        # 8️⃣ STRATEGY AI INSIGHT (dashboard card)
+        # 8️⃣ STRATEGY AI INSIGHT (dashboard kaart)
         # ==================================================
         analysis = analyze_strategies(
-            [
+            user_id=user_id,
+            strategies=[
                 {
                     "setup_id": setup_id,
                     "strategy_id": base_strategy["strategy_id"],
@@ -672,7 +668,7 @@ def run_daily_strategy_snapshot(user_id: int):
                     "stop_loss": stop_value,
                     "confidence_score": confidence,
                 }
-            ]
+            ],
         )
 
         if analysis:
@@ -694,7 +690,7 @@ def run_daily_strategy_snapshot(user_id: int):
                         date
                     ) VALUES (
                         'strategy',
-                        %s,%s,%s,%s,%s,%s,%s::jsonb,CURRENT_DATE
+                        %s, %s, %s, %s, %s, %s, %s::jsonb, CURRENT_DATE
                     )
                     ON CONFLICT (user_id, category, date)
                     DO UPDATE SET
