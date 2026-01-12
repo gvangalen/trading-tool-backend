@@ -741,11 +741,13 @@ async def update_bot_config(
     body = await request.json()
 
     name = body.get("name")
-    strategy_id = body.get("strategy_id")
     mode = body.get("mode")
 
-    if not strategy_id:
-        raise HTTPException(status_code=400, detail="strategy_id is verplicht")
+    if not name:
+        raise HTTPException(status_code=400, detail="Bot naam is verplicht")
+
+    if mode not in ("manual", "semi", "auto"):
+        raise HTTPException(status_code=400, detail="Ongeldige mode")
 
     conn = get_db_connection()
     if not conn:
@@ -758,18 +760,22 @@ async def update_bot_config(
                 UPDATE bot_configs
                 SET
                     name = %s,
-                    strategy_id = %s,
                     mode = %s,
                     updated_at = NOW()
                 WHERE id = %s
                   AND user_id = %s
                 """,
-                (name, strategy_id, mode, bot_id, user_id),
+                (name, mode, bot_id, user_id),
             )
+
+            if cur.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Bot niet gevonden")
 
         conn.commit()
         return {"ok": True, "bot_id": bot_id}
 
+    except HTTPException:
+        raise
     except Exception as e:
         conn.rollback()
         logger.error(f"❌ update bot error: {e}", exc_info=True)
