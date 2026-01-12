@@ -310,7 +310,7 @@ def analyze_strategy(user_id: int, strategy_id: int):
             "created_at",
         ]
         if "risk_reward" in cols:
-            select_fields.insert(5, "risk_reward")  # na stop_loss
+            select_fields.insert(5, "risk_reward")
 
         query = f"""
             SELECT {", ".join(select_fields)}
@@ -322,48 +322,45 @@ def analyze_strategy(user_id: int, strategy_id: int):
             cur.execute(query, (strategy_id, user_id))
             row = cur.fetchone()
 
-        # ✅ NOOIT stil returnen
         if not row:
-            logger.error(f"❌ Strategy niet gevonden | strategy_id={strategy_id} user_id={user_id}")
-            raise ValueError("Strategy niet gevonden voor deze user")
+            raise ValueError("Strategy niet gevonden")
 
         row_map = dict(zip(select_fields, row))
 
         payload = [
             {
-                "strategy_id": row_map.get("id"),
-                "setup_id": row_map.get("setup_id"),
-                "entry": row_map.get("entry"),
-                "targets": row_map.get("target").split(",") if row_map.get("target") else [],
-                "stop_loss": row_map.get("stop_loss"),
+                "strategy_id": row_map["id"],
+                "setup_id": row_map["setup_id"],
+                "entry": row_map["entry"],
+                "targets": row_map["target"].split(",") if row_map["target"] else [],
+                "stop_loss": row_map["stop_loss"],
                 "risk_reward": row_map.get("risk_reward"),
-                "explanation": row_map.get("explanation"),
-                "data": safe_json(row_map.get("data")),
-                "created_at": row_map.get("created_at").isoformat() if row_map.get("created_at") else None,
+                "explanation": row_map["explanation"],
+                "data": safe_json(row_map["data"]),
+                "created_at": row_map["created_at"].isoformat()
+                if row_map["created_at"] else None,
             }
         ]
 
-        # ✅ PAYLOAD LOGGEN (zodat je ziet wat naar AI gaat)
         logger.info("🚀 AI analyse payload:")
         logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
 
-        analysis = analyze_strategies(payload)
+        # 🔧 FIX: user_id EXPLICIET meegeven
+        analysis = analyze_strategies(
+            user_id=user_id,
+            strategies=payload,
+        )
 
-        # ✅ NOOIT stil returnen
         if not analysis:
-            logger.error("❌ AI analyse faalde: analyze_strategies() gaf None terug")
-            raise RuntimeError("AI analyse faalde (None)")
-
-        logger.info("🧠 AI analyse result:")
-        logger.info(json.dumps(analysis, indent=2, ensure_ascii=False))
+            raise RuntimeError("AI analyse gaf None terug")
 
         explanation_text = (
-            f"{analysis.get('comment', '')}\n\n{analysis.get('recommendation', '')}"
+            f"{analysis.get('comment', '')}\n\n"
+            f"{analysis.get('recommendation', '')}"
         ).strip()
 
         if not explanation_text:
-            logger.error("❌ AI analyse gaf lege uitleg terug")
-            raise RuntimeError("AI gaf lege explanation terug")
+            raise RuntimeError("Lege AI explanation")
 
         with conn.cursor() as cur:
             cur.execute(
@@ -380,52 +377,31 @@ def analyze_strategy(user_id: int, strategy_id: int):
                 (json.dumps(explanation_text), strategy_id, user_id),
             )
 
-            if cur.rowcount == 0:
-                logger.error("❌ Update faalde: rowcount=0 (ownership mismatch?)")
-                raise RuntimeError("DB update faalde (rowcount=0)")
-
         conn.commit()
-        logger.info("✅ Strategy AI explanation opgeslagen → data.ai_explanation")
+        logger.info("✅ Strategy AI explanation opgeslagen")
 
-        return {"success": True, "strategy_id": strategy_id}
+        return {"success": True}
 
     except Exception:
         logger.exception("❌ analyze_strategy crash")
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        conn.rollback()
         raise
     finally:
         conn.close()
 
 def run_dca_strategy_snapshot(user_id: int, setup: dict):
-    """
-    Dagelijkse DCA snapshot:
-    - GEEN targets
-    - GEEN stop-loss
-    - Entry = referentie (contextueel)
-    - Wel AI confidence + uitleg
-    - Wel dashboard AI insight (category = strategy)
-    """
-
     logger.info(f"🟢 DCA snapshot gestart | user={user_id} setup={setup['id']}")
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen databaseverbinding (DCA snapshot)")
         return
 
     try:
-        # ==================================================
-        # 1️⃣ Market context (scores van vandaag)
-        # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT macro_score, technical_score, market_score
                 FROM daily_scores
-                WHERE user_id = %s
-                  AND report_date = CURRENT_DATE
+                WHERE user_id = %s AND report_date = CURRENT_DATE
                 LIMIT 1;
                 """,
                 (user_id,),
@@ -433,7 +409,6 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
             scores = cur.fetchone()
 
         if not scores:
-            logger.warning("⚠️ Geen daily_scores gevonden (DCA)")
             return
 
         market_context = {
@@ -442,37 +417,24 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
             "market_score": float(scores[2]) if scores[2] is not None else None,
         }
 
-        # ==================================================
-        # 2️⃣ Laatste strategy laden (DCA heeft vaak geen entry)
-        # ==================================================
         base_strategy = load_latest_strategy(setup["id"], user_id)
-
         if not base_strategy:
-            logger.warning("⚠️ Geen base DCA strategy gevonden")
             return
 
-        # ==================================================
-        # 3️⃣ AI adjustment (DCA-context)
-        # ==================================================
         adjustment = adjust_strategy_for_today(
             base_strategy=base_strategy,
             setup=setup,
             market_context=market_context,
         )
-
         if not adjustment:
-            logger.warning("⚠️ Geen AI adjustment ontvangen (DCA)")
             return
 
-        confidence = safe_confidence(
-            adjustment.get("confidence_score"), fallback=50
-        )
+        confidence = safe_confidence(adjustment.get("confidence_score"), 50)
 
-        # ==================================================
-        # 4️⃣ STRATEGY AI INSIGHT (dashboard)
-        # ==================================================
+        # 🔧 FIX: user_id meegeven
         analysis = analyze_strategies(
-            [
+            user_id=user_id,
+            strategies=[
                 {
                     "setup_id": setup["id"],
                     "strategy_type": "dca",
@@ -480,71 +442,48 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
                     "market_context": market_context,
                     "adjustment_reason": adjustment.get("adjustment_reason"),
                 }
-            ]
+            ],
         )
 
-        if analysis:
-            trend = "Actief" if confidence >= 60 else "Neutraal"
-            bias = "Accumuleer" if confidence >= 60 else "Rustig opbouwen"
+        if not analysis:
+            return
 
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO ai_category_insights (
-                        category,
-                        user_id,
-                        avg_score,
-                        trend,
-                        bias,
-                        risk,
-                        summary,
-                        top_signals,
-                        date
-                    ) VALUES (
-                        'strategy',
-                        %s,%s,%s,%s,%s,%s,%s::jsonb,CURRENT_DATE
-                    )
-                    ON CONFLICT (user_id, category, date)
-                    DO UPDATE SET
-                        avg_score = EXCLUDED.avg_score,
-                        trend = EXCLUDED.trend,
-                        bias = EXCLUDED.bias,
-                        risk = EXCLUDED.risk,
-                        summary = EXCLUDED.summary,
-                        top_signals = EXCLUDED.top_signals,
-                        created_at = NOW();
-                    """,
-                    (
-                        user_id,
-                        confidence,
-                        trend,
-                        bias,
-                        "Laag",
-                        analysis.get(
-                            "comment",
-                            "DCA evaluatie op basis van marktcontext"
-                        ),
-                        json.dumps(
-                            [
-                                analysis.get(
-                                    "recommendation",
-                                    "Blijf consistent accumuleren."
-                                )
-                            ],
-                            ensure_ascii=False,
-                        ),
-                    ),
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ai_category_insights (
+                    category, user_id, avg_score,
+                    trend, bias, risk,
+                    summary, top_signals, date
                 )
+                VALUES (
+                    'strategy', %s, %s,
+                    %s, %s, %s,
+                    %s, %s::jsonb, CURRENT_DATE
+                )
+                ON CONFLICT (user_id, category, date)
+                DO UPDATE SET
+                    summary = EXCLUDED.summary,
+                    top_signals = EXCLUDED.top_signals,
+                    created_at = NOW();
+                """,
+                (
+                    user_id,
+                    confidence,
+                    "Actief" if confidence >= 60 else "Neutraal",
+                    "Accumuleer" if confidence >= 60 else "Rustig",
+                    "Laag",
+                    analysis["comment"],
+                    json.dumps([analysis["recommendation"]]),
+                ),
+            )
 
         conn.commit()
-        logger.info("✅ DCA snapshot + AI insight opgeslagen")
+        logger.info("✅ DCA AI insight opgeslagen")
 
     except Exception:
         logger.error("❌ DCA snapshot fout", exc_info=True)
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        conn.rollback()
     finally:
         conn.close()
 
