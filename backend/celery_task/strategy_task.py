@@ -422,6 +422,7 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
             return
 
         adjustment = adjust_strategy_for_today(
+            user_id=user_id,
             base_strategy=base_strategy,
             setup=setup,
             market_context=market_context,
