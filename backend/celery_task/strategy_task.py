@@ -391,17 +391,23 @@ def analyze_strategy(user_id: int, strategy_id: int):
 
 def run_dca_strategy_snapshot(user_id: int, setup: dict):
     logger.info(f"🟢 DCA snapshot gestart | user={user_id} setup={setup['id']}")
+
     conn = get_db_connection()
     if not conn:
+        logger.error("❌ Geen databaseverbinding")
         return
 
     try:
+        # ==================================================
+        # 1️⃣ Scores van vandaag ophalen
+        # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT macro_score, technical_score, market_score
                 FROM daily_scores
-                WHERE user_id = %s AND report_date = CURRENT_DATE
+                WHERE user_id = %s
+                  AND report_date = CURRENT_DATE
                 LIMIT 1;
                 """,
                 (user_id,),
@@ -409,6 +415,7 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
             scores = cur.fetchone()
 
         if not scores:
+            logger.warning("⚠️ Geen daily_scores gevonden")
             return
 
         market_context = {
@@ -417,26 +424,41 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
             "market_score": float(scores[2]) if scores[2] is not None else None,
         }
 
+        # ==================================================
+        # 2️⃣ Laatste bestaande strategy laden
+        # ==================================================
         base_strategy = load_latest_strategy(setup["id"], user_id)
         if not base_strategy:
+            logger.warning("⚠️ Geen base strategy gevonden voor DCA setup")
             return
 
+        # ==================================================
+        # 3️⃣ Subtiele AI-aanpassing (🔥 user_id FIX)
+        # ==================================================
         adjustment = adjust_strategy_for_today(
-            user_id=user_id,
+            user_id=user_id,  # 🔴 CRUCIAAL — dit was de bug
             base_strategy=base_strategy,
             setup=setup,
             market_context=market_context,
         )
+
         if not adjustment:
+            logger.warning("⚠️ Geen AI adjustment ontvangen")
             return
 
-        confidence = safe_confidence(adjustment.get("confidence_score"), 50)
+        confidence = safe_confidence(
+            adjustment.get("confidence_score"),
+            fallback=50,
+        )
 
-        # 🔧 FIX: user_id meegeven
+        # ==================================================
+        # 4️⃣ Strategy AI analyse (execution & discipline)
+        # ==================================================
         analysis = analyze_strategies(
             user_id=user_id,
             strategies=[
                 {
+                    "strategy_id": base_strategy["strategy_id"],
                     "setup_id": setup["id"],
                     "strategy_type": "dca",
                     "confidence_score": confidence,
@@ -447,23 +469,40 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
         )
 
         if not analysis:
+            logger.warning("⚠️ Geen AI analyse-resultaat")
             return
 
+        # ==================================================
+        # 5️⃣ AI Category Insight opslaan (dashboard kaart)
+        # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO ai_category_insights (
-                    category, user_id, avg_score,
-                    trend, bias, risk,
-                    summary, top_signals, date
+                    category,
+                    user_id,
+                    avg_score,
+                    trend,
+                    bias,
+                    risk,
+                    summary,
+                    top_signals,
+                    date
                 )
                 VALUES (
-                    'strategy', %s, %s,
+                    'strategy',
+                    %s, %s,
                     %s, %s, %s,
-                    %s, %s::jsonb, CURRENT_DATE
+                    %s,
+                    %s::jsonb,
+                    CURRENT_DATE
                 )
                 ON CONFLICT (user_id, category, date)
                 DO UPDATE SET
+                    avg_score = EXCLUDED.avg_score,
+                    trend = EXCLUDED.trend,
+                    bias = EXCLUDED.bias,
+                    risk = EXCLUDED.risk,
                     summary = EXCLUDED.summary,
                     top_signals = EXCLUDED.top_signals,
                     created_at = NOW();
@@ -475,19 +514,24 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
                     "Accumuleer" if confidence >= 60 else "Rustig",
                     "Laag",
                     analysis["comment"],
-                    json.dumps([analysis["recommendation"]]),
+                    json.dumps(
+                        [analysis["recommendation"]],
+                        ensure_ascii=False,
+                    ),
                 ),
             )
 
         conn.commit()
-        logger.info("✅ DCA AI insight opgeslagen")
+        logger.info("✅ DCA strategy snapshot + AI insight opgeslagen")
 
     except Exception:
         logger.error("❌ DCA snapshot fout", exc_info=True)
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     finally:
         conn.close()
-
 
 # ============================================================
 # 🟡 DAGELIJKSE STRATEGY SNAPSHOT + DASHBOARD INSIGHT
