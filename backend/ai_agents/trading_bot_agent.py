@@ -69,6 +69,11 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
               b.mode,
               b.strategy_id,
 
+              COALESCE(b.budget_total_eur, 0),
+              COALESCE(b.budget_daily_limit_eur, 0),
+              COALESCE(b.budget_min_order_eur, 0),
+              COALESCE(b.budget_max_order_eur, 0),
+
               s.strategy_type,
               st.id             AS setup_id,
               st.symbol,
@@ -92,6 +97,10 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
             bot_name,
             mode,
             strategy_id,
+            budget_total_eur,
+            budget_daily_limit_eur,
+            budget_min_order_eur,
+            budget_max_order_eur,
             strategy_type,
             setup_id,
             symbol,
@@ -108,6 +117,12 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
                 "setup_id": setup_id,
                 "symbol": (symbol or DEFAULT_SYMBOL).upper(),
                 "timeframe": timeframe,
+                "budget": {
+                    "total_eur": float(budget_total_eur or 0),
+                    "daily_limit_eur": float(budget_daily_limit_eur or 0),
+                    "min_order_eur": float(budget_min_order_eur or 0),
+                    "max_order_eur": float(budget_max_order_eur or 0),
+                },
             }
         )
 
@@ -194,51 +209,57 @@ def check_bot_budget(
     bot_config: dict,
     today_spent_eur: float,
     proposed_amount_eur: float,
-) -> bool:
+):
     """
-    True = mag order plaatsen
-    False = budget overschreden
+    Returns:
+      (True, None)  -> order toegestaan
+      (False, str)  -> order geblokkeerd + reden
     """
+    budget = bot_config.get("budget") or {}
 
-    # totaal budget check
-    if bot_config["budget"]["total_eur"] > 0:
-        if today_spent_eur + proposed_amount_eur > bot_config["budget"]["total_eur"]:
-            return False
+    total_eur = float(budget.get("total_eur") or 0)
+    daily_limit_eur = float(budget.get("daily_limit_eur") or 0)
+    min_order_eur = float(budget.get("min_order_eur") or 0)
+    max_order_eur = float(budget.get("max_order_eur") or 0)
 
-    # daglimiet check
-    if bot_config["budget"]["daily_limit_eur"] > 0:
-        if today_spent_eur + proposed_amount_eur > bot_config["budget"]["daily_limit_eur"]:
-            return False
+    if proposed_amount_eur <= 0:
+        return True, None
 
-    # min / max order check
-    if bot_config["budget"]["min_order_eur"] > 0:
-        if proposed_amount_eur < bot_config["budget"]["min_order_eur"]:
-            return False
+    if total_eur > 0 and (today_spent_eur + proposed_amount_eur) > total_eur:
+        return False, "Totaal budget overschreden"
 
-    if bot_config["budget"]["max_order_eur"] > 0:
-        if proposed_amount_eur > bot_config["budget"]["max_order_eur"]:
-            return False
+    if daily_limit_eur > 0 and (today_spent_eur + proposed_amount_eur) > daily_limit_eur:
+        return False, "Daglimiet overschreden"
 
-    return True
+    if min_order_eur > 0 and proposed_amount_eur < min_order_eur:
+        return False, "Onder minimum orderbedrag"
+
+    if max_order_eur > 0 and proposed_amount_eur > max_order_eur:
+        return False, "Boven maximum orderbedrag"
+
+    return True, None
 
 # =====================================================
 # 📸 BOT TODAY SPENT
 # =====================================================
-def get_today_spent_eur(conn, user_id: int, bot_id: int, report_date):
+def get_today_spent_eur(conn, user_id: int, bot_id: int, report_date: date) -> float:
+    if not _table_exists(conn, "bot_orders"):
+        return 0.0
+
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT COALESCE(SUM(quote_amount_eur),0)
-            FROM bot_orders
-            WHERE user_id=%s
-              AND bot_id=%s
-              AND DATE(created_at)=%s
-              AND status IN ('filled','ready')
+            SELECT COALESCE(SUM(o.quote_amount_eur), 0)
+            FROM bot_orders o
+            JOIN bot_decisions d ON d.id = o.decision_id
+            WHERE o.user_id=%s
+              AND o.bot_id=%s
+              AND d.decision_date=%s
+              AND o.status IN ('ready','filled')
             """,
             (user_id, bot_id, report_date),
         )
-        return float(cur.fetchone()[0] or 0)
-
+        return float(cur.fetchone()[0] or 0.0)
 
 # =====================================================
 # 📸 BOT RECORD LEDGER
@@ -470,6 +491,24 @@ def run_trading_bot_agent(
             )
 
             decision = _decide(bot, snapshot, scores)
+
+            # 🧮 BUDGET CHECK
+            today_spent = get_today_spent_eur(
+                conn, user_id, bot["bot_id"], report_date
+            )
+
+            ok, reason = check_bot_budget(
+                bot_config=bot,
+                today_spent_eur=today_spent,
+                proposed_amount_eur=float(decision.get("amount_eur") or 0),
+            )
+
+            if not ok:
+                decision["action"] = "hold"
+                decision["confidence"] = "low"
+                decision["amount_eur"] = 0
+                decision.setdefault("reasons", [])
+                decision["reasons"].append(f"Budget blokkeert order: {reason}")
 
             decision_id = _persist_decision_and_order(
                 conn=conn,
