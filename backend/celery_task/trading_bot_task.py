@@ -24,15 +24,11 @@ def run_daily_trading_bot(user_id: int, report_date: Optional[str] = None):
     Draait de trading bot agent voor één user.
 
     Verwachting:
-    - daily_scores zijn al berekend (indien aanwezig)
+    - daily_scores zijn al berekend
     - bot_configs bestaan
     - agent schrijft:
         - bot_decisions (status = planned)
         - bot_orders (status = ready)
-
-    Wordt aangeroepen:
-    - na daily_scores_task
-    - of handmatig via API (force refresh)
     """
 
     try:
@@ -69,19 +65,19 @@ def run_daily_trading_bot(user_id: int, report_date: Optional[str] = None):
             return result
 
         decisions_count = len(result.get("decisions", []))
-        orders_count = len(result.get("orders", []))
+        bots_count = result.get("bots", 0)
 
         logger.info(
             f"✅ Trading Bot klaar | user_id={user_id} | "
-            f"decisions={decisions_count} | orders={orders_count}"
+            f"bots={bots_count} | decisions={decisions_count}"
         )
 
         return {
             "ok": True,
             "user_id": user_id,
             "date": str(run_date) if run_date else None,
+            "bots": bots_count,
             "decisions": decisions_count,
-            "orders": orders_count,
         }
 
     except Exception as e:
