@@ -90,6 +90,12 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
               b.is_active,
               b.mode,
               b.cadence,
+
+              b.budget_total_eur,
+              b.budget_daily_limit_eur,
+              b.budget_min_order_eur,
+              b.budget_max_order_eur,
+
               b.created_at,
               b.updated_at,
 
@@ -120,8 +126,15 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                 is_active,
                 mode,
                 cadence,
+
+                budget_total,
+                budget_daily,
+                budget_min,
+                budget_max,
+
                 created_at,
                 updated_at,
+
                 strategy_id,
                 strategy_type,
                 setup_id,
@@ -134,11 +147,11 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
             if strategy_id:
                 strategy = {
                     "id": strategy_id,
-                    "name": setup_name or f"{strategy_type.upper()} strategy",
                     "type": strategy_type,
+                    "setup_id": setup_id,
+                    "name": setup_name,
                     "symbol": symbol,
                     "timeframe": timeframe,
-                    "setup_id": setup_id,
                 }
 
             out.append(
@@ -148,17 +161,25 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                     "is_active": bool(is_active),
                     "mode": mode,
                     "cadence": cadence,
+
+                    "budget": {
+                        "total_eur": float(budget_total or 0),
+                        "daily_limit_eur": float(budget_daily or 0),
+                        "min_order_eur": float(budget_min or 0),
+                        "max_order_eur": float(budget_max or 0),
+                    },
+
+                    "strategy": strategy,
                     "created_at": created_at,
                     "updated_at": updated_at,
-                    "strategy": strategy,
                 }
             )
 
         return out
 
     except Exception as e:
-        logger.error(f"❌ bot/configs error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Bot configs ophalen mislukt.")
+        logger.error("❌ get_bot_configs error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Bot configs ophalen mislukt")
     finally:
         conn.close()
 
@@ -443,30 +464,56 @@ async def generate_bot_today(
 ):
     user_id = current_user["id"]
     body = await request.json()
-    report_date_str = body.get("report_date")
+    report_date = date.today()
 
-    run_date = date.today()
-    if report_date_str:
-        try:
-            run_date = date.fromisoformat(report_date_str)
-        except Exception:
-            raise HTTPException(status_code=400, detail="❌ report_date moet YYYY-MM-DD zijn.")
+    if body.get("report_date"):
+        report_date = date.fromisoformat(body["report_date"])
 
-    logger.info(f"🤖 [post/generate] run bot agent voor user_id={user_id} date={run_date}")
-
-    # 1) Probeer Celery (als jij straks trading_bot_task maakt)
+    conn = get_db_connection()
     try:
-        from backend.celery_task.trading_bot_task import run_daily_trading_bot
+        # 1️⃣ haal alle actieve bots
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id
+                FROM bot_configs
+                WHERE user_id=%s AND is_active=TRUE
+                ORDER BY id
+                """,
+                (user_id,),
+            )
+            bots = [r[0] for r in cur.fetchall()]
 
-        task = run_daily_trading_bot.delay(user_id=user_id, report_date=str(run_date))
-        return {"ok": True, "queued": True, "task_id": getattr(task, "id", None), "date": str(run_date)}
-    except Exception:
-        logger.warning("⚠️ Celery niet beschikbaar/failed → sync fallback.", exc_info=True)
+        if not bots:
+            return {"ok": True, "message": "Geen actieve bots"}
 
-    # 2) Sync fallback
-    result = run_trading_bot_agent(user_id=user_id, report_date=run_date)
-    return {"ok": bool(result.get("ok")), "queued": False, "date": str(run_date), "result": result}
+        results = []
 
+        # 2️⃣ run agent PER BOT
+        for bot_id in bots:
+            try:
+                res = run_trading_bot_agent(
+                    user_id=user_id,
+                    bot_id=bot_id,
+                    report_date=report_date,
+                )
+                results.append(
+                    {"bot_id": bot_id, "ok": bool(res.get("ok"))}
+                )
+            except Exception as e:
+                logger.error(f"❌ bot {bot_id} failed", exc_info=True)
+                results.append(
+                    {"bot_id": bot_id, "ok": False, "error": str(e)}
+                )
+
+        return {
+            "ok": True,
+            "date": str(report_date),
+            "bots_processed": results,
+        }
+
+    finally:
+        conn.close()
 
 # =====================================
 # ✅ MARK EXECUTED (human-in-the-loop)
@@ -601,16 +648,17 @@ async def create_bot_config(
     strategy_id = body.get("strategy_id")
     mode = body.get("mode", "manual")
 
+    budget_total = body.get("budget_total_eur", 0)
+    budget_daily = body.get("budget_daily_limit_eur", 0)
+    budget_min = body.get("budget_min_order_eur", 0)
+    budget_max = body.get("budget_max_order_eur", 0)
+
     if not name:
         raise HTTPException(status_code=400, detail="Bot naam is verplicht")
-
     if not strategy_id:
         raise HTTPException(status_code=400, detail="strategy_id is verplicht")
 
     conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
-
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -620,28 +668,34 @@ async def create_bot_config(
                     name,
                     strategy_id,
                     mode,
+                    budget_total_eur,
+                    budget_daily_limit_eur,
+                    budget_min_order_eur,
+                    budget_max_order_eur,
                     created_at,
                     updated_at
                 )
-                VALUES (%s, %s, %s, %s, NOW(), NOW())
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
                 RETURNING id
                 """,
-                (user_id, name, strategy_id, mode),
+                (
+                    user_id,
+                    name,
+                    strategy_id,
+                    mode,
+                    budget_total,
+                    budget_daily,
+                    budget_min,
+                    budget_max,
+                ),
             )
             bot_id = cur.fetchone()[0]
 
         conn.commit()
-        return {
-            "ok": True,
-            "id": bot_id,
-            "name": name,
-            "strategy_id": strategy_id,
-            "mode": mode,
-        }
+        return {"ok": True, "id": bot_id}
 
-    except Exception as e:
+    except Exception:
         conn.rollback()
-        logger.error(f"❌ create bot error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot aanmaken mislukt")
     finally:
         conn.close()
@@ -743,16 +797,15 @@ async def update_bot_config(
     name = body.get("name")
     mode = body.get("mode")
 
+    budget_total = body.get("budget_total_eur")
+    budget_daily = body.get("budget_daily_limit_eur")
+    budget_min = body.get("budget_min_order_eur")
+    budget_max = body.get("budget_max_order_eur")
+
     if not name:
         raise HTTPException(status_code=400, detail="Bot naam is verplicht")
 
-    if mode not in ("manual", "semi", "auto"):
-        raise HTTPException(status_code=400, detail="Ongeldige mode")
-
     conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
-
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -761,24 +814,30 @@ async def update_bot_config(
                 SET
                     name = %s,
                     mode = %s,
+                    budget_total_eur = %s,
+                    budget_daily_limit_eur = %s,
+                    budget_min_order_eur = %s,
+                    budget_max_order_eur = %s,
                     updated_at = NOW()
-                WHERE id = %s
-                  AND user_id = %s
+                WHERE id = %s AND user_id = %s
                 """,
-                (name, mode, bot_id, user_id),
+                (
+                    name,
+                    mode,
+                    budget_total,
+                    budget_daily,
+                    budget_min,
+                    budget_max,
+                    bot_id,
+                    user_id,
+                ),
             )
-
-            if cur.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Bot niet gevonden")
 
         conn.commit()
         return {"ok": True, "bot_id": bot_id}
 
-    except HTTPException:
-        raise
-    except Exception as e:
+    except Exception:
         conn.rollback()
-        logger.error(f"❌ update bot error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot bijwerken mislukt")
     finally:
         conn.close()
