@@ -464,56 +464,40 @@ async def generate_bot_today(
 ):
     user_id = current_user["id"]
     body = await request.json()
+
     report_date = date.today()
-
     if body.get("report_date"):
-        report_date = date.fromisoformat(body["report_date"])
-
-    conn = get_db_connection()
-    try:
-        # 1️⃣ haal alle actieve bots
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id
-                FROM bot_configs
-                WHERE user_id=%s AND is_active=TRUE
-                ORDER BY id
-                """,
-                (user_id,),
+        try:
+            report_date = date.fromisoformat(body["report_date"])
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="❌ report_date moet YYYY-MM-DD zijn",
             )
-            bots = [r[0] for r in cur.fetchall()]
 
-        if not bots:
-            return {"ok": True, "message": "Geen actieve bots"}
+    logger.info(
+        f"🤖 [bot/generate/today] run trading bot agent "
+        f"user_id={user_id} date={report_date}"
+    )
 
-        results = []
+    # 🔥 ÉÉN keer runnen — agent verwerkt ALLE actieve bots
+    result = run_trading_bot_agent(
+        user_id=user_id,
+        report_date=report_date,
+    )
 
-        # 2️⃣ run agent PER BOT
-        for bot_id in bots:
-            try:
-                res = run_trading_bot_agent(
-                    user_id=user_id,
-                    bot_id=bot_id,
-                    report_date=report_date,
-                )
-                results.append(
-                    {"bot_id": bot_id, "ok": bool(res.get("ok"))}
-                )
-            except Exception as e:
-                logger.error(f"❌ bot {bot_id} failed", exc_info=True)
-                results.append(
-                    {"bot_id": bot_id, "ok": False, "error": str(e)}
-                )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=500,
+            detail="Trading bot agent mislukt",
+        )
 
-        return {
-            "ok": True,
-            "date": str(report_date),
-            "bots_processed": results,
-        }
-
-    finally:
-        conn.close()
+    return {
+        "ok": True,
+        "date": str(report_date),
+        "bots_processed": result.get("bots", 0),
+        "decisions": result.get("decisions", []),
+    }
 
 # =====================================
 # ✅ MARK EXECUTED (human-in-the-loop)
