@@ -186,6 +186,111 @@ def _get_active_strategy_snapshot(
         "reason": reason,
     }
 
+# =====================================================
+# 📸 BOT BUDGET
+# =====================================================
+def check_bot_budget(
+    *,
+    bot_config: dict,
+    today_spent_eur: float,
+    proposed_amount_eur: float,
+) -> bool:
+    """
+    True = mag order plaatsen
+    False = budget overschreden
+    """
+
+    # totaal budget check
+    if bot_config["budget"]["total_eur"] > 0:
+        if today_spent_eur + proposed_amount_eur > bot_config["budget"]["total_eur"]:
+            return False
+
+    # daglimiet check
+    if bot_config["budget"]["daily_limit_eur"] > 0:
+        if today_spent_eur + proposed_amount_eur > bot_config["budget"]["daily_limit_eur"]:
+            return False
+
+    # min / max order check
+    if bot_config["budget"]["min_order_eur"] > 0:
+        if proposed_amount_eur < bot_config["budget"]["min_order_eur"]:
+            return False
+
+    if bot_config["budget"]["max_order_eur"] > 0:
+        if proposed_amount_eur > bot_config["budget"]["max_order_eur"]:
+            return False
+
+    return True
+
+# =====================================================
+# 📸 BOT TODAY SPENT
+# =====================================================
+def get_today_spent_eur(conn, user_id: int, bot_id: int, report_date):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(quote_amount_eur),0)
+            FROM bot_orders
+            WHERE user_id=%s
+              AND bot_id=%s
+              AND DATE(created_at)=%s
+              AND status IN ('filled','ready')
+            """,
+            (user_id, bot_id, report_date),
+        )
+        return float(cur.fetchone()[0] or 0)
+
+
+# =====================================================
+# 📸 BOT RECORD LEDGER
+# =====================================================
+def record_bot_ledger_entry(
+    *,
+    conn,
+    user_id,
+    bot_id,
+    amount_eur,
+    type_: str,   # 'reserve', 'execute', 'release'
+    ref_id=None,
+):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO bot_ledger (
+                user_id,
+                bot_id,
+                type,
+                amount_eur,
+                ref_id,
+                created_at
+            )
+            VALUES (%s,%s,%s,%s,%s,NOW())
+            """,
+            (user_id, bot_id, type_, amount_eur, ref_id),
+        )
+
+
+# =====================================================
+# 📸 BOT BALANCE
+# =====================================================
+def get_bot_balance(conn, user_id, bot_id):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              COALESCE(SUM(
+                CASE
+                  WHEN type='execute' THEN -amount_eur
+                  WHEN type='release' THEN amount_eur
+                  ELSE 0
+                END
+              ),0)
+            FROM bot_ledger
+            WHERE user_id=%s AND bot_id=%s
+            """,
+            (user_id, bot_id),
+        )
+        return float(cur.fetchone()[0] or 0)
+
 
 # =====================================================
 # 🧠 Decision logic (strategy-driven)
