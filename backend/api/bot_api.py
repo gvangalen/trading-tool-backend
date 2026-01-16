@@ -867,3 +867,142 @@ async def delete_bot_config(
         raise HTTPException(status_code=500, detail="Bot verwijderen mislukt")
     finally:
         conn.close()
+
+
+# =====================================
+# 📊 BOT PORTFOLIOS / BUDGET DASHBOARD
+# =====================================
+@router.get("/bot/portfolios")
+async def get_bot_portfolios(
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+    today = date.today()
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="❌ DB niet beschikbaar")
+
+    try:
+        with conn.cursor() as cur:
+            # ---------------------------------
+            # 1️⃣ Basis bot + budget info
+            # ---------------------------------
+            cur.execute(
+                """
+                SELECT
+                  b.id,
+                  b.name,
+                  st.symbol,
+
+                  b.budget_total_eur,
+                  b.budget_daily_limit_eur,
+
+                  COALESCE(SUM(
+                    CASE
+                      WHEN bl.type = 'execute' THEN bl.amount_eur
+                      ELSE 0
+                    END
+                  ), 0) AS spent_total_eur
+
+                FROM bot_configs b
+                LEFT JOIN strategies s ON s.id = b.strategy_id
+                LEFT JOIN setups st    ON st.id = s.setup_id
+                LEFT JOIN bot_ledger bl
+                  ON bl.bot_id = b.id
+                 AND bl.user_id = b.user_id
+
+                WHERE b.user_id = %s
+                GROUP BY b.id, b.name, st.symbol
+                ORDER BY b.id ASC
+                """,
+                (user_id,),
+            )
+
+            bots = cur.fetchall()
+            portfolios = []
+
+            for (
+                bot_id,
+                bot_name,
+                symbol,
+                budget_total,
+                budget_daily,
+                spent_total,
+            ) in bots:
+
+                # ---------------------------------
+                # 2️⃣ Vandaag besteed
+                # ---------------------------------
+                cur.execute(
+                    """
+                    SELECT COALESCE(SUM(o.quote_amount_eur), 0)
+                    FROM bot_orders o
+                    JOIN bot_decisions d ON d.id = o.decision_id
+                    WHERE o.user_id=%s
+                      AND o.bot_id=%s
+                      AND d.decision_date=%s
+                      AND o.status IN ('ready','filled')
+                    """,
+                    (user_id, bot_id, today),
+                )
+                spent_today = float(cur.fetchone()[0] or 0)
+
+                # ---------------------------------
+                # 3️⃣ Portfolio (paper holdings)
+                # ---------------------------------
+                cur.execute(
+                    """
+                    SELECT
+                      COALESCE(SUM(
+                        CASE
+                          WHEN side='buy'  THEN quote_amount_eur
+                          WHEN side='sell' THEN -quote_amount_eur
+                          ELSE 0
+                        END
+                      ), 0)
+                    FROM bot_orders
+                    WHERE user_id=%s
+                      AND bot_id=%s
+                      AND status='filled'
+                    """,
+                    (user_id, bot_id),
+                )
+                cost_basis = float(cur.fetchone()[0] or 0)
+
+                units = cost_basis / 1 if cost_basis > 0 else 0  # paper units
+
+                portfolios.append(
+                    {
+                        "bot_id": bot_id,
+                        "bot_name": bot_name,
+                        "symbol": symbol or "BTC",
+
+                        "budget": {
+                            "total_eur": float(budget_total or 0),
+                            "daily_limit_eur": float(budget_daily or 0),
+                            "spent_today_eur": spent_today,
+                            "spent_total_eur": float(spent_total or 0),
+                        },
+
+                        "portfolio": {
+                            "units": units,
+                            "avg_entry": None,
+                            "cost_basis_eur": cost_basis,
+                            "unrealized_pnl_eur": 0,
+                            "unrealized_pnl_pct": 0,
+                        },
+
+                        "status": "active",
+                    }
+                )
+
+        return portfolios
+
+    except Exception as e:
+        logger.error("❌ bot/portfolios error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Bot portfolios ophalen mislukt")
+    finally:
+        conn.close()
+
+
