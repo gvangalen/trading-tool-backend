@@ -876,133 +876,160 @@ async def delete_bot_config(
 async def get_bot_portfolios(
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Read-only overzicht per bot:
+    - budget (daglimiet + vandaag besteed)
+    - portfolio (units, avg entry, PnL)
+    """
+
     user_id = current_user["id"]
     today = date.today()
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="❌ DB niet beschikbaar")
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
     try:
+        if not _table_exists(conn, "bot_configs"):
+            return []
+
+        # -------------------------------------------------
+        # 1) Bots + symbol + daglimiet
+        # -------------------------------------------------
         with conn.cursor() as cur:
-            # ---------------------------------
-            # 1️⃣ Basis bot + budget info
-            # ---------------------------------
             cur.execute(
                 """
                 SELECT
                   b.id,
                   b.name,
-                  st.symbol,
-
-                  b.budget_total_eur,
-                  b.budget_daily_limit_eur,
-
-                  COALESCE(SUM(
-                    CASE
-                      WHEN bl.type = 'execute' THEN bl.amount_eur
-                      ELSE 0
-                    END
-                  ), 0) AS spent_total_eur
-
+                  b.is_active,
+                  COALESCE(b.budget_daily_limit_eur, 0) AS daily_limit_eur,
+                  COALESCE(st.symbol, 'BTC')            AS symbol
                 FROM bot_configs b
                 LEFT JOIN strategies s ON s.id = b.strategy_id
                 LEFT JOIN setups st    ON st.id = s.setup_id
-                LEFT JOIN bot_ledger bl
-                  ON bl.bot_id = b.id
-                 AND bl.user_id = b.user_id
-
                 WHERE b.user_id = %s
-                GROUP BY b.id, b.name, st.symbol
                 ORDER BY b.id ASC
                 """,
                 (user_id,),
             )
-
             bots = cur.fetchall()
-            portfolios = []
 
-            for (
-                bot_id,
-                bot_name,
-                symbol,
-                budget_total,
-                budget_daily,
-                spent_total,
-            ) in bots:
+        if not bots:
+            return []
 
-                # ---------------------------------
-                # 2️⃣ Vandaag besteed
-                # ---------------------------------
-                cur.execute(
-                    """
-                    SELECT COALESCE(SUM(o.quote_amount_eur), 0)
-                    FROM bot_orders o
-                    JOIN bot_decisions d ON d.id = o.decision_id
-                    WHERE o.user_id=%s
-                      AND o.bot_id=%s
-                      AND d.decision_date=%s
-                      AND o.status IN ('ready','filled')
-                    """,
-                    (user_id, bot_id, today),
-                )
-                spent_today = float(cur.fetchone()[0] or 0)
+        results = []
 
-                # ---------------------------------
-                # 3️⃣ Portfolio (paper holdings)
-                # ---------------------------------
-                cur.execute(
-                    """
-                    SELECT
-                      COALESCE(SUM(
-                        CASE
-                          WHEN side='buy'  THEN quote_amount_eur
-                          WHEN side='sell' THEN -quote_amount_eur
-                          ELSE 0
-                        END
-                      ), 0)
-                    FROM bot_orders
-                    WHERE user_id=%s
-                      AND bot_id=%s
-                      AND status='filled'
-                    """,
-                    (user_id, bot_id),
-                )
-                cost_basis = float(cur.fetchone()[0] or 0)
+        for (bot_id, bot_name, is_active, daily_limit_eur, symbol) in bots:
+            symbol = (symbol or "BTC").upper()
 
-                units = cost_basis / 1 if cost_basis > 0 else 0  # paper units
+            # -------------------------------------------------
+            # 2) Vandaag besteed (orders ready + filled)
+            # -------------------------------------------------
+            spent_today = 0.0
+            if _table_exists(conn, "bot_orders") and _table_exists(conn, "bot_decisions"):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT COALESCE(SUM(o.quote_amount_eur), 0)
+                        FROM bot_orders o
+                        JOIN bot_decisions d ON d.id = o.decision_id
+                        WHERE o.user_id = %s
+                          AND o.bot_id = %s
+                          AND d.decision_date = %s
+                          AND o.status IN ('ready','filled')
+                        """,
+                        (user_id, bot_id, today),
+                    )
+                    spent_today = float(cur.fetchone()[0] or 0.0)
 
-                portfolios.append(
-                    {
-                        "bot_id": bot_id,
-                        "bot_name": bot_name,
-                        "symbol": symbol or "BTC",
+            # -------------------------------------------------
+            # 3) Portfolio (units + cost basis) op basis van FILLED executions
+            # -------------------------------------------------
+            units = 0.0
+            cost_basis = 0.0
 
-                        "budget": {
-                            "total_eur": float(budget_total or 0),
-                            "daily_limit_eur": float(budget_daily or 0),
-                            "spent_today_eur": spent_today,
-                            "spent_total_eur": float(spent_total or 0),
-                        },
+            if _table_exists(conn, "bot_orders") and _table_exists(conn, "bot_executions"):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT
+                          COALESCE(SUM(
+                            CASE
+                              WHEN o.side='buy'  THEN COALESCE(o.quantity, 0)
+                              WHEN o.side='sell' THEN -COALESCE(o.quantity, 0)
+                              ELSE 0
+                            END
+                          ), 0) AS units,
 
-                        "portfolio": {
-                            "units": units,
-                            "avg_entry": None,
-                            "cost_basis_eur": cost_basis,
-                            "unrealized_pnl_eur": 0,
-                            "unrealized_pnl_pct": 0,
-                        },
+                          COALESCE(SUM(
+                            CASE
+                              WHEN o.side='buy'  THEN COALESCE(o.quote_amount_eur, 0)
+                              WHEN o.side='sell' THEN -COALESCE(o.quote_amount_eur, 0)
+                              ELSE 0
+                            END
+                          ), 0) AS cost_basis
+                        FROM bot_orders o
+                        JOIN bot_executions e ON e.bot_order_id = o.id
+                        WHERE o.user_id = %s
+                          AND o.bot_id  = %s
+                          AND e.status  = 'filled'
+                        """,
+                        (user_id, bot_id),
+                    )
+                    row = cur.fetchone()
+                    units = float(row[0] or 0.0)
+                    cost_basis = float(row[1] or 0.0)
 
-                        "status": "active",
-                    }
-                )
+            avg_entry = (cost_basis / units) if units > 0 else 0.0
 
-        return portfolios
+            # -------------------------------------------------
+            # 4) Current price uit market_data
+            # -------------------------------------------------
+            current_price = 0.0
+            if _table_exists(conn, "market_data"):
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT price
+                        FROM market_data
+                        WHERE symbol = %s
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                        """,
+                        (symbol,),
+                    )
+                    r = cur.fetchone()
+                    current_price = float(r[0]) if r and r[0] is not None else 0.0
 
-    except Exception as e:
+            market_value = units * current_price
+            unrealized_pnl_eur = market_value - cost_basis
+            unrealized_pnl_pct = (unrealized_pnl_eur / cost_basis * 100.0) if cost_basis > 0 else 0.0
+
+            results.append(
+                {
+                    "bot_id": bot_id,
+                    "bot_name": bot_name,
+                    "symbol": symbol,
+                    "status": "active" if is_active else "inactive",
+                    "budget": {
+                        "daily_limit_eur": float(daily_limit_eur or 0.0),
+                        "spent_today_eur": float(spent_today or 0.0),
+                    },
+                    "portfolio": {
+                        "units": round(units, 8),
+                        "avg_entry": round(avg_entry, 2),
+                        "cost_basis_eur": round(cost_basis, 2),
+                        "unrealized_pnl_eur": round(unrealized_pnl_eur, 2),
+                        "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
+                    },
+                }
+            )
+
+        return results
+
+    except Exception:
         logger.error("❌ bot/portfolios error", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot portfolios ophalen mislukt")
     finally:
         conn.close()
-
-
