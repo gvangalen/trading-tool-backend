@@ -71,6 +71,39 @@ def _get_table_columns(conn, table_name: str):
         )
         return [r[0] for r in cur.fetchall()]
 
+def _get_daily_scores_row(conn, user_id: int, report_date: date):
+    """
+    Haalt de gecombineerde scores op uit daily_scores.
+    Return:
+      dict {macro, technical, market, setup}  of None
+    """
+    if not _table_exists(conn, "daily_scores"):
+        return None
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT macro_score, technical_score, market_score, setup_score
+            FROM daily_scores
+            WHERE user_id=%s
+              AND report_date=%s
+            LIMIT 1
+            """,
+            (user_id, report_date),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return None
+
+    macro, technical, market, setup = row
+    return {
+        "macro": float(macro or 10),
+        "technical": float(technical or 10),
+        "market": float(market or 10),
+        "setup": float(setup or 10),
+    }
+
 
 # =====================================
 # 📦 BOT CONFIGS (actieve bots)
@@ -193,8 +226,22 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
     conn, cur = get_db_cursor()
     try:
+        # ✅ altijd scores proberen op te halen (los van decisions)
+        daily_scores = _get_daily_scores_row(conn, user_id, today) or {
+            "macro": 10,
+            "technical": 10,
+            "market": 10,
+            "setup": 10,
+        }
+
+        # Geen bot_decisions? Dan nog steeds scores teruggeven
         if not _table_exists(conn, "bot_decisions"):
-            return {"date": str(today), "decisions": [], "orders": []}
+            return {
+                "date": str(today),
+                "scores": daily_scores,  # ✅ nieuw
+                "decisions": [],
+                "orders": [],
+            }
 
         # --------------------------
         # decisions (bot_decisions)
@@ -227,6 +274,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
         decisions = []
         decision_ids = []
+
         for r in drows:
             (
                 decision_id,
@@ -247,17 +295,21 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
             decision_ids.append(decision_id)
 
+            # ✅ normaliseer jsonb/str/None → dict
+            scores_obj = _safe_json(scores_json, daily_scores)
+            reasons_obj = _safe_json(reason_json, [])
+
             decisions.append(
                 {
                     "id": decision_id,
                     "bot_id": bot_id,
                     "symbol": symbol,
                     "decision_ts": decision_ts,
-                    "date": decision_date,  # frontend verwacht vaak "date"
+                    "date": decision_date,
                     "action": action,
                     "confidence": confidence,
-                    "scores": scores_json or {},
-                    "reasons": reason_json or {},
+                    "scores": scores_obj,        # ✅ altijd dict
+                    "reasons": reasons_obj,      # ✅ altijd list/dict (afhankelijk van jouw opslag)
                     "setup_id": setup_id,
                     "strategy_id": strategy_id,
                     "status": status,
@@ -272,7 +324,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         orders = []
         if decision_ids and _table_exists(conn, "bot_orders"):
             cur.execute(
-                f"""
+                """
                 SELECT
                   id,
                   bot_id,
@@ -323,8 +375,9 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     updated_at,
                 ) = r
 
-                # 👇 voor compat: veel frontend code verwacht "amount_eur"
-                amount_eur = float(quote_amount_eur) if quote_amount_eur is not None else None
+                amount_eur = (
+                    float(quote_amount_eur) if quote_amount_eur is not None else None
+                )
 
                 orders.append(
                     {
@@ -336,13 +389,13 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                         "order_type": order_type,
                         "quantity": float(quantity) if quantity is not None else None,
                         "quote_amount_eur": float(quote_amount_eur) if quote_amount_eur is not None else None,
-                        "amount_eur": amount_eur,  # compat
+                        "amount_eur": amount_eur,
                         "limit_price": float(limit_price) if limit_price is not None else None,
                         "time_in_force": tif,
                         "reduce_only": bool(reduce_only) if reduce_only is not None else False,
                         "exchange": exchange,
-                        "order_payload": order_payload or {},
-                        "dry_run_payload": dry_run_payload or {},
+                        "order_payload": _safe_json(order_payload, {}),
+                        "dry_run_payload": _safe_json(dry_run_payload, {}),
                         "status": status,
                         "last_error": last_error,
                         "created_at": created_at,
@@ -350,7 +403,13 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     }
                 )
 
-        return {"date": str(today), "decisions": decisions, "orders": orders}
+        # ✅ altijd scores mee teruggeven op top-level
+        return {
+            "date": str(today),
+            "scores": daily_scores,   # ✅ nieuw
+            "decisions": decisions,
+            "orders": orders,
+        }
 
     except Exception as e:
         logger.error(f"❌ bot/today error: {e}", exc_info=True)
