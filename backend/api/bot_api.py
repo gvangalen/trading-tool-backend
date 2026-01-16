@@ -13,7 +13,6 @@ from backend.utils.auth_utils import get_current_user
 # (optioneel) onboarding helper — alleen gebruiken als jij dat wil
 # from backend.api.onboarding_api import mark_step_completed
 
-from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -455,16 +454,22 @@ async def get_bot_history(days: int = 30, current_user: dict = Depends(get_curre
 
 # =====================================
 # 🔁 FORCE GENERATE (vandaag / datum)
-# - Celery als beschikbaar, anders sync fallback
+# - Lazy import van trading_bot_agent
 # =====================================
 @router.post("/bot/generate/today")
 async def generate_bot_today(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
+    # 🔥 LAZY IMPORT — voorkomt crash bij app startup
+    from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
+
     user_id = current_user["id"]
     body = await request.json()
 
+    # ---------------------------
+    # 📅 Report date
+    # ---------------------------
     report_date = date.today()
     if body.get("report_date"):
         try:
@@ -480,13 +485,16 @@ async def generate_bot_today(
         f"user_id={user_id} date={report_date}"
     )
 
-    # 🔥 ÉÉN keer runnen — agent verwerkt ALLE actieve bots
+    # ---------------------------
+    # 🚀 RUN AGENT (alle bots)
+    # ---------------------------
     result = run_trading_bot_agent(
         user_id=user_id,
         report_date=report_date,
     )
 
-    if not result.get("ok"):
+    if not result or not result.get("ok"):
+        logger.error(f"❌ trading_bot_agent failed: {result}")
         raise HTTPException(
             status_code=500,
             detail="Trading bot agent mislukt",
