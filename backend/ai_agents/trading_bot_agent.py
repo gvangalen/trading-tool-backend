@@ -461,7 +461,6 @@ def _persist_decision_and_order(
 
     return decision_id
 
-
 # =====================================================
 # 🚀 PUBLIC ENTRYPOINT (PER BOT ONDERSTEUND)
 # =====================================================
@@ -472,8 +471,9 @@ def run_trading_bot_agent(
 ) -> Dict[str, Any]:
     """
     Run trading bot agent.
-    - bot_id = None  → alle actieve bots
-    - bot_id = int   → alleen die bot
+
+    - bot_id = None  → genereer decisions voor ALLE actieve bots
+    - bot_id = int   → genereer decision voor ÉÉN specifieke bot
     """
 
     report_date = report_date or date.today()
@@ -482,11 +482,14 @@ def run_trading_bot_agent(
         return {"ok": False, "error": "db_unavailable"}
 
     try:
+        # -------------------------------------------------
+        # 1️⃣ Actieve bots ophalen
+        # -------------------------------------------------
         bots = _get_active_bots(conn, user_id)
 
-        # ==============================
-        # ✅ FILTER OP BOT_ID (NIEUW)
-        # ==============================
+        # -------------------------------------------------
+        # 2️⃣ FILTER OP BOT_ID (⬅️ DIT IS DE CRUCIALE WIJZIGING)
+        # -------------------------------------------------
         if bot_id is not None:
             bots = [b for b in bots if b["bot_id"] == bot_id]
 
@@ -502,9 +505,15 @@ def run_trading_bot_agent(
                 "decisions": [],
             }
 
+        # -------------------------------------------------
+        # 3️⃣ Daily scores (single source of truth)
+        # -------------------------------------------------
         scores = _get_daily_scores(conn, user_id, report_date)
-        decisions = []
+        decisions: List[Dict[str, Any]] = []
 
+        # -------------------------------------------------
+        # 4️⃣ Per bot → decision genereren
+        # -------------------------------------------------
         for bot in bots:
             snapshot = _get_active_strategy_snapshot(
                 conn,
@@ -515,7 +524,9 @@ def run_trading_bot_agent(
 
             decision = _decide(bot, snapshot, scores)
 
-            # 🧮 BUDGET CHECK
+            # -----------------------------
+            # 🧮 Budget check
+            # -----------------------------
             today_spent = get_today_spent_eur(
                 conn, user_id, bot["bot_id"], report_date
             )
@@ -535,6 +546,9 @@ def run_trading_bot_agent(
                     f"Budget blokkeert order: {reason}"
                 )
 
+            # -----------------------------
+            # 💾 Persist decision + order
+            # -----------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -571,6 +585,6 @@ def run_trading_bot_agent(
         conn.rollback()
         logger.exception("❌ trading_bot_agent crash")
         return {"ok": False, "error": "crash"}
+
     finally:
         conn.close()
-
