@@ -520,6 +520,12 @@ async def generate_bot_today(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Genereer bot decisions voor vandaag.
+    - Zonder bot_id  → alle bots
+    - Met bot_id     → alleen die bot
+    """
+
     # 🔥 LAZY IMPORT — voorkomt crash bij app startup
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 
@@ -539,17 +545,31 @@ async def generate_bot_today(
                 detail="❌ report_date moet YYYY-MM-DD zijn",
             )
 
+    # ---------------------------
+    # 🤖 Optionele bot_id
+    # ---------------------------
+    bot_id = body.get("bot_id")
+    if bot_id is not None:
+        try:
+            bot_id = int(bot_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="❌ bot_id moet een integer zijn",
+            )
+
     logger.info(
         f"🤖 [bot/generate/today] run trading bot agent "
-        f"user_id={user_id} date={report_date}"
+        f"user_id={user_id} date={report_date} bot_id={bot_id}"
     )
 
     # ---------------------------
-    # 🚀 RUN AGENT (alle bots)
+    # 🚀 RUN AGENT
     # ---------------------------
     result = run_trading_bot_agent(
         user_id=user_id,
         report_date=report_date,
+        bot_id=bot_id,          # ✅ NIEUW
     )
 
     if not result or not result.get("ok"):
@@ -562,10 +582,10 @@ async def generate_bot_today(
     return {
         "ok": True,
         "date": str(report_date),
+        "bot_id": bot_id,
         "bots_processed": result.get("bots", 0),
         "decisions": result.get("decisions", []),
     }
-
 # =====================================
 # ✅ MARK EXECUTED (human-in-the-loop)
 # =====================================
