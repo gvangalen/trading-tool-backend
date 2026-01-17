@@ -947,6 +947,40 @@ async def delete_bot_config(
     finally:
         conn.close()
 
+@router.post("/bot/generate/one")
+async def generate_single_bot_today(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
+
+    user_id = current_user["id"]
+    body = await request.json()
+
+    bot_id = body.get("bot_id")
+    if not bot_id:
+        raise HTTPException(status_code=400, detail="bot_id is verplicht")
+
+    report_date = date.today()
+    if body.get("report_date"):
+        report_date = date.fromisoformat(body["report_date"])
+
+    result = run_trading_bot_agent(
+        user_id=user_id,
+        report_date=report_date,
+        bot_id=bot_id,  # 🔥 BELANGRIJK
+    )
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail="Bot decision generatie mislukt")
+
+    return {
+        "ok": True,
+        "bot_id": bot_id,
+        "date": str(report_date),
+        "decision": result.get("decisions", []),
+    }
+
 
 # =====================================
 # 📊 BOT PORTFOLIOS / BUDGET DASHBOARD
