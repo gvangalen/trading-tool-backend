@@ -463,12 +463,19 @@ def _persist_decision_and_order(
 
 
 # =====================================================
-# 🚀 PUBLIC ENTRYPOINT
+# 🚀 PUBLIC ENTRYPOINT (PER BOT ONDERSTEUND)
 # =====================================================
 def run_trading_bot_agent(
     user_id: int,
     report_date: Optional[date] = None,
+    bot_id: Optional[int] = None,
 ) -> Dict[str, Any]:
+    """
+    Run trading bot agent.
+    - bot_id = None  → alle actieve bots
+    - bot_id = int   → alleen die bot
+    """
+
     report_date = report_date or date.today()
     conn = get_db_connection()
     if not conn:
@@ -476,8 +483,24 @@ def run_trading_bot_agent(
 
     try:
         bots = _get_active_bots(conn, user_id)
+
+        # ==============================
+        # ✅ FILTER OP BOT_ID (NIEUW)
+        # ==============================
+        if bot_id is not None:
+            bots = [b for b in bots if b["bot_id"] == bot_id]
+
         if not bots:
-            return {"ok": True, "date": str(report_date), "bots": 0, "decisions": []}
+            logger.info(
+                f"🤖 trading_bot_agent: geen actieve bots "
+                f"(user_id={user_id}, bot_id={bot_id})"
+            )
+            return {
+                "ok": True,
+                "date": str(report_date),
+                "bots": 0,
+                "decisions": [],
+            }
 
         scores = _get_daily_scores(conn, user_id, report_date)
         decisions = []
@@ -508,7 +531,9 @@ def run_trading_bot_agent(
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0
                 decision.setdefault("reasons", [])
-                decision["reasons"].append(f"Budget blokkeert order: {reason}")
+                decision["reasons"].append(
+                    f"Budget blokkeert order: {reason}"
+                )
 
             decision_id = _persist_decision_and_order(
                 conn=conn,
@@ -548,5 +573,4 @@ def run_trading_bot_agent(
         return {"ok": False, "error": "crash"}
     finally:
         conn.close()
-
 
