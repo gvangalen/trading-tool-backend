@@ -520,14 +520,33 @@ async def generate_bot_today(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Forceer decision generatie (vandaag of opgegeven datum).
+
+    Budget-regel (BELANGRIJK):
+    - Bot is toegestaan als ÉÉN van deze > 0 is:
+        - budget_total_eur
+        - budget_daily_limit_eur
+        - budget_min_order_eur
+        - budget_max_order_eur
+    """
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 
     user_id = current_user["id"]
     body = await request.json()
 
+    # -----------------------------
+    # Datum
+    # -----------------------------
     report_date = date.today()
     if body.get("report_date"):
-        report_date = date.fromisoformat(body["report_date"])
+        try:
+            report_date = date.fromisoformat(body["report_date"])
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="report_date moet YYYY-MM-DD zijn",
+            )
 
     bot_id = body.get("bot_id")
 
@@ -536,23 +555,57 @@ async def generate_bot_today(
         raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
     try:
+        # -------------------------------------------------
+        # 🧠 BUDGET CHECK (FIXED)
+        # -------------------------------------------------
         if bot_id:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT COALESCE(budget_total_eur,0)
+                    SELECT
+                      COALESCE(budget_total_eur, 0),
+                      COALESCE(budget_daily_limit_eur, 0),
+                      COALESCE(budget_min_order_eur, 0),
+                      COALESCE(budget_max_order_eur, 0)
                     FROM bot_configs
-                    WHERE id=%s AND user_id=%s
+                    WHERE id=%s
+                      AND user_id=%s
                     """,
                     (bot_id, user_id),
                 )
                 row = cur.fetchone()
-                if not row or float(row[0]) <= 0:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Bot heeft geen budget ingesteld",
-                    )
 
+            if not row:
+                raise HTTPException(status_code=404, detail="Bot niet gevonden")
+
+            (
+                budget_total,
+                budget_daily,
+                budget_min,
+                budget_max,
+            ) = [float(x or 0) for x in row]
+
+            has_any_budget = any(
+                v > 0 for v in (
+                    budget_total,
+                    budget_daily,
+                    budget_min,
+                    budget_max,
+                )
+            )
+
+            if not has_any_budget:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Bot heeft geen budget ingesteld. "
+                        "Stel een totaalbudget, daglimiet of per-trade limiet in."
+                    ),
+                )
+
+        # -------------------------------------------------
+        # 🚀 RUN BOT AGENT
+        # -------------------------------------------------
         result = run_trading_bot_agent(
             user_id=user_id,
             report_date=report_date,
@@ -560,7 +613,10 @@ async def generate_bot_today(
         )
 
         if not result or not result.get("ok"):
-            raise HTTPException(status_code=500, detail="Trading bot agent mislukt")
+            raise HTTPException(
+                status_code=500,
+                detail="Trading bot agent mislukt",
+            )
 
         return {
             "ok": True,
@@ -570,6 +626,16 @@ async def generate_bot_today(
             "decisions": result.get("decisions", []),
         }
 
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        logger.error("❌ generate_bot_today error", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Bot decision generatie mislukt",
+        )
     finally:
         conn.close()
 
