@@ -210,11 +210,6 @@ def check_bot_budget(
     today_spent_eur: float,
     proposed_amount_eur: float,
 ):
-    """
-    Returns:
-      (True, None)  -> order toegestaan
-      (False, str)  -> order geblokkeerd + reden
-    """
     budget = bot_config.get("budget") or {}
 
     total_eur = float(budget.get("total_eur") or 0)
@@ -224,9 +219,6 @@ def check_bot_budget(
 
     if proposed_amount_eur <= 0:
         return True, None
-
-    if total_eur > 0 and (today_spent_eur + proposed_amount_eur) > total_eur:
-        return False, "Totaal budget overschreden"
 
     if daily_limit_eur > 0 and (today_spent_eur + proposed_amount_eur) > daily_limit_eur:
         return False, "Daglimiet overschreden"
@@ -238,6 +230,7 @@ def check_bot_budget(
         return False, "Boven maximum orderbedrag"
 
     return True, None
+
 
 # =====================================================
 # 📸 BOT TODAY SPENT
@@ -321,7 +314,6 @@ def _decide(
     snapshot: Optional[Dict[str, Any]],
     scores: Dict[str, float],
 ) -> Dict[str, Any]:
-    strategy_type = bot["strategy_type"]
     symbol = bot["symbol"]
 
     if not snapshot:
@@ -329,11 +321,10 @@ def _decide(
             "symbol": symbol,
             "action": "observe",
             "confidence": "low",
-            "amount_eur": 0,
             "reasons": ["Geen actieve strategy snapshot"],
         }
 
-    confidence_score = snapshot["confidence"]
+    confidence_score = float(snapshot.get("confidence", 0))
     reasons = []
 
     if confidence_score < 40:
@@ -347,26 +338,15 @@ def _decide(
         confidence = "high"
 
     reasons.append(f"Strategy confidence: {confidence_score}")
-    reasons.append(f"Market score: {scores['market']}")
-    reasons.append(f"Macro score: {scores['macro']}")
-
-    amount = 0
-    if strategy_type == "dca" and action == "buy":
-        if scores["market"] < 35:
-            amount = 150
-        elif scores["market"] < 55:
-            amount = 125
-        else:
-            amount = 100
+    reasons.append(f"Market score: {scores.get('market')}")
+    reasons.append(f"Macro score: {scores.get('macro')}")
 
     return {
         "symbol": symbol,
         "action": action,
         "confidence": confidence,
-        "amount_eur": amount,
         "reasons": reasons[:4],
     }
-
 
 # =====================================================
 # 💾 Persist decision + paper order
@@ -469,12 +449,6 @@ def run_trading_bot_agent(
     report_date: Optional[date] = None,
     bot_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """
-    Run trading bot agent.
-
-    - bot_id = None  → genereer decisions voor ALLE actieve bots
-    - bot_id = int   → genereer decision voor ÉÉN specifieke bot
-    """
 
     report_date = report_date or date.today()
     conn = get_db_connection()
@@ -482,38 +456,17 @@ def run_trading_bot_agent(
         return {"ok": False, "error": "db_unavailable"}
 
     try:
-        # -------------------------------------------------
-        # 1️⃣ Actieve bots ophalen
-        # -------------------------------------------------
         bots = _get_active_bots(conn, user_id)
 
-        # -------------------------------------------------
-        # 2️⃣ FILTER OP BOT_ID (⬅️ DIT IS DE CRUCIALE WIJZIGING)
-        # -------------------------------------------------
         if bot_id is not None:
             bots = [b for b in bots if b["bot_id"] == bot_id]
 
         if not bots:
-            logger.info(
-                f"🤖 trading_bot_agent: geen actieve bots "
-                f"(user_id={user_id}, bot_id={bot_id})"
-            )
-            return {
-                "ok": True,
-                "date": str(report_date),
-                "bots": 0,
-                "decisions": [],
-            }
+            return {"ok": True, "date": str(report_date), "bots": 0, "decisions": []}
 
-        # -------------------------------------------------
-        # 3️⃣ Daily scores (single source of truth)
-        # -------------------------------------------------
         scores = _get_daily_scores(conn, user_id, report_date)
-        decisions: List[Dict[str, Any]] = []
+        decisions = []
 
-        # -------------------------------------------------
-        # 4️⃣ Per bot → decision genereren
-        # -------------------------------------------------
         for bot in bots:
             snapshot = _get_active_strategy_snapshot(
                 conn,
@@ -524,17 +477,39 @@ def run_trading_bot_agent(
 
             decision = _decide(bot, snapshot, scores)
 
-            # -----------------------------
-            # 🧮 Budget check
-            # -----------------------------
+            # ===============================
+            # 💰 AMOUNT BEPALEN (STRATEGY → BOT)
+            # ===============================
+            amount = 0.0
+            if decision["action"] == "buy" and snapshot:
+                strategy_amount = float(snapshot.get("amount_per_trade", 0))
+
+                min_eur = bot["budget"].get("min_order_eur", 0)
+                max_eur = bot["budget"].get("max_order_eur", 0)
+
+                amount = strategy_amount
+                if min_eur > 0:
+                    amount = max(amount, min_eur)
+                if max_eur > 0:
+                    amount = min(amount, max_eur)
+
+            decision["amount_eur"] = amount
+
+            # ===============================
+            # 📊 BUDGET CHECKS
+            # ===============================
             today_spent = get_today_spent_eur(
                 conn, user_id, bot["bot_id"], report_date
+            )
+
+            total_spent = get_bot_balance(
+                conn, user_id, bot["bot_id"]
             )
 
             ok, reason = check_bot_budget(
                 bot_config=bot,
                 today_spent_eur=today_spent,
-                proposed_amount_eur=float(decision.get("amount_eur") or 0),
+                proposed_amount_eur=amount,
             )
 
             if not ok:
@@ -542,13 +517,11 @@ def run_trading_bot_agent(
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0
                 decision.setdefault("reasons", [])
-                decision["reasons"].append(
-                    f"Budget blokkeert order: {reason}"
-                )
+                decision["reasons"].append(f"Budget blokkeert order: {reason}")
 
-            # -----------------------------
-            # 💾 Persist decision + order
-            # -----------------------------
+            # ===============================
+            # 💾 DECISION + ORDER
+            # ===============================
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -560,11 +533,22 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
+            # ===============================
+            # 📒 LEDGER RESERVE
+            # ===============================
+            if decision["amount_eur"] > 0:
+                record_bot_ledger_entry(
+                    conn=conn,
+                    user_id=user_id,
+                    bot_id=bot["bot_id"],
+                    amount_eur=decision["amount_eur"],
+                    type_="reserve",
+                    ref_id=decision_id,
+                )
+
             decisions.append(
                 {
                     "bot_id": bot["bot_id"],
-                    "bot_name": bot["bot_name"],
-                    "strategy_id": bot["strategy_id"],
                     "action": decision["action"],
                     "confidence": decision["confidence"],
                     "amount_eur": decision["amount_eur"],
