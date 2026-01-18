@@ -520,72 +520,60 @@ async def generate_bot_today(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Genereer bot decisions voor vandaag.
-    - Zonder bot_id  → alle bots
-    - Met bot_id     → alleen die bot
-    """
-
-    # 🔥 LAZY IMPORT — voorkomt crash bij app startup
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 
     user_id = current_user["id"]
     body = await request.json()
 
-    # ---------------------------
-    # 📅 Report date
-    # ---------------------------
     report_date = date.today()
     if body.get("report_date"):
-        try:
-            report_date = date.fromisoformat(body["report_date"])
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="❌ report_date moet YYYY-MM-DD zijn",
-            )
+        report_date = date.fromisoformat(body["report_date"])
 
-    # ---------------------------
-    # 🤖 Optionele bot_id
-    # ---------------------------
     bot_id = body.get("bot_id")
-    if bot_id is not None:
-        try:
-            bot_id = int(bot_id)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail="❌ bot_id moet een integer zijn",
-            )
 
-    logger.info(
-        f"🤖 [bot/generate/today] run trading bot agent "
-        f"user_id={user_id} date={report_date} bot_id={bot_id}"
-    )
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
-    # ---------------------------
-    # 🚀 RUN AGENT
-    # ---------------------------
-    result = run_trading_bot_agent(
-        user_id=user_id,
-        report_date=report_date,
-        bot_id=bot_id,          # ✅ NIEUW
-    )
+    try:
+        if bot_id:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COALESCE(budget_total_eur,0)
+                    FROM bot_configs
+                    WHERE id=%s AND user_id=%s
+                    """,
+                    (bot_id, user_id),
+                )
+                row = cur.fetchone()
+                if not row or float(row[0]) <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Bot heeft geen budget ingesteld",
+                    )
 
-    if not result or not result.get("ok"):
-        logger.error(f"❌ trading_bot_agent failed: {result}")
-        raise HTTPException(
-            status_code=500,
-            detail="Trading bot agent mislukt",
+        result = run_trading_bot_agent(
+            user_id=user_id,
+            report_date=report_date,
+            bot_id=bot_id,
         )
 
-    return {
-        "ok": True,
-        "date": str(report_date),
-        "bot_id": bot_id,
-        "bots_processed": result.get("bots", 0),
-        "decisions": result.get("decisions", []),
-    }
+        if not result or not result.get("ok"):
+            raise HTTPException(status_code=500, detail="Trading bot agent mislukt")
+
+        return {
+            "ok": True,
+            "date": str(report_date),
+            "bot_id": bot_id,
+            "bots_processed": result.get("bots", 0),
+            "decisions": result.get("decisions", []),
+        }
+
+    finally:
+        conn.close()
+
+
 # =====================================
 # ✅ MARK EXECUTED (human-in-the-loop)
 # =====================================
@@ -873,9 +861,6 @@ async def update_bot_config(
     budget_min = body.get("budget_min_order_eur")
     budget_max = body.get("budget_max_order_eur")
 
-    if not name:
-        raise HTTPException(status_code=400, detail="Bot naam is verplicht")
-
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -883,14 +868,15 @@ async def update_bot_config(
                 """
                 UPDATE bot_configs
                 SET
-                    name = %s,
-                    mode = %s,
-                    budget_total_eur = %s,
-                    budget_daily_limit_eur = %s,
-                    budget_min_order_eur = %s,
-                    budget_max_order_eur = %s,
+                    name = COALESCE(%s, name),
+                    mode = COALESCE(%s, mode),
+                    budget_total_eur = COALESCE(%s, budget_total_eur),
+                    budget_daily_limit_eur = COALESCE(%s, budget_daily_limit_eur),
+                    budget_min_order_eur = COALESCE(%s, budget_min_order_eur),
+                    budget_max_order_eur = COALESCE(%s, budget_max_order_eur),
                     updated_at = NOW()
-                WHERE id = %s AND user_id = %s
+                WHERE id = %s
+                  AND user_id = %s
                 """,
                 (
                     name,
@@ -907,12 +893,12 @@ async def update_bot_config(
         conn.commit()
         return {"ok": True, "bot_id": bot_id}
 
-    except Exception:
+    except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail="Bot bijwerken mislukt")
     finally:
         conn.close()
-
+        
 # =====================================
 # ⏭️ DELETE BOT 
 # =====================================
@@ -990,11 +976,8 @@ async def get_bot_portfolios(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Read-only overzicht per bot:
-    - budget (daglimiet + vandaag besteed)
-    - portfolio (units, avg entry, PnL)
+    Volledig budget + portfolio overzicht per bot
     """
-
     user_id = current_user["id"]
     today = date.today()
 
@@ -1003,12 +986,6 @@ async def get_bot_portfolios(
         raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
     try:
-        if not _table_exists(conn, "bot_configs"):
-            return []
-
-        # -------------------------------------------------
-        # 1) Bots + symbol + daglimiet
-        # -------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1016,8 +993,9 @@ async def get_bot_portfolios(
                   b.id,
                   b.name,
                   b.is_active,
-                  COALESCE(b.budget_daily_limit_eur, 0) AS daily_limit_eur,
-                  COALESCE(st.symbol, 'BTC')            AS symbol
+                  COALESCE(b.budget_total_eur, 0),
+                  COALESCE(b.budget_daily_limit_eur, 0),
+                  COALESCE(st.symbol, 'BTC')
                 FROM bot_configs b
                 LEFT JOIN strategies s ON s.id = b.strategy_id
                 LEFT JOIN setups st    ON st.id = s.setup_id
@@ -1028,17 +1006,20 @@ async def get_bot_portfolios(
             )
             bots = cur.fetchall()
 
-        if not bots:
-            return []
-
         results = []
 
-        for (bot_id, bot_name, is_active, daily_limit_eur, symbol) in bots:
-            symbol = (symbol or "BTC").upper()
+        for (
+            bot_id,
+            bot_name,
+            is_active,
+            total_budget,
+            daily_limit,
+            symbol,
+        ) in bots:
 
-            # -------------------------------------------------
-            # 2) Vandaag besteed (orders ready + filled)
-            # -------------------------------------------------
+            # =============================
+            # SPENT TODAY
+            # =============================
             spent_today = 0.0
             if _table_exists(conn, "bot_orders") and _table_exists(conn, "bot_decisions"):
                 with conn.cursor() as cur:
@@ -1047,18 +1028,18 @@ async def get_bot_portfolios(
                         SELECT COALESCE(SUM(o.quote_amount_eur), 0)
                         FROM bot_orders o
                         JOIN bot_decisions d ON d.id = o.decision_id
-                        WHERE o.user_id = %s
-                          AND o.bot_id = %s
-                          AND d.decision_date = %s
+                        WHERE o.user_id=%s
+                          AND o.bot_id=%s
+                          AND d.decision_date=%s
                           AND o.status IN ('ready','filled')
                         """,
                         (user_id, bot_id, today),
                     )
                     spent_today = float(cur.fetchone()[0] or 0.0)
 
-            # -------------------------------------------------
-            # 3) Portfolio (units + cost basis) op basis van FILLED executions
-            # -------------------------------------------------
+            # =============================
+            # PORTFOLIO (filled only)
+            # =============================
             units = 0.0
             cost_basis = 0.0
 
@@ -1069,24 +1050,23 @@ async def get_bot_portfolios(
                         SELECT
                           COALESCE(SUM(
                             CASE
-                              WHEN o.side='buy'  THEN COALESCE(o.quantity, 0)
-                              WHEN o.side='sell' THEN -COALESCE(o.quantity, 0)
+                              WHEN o.side='buy'  THEN o.quantity
+                              WHEN o.side='sell' THEN -o.quantity
                               ELSE 0
                             END
-                          ), 0) AS units,
-
+                          ), 0),
                           COALESCE(SUM(
                             CASE
-                              WHEN o.side='buy'  THEN COALESCE(o.quote_amount_eur, 0)
-                              WHEN o.side='sell' THEN -COALESCE(o.quote_amount_eur, 0)
+                              WHEN o.side='buy'  THEN o.quote_amount_eur
+                              WHEN o.side='sell' THEN -o.quote_amount_eur
                               ELSE 0
                             END
-                          ), 0) AS cost_basis
+                          ), 0)
                         FROM bot_orders o
-                        JOIN bot_executions e ON e.bot_order_id = o.id
-                        WHERE o.user_id = %s
-                          AND o.bot_id  = %s
-                          AND e.status  = 'filled'
+                        JOIN bot_executions e ON e.bot_order_id=o.id
+                        WHERE o.user_id=%s
+                          AND o.bot_id=%s
+                          AND e.status='filled'
                         """,
                         (user_id, bot_id),
                     )
@@ -1094,11 +1074,12 @@ async def get_bot_portfolios(
                     units = float(row[0] or 0.0)
                     cost_basis = float(row[1] or 0.0)
 
+            remaining_budget = max(float(total_budget) - float(cost_basis), 0.0)
             avg_entry = (cost_basis / units) if units > 0 else 0.0
 
-            # -------------------------------------------------
-            # 4) Current price uit market_data
-            # -------------------------------------------------
+            # =============================
+            # CURRENT PRICE
+            # =============================
             current_price = 0.0
             if _table_exists(conn, "market_data"):
                 with conn.cursor() as cur:
@@ -1106,18 +1087,18 @@ async def get_bot_portfolios(
                         """
                         SELECT price
                         FROM market_data
-                        WHERE symbol = %s
+                        WHERE symbol=%s
                         ORDER BY timestamp DESC
                         LIMIT 1
                         """,
                         (symbol,),
                     )
                     r = cur.fetchone()
-                    current_price = float(r[0]) if r and r[0] is not None else 0.0
+                    current_price = float(r[0]) if r else 0.0
 
             market_value = units * current_price
-            unrealized_pnl_eur = market_value - cost_basis
-            unrealized_pnl_pct = (unrealized_pnl_eur / cost_basis * 100.0) if cost_basis > 0 else 0.0
+            pnl_eur = market_value - cost_basis
+            pnl_pct = (pnl_eur / cost_basis * 100) if cost_basis > 0 else 0.0
 
             results.append(
                 {
@@ -1126,23 +1107,25 @@ async def get_bot_portfolios(
                     "symbol": symbol,
                     "status": "active" if is_active else "inactive",
                     "budget": {
-                        "daily_limit_eur": float(daily_limit_eur or 0.0),
-                        "spent_today_eur": float(spent_today or 0.0),
+                        "total_eur": round(float(total_budget), 2),
+                        "remaining_eur": round(remaining_budget, 2),
+                        "daily_limit_eur": round(float(daily_limit), 2),
+                        "spent_today_eur": round(spent_today, 2),
                     },
                     "portfolio": {
                         "units": round(units, 8),
                         "avg_entry": round(avg_entry, 2),
                         "cost_basis_eur": round(cost_basis, 2),
-                        "unrealized_pnl_eur": round(unrealized_pnl_eur, 2),
-                        "unrealized_pnl_pct": round(unrealized_pnl_pct, 2),
+                        "unrealized_pnl_eur": round(pnl_eur, 2),
+                        "unrealized_pnl_pct": round(pnl_pct, 2),
                     },
                 }
             )
 
         return results
 
-    except Exception:
-        logger.error("❌ bot/portfolios error", exc_info=True)
+    except Exception as e:
+        logger.error("❌ get_bot_portfolios error", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot portfolios ophalen mislukt")
     finally:
         conn.close()
