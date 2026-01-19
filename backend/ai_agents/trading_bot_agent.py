@@ -235,24 +235,28 @@ def check_bot_budget(
 # =====================================================
 # 📸 BOT TODAY SPENT
 # =====================================================
-def get_today_spent_eur(conn, user_id: int, bot_id: int, report_date: date) -> float:
-    if not _table_exists(conn, "bot_orders"):
-        return 0.0
-
+def get_today_spent_eur(
+    conn,
+    user_id: int,
+    bot_id: int,
+    report_date: date,
+) -> float:
+    """
+    Total EUR spent TODAY by this bot (from ledger)
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT COALESCE(SUM(o.quote_amount_eur), 0)
-            FROM bot_orders o
-            JOIN bot_decisions d ON d.id = o.decision_id
-            WHERE o.user_id=%s
-              AND o.bot_id=%s
-              AND d.decision_date=%s
-              AND o.status IN ('ready','filled')
+            SELECT COALESCE(SUM(cash_delta_eur), 0)
+            FROM bot_ledger
+            WHERE user_id = %s
+              AND bot_id = %s
+              AND cash_delta_eur < 0
+              AND DATE(ts) = %s
             """,
             (user_id, bot_id, report_date),
         )
-        return float(cur.fetchone()[0] or 0.0)
+        return abs(float(cur.fetchone()[0] or 0.0))
 
 # =====================================================
 # 📸 BOT RECORD LEDGER
@@ -260,50 +264,70 @@ def get_today_spent_eur(conn, user_id: int, bot_id: int, report_date: date) -> f
 def record_bot_ledger_entry(
     *,
     conn,
-    user_id,
-    bot_id,
-    amount_eur,
-    type_: str,   # 'reserve', 'execute', 'release'
-    ref_id=None,
+    user_id: int,
+    bot_id: int,
+    entry_type: str,
+    cash_delta_eur: float = 0.0,
+    qty_delta: float = 0.0,
+    symbol: str = DEFAULT_SYMBOL,
+    decision_id: Optional[int] = None,
+    order_id: Optional[int] = None,
+    note: Optional[str] = None,
+    meta: Optional[dict] = None,
 ):
+    """
+    Single source of truth for all bot balance changes
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO bot_ledger (
                 user_id,
                 bot_id,
-                type,
-                amount_eur,
-                ref_id,
-                created_at
+                decision_id,
+                order_id,
+                entry_type,
+                symbol,
+                cash_delta_eur,
+                qty_delta,
+                note,
+                meta,
+                ts
             )
-            VALUES (%s,%s,%s,%s,%s,NOW())
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW())
             """,
-            (user_id, bot_id, type_, amount_eur, ref_id),
+            (
+                user_id,
+                bot_id,
+                decision_id,
+                order_id,
+                entry_type,
+                symbol,
+                cash_delta_eur,
+                qty_delta,
+                note,
+                json.dumps(meta or {}),
+            ),
         )
-
 
 # =====================================================
 # 📸 BOT BALANCE
 # =====================================================
-def get_bot_balance(conn, user_id, bot_id):
+def get_bot_balance(conn, user_id: int, bot_id: int) -> float:
+    """
+    Net EUR balance delta for this bot (ledger-based)
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT
-              COALESCE(SUM(
-                CASE
-                  WHEN type='execute' THEN -amount_eur
-                  WHEN type='release' THEN amount_eur
-                  ELSE 0
-                END
-              ),0)
+            SELECT COALESCE(SUM(cash_delta_eur), 0)
             FROM bot_ledger
-            WHERE user_id=%s AND bot_id=%s
+            WHERE user_id = %s
+              AND bot_id = %s
             """,
             (user_id, bot_id),
         )
-        return float(cur.fetchone()[0] or 0)
+        return float(cur.fetchone()[0] or 0.0)
 
 
 # =====================================================
@@ -456,17 +480,31 @@ def run_trading_bot_agent(
         return {"ok": False, "error": "db_unavailable"}
 
     try:
+        # ==========================================
+        # 📦 Actieve bots
+        # ==========================================
         bots = _get_active_bots(conn, user_id)
 
         if bot_id is not None:
             bots = [b for b in bots if b["bot_id"] == bot_id]
 
         if not bots:
-            return {"ok": True, "date": str(report_date), "bots": 0, "decisions": []}
+            return {
+                "ok": True,
+                "date": str(report_date),
+                "bots": 0,
+                "decisions": [],
+            }
 
+        # ==========================================
+        # 📊 Daily scores (single source)
+        # ==========================================
         scores = _get_daily_scores(conn, user_id, report_date)
         decisions = []
 
+        # ==========================================
+        # 🔁 PER BOT
+        # ==========================================
         for bot in bots:
             snapshot = _get_active_strategy_snapshot(
                 conn,
@@ -477,15 +515,17 @@ def run_trading_bot_agent(
 
             decision = _decide(bot, snapshot, scores)
 
-            # ===============================
-            # 💰 AMOUNT BEPALEN (STRATEGY → BOT)
-            # ===============================
+            # ======================================
+            # 💰 AMOUNT BEPALEN (strategy → bot)
+            # ======================================
             amount = 0.0
             if decision["action"] == "buy" and snapshot:
-                strategy_amount = float(snapshot.get("amount_per_trade", 0))
+                strategy_amount = float(
+                    snapshot.get("amount_per_trade", 0) or 0
+                )
 
-                min_eur = bot["budget"].get("min_order_eur", 0)
-                max_eur = bot["budget"].get("max_order_eur", 0)
+                min_eur = float(bot["budget"].get("min_order_eur", 0) or 0)
+                max_eur = float(bot["budget"].get("max_order_eur", 0) or 0)
 
                 amount = strategy_amount
                 if min_eur > 0:
@@ -493,35 +533,42 @@ def run_trading_bot_agent(
                 if max_eur > 0:
                     amount = min(amount, max_eur)
 
-            decision["amount_eur"] = amount
+            decision["amount_eur"] = float(amount)
 
-            # ===============================
+            # ======================================
             # 📊 BUDGET CHECKS
-            # ===============================
+            # ======================================
             today_spent = get_today_spent_eur(
-                conn, user_id, bot["bot_id"], report_date
+                conn,
+                user_id,
+                bot["bot_id"],
+                report_date,
             )
 
-            total_spent = get_bot_balance(
-                conn, user_id, bot["bot_id"]
+            total_balance = get_bot_balance(
+                conn,
+                user_id,
+                bot["bot_id"],
             )
 
             ok, reason = check_bot_budget(
                 bot_config=bot,
                 today_spent_eur=today_spent,
-                proposed_amount_eur=amount,
+                proposed_amount_eur=decision["amount_eur"],
             )
 
             if not ok:
                 decision["action"] = "hold"
                 decision["confidence"] = "low"
-                decision["amount_eur"] = 0
+                decision["amount_eur"] = 0.0
                 decision.setdefault("reasons", [])
-                decision["reasons"].append(f"Budget blokkeert order: {reason}")
+                decision["reasons"].append(
+                    f"Budget blokkeert order: {reason}"
+                )
 
-            # ===============================
-            # 💾 DECISION + ORDER
-            # ===============================
+            # ======================================
+            # 💾 DECISION + (PAPER) ORDER
+            # ======================================
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -533,31 +580,35 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            # ===============================
-            # 📒 LEDGER RESERVE
-            # ===============================
+            # ======================================
+            # 📒 LEDGER — RESERVE (enkel bij buy)
+            # ======================================
             if decision["amount_eur"] > 0:
                 record_bot_ledger_entry(
                     conn=conn,
                     user_id=user_id,
                     bot_id=bot["bot_id"],
-                    amount_eur=decision["amount_eur"],
-                    type_="reserve",
-                    ref_id=decision_id,
+                    entry_type="reserve",
+                    cash_delta_eur=-decision["amount_eur"],
+                    qty_delta=0,
+                    symbol=decision["symbol"],
+                    decision_id=decision_id,
+                    note="Reserved by bot decision",
                 )
 
             decisions.append(
                 {
                     "bot_id": bot["bot_id"],
+                    "decision_id": decision_id,
                     "action": decision["action"],
                     "confidence": decision["confidence"],
                     "amount_eur": decision["amount_eur"],
-                    "reasons": decision["reasons"],
-                    "decision_id": decision_id,
+                    "reasons": decision.get("reasons", []),
                 }
             )
 
         conn.commit()
+
         return {
             "ok": True,
             "date": str(report_date),
