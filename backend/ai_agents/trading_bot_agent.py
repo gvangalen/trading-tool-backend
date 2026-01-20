@@ -129,7 +129,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
     return bots
 
 # =====================================================
-# 📦 Bot Proposal
+# 📦 Bot Proposal (MARKET_DATA FIXED)
 # =====================================================
 def build_order_proposal(
     *,
@@ -144,55 +144,72 @@ def build_order_proposal(
     Returns None if no order should be proposed.
     """
 
-    if decision["action"] != "buy" or decision.get("amount_eur", 0) <= 0:
+    # Alleen BUY voorstellen
+    if decision.get("action") != "buy":
         return None
 
-    symbol = decision["symbol"]
+    amount_eur = float(decision.get("amount_eur") or 0)
+    if amount_eur <= 0:
+        return None
 
-    # 1️⃣ haal indicatieve marktprijs op
+    symbol = decision.get("symbol", DEFAULT_SYMBOL)
+
+    # -------------------------------------------------
+    # 📈 Laatste marktprijs ophalen (CORRECT SCHEMA)
+    # -------------------------------------------------
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT price_eur
+            SELECT price
             FROM market_data
-            WHERE symbol=%s
-            ORDER BY ts DESC
+            WHERE symbol = %s
+              AND price IS NOT NULL
+            ORDER BY timestamp DESC
             LIMIT 1
             """,
             (symbol,),
         )
         row = cur.fetchone()
 
-    if not row:
+    if not row or row[0] is None:
+        logger.warning(f"⚠️ Geen marktprijs gevonden voor {symbol}")
         return None
 
     price_eur = float(row[0])
-    amount_eur = float(decision["amount_eur"])
 
-    # 2️⃣ bereken hoeveelheid
+    # -------------------------------------------------
+    # 📐 Geschatte hoeveelheid
+    # -------------------------------------------------
     estimated_qty = round(amount_eur / price_eur, 8)
 
-    # 3️⃣ budget impact simuleren
-    daily_limit = float(bot["budget"].get("daily_limit_eur", 0))
-    total_budget = float(bot["budget"].get("total_eur", 0))
+    # -------------------------------------------------
+    # 💰 Budget impact simulatie
+    # -------------------------------------------------
+    budget = bot.get("budget", {})
+
+    daily_limit = float(budget.get("daily_limit_eur") or 0)
+    total_budget = float(budget.get("total_eur") or 0)
 
     daily_remaining = (
-        max(0, daily_limit - (today_spent_eur + amount_eur))
+        round(max(0.0, daily_limit - (today_spent_eur + amount_eur)), 2)
         if daily_limit > 0
         else None
     )
 
     total_remaining = (
-        max(0, total_budget - (total_balance_eur + amount_eur))
+        round(max(0.0, total_budget - (total_balance_eur + amount_eur)), 2)
         if total_budget > 0
         else None
     )
 
+    # -------------------------------------------------
+    # 📦 Proposal object (frontend truth)
+    # -------------------------------------------------
     return {
         "symbol": symbol,
         "side": "buy",
-        "quote_amount_eur": amount_eur,
-        "estimated_price": price_eur,
+        "quote_amount_eur": round(amount_eur, 2),
+        "estimated_price": round(price_eur, 2),
         "estimated_qty": estimated_qty,
         "status": "ready",
         "budget_after": {
@@ -200,8 +217,7 @@ def build_order_proposal(
             "total_remaining": total_remaining,
         },
     }
-
-
+    
 # =====================================================
 # 📊 Daily scores (single source of truth)
 # =====================================================
