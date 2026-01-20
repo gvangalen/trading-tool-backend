@@ -222,11 +222,12 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
 async def get_bot_today(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     today = date.today()
-    logger.info(f"🤖 [get/today] bot today voor user_id={user_id}")
 
     conn, cur = get_db_cursor()
     try:
-        # ✅ altijd scores proberen op te halen (los van decisions)
+        # -----------------------------
+        # 📊 Scores (altijd)
+        # -----------------------------
         daily_scores = _get_daily_scores_row(conn, user_id, today) or {
             "macro": 10,
             "technical": 10,
@@ -234,186 +235,117 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             "setup": 10,
         }
 
-        # Geen bot_decisions? Dan nog steeds scores teruggeven
-        if not _table_exists(conn, "bot_decisions"):
+        # -----------------------------
+        # 📦 Bots
+        # -----------------------------
+        bots = []
+        cur.execute(
+            """
+            SELECT id, name
+            FROM bot_configs
+            WHERE user_id=%s AND is_active=TRUE
+            ORDER BY id ASC
+            """,
+            (user_id,),
+        )
+        bots = cur.fetchall()
+
+        if not bots:
             return {
                 "date": str(today),
-                "scores": daily_scores,  # ✅ nieuw
-                "decisions": [],
-                "orders": [],
+                "scores": daily_scores,
+                "bots": [],
             }
 
-        # --------------------------
-        # decisions (bot_decisions)
-        # --------------------------
+        # -----------------------------
+        # 📄 Decisions
+        # -----------------------------
         cur.execute(
             """
             SELECT
-              id,
-              bot_id,
-              symbol,
-              decision_ts,
-              decision_date,
-              action,
-              confidence,
-              scores_json,
-              reason_json,
-              setup_id,
-              strategy_id,
-              status,
-              created_at,
-              updated_at
+              id, bot_id, symbol, action, confidence,
+              reason_json, status
             FROM bot_decisions
-            WHERE user_id=%s
-              AND decision_date=%s
-            ORDER BY bot_id ASC NULLS LAST, id DESC
+            WHERE user_id=%s AND decision_date=%s
             """,
             (user_id, today),
         )
-        drows = cur.fetchall()
+        decisions_raw = cur.fetchall()
+        decisions = {d[1]: d for d in decisions_raw}
 
-        decisions = []
-        decision_ids = []
-
-        for r in drows:
-            (
-                decision_id,
-                bot_id,
-                symbol,
-                decision_ts,
-                decision_date,
-                action,
-                confidence,
-                scores_json,
-                reason_json,
-                setup_id,
-                strategy_id,
-                status,
-                created_at,
-                updated_at,
-            ) = r
-
-            decision_ids.append(decision_id)
-
-            # ✅ normaliseer jsonb/str/None → dict
-            scores_obj = _safe_json(scores_json, daily_scores)
-            reasons_obj = _safe_json(reason_json, [])
-
-            decisions.append(
-                {
-                    "id": decision_id,
-                    "bot_id": bot_id,
-                    "symbol": symbol,
-                    "decision_ts": decision_ts,
-                    "date": decision_date,
-                    "action": action,
-                    "confidence": confidence,
-                    "scores": scores_obj,        # ✅ altijd dict
-                    "reasons": reasons_obj,      # ✅ altijd list/dict (afhankelijk van jouw opslag)
-                    "setup_id": setup_id,
-                    "strategy_id": strategy_id,
-                    "status": status,
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                }
-            )
-
-        # --------------------------
-        # orders (bot_orders) via decision_id
-        # --------------------------
-        orders = []
-        if decision_ids and _table_exists(conn, "bot_orders"):
+        # -----------------------------
+        # 🧾 Orders
+        # -----------------------------
+        orders = {}
+        if _table_exists(conn, "bot_orders"):
             cur.execute(
                 """
                 SELECT
-                  id,
-                  bot_id,
-                  decision_id,
-                  symbol,
-                  side,
-                  order_type,
-                  quantity,
-                  quote_amount_eur,
-                  limit_price,
-                  time_in_force,
-                  reduce_only,
-                  exchange,
-                  order_payload,
-                  dry_run_payload,
-                  status,
-                  last_error,
-                  created_at,
-                  updated_at
+                  id, bot_id, decision_id, symbol, side,
+                  quote_amount_eur, status
                 FROM bot_orders
                 WHERE user_id=%s
-                  AND decision_id = ANY(%s)
-                ORDER BY bot_id ASC NULLS LAST, id DESC
                 """,
-                (user_id, decision_ids),
+                (user_id,),
             )
-            orows = cur.fetchall()
+            for r in cur.fetchall():
+                orders[r[1]] = {
+                    "id": r[0],
+                    "bot_id": r[1],
+                    "decision_id": r[2],
+                    "symbol": r[3],
+                    "side": r[4],
+                    "quote_amount_eur": float(r[5] or 0),
+                    "status": r[6],
+                }
 
-            for r in orows:
-                (
-                    order_id,
-                    bot_id,
-                    decision_id,
-                    symbol,
-                    side,
-                    order_type,
-                    quantity,
-                    quote_amount_eur,
-                    limit_price,
-                    tif,
-                    reduce_only,
-                    exchange,
-                    order_payload,
-                    dry_run_payload,
-                    status,
-                    last_error,
-                    created_at,
-                    updated_at,
-                ) = r
+        # -----------------------------
+        # 🔁 Combine per bot
+        # -----------------------------
+        from backend.ai_agents.trading_bot_agent import build_order_proposal
 
-                amount_eur = (
-                    float(quote_amount_eur) if quote_amount_eur is not None else None
-                )
+        result = []
 
-                orders.append(
-                    {
-                        "id": order_id,
-                        "bot_id": bot_id,
-                        "decision_id": decision_id,
-                        "symbol": symbol,
-                        "side": side,
-                        "order_type": order_type,
-                        "quantity": float(quantity) if quantity is not None else None,
-                        "quote_amount_eur": float(quote_amount_eur) if quote_amount_eur is not None else None,
-                        "amount_eur": amount_eur,
-                        "limit_price": float(limit_price) if limit_price is not None else None,
-                        "time_in_force": tif,
-                        "reduce_only": bool(reduce_only) if reduce_only is not None else False,
-                        "exchange": exchange,
-                        "order_payload": _safe_json(order_payload, {}),
-                        "dry_run_payload": _safe_json(dry_run_payload, {}),
-                        "status": status,
-                        "last_error": last_error,
-                        "created_at": created_at,
-                        "updated_at": updated_at,
-                    }
-                )
+        for bot_id, bot_name in bots:
+            d = decisions.get(bot_id)
+            o = orders.get(bot_id)
 
-        # ✅ altijd scores mee teruggeven op top-level
+            decision_obj = None
+            if d:
+                decision_obj = {
+                    "action": d[3],
+                    "confidence": d[4],
+                    "reasons": _safe_json(d[5], []),
+                    "status": d[6],
+                }
+
+            order_proposal = build_order_proposal(
+                conn=conn,
+                user_id=user_id,
+                bot_id=bot_id,
+                decision=decision_obj or {},
+                order=o,
+                today=today,
+            )
+
+            result.append(
+                {
+                    "bot_id": bot_id,
+                    "bot_name": bot_name,
+                    "decision": decision_obj,
+                    "order": order_proposal,
+                }
+            )
+
         return {
             "date": str(today),
-            "scores": daily_scores,   # ✅ nieuw
-            "decisions": decisions,
-            "orders": orders,
+            "scores": daily_scores,
+            "bots": result,
         }
 
-    except Exception as e:
-        logger.error(f"❌ bot/today error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Bot today ophalen mislukt.")
+    except Exception:
+        logger.exception("❌ bot/today error")
+        raise HTTPException(status_code=500, detail="Bot today ophalen mislukt")
     finally:
         conn.close()
 
