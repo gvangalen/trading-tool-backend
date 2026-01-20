@@ -128,6 +128,79 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
 
     return bots
 
+# =====================================================
+# 📦 Bot Proposal
+# =====================================================
+def build_order_proposal(
+    *,
+    conn,
+    bot: dict,
+    decision: dict,
+    today_spent_eur: float,
+    total_balance_eur: float,
+) -> Optional[dict]:
+    """
+    Builds a concrete order preview for today.
+    Returns None if no order should be proposed.
+    """
+
+    if decision["action"] != "buy" or decision.get("amount_eur", 0) <= 0:
+        return None
+
+    symbol = decision["symbol"]
+
+    # 1️⃣ haal indicatieve marktprijs op
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT price_eur
+            FROM market_data
+            WHERE symbol=%s
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            (symbol,),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return None
+
+    price_eur = float(row[0])
+    amount_eur = float(decision["amount_eur"])
+
+    # 2️⃣ bereken hoeveelheid
+    estimated_qty = round(amount_eur / price_eur, 8)
+
+    # 3️⃣ budget impact simuleren
+    daily_limit = float(bot["budget"].get("daily_limit_eur", 0))
+    total_budget = float(bot["budget"].get("total_eur", 0))
+
+    daily_remaining = (
+        max(0, daily_limit - (today_spent_eur + amount_eur))
+        if daily_limit > 0
+        else None
+    )
+
+    total_remaining = (
+        max(0, total_budget - (total_balance_eur + amount_eur))
+        if total_budget > 0
+        else None
+    )
+
+    return {
+        "symbol": symbol,
+        "side": "buy",
+        "quote_amount_eur": amount_eur,
+        "estimated_price": price_eur,
+        "estimated_qty": estimated_qty,
+        "status": "ready",
+        "budget_after": {
+            "daily_remaining": daily_remaining,
+            "total_remaining": total_remaining,
+        },
+    }
+
 
 # =====================================================
 # 📊 Daily scores (single source of truth)
@@ -468,6 +541,9 @@ def _persist_decision_and_order(
 # =====================================================
 # 🚀 PUBLIC ENTRYPOINT (PER BOT ONDERSTEUND)
 # =====================================================
+# =====================================================
+# 🚀 PUBLIC ENTRYPOINT (PER BOT ONDERSTEUND)
+# =====================================================
 def run_trading_bot_agent(
     user_id: int,
     report_date: Optional[date] = None,
@@ -500,12 +576,15 @@ def run_trading_bot_agent(
         # 📊 Daily scores (single source)
         # ==========================================
         scores = _get_daily_scores(conn, user_id, report_date)
-        decisions = []
+        results = []
 
         # ==========================================
         # 🔁 PER BOT
         # ==========================================
         for bot in bots:
+            # --------------------------------------
+            # 📸 Strategy snapshot
+            # --------------------------------------
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -513,11 +592,14 @@ def run_trading_bot_agent(
                 report_date,
             )
 
+            # --------------------------------------
+            # 🧠 Decision (abstract)
+            # --------------------------------------
             decision = _decide(bot, snapshot, scores)
 
-            # ======================================
-            # 💰 AMOUNT BEPALEN (strategy → bot)
-            # ======================================
+            # --------------------------------------
+            # 💰 Amount bepalen
+            # --------------------------------------
             amount = 0.0
             if decision["action"] == "buy" and snapshot:
                 strategy_amount = float(
@@ -535,9 +617,9 @@ def run_trading_bot_agent(
 
             decision["amount_eur"] = float(amount)
 
-            # ======================================
-            # 📊 BUDGET CHECKS
-            # ======================================
+            # --------------------------------------
+            # 📊 Budget checks
+            # --------------------------------------
             today_spent = get_today_spent_eur(
                 conn,
                 user_id,
@@ -545,10 +627,8 @@ def run_trading_bot_agent(
                 report_date,
             )
 
-            total_balance = get_bot_balance(
-                conn,
-                user_id,
-                bot["bot_id"],
+            total_balance = abs(
+                get_bot_balance(conn, user_id, bot["bot_id"])
             )
 
             ok, reason = check_bot_budget(
@@ -558,7 +638,7 @@ def run_trading_bot_agent(
             )
 
             if not ok:
-                decision["action"] = "hold"
+                decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
                 decision.setdefault("reasons", [])
@@ -566,9 +646,20 @@ def run_trading_bot_agent(
                     f"Budget blokkeert order: {reason}"
                 )
 
-            # ======================================
-            # 💾 DECISION + (PAPER) ORDER
-            # ======================================
+            # --------------------------------------
+            # 🧾 ORDER PROPOSAL (nieuw)
+            # --------------------------------------
+            order_proposal = build_order_proposal(
+                conn=conn,
+                bot=bot,
+                decision=decision,
+                today_spent_eur=today_spent,
+                total_balance_eur=total_balance,
+            )
+
+            # --------------------------------------
+            # 💾 Persist decision (+ paper order)
+            # --------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -580,30 +671,39 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            # ======================================
-            # 📒 LEDGER — RESERVE (enkel bij buy)
-            # ======================================
-            if decision["amount_eur"] > 0:
+            # --------------------------------------
+            # 📒 Ledger reserve (alleen bij voorstel)
+            # --------------------------------------
+            if order_proposal:
                 record_bot_ledger_entry(
                     conn=conn,
                     user_id=user_id,
                     bot_id=bot["bot_id"],
                     entry_type="reserve",
                     cash_delta_eur=-decision["amount_eur"],
-                    qty_delta=0,
+                    qty_delta=0.0,
                     symbol=decision["symbol"],
                     decision_id=decision_id,
-                    note="Reserved by bot decision",
+                    note="Reserved by bot proposal",
+                    meta={
+                        "estimated_price": order_proposal.get("estimated_price"),
+                        "estimated_qty": order_proposal.get("estimated_qty"),
+                    },
                 )
 
-            decisions.append(
+            # --------------------------------------
+            # 📤 Result voor frontend
+            # --------------------------------------
+            results.append(
                 {
                     "bot_id": bot["bot_id"],
                     "decision_id": decision_id,
+                    "symbol": decision["symbol"],
                     "action": decision["action"],
                     "confidence": decision["confidence"],
                     "amount_eur": decision["amount_eur"],
                     "reasons": decision.get("reasons", []),
+                    "order": order_proposal,  # ⭐ dit is de UI-truth
                 }
             )
 
@@ -612,8 +712,8 @@ def run_trading_bot_agent(
         return {
             "ok": True,
             "date": str(report_date),
-            "bots": len(decisions),
-            "decisions": decisions,
+            "bots": len(results),
+            "decisions": results,
         }
 
     except Exception:
