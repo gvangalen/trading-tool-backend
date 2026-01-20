@@ -611,9 +611,10 @@ def run_daily_strategy_snapshot(user_id: int):
             return
 
         # ==================================================
-        # 4️⃣ AI adjustment (subtiele aanpassing)
+        # 4️⃣ AI adjustment (🔥 FIX: user_id EXPLICIET meegeven)
         # ==================================================
         adjustment = adjust_strategy_for_today(
+            user_id=user_id,                 # ✅ FIX
             base_strategy=base_strategy,
             setup=setup,
             market_context=market_context,
@@ -641,12 +642,13 @@ def run_daily_strategy_snapshot(user_id: int):
             stop_value = base_strategy.get("stop_loss")
 
         # ==================================================
-        # 6️⃣ TYPE-SAFETY & NORMALISATIE (BELANGRIJK)
+        # 6️⃣ TYPE-SAFETY & NORMALISATIE
         # ==================================================
         entry_num = safe_numeric(entry_value)
         stop_num = safe_numeric(stop_value)
         confidence = safe_confidence(
-            adjustment.get("confidence_score"), fallback=50
+            adjustment.get("confidence_score"),
+            fallback=50,
         )
 
         # ==================================================
@@ -772,7 +774,6 @@ def run_daily_strategy_snapshot(user_id: int):
             pass
     finally:
         conn.close()
-
 
 # ============================================================
 # 🔄 BULK GENERATIE — BEWUST UIT
