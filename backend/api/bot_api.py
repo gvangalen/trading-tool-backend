@@ -216,9 +216,6 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
         conn.close()
 
 # =====================================
-# 📄 BOT TODAY (decisions + orders)
-# =====================================
-# =====================================
 # 📄 BOT TODAY (decisions + orders + proposal)
 # =====================================
 @router.get("/bot/today")
@@ -613,109 +610,81 @@ async def generate_bot_today(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    Forceer decision generatie (vandaag of opgegeven datum).
-
-    Budget-regel (BELANGRIJK):
-    - Bot is toegestaan als ÉÉN van deze > 0 is:
-        - budget_total_eur
-        - budget_daily_limit_eur
-        - budget_min_order_eur
-        - budget_max_order_eur
-    """
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 
     user_id = current_user["id"]
     body = await request.json()
 
-    # -----------------------------
-    # Datum
-    # -----------------------------
+    bot_id = body.get("bot_id")
     report_date = date.today()
     if body.get("report_date"):
-        try:
-            report_date = date.fromisoformat(body["report_date"])
-        except Exception:
-            raise HTTPException(
-                status_code=400,
-                detail="report_date moet YYYY-MM-DD zijn",
-            )
-
-    bot_id = body.get("bot_id")
+        report_date = date.fromisoformat(body["report_date"])
 
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
     try:
-        # -------------------------------------------------
-        # 🧠 BUDGET CHECK (FIXED)
-        # -------------------------------------------------
-        if bot_id:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT
-                      COALESCE(budget_total_eur, 0),
-                      COALESCE(budget_daily_limit_eur, 0),
-                      COALESCE(budget_min_order_eur, 0),
-                      COALESCE(budget_max_order_eur, 0)
-                    FROM bot_configs
-                    WHERE id=%s
-                      AND user_id=%s
-                    """,
-                    (bot_id, user_id),
-                )
-                row = cur.fetchone()
-
-            if not row:
-                raise HTTPException(status_code=404, detail="Bot niet gevonden")
-
-            (
-                budget_total,
-                budget_daily,
-                budget_min,
-                budget_max,
-            ) = [float(x or 0) for x in row]
-
-            has_any_budget = any(
-                v > 0 for v in (
-                    budget_total,
-                    budget_daily,
-                    budget_min,
-                    budget_max,
-                )
+        with conn.cursor() as cur:
+            # 🧠 bestaande decision annuleren (indien aanwezig)
+            cur.execute(
+                """
+                SELECT id, status
+                FROM bot_decisions
+                WHERE user_id=%s
+                  AND bot_id=%s
+                  AND decision_date=%s
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (user_id, bot_id, report_date),
             )
+            row = cur.fetchone()
 
-            if not has_any_budget:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Bot heeft geen budget ingesteld. "
-                        "Stel een totaalbudget, daglimiet of per-trade limiet in."
-                    ),
-                )
+            if row:
+                decision_id, status = row
 
-        # -------------------------------------------------
-        # 🚀 RUN BOT AGENT
-        # -------------------------------------------------
+                if status in ("executed", "skipped"):
+                    cur.execute(
+                        """
+                        UPDATE bot_decisions
+                        SET status='cancelled',
+                            updated_at=NOW()
+                        WHERE id=%s
+                        """,
+                        (decision_id,),
+                    )
+
+            # 🔍 bot mode ophalen (AUTO / SEMI / MANUAL)
+            cur.execute(
+                """
+                SELECT mode
+                FROM bot_configs
+                WHERE id=%s AND user_id=%s
+                """,
+                (bot_id, user_id),
+            )
+            brow = cur.fetchone()
+            mode = brow[0] if brow else "manual"
+
+        conn.commit()
+
+        # 🚀 run agent
         result = run_trading_bot_agent(
             user_id=user_id,
             report_date=report_date,
             bot_id=bot_id,
+            auto_execute=(mode == "auto"),
         )
 
         if not result or not result.get("ok"):
-            raise HTTPException(
-                status_code=500,
-                detail="Trading bot agent mislukt",
-            )
+            raise HTTPException(status_code=500, detail="Bot agent mislukt")
 
         return {
             "ok": True,
-            "date": str(report_date),
             "bot_id": bot_id,
-            "bots_processed": result.get("bots", 0),
+            "date": str(report_date),
+            "mode": mode,
             "decisions": result.get("decisions", []),
         }
 
@@ -725,10 +694,7 @@ async def generate_bot_today(
     except Exception:
         conn.rollback()
         logger.error("❌ generate_bot_today error", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail="Bot decision generatie mislukt",
-        )
+        raise HTTPException(status_code=500, detail="Decision generatie mislukt")
     finally:
         conn.close()
 
@@ -746,15 +712,11 @@ async def mark_bot_executed(
 
     bot_id = body.get("bot_id")
     if not bot_id:
-        raise HTTPException(status_code=400, detail="❌ bot_id is verplicht.")
+        raise HTTPException(status_code=400, detail="bot_id is verplicht")
 
-    report_date_str = body.get("report_date")
-    run_date = date.today()
-    if report_date_str:
-        try:
-            run_date = date.fromisoformat(report_date_str)
-        except Exception:
-            raise HTTPException(status_code=400, detail="❌ report_date moet YYYY-MM-DD zijn.")
+    report_date = date.today()
+    if body.get("report_date"):
+        report_date = date.fromisoformat(body["report_date"])
 
     exchange = body.get("exchange")
     price = body.get("price")
@@ -762,11 +724,11 @@ async def mark_bot_executed(
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="❌ DB niet beschikbaar.")
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
     try:
         with conn.cursor() as cur:
-            # 1) decision -> executed
+            # 🔒 HARD LOCK: alleen planned mag uitgevoerd worden
             cur.execute(
                 """
                 UPDATE bot_decisions
@@ -775,30 +737,24 @@ async def mark_bot_executed(
                 WHERE user_id=%s
                   AND bot_id=%s
                   AND decision_date=%s
+                  AND status='planned'
+                RETURNING id
                 """,
-                (user_id, bot_id, run_date),
+                (user_id, bot_id, report_date),
             )
+            row = cur.fetchone()
 
-            # 2) haal decision_id (nodig voor orders)
-            cur.execute(
-                """
-                SELECT id
-                FROM bot_decisions
-                WHERE user_id=%s
-                  AND bot_id=%s
-                  AND decision_date=%s
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (user_id, bot_id, run_date),
-            )
-            drow = cur.fetchone()
-            decision_id = drow[0] if drow else None
+            if not row:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Decision is al afgehandeld"
+                )
 
+            decision_id = row[0]
+
+            # orders → filled
             bot_order_id = None
-
-            # 3) orders -> filled (NIET executed!)
-            if decision_id and _table_exists(conn, "bot_orders"):
+            if _table_exists(conn, "bot_orders"):
                 cur.execute(
                     """
                     UPDATE bot_orders
@@ -814,19 +770,16 @@ async def mark_bot_executed(
                 orow = cur.fetchone()
                 bot_order_id = orow[0] if orow else None
 
-            # 4) executions record (koppelt aan bot_order_id)
+            # executions log
             if bot_order_id and _table_exists(conn, "bot_executions"):
-                raw = {"notes": notes, "price": price}
-
                 cur.execute(
                     """
                     INSERT INTO bot_executions
                       (user_id, bot_order_id, exchange, status, avg_fill_price, raw_response, created_at, updated_at)
-                    VALUES (%s, %s, %s, 'filled', %s, %s, NOW(), NOW())
+                    VALUES (%s,%s,%s,'filled',%s,%s,NOW(),NOW())
                     ON CONFLICT (bot_order_id)
                     DO UPDATE SET
                       exchange=EXCLUDED.exchange,
-                      status='filled',
                       avg_fill_price=EXCLUDED.avg_fill_price,
                       raw_response=EXCLUDED.raw_response,
                       updated_at=NOW()
@@ -835,18 +788,21 @@ async def mark_bot_executed(
                         user_id,
                         bot_order_id,
                         exchange,
-                        float(price) if price is not None else None,
-                        json.dumps(raw),
+                        float(price) if price else None,
+                        json.dumps({"notes": notes}),
                     ),
                 )
 
         conn.commit()
-        return {"ok": True, "bot_id": bot_id, "date": str(run_date), "status": "executed"}
+        return {"ok": True, "status": "executed"}
 
-    except Exception as e:
+    except HTTPException:
         conn.rollback()
-        logger.error(f"❌ bot/mark_executed error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Mark executed mislukt.")
+        raise
+    except Exception:
+        conn.rollback()
+        logger.error("❌ mark_executed error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Mark executed mislukt")
     finally:
         conn.close()
 
@@ -931,23 +887,19 @@ async def skip_bot_today(
 
     bot_id = body.get("bot_id")
     if not bot_id:
-        raise HTTPException(status_code=400, detail="❌ bot_id is verplicht.")
+        raise HTTPException(status_code=400, detail="bot_id is verplicht")
 
-    report_date_str = body.get("report_date")
-    run_date = date.today()
-    if report_date_str:
-        try:
-            run_date = date.fromisoformat(report_date_str)
-        except Exception:
-            raise HTTPException(status_code=400, detail="❌ report_date moet YYYY-MM-DD zijn.")
+    report_date = date.today()
+    if body.get("report_date"):
+        report_date = date.fromisoformat(body["report_date"])
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="❌ DB niet beschikbaar.")
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
     try:
         with conn.cursor() as cur:
-            # 1) decision -> skipped
+            # 🔒 HARD LOCK
             cur.execute(
                 """
                 UPDATE bot_decisions
@@ -956,28 +908,23 @@ async def skip_bot_today(
                 WHERE user_id=%s
                   AND bot_id=%s
                   AND decision_date=%s
+                  AND status='planned'
+                RETURNING id
                 """,
-                (user_id, bot_id, run_date),
+                (user_id, bot_id, report_date),
             )
+            row = cur.fetchone()
 
-            # 2) decision_id ophalen
-            cur.execute(
-                """
-                SELECT id
-                FROM bot_decisions
-                WHERE user_id=%s
-                  AND bot_id=%s
-                  AND decision_date=%s
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (user_id, bot_id, run_date),
-            )
-            drow = cur.fetchone()
-            decision_id = drow[0] if drow else None
+            if not row:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Decision is al afgehandeld"
+                )
 
-            # 3) orders -> cancelled (NIET skipped!)
-            if decision_id and _table_exists(conn, "bot_orders"):
+            decision_id = row[0]
+
+            # orders → cancelled
+            if _table_exists(conn, "bot_orders"):
                 cur.execute(
                     """
                     UPDATE bot_orders
@@ -991,12 +938,15 @@ async def skip_bot_today(
                 )
 
         conn.commit()
-        return {"ok": True, "bot_id": bot_id, "date": str(run_date), "status": "skipped"}
+        return {"ok": True, "status": "skipped"}
 
-    except Exception as e:
+    except HTTPException:
         conn.rollback()
-        logger.error(f"❌ bot/skip error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Bot skip mislukt.")
+        raise
+    except Exception:
+        conn.rollback()
+        logger.error("❌ skip_bot_today error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Bot skip mislukt")
     finally:
         conn.close()
 
