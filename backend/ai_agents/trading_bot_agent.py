@@ -54,6 +54,37 @@ def _normalize_confidence(v: str) -> str:
 
 
 # =====================================================
+# 📦 Risk profiles
+# =====================================================
+def _get_risk_thresholds(risk_profile: str) -> dict:
+    """
+    Defines decision thresholds per risk profile.
+    """
+    profile = (risk_profile or "balanced").lower()
+
+    if profile == "conservative":
+        return {
+            "buy": 75,
+            "hold": 55,
+            "min_confidence": "high",
+        }
+
+    if profile == "aggressive":
+        return {
+            "buy": 35,
+            "hold": 20,
+            "min_confidence": "medium",
+        }
+
+    # default: balanced
+    return {
+        "buy": 55,
+        "hold": 40,
+        "min_confidence": "medium",
+    }
+
+
+# =====================================================
 # 📦 Actieve bots + strategy context
 # =====================================================
 def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
@@ -67,6 +98,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
               b.id              AS bot_id,
               b.name            AS bot_name,
               b.mode,
+              b.risk_profile,
               b.strategy_id,
 
               COALESCE(b.budget_total_eur, 0),
@@ -112,6 +144,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
                 "bot_id": bot_id,
                 "bot_name": bot_name,
                 "mode": mode,
+                "risk_profile": risk_profile,
                 "strategy_id": strategy_id,
                 "strategy_type": strategy_type,
                 "setup_id": setup_id,
@@ -427,136 +460,83 @@ def _decide(
     snapshot: Optional[Dict[str, Any]],
     scores: Dict[str, float],
 ) -> Dict[str, Any]:
-    symbol = bot["symbol"]
+    """
+    Decision logic with risk profiles:
+    - conservative
+    - balanced
+    - aggressive
+    """
 
+    symbol = bot["symbol"]
+    risk_profile = bot.get("risk_profile", "balanced")
+    thresholds = _get_risk_thresholds(risk_profile)
+
+    reasons = []
+
+    # --------------------------------------------------
+    # ❌ Geen actieve strategie
+    # --------------------------------------------------
     if not snapshot:
         return {
             "symbol": symbol,
             "action": "observe",
             "confidence": "low",
-            "reasons": ["Geen actieve strategy snapshot"],
+            "reasons": [
+                "Geen actieve strategy snapshot",
+                f"Risk profile: {risk_profile}",
+            ],
         }
 
-    confidence_score = float(snapshot.get("confidence", 0))
-    reasons = []
+    # --------------------------------------------------
+    # 📊 Scores
+    # --------------------------------------------------
+    macro = float(scores.get("macro", 10))
+    technical = float(scores.get("technical", 10))
+    market = float(scores.get("market", 10))
+    setup = float(scores.get("setup", 10))
 
-    if confidence_score < 40:
+    combined_score = round(
+        (macro + technical + market + setup) / 4, 1
+    )
+
+    reasons.append(f"Combined score: {combined_score}")
+    reasons.append(f"Risk profile: {risk_profile}")
+
+    # --------------------------------------------------
+    # 🧠 Strategy confidence (AI snapshot)
+    # --------------------------------------------------
+    strategy_confidence = float(snapshot.get("confidence", 0))
+    reasons.append(f"Strategy confidence: {strategy_confidence}")
+
+    # --------------------------------------------------
+    # 🟢 Decision rules
+    # --------------------------------------------------
+    if combined_score >= thresholds["buy"] and strategy_confidence >= thresholds["buy"]:
+        action = "buy"
+        confidence = "high" if risk_profile != "aggressive" else "medium"
+
+    elif combined_score >= thresholds["hold"]:
+        action = "hold"
+        confidence = thresholds["min_confidence"]
+
+    else:
         action = "observe"
         confidence = "low"
-    elif confidence_score < 60:
-        action = "hold"
-        confidence = "medium"
-    else:
-        action = "buy"
-        confidence = "high"
 
-    reasons.append(f"Strategy confidence: {confidence_score}")
-    reasons.append(f"Market score: {scores.get('market')}")
-    reasons.append(f"Macro score: {scores.get('macro')}")
+    # --------------------------------------------------
+    # 📌 Final explanation
+    # --------------------------------------------------
+    reasons.append(
+        f"Thresholds → buy ≥ {thresholds['buy']} | hold ≥ {thresholds['hold']}"
+    )
 
     return {
         "symbol": symbol,
         "action": action,
         "confidence": confidence,
-        "reasons": reasons[:4],
+        "reasons": reasons[:6],
     }
 
-# =====================================================
-# 💾 Persist decision + paper order
-# =====================================================
-def _persist_decision_and_order(
-    conn,
-    user_id: int,
-    bot_id: int,
-    strategy_id: int,
-    setup_id: int,
-    report_date: date,
-    decision: Dict[str, Any],
-    scores: Dict[str, float],
-) -> int:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO bot_decisions (
-              user_id, bot_id, symbol, decision_date, decision_ts,
-              action, confidence, scores_json, reason_json,
-              setup_id, strategy_id, status, created_at, updated_at
-            )
-            VALUES (
-              %s,%s,%s,%s,NOW(),
-              %s,%s,%s::jsonb,%s::jsonb,
-              %s,%s,'planned',NOW(),NOW()
-            )
-            ON CONFLICT (user_id, bot_id, decision_date)
-            DO UPDATE SET
-              action=EXCLUDED.action,
-              confidence=EXCLUDED.confidence,
-              scores_json=EXCLUDED.scores_json,
-              reason_json=EXCLUDED.reason_json,
-              setup_id=EXCLUDED.setup_id,
-              strategy_id=EXCLUDED.strategy_id,
-              status='planned',
-              decision_ts=NOW(),
-              updated_at=NOW()
-            RETURNING id
-            """,
-            (
-                user_id,
-                bot_id,
-                decision["symbol"],
-                report_date,
-                decision["action"],
-                decision["confidence"],
-                json.dumps(scores),
-                json.dumps(decision["reasons"]),
-                setup_id,
-                strategy_id,
-            ),
-        )
-        decision_id = cur.fetchone()[0]
-
-    if (
-        decision["action"] in ("buy", "sell")
-        and decision.get("amount_eur", 0) > 0
-        and _table_exists(conn, "bot_orders")
-    ):
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM bot_orders WHERE decision_id=%s", (decision_id,))
-            cur.execute(
-                """
-                INSERT INTO bot_orders (
-                  user_id, bot_id, decision_id, symbol,
-                  side, order_type, quote_amount_eur,
-                  dry_run_payload, status, created_at, updated_at
-                )
-                VALUES (
-                  %s,%s,%s,%s,
-                  %s,'market',%s,
-                  %s::jsonb,'ready',NOW(),NOW()
-                )
-                """,
-                (
-                    user_id,
-                    bot_id,
-                    decision_id,
-                    decision["symbol"],
-                    decision["action"],
-                    decision["amount_eur"],
-                    json.dumps(
-                        {
-                            "symbol": decision["symbol"],
-                            "action": decision["action"],
-                            "amount_eur": decision["amount_eur"],
-                        }
-                    ),
-                ),
-            )
-
-    return decision_id
-
-# =====================================================
-# 🚀 PUBLIC ENTRYPOINT (PER BOT ONDERSTEUND)
-# =====================================================
 # =====================================================
 # 🚀 PUBLIC ENTRYPOINT (PER BOT ONDERSTEUND)
 # =====================================================
