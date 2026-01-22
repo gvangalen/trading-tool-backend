@@ -544,6 +544,7 @@ def run_trading_bot_agent(
     user_id: int,
     report_date: Optional[date] = None,
     bot_id: Optional[int] = None,
+    auto_execute: bool = False,   # ✅ AUTO MODE SUPPORT
 ) -> Dict[str, Any]:
 
     report_date = report_date or date.today()
@@ -569,7 +570,7 @@ def run_trading_bot_agent(
             }
 
         # ==========================================
-        # 📊 Daily scores (single source)
+        # 📊 Daily scores
         # ==========================================
         scores = _get_daily_scores(conn, user_id, report_date)
         results = []
@@ -589,7 +590,7 @@ def run_trading_bot_agent(
             )
 
             # --------------------------------------
-            # 🧠 Decision (abstract)
+            # 🧠 Decision
             # --------------------------------------
             decision = _decide(bot, snapshot, scores)
 
@@ -643,7 +644,7 @@ def run_trading_bot_agent(
                 )
 
             # --------------------------------------
-            # 🧾 ORDER PROPOSAL (nieuw)
+            # 🧾 ORDER PROPOSAL
             # --------------------------------------
             order_proposal = build_order_proposal(
                 conn=conn,
@@ -654,7 +655,7 @@ def run_trading_bot_agent(
             )
 
             # --------------------------------------
-            # 💾 Persist decision (+ paper order)
+            # 💾 Persist decision + order
             # --------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
@@ -668,7 +669,7 @@ def run_trading_bot_agent(
             )
 
             # --------------------------------------
-            # 📒 Ledger reserve (alleen bij voorstel)
+            # 📒 Reserve ledger (proposal)
             # --------------------------------------
             if order_proposal:
                 record_bot_ledger_entry(
@@ -688,7 +689,61 @@ def run_trading_bot_agent(
                 )
 
             # --------------------------------------
-            # 📤 Result voor frontend
+            # 🤖 AUTO EXECUTE (OPTIE 3)
+            # --------------------------------------
+            if auto_execute and order_proposal:
+                with conn.cursor() as cur:
+                    # decision → executed
+                    cur.execute(
+                        """
+                        UPDATE bot_decisions
+                        SET
+                          status='executed',
+                          executed_by='auto',
+                          executed_at=NOW(),
+                          updated_at=NOW()
+                        WHERE id=%s
+                          AND user_id=%s
+                          AND bot_id=%s
+                          AND status='planned'
+                        """,
+                        (decision_id, user_id, bot["bot_id"]),
+                    )
+
+                    # order → filled
+                    cur.execute(
+                        """
+                        UPDATE bot_orders
+                        SET status='filled',
+                            updated_at=NOW()
+                        WHERE decision_id=%s
+                          AND user_id=%s
+                          AND bot_id=%s
+                        RETURNING id
+                        """,
+                        (decision_id, user_id, bot["bot_id"]),
+                    )
+                    row = cur.fetchone()
+                    order_id = row[0] if row else None
+
+                # ledger execute
+                if order_id:
+                    record_bot_ledger_entry(
+                        conn=conn,
+                        user_id=user_id,
+                        bot_id=bot["bot_id"],
+                        entry_type="execute",
+                        cash_delta_eur=-float(order_proposal["quote_amount_eur"]),
+                        qty_delta=float(order_proposal["estimated_qty"]),
+                        symbol=order_proposal["symbol"],
+                        decision_id=decision_id,
+                        order_id=order_id,
+                        note="Auto executed by bot",
+                        meta={"mode": "auto"},
+                    )
+
+            # --------------------------------------
+            # 📤 Result for frontend
             # --------------------------------------
             results.append(
                 {
@@ -699,7 +754,7 @@ def run_trading_bot_agent(
                     "confidence": decision["confidence"],
                     "amount_eur": decision["amount_eur"],
                     "reasons": decision.get("reasons", []),
-                    "order": order_proposal,  # ⭐ dit is de UI-truth
+                    "order": order_proposal,
                 }
             )
 
@@ -719,3 +774,71 @@ def run_trading_bot_agent(
 
     finally:
         conn.close()
+
+def _auto_execute_decision(
+    *,
+    conn,
+    user_id: int,
+    bot_id: int,
+    decision_id: int,
+    order: dict,
+):
+    """
+    Marks decision + order as executed by AUTO.
+    Single source of truth.
+    """
+
+    with conn.cursor() as cur:
+        # ✅ decision executed
+        cur.execute(
+            """
+            UPDATE bot_decisions
+            SET
+              status='executed',
+              executed_by='auto',
+              executed_at=NOW(),
+              updated_at=NOW()
+            WHERE id=%s
+              AND user_id=%s
+              AND bot_id=%s
+              AND status='planned'
+            """,
+            (decision_id, user_id, bot_id),
+        )
+
+        # ✅ order filled
+        if _table_exists(conn, "bot_orders"):
+            cur.execute(
+                """
+                UPDATE bot_orders
+                SET
+                  status='filled',
+                  updated_at=NOW()
+                WHERE decision_id=%s
+                  AND user_id=%s
+                  AND bot_id=%s
+                RETURNING id
+                """,
+                (decision_id, user_id, bot_id),
+            )
+            row = cur.fetchone()
+            order_id = row[0] if row else None
+
+        else:
+            order_id = None
+
+        # ✅ ledger execution
+        if order_id:
+            record_bot_ledger_entry(
+                conn=conn,
+                user_id=user_id,
+                bot_id=bot_id,
+                entry_type="execute",
+                cash_delta_eur=-float(order.get("quote_amount_eur") or 0),
+                qty_delta=float(order.get("estimated_qty") or 0),
+                symbol=order.get("symbol", DEFAULT_SYMBOL),
+                decision_id=decision_id,
+                order_id=order_id,
+                note="Auto executed by bot",
+                meta={"mode": "auto"},
+            )
