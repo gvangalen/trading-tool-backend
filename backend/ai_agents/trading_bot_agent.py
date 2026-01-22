@@ -83,6 +83,42 @@ def _get_risk_thresholds(risk_profile: str) -> dict:
         "min_confidence": "medium",
     }
 
+def _build_setup_match(
+    *,
+    bot: Dict[str, Any],
+    scores: Dict[str, float],
+) -> Dict[str, Any]:
+    """
+    ALTIJD teruggeven zodat frontend altijd de card kan tonen.
+    Dit is 'strategy/setup match vandaag' (bot score vs totale marktscore).
+    """
+
+    macro = float(scores.get("macro", 10))
+    technical = float(scores.get("technical", 10))
+    market = float(scores.get("market", 10))
+    setup = float(scores.get("setup", 10))
+
+    combined_score = round((macro + technical + market + setup) / 4, 1)
+
+    thresholds = _get_risk_thresholds(bot.get("risk_profile", "balanced"))
+
+    return {
+        "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
+        "symbol": bot.get("symbol", DEFAULT_SYMBOL),
+        "timeframe": bot.get("timeframe") or "—",
+        "score": combined_score,
+        "components": {
+            "macro": macro,
+            "technical": technical,
+            "market": market,
+            "setup": setup,
+        },
+        "thresholds": {
+            "buy": float(thresholds["buy"]),
+            "hold": float(thresholds["hold"]),
+        },
+    }
+
 
 # =====================================================
 # 📦 Actieve bots + strategy context
@@ -301,7 +337,8 @@ def _get_active_strategy_snapshot(
               targets,
               stop_loss,
               confidence_score,
-              adjustment_reason
+              adjustment_reason,
+              amount_per_trade
             FROM active_strategy_snapshot
             WHERE user_id=%s
               AND strategy_id=%s
@@ -315,13 +352,14 @@ def _get_active_strategy_snapshot(
     if not row:
         return None
 
-    entry, targets, stop_loss, confidence, reason = row
+    entry, targets, stop_loss, confidence, reason, amount_per_trade = row
     return {
         "entry": entry,
         "targets": targets,
         "stop_loss": stop_loss,
         "confidence": float(confidence or 0),
         "reason": reason,
+        "amount_per_trade": float(amount_per_trade or 0),
     }
 
 # =====================================================
@@ -567,6 +605,7 @@ def run_trading_bot_agent(
                 "decisions": [],
             }
 
+        # ✅ single source scores
         scores = _get_daily_scores(conn, user_id, report_date)
         results = []
 
@@ -578,9 +617,13 @@ def run_trading_bot_agent(
                 report_date,
             )
 
+            # ✅ ALTIJD: setup/strategy match card data
+            setup_match = _build_setup_match(bot=bot, scores=scores)
+
+            # ✅ decision (buy/hold/observe) op basis van snapshot + scores
             decision = _decide(bot, snapshot, scores)
 
-            # 💰 amount
+            # 💰 amount bepalen (alleen relevant bij BUY)
             amount = 0.0
             if decision["action"] == "buy" and snapshot:
                 amount = float(snapshot.get("amount_per_trade") or 0)
@@ -595,13 +638,9 @@ def run_trading_bot_agent(
 
             decision["amount_eur"] = float(amount)
 
-            today_spent = get_today_spent_eur(
-                conn, user_id, bot["bot_id"], report_date
-            )
-
-            total_balance = abs(
-                get_bot_balance(conn, user_id, bot["bot_id"])
-            )
+            # 📊 budget checks
+            today_spent = get_today_spent_eur(conn, user_id, bot["bot_id"], report_date)
+            total_balance = abs(get_bot_balance(conn, user_id, bot["bot_id"]))
 
             ok, reason = check_bot_budget(
                 bot_config=bot,
@@ -613,10 +652,9 @@ def run_trading_bot_agent(
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", []).append(
-                    f"Budget blokkeert order: {reason}"
-                )
+                decision.setdefault("reasons", []).append(f"Budget blokkeert order: {reason}")
 
+            # 🧾 order preview (alleen bij BUY)
             order_proposal = build_order_proposal(
                 conn=conn,
                 bot=bot,
@@ -625,6 +663,7 @@ def run_trading_bot_agent(
                 total_balance_eur=total_balance,
             )
 
+            # 💾 persist decision + order
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -636,6 +675,7 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
+            # 📒 reserve ledger (alleen bij proposal)
             if order_proposal:
                 record_bot_ledger_entry(
                     conn=conn,
@@ -646,13 +686,15 @@ def run_trading_bot_agent(
                     symbol=decision["symbol"],
                     decision_id=decision_id,
                     meta={
-                        "estimated_price": order_proposal["estimated_price"],
-                        "estimated_qty": order_proposal["estimated_qty"],
+                        "estimated_price": order_proposal.get("estimated_price"),
+                        "estimated_qty": order_proposal.get("estimated_qty"),
                     },
                 )
 
-            # 🤖 AUTO MODE — ENIGE PLEK
-            if auto_execute and order_proposal:
+            # 🤖 AUTO MODE: alleen uitvoeren als bot.mode == auto
+            executed_by = None
+            status = "planned"
+            if bot.get("mode") == "auto" and auto_execute and order_proposal:
                 _auto_execute_decision(
                     conn=conn,
                     user_id=user_id,
@@ -660,7 +702,10 @@ def run_trading_bot_agent(
                     decision_id=decision_id,
                     order=order_proposal,
                 )
+                executed_by = "auto"
+                status = "executed"
 
+            # ✅ Return payload voor frontend (setup_match altijd!)
             results.append(
                 {
                     "bot_id": bot["bot_id"],
@@ -670,7 +715,16 @@ def run_trading_bot_agent(
                     "confidence": decision["confidence"],
                     "amount_eur": decision["amount_eur"],
                     "reasons": decision.get("reasons", []),
+
+                    # ⭐ CRUCIAAL: card data altijd aanwezig
+                    "setup_match": setup_match,
+
+                    # order (kan None zijn)
                     "order": order_proposal,
+
+                    # status info voor UI
+                    "status": status if executed_by else "planned",
+                    "executed_by": executed_by,
                 }
             )
 
