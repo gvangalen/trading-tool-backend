@@ -499,81 +499,46 @@ def _decide(
     snapshot: Optional[Dict[str, Any]],
     scores: Dict[str, float],
 ) -> Dict[str, Any]:
-    """
-    Decision logic with risk profiles:
-    - conservative
-    - balanced
-    - aggressive
-    """
 
     symbol = bot["symbol"]
     risk_profile = bot.get("risk_profile", "balanced")
     thresholds = _get_risk_thresholds(risk_profile)
 
-    reasons = []
-
-    # --------------------------------------------------
-    # ❌ Geen actieve strategie
-    # --------------------------------------------------
-    if not snapshot:
-        return {
-            "symbol": symbol,
-            "action": "observe",
-            "confidence": "low",
-            "reasons": [
-                "Geen actieve strategy snapshot",
-                f"Risk profile: {risk_profile}",
-            ],
-        }
-
-    # --------------------------------------------------
-    # 📊 Scores
-    # --------------------------------------------------
+    # Scores
     macro = float(scores.get("macro", 10))
     technical = float(scores.get("technical", 10))
     market = float(scores.get("market", 10))
     setup = float(scores.get("setup", 10))
 
-    combined_score = round(
-        (macro + technical + market + setup) / 4, 1
-    )
+    combined_score = round((macro + technical + market + setup) / 4, 1)
 
-    reasons.append(f"Combined score: {combined_score}")
-    reasons.append(f"Risk profile: {risk_profile}")
+    # Strategy confidence
+    strategy_confidence = float(snapshot.get("confidence", 0)) if snapshot else 0
 
-    # --------------------------------------------------
-    # 🧠 Strategy confidence (AI snapshot)
-    # --------------------------------------------------
-    strategy_confidence = float(snapshot.get("confidence", 0))
-    reasons.append(f"Strategy confidence: {strategy_confidence}")
+    # Default
+    action = "observe"
+    confidence = "low"
 
-    # --------------------------------------------------
-    # 🟢 Decision rules
-    # --------------------------------------------------
-    if combined_score >= thresholds["buy"] and strategy_confidence >= thresholds["buy"]:
-        action = "buy"
-        confidence = "high" if risk_profile != "aggressive" else "medium"
-
-    elif combined_score >= thresholds["hold"]:
-        action = "hold"
-        confidence = thresholds["min_confidence"]
-
-    else:
-        action = "observe"
-        confidence = "low"
-
-    # --------------------------------------------------
-    # 📌 Final explanation
-    # --------------------------------------------------
-    reasons.append(
-        f"Thresholds → buy ≥ {thresholds['buy']} | hold ≥ {thresholds['hold']}"
-    )
+    if snapshot:
+        if combined_score >= thresholds["buy"] and strategy_confidence >= thresholds["buy"]:
+            action = "buy"
+            confidence = "high"
+        elif combined_score >= thresholds["hold"]:
+            action = "hold"
+            confidence = thresholds["min_confidence"]
 
     return {
         "symbol": symbol,
         "action": action,
         "confidence": confidence,
-        "reasons": reasons[:6],
+        "score": combined_score,   # 🔥 DIT MISSTE
+        "setup_match": {           # 🔥 DIT MISSTE
+            "name": bot["strategy_type"],
+            "symbol": bot["symbol"],
+            "timeframe": bot["timeframe"],
+            "score": combined_score,
+            "min_required": thresholds["buy"],
+        },
     }
 
 # =====================================================
