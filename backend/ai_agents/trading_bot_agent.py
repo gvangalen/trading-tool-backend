@@ -128,6 +128,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
             bot_id,
             bot_name,
             mode,
+            risk_profile,        # ✅ FIX
             strategy_id,
             budget_total_eur,
             budget_daily_limit_eur,
@@ -144,7 +145,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
                 "bot_id": bot_id,
                 "bot_name": bot_name,
                 "mode": mode,
-                "risk_profile": risk_profile,
+                "risk_profile": risk_profile or "balanced",
                 "strategy_id": strategy_id,
                 "strategy_type": strategy_type,
                 "setup_id": setup_id,
@@ -544,7 +545,7 @@ def run_trading_bot_agent(
     user_id: int,
     report_date: Optional[date] = None,
     bot_id: Optional[int] = None,
-    auto_execute: bool = False,   # ✅ AUTO MODE SUPPORT
+    auto_execute: bool = False,
 ) -> Dict[str, Any]:
 
     report_date = report_date or date.today()
@@ -553,9 +554,6 @@ def run_trading_bot_agent(
         return {"ok": False, "error": "db_unavailable"}
 
     try:
-        # ==========================================
-        # 📦 Actieve bots
-        # ==========================================
         bots = _get_active_bots(conn, user_id)
 
         if bot_id is not None:
@@ -569,19 +567,10 @@ def run_trading_bot_agent(
                 "decisions": [],
             }
 
-        # ==========================================
-        # 📊 Daily scores
-        # ==========================================
         scores = _get_daily_scores(conn, user_id, report_date)
         results = []
 
-        # ==========================================
-        # 🔁 PER BOT
-        # ==========================================
         for bot in bots:
-            # --------------------------------------
-            # 📸 Strategy snapshot
-            # --------------------------------------
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -589,24 +578,16 @@ def run_trading_bot_agent(
                 report_date,
             )
 
-            # --------------------------------------
-            # 🧠 Decision
-            # --------------------------------------
             decision = _decide(bot, snapshot, scores)
 
-            # --------------------------------------
-            # 💰 Amount bepalen
-            # --------------------------------------
+            # 💰 amount
             amount = 0.0
             if decision["action"] == "buy" and snapshot:
-                strategy_amount = float(
-                    snapshot.get("amount_per_trade", 0) or 0
-                )
+                amount = float(snapshot.get("amount_per_trade") or 0)
 
-                min_eur = float(bot["budget"].get("min_order_eur", 0) or 0)
-                max_eur = float(bot["budget"].get("max_order_eur", 0) or 0)
+                min_eur = float(bot["budget"].get("min_order_eur") or 0)
+                max_eur = float(bot["budget"].get("max_order_eur") or 0)
 
-                amount = strategy_amount
                 if min_eur > 0:
                     amount = max(amount, min_eur)
                 if max_eur > 0:
@@ -614,14 +595,8 @@ def run_trading_bot_agent(
 
             decision["amount_eur"] = float(amount)
 
-            # --------------------------------------
-            # 📊 Budget checks
-            # --------------------------------------
             today_spent = get_today_spent_eur(
-                conn,
-                user_id,
-                bot["bot_id"],
-                report_date,
+                conn, user_id, bot["bot_id"], report_date
             )
 
             total_balance = abs(
@@ -638,14 +613,10 @@ def run_trading_bot_agent(
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", [])
-                decision["reasons"].append(
+                decision.setdefault("reasons", []).append(
                     f"Budget blokkeert order: {reason}"
                 )
 
-            # --------------------------------------
-            # 🧾 ORDER PROPOSAL
-            # --------------------------------------
             order_proposal = build_order_proposal(
                 conn=conn,
                 bot=bot,
@@ -654,9 +625,6 @@ def run_trading_bot_agent(
                 total_balance_eur=total_balance,
             )
 
-            # --------------------------------------
-            # 💾 Persist decision + order
-            # --------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -668,9 +636,6 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            # --------------------------------------
-            # 📒 Reserve ledger (proposal)
-            # --------------------------------------
             if order_proposal:
                 record_bot_ledger_entry(
                     conn=conn,
@@ -678,73 +643,24 @@ def run_trading_bot_agent(
                     bot_id=bot["bot_id"],
                     entry_type="reserve",
                     cash_delta_eur=-decision["amount_eur"],
-                    qty_delta=0.0,
                     symbol=decision["symbol"],
                     decision_id=decision_id,
-                    note="Reserved by bot proposal",
                     meta={
-                        "estimated_price": order_proposal.get("estimated_price"),
-                        "estimated_qty": order_proposal.get("estimated_qty"),
+                        "estimated_price": order_proposal["estimated_price"],
+                        "estimated_qty": order_proposal["estimated_qty"],
                     },
                 )
 
-            # --------------------------------------
-            # 🤖 AUTO EXECUTE (OPTIE 3)
-            # --------------------------------------
+            # 🤖 AUTO MODE — ENIGE PLEK
             if auto_execute and order_proposal:
-                with conn.cursor() as cur:
-                    # decision → executed
-                    cur.execute(
-                        """
-                        UPDATE bot_decisions
-                        SET
-                          status='executed',
-                          executed_by='auto',
-                          executed_at=NOW(),
-                          updated_at=NOW()
-                        WHERE id=%s
-                          AND user_id=%s
-                          AND bot_id=%s
-                          AND status='planned'
-                        """,
-                        (decision_id, user_id, bot["bot_id"]),
-                    )
+                _auto_execute_decision(
+                    conn=conn,
+                    user_id=user_id,
+                    bot_id=bot["bot_id"],
+                    decision_id=decision_id,
+                    order=order_proposal,
+                )
 
-                    # order → filled
-                    cur.execute(
-                        """
-                        UPDATE bot_orders
-                        SET status='filled',
-                            updated_at=NOW()
-                        WHERE decision_id=%s
-                          AND user_id=%s
-                          AND bot_id=%s
-                        RETURNING id
-                        """,
-                        (decision_id, user_id, bot["bot_id"]),
-                    )
-                    row = cur.fetchone()
-                    order_id = row[0] if row else None
-
-                # ledger execute
-                if order_id:
-                    record_bot_ledger_entry(
-                        conn=conn,
-                        user_id=user_id,
-                        bot_id=bot["bot_id"],
-                        entry_type="execute",
-                        cash_delta_eur=-float(order_proposal["quote_amount_eur"]),
-                        qty_delta=float(order_proposal["estimated_qty"]),
-                        symbol=order_proposal["symbol"],
-                        decision_id=decision_id,
-                        order_id=order_id,
-                        note="Auto executed by bot",
-                        meta={"mode": "auto"},
-                    )
-
-            # --------------------------------------
-            # 📤 Result for frontend
-            # --------------------------------------
             results.append(
                 {
                     "bot_id": bot["bot_id"],
@@ -775,6 +691,9 @@ def run_trading_bot_agent(
     finally:
         conn.close()
 
+# =====================================================
+# 🚀 Bot exute decision functie
+# =====================================================
 def _auto_execute_decision(
     *,
     conn,
