@@ -52,6 +52,53 @@ def _normalize_confidence(v: str) -> str:
     v = (v or "").lower().strip()
     return v if v in CONFIDENCE_LEVELS else "low"
 
+def _get_strategy_trade_amount_eur(
+    conn,
+    *,
+    user_id: int,
+    strategy_id: int,
+) -> float:
+    """
+    Single source of truth voor trade sizing:
+    → strategies.data -> trade_amount_eur (of amount_eur als fallback)
+
+    Verwachte JSON:
+      {"trade_amount_eur": 250}
+    """
+    if not _table_exists(conn, "strategies"):
+        return 0.0
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT data
+            FROM strategies
+            WHERE id=%s AND user_id=%s
+            LIMIT 1
+            """,
+            (strategy_id, user_id),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        return 0.0
+
+    data = row[0] or {}
+    if isinstance(data, str):
+        data = _safe_json(data, {})
+
+    if not isinstance(data, dict):
+        return 0.0
+
+    val = data.get("trade_amount_eur", None)
+    if val is None:
+        val = data.get("amount_eur", None)  # fallback key
+
+    try:
+        return float(val or 0.0)
+    except Exception:
+        return 0.0
+
 
 # =====================================================
 # 📦 Risk profiles
@@ -87,10 +134,11 @@ def _build_setup_match(
     *,
     bot: Dict[str, Any],
     scores: Dict[str, float],
+    snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     ALTIJD teruggeven zodat frontend altijd de card kan tonen.
-    Dit is 'strategy/setup match vandaag' (bot score vs totale marktscore).
+    Dit is "strategy/setup match vandaag" (bot score vs totale marktscore).
     """
 
     macro = float(scores.get("macro", 10))
@@ -101,6 +149,26 @@ def _build_setup_match(
     combined_score = round((macro + technical + market + setup) / 4, 1)
 
     thresholds = _get_risk_thresholds(bot.get("risk_profile", "balanced"))
+    buy_th = float(thresholds["buy"])
+    hold_th = float(thresholds["hold"])
+
+    has_snapshot = snapshot is not None
+    strategy_confidence = float(snapshot.get("confidence", 0) if snapshot else 0)
+
+    # "match" = waarom wel/geen trade
+    match_buy = has_snapshot and (combined_score >= buy_th) and (strategy_confidence >= buy_th)
+    match_hold = has_snapshot and (combined_score >= hold_th)
+
+    if not has_snapshot:
+        why = "Geen active_strategy_snapshot voor vandaag"
+    elif combined_score < hold_th:
+        why = f"Score te laag: {combined_score} < hold drempel {hold_th}"
+    elif combined_score < buy_th:
+        why = f"Score ok voor hold, maar niet voor buy: {combined_score} < buy drempel {buy_th}"
+    elif strategy_confidence < buy_th:
+        why = f"Strategy confidence te laag: {strategy_confidence} < buy drempel {buy_th}"
+    else:
+        why = "Voldoet aan buy voorwaarden"
 
     return {
         "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
@@ -114,9 +182,14 @@ def _build_setup_match(
             "setup": setup,
         },
         "thresholds": {
-            "buy": float(thresholds["buy"]),
-            "hold": float(thresholds["hold"]),
+            "buy": buy_th,
+            "hold": hold_th,
         },
+        "strategy_confidence": strategy_confidence,
+        "has_snapshot": has_snapshot,
+        "match_buy": bool(match_buy),
+        "match_hold": bool(match_hold),
+        "why": why,
     }
 
 
@@ -326,6 +399,10 @@ def _get_active_strategy_snapshot(
     strategy_id: int,
     report_date: date,
 ) -> Optional[Dict[str, Any]]:
+    """
+    Snapshot = alleen "wat is vandaag de actuele strategy context".
+    NIET sizing. Sizing komt uit strategies.data.
+    """
     if not _table_exists(conn, "active_strategy_snapshot"):
         return None
 
@@ -337,8 +414,7 @@ def _get_active_strategy_snapshot(
               targets,
               stop_loss,
               confidence_score,
-              adjustment_reason,
-              amount_per_trade
+              adjustment_reason
             FROM active_strategy_snapshot
             WHERE user_id=%s
               AND strategy_id=%s
@@ -352,14 +428,13 @@ def _get_active_strategy_snapshot(
     if not row:
         return None
 
-    entry, targets, stop_loss, confidence, reason, amount_per_trade = row
+    entry, targets, stop_loss, confidence, reason = row
     return {
         "entry": entry,
         "targets": targets,
         "stop_loss": stop_loss,
         "confidence": float(confidence or 0),
         "reason": reason,
-        "amount_per_trade": float(amount_per_trade or 0),
     }
 
 # =====================================================
@@ -499,48 +574,52 @@ def _decide(
     snapshot: Optional[Dict[str, Any]],
     scores: Dict[str, float],
 ) -> Dict[str, Any]:
-
     symbol = bot["symbol"]
     risk_profile = bot.get("risk_profile", "balanced")
     thresholds = _get_risk_thresholds(risk_profile)
 
-    # Scores
     macro = float(scores.get("macro", 10))
     technical = float(scores.get("technical", 10))
     market = float(scores.get("market", 10))
     setup = float(scores.get("setup", 10))
 
     combined_score = round((macro + technical + market + setup) / 4, 1)
+    strategy_confidence = float(snapshot.get("confidence", 0) if snapshot else 0)
 
-    # Strategy confidence
-    strategy_confidence = float(snapshot.get("confidence", 0)) if snapshot else 0
+    reasons = [
+        f"Combined score: {combined_score}",
+        f"Risk profile: {risk_profile}",
+        f"Strategy confidence: {strategy_confidence}",
+        f"Thresholds → buy ≥ {thresholds['buy']} | hold ≥ {thresholds['hold']}",
+    ]
 
-    # Default
-    action = "observe"
-    confidence = "low"
+    if not snapshot:
+        return {
+            "symbol": symbol,
+            "action": "observe",
+            "confidence": "low",
+            "score": combined_score,
+            "reasons": reasons[:6],
+        }
 
-    if snapshot:
-        if combined_score >= thresholds["buy"] and strategy_confidence >= thresholds["buy"]:
-            action = "buy"
-            confidence = "high"
-        elif combined_score >= thresholds["hold"]:
-            action = "hold"
-            confidence = thresholds["min_confidence"]
+    if combined_score >= thresholds["buy"] and strategy_confidence >= thresholds["buy"]:
+        action = "buy"
+        confidence = "high" if risk_profile != "aggressive" else "medium"
+    elif combined_score >= thresholds["hold"]:
+        action = "hold"
+        confidence = thresholds["min_confidence"]
+    else:
+        action = "observe"
+        confidence = "low"
 
     return {
         "symbol": symbol,
         "action": action,
         "confidence": confidence,
-        "score": combined_score,   # 🔥 DIT MISSTE
-        "setup_match": {           # 🔥 DIT MISSTE
-            "name": bot["strategy_type"],
-            "symbol": bot["symbol"],
-            "timeframe": bot["timeframe"],
-            "score": combined_score,
-            "min_required": thresholds["buy"],
-        },
+        "score": combined_score,
+        "reasons": reasons[:6],
     }
-
+    
 # =====================================================
 # 🚀 PUBLIC ENTRYPOINT (PER BOT ONDERSTEUND)
 # =====================================================
@@ -550,7 +629,6 @@ def run_trading_bot_agent(
     bot_id: Optional[int] = None,
     auto_execute: bool = False,
 ) -> Dict[str, Any]:
-
     report_date = report_date or date.today()
     conn = get_db_connection()
     if not conn:
@@ -563,35 +641,30 @@ def run_trading_bot_agent(
             bots = [b for b in bots if b["bot_id"] == bot_id]
 
         if not bots:
-            return {
-                "ok": True,
-                "date": str(report_date),
-                "bots": 0,
-                "decisions": [],
-            }
+            return {"ok": True, "date": str(report_date), "bots": 0, "decisions": []}
 
-        # ✅ single source scores
         scores = _get_daily_scores(conn, user_id, report_date)
         results = []
 
         for bot in bots:
             snapshot = _get_active_strategy_snapshot(
-                conn,
-                user_id,
-                bot["strategy_id"],
-                report_date,
+                conn, user_id, bot["strategy_id"], report_date
             )
 
-            # ✅ ALTIJD: setup/strategy match card data
-            setup_match = _build_setup_match(bot=bot, scores=scores)
+            # ✅ card data altijd
+            setup_match = _build_setup_match(bot=bot, scores=scores, snapshot=snapshot)
 
-            # ✅ decision (buy/hold/observe) op basis van snapshot + scores
+            # ✅ decision
             decision = _decide(bot, snapshot, scores)
 
-            # 💰 amount bepalen (alleen relevant bij BUY)
+            # ✅ sizing komt uit strategies.data (niet uit snapshot)
+            strategy_amount = _get_strategy_trade_amount_eur(
+                conn, user_id=user_id, strategy_id=bot["strategy_id"]
+            )
+
             amount = 0.0
-            if decision["action"] == "buy" and snapshot:
-                amount = float(snapshot.get("amount_per_trade") or 0)
+            if decision["action"] == "buy":
+                amount = float(strategy_amount or 0)
 
                 min_eur = float(bot["budget"].get("min_order_eur") or 0)
                 max_eur = float(bot["budget"].get("max_order_eur") or 0)
@@ -603,7 +676,7 @@ def run_trading_bot_agent(
 
             decision["amount_eur"] = float(amount)
 
-            # 📊 budget checks
+            # budget checks
             today_spent = get_today_spent_eur(conn, user_id, bot["bot_id"], report_date)
             total_balance = abs(get_bot_balance(conn, user_id, bot["bot_id"]))
 
@@ -617,9 +690,10 @@ def run_trading_bot_agent(
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", []).append(f"Budget blokkeert order: {reason}")
+                decision.setdefault("reasons", [])
+                decision["reasons"].append(f"Budget blokkeert order: {reason}")
 
-            # 🧾 order preview (alleen bij BUY)
+            # order preview alleen bij BUY
             order_proposal = build_order_proposal(
                 conn=conn,
                 bot=bot,
@@ -628,7 +702,10 @@ def run_trading_bot_agent(
                 total_balance_eur=total_balance,
             )
 
-            # 💾 persist decision + order
+            # ⭐ push setup_match in decision object (zodat _persist het kan opslaan)
+            decision["setup_match"] = setup_match
+
+            # persist decision + order
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -640,14 +717,14 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            # 📒 reserve ledger (alleen bij proposal)
+            # reserve ledger bij proposal
             if order_proposal:
                 record_bot_ledger_entry(
                     conn=conn,
                     user_id=user_id,
                     bot_id=bot["bot_id"],
                     entry_type="reserve",
-                    cash_delta_eur=-decision["amount_eur"],
+                    cash_delta_eur=-float(decision["amount_eur"]),
                     symbol=decision["symbol"],
                     decision_id=decision_id,
                     meta={
@@ -656,9 +733,10 @@ def run_trading_bot_agent(
                     },
                 )
 
-            # 🤖 AUTO MODE: alleen uitvoeren als bot.mode == auto
+            # auto execute enkel als bot.mode == auto + auto_execute flag + proposal
             executed_by = None
             status = "planned"
+
             if bot.get("mode") == "auto" and auto_execute and order_proposal:
                 _auto_execute_decision(
                     conn=conn,
@@ -670,7 +748,6 @@ def run_trading_bot_agent(
                 executed_by = "auto"
                 status = "executed"
 
-            # ✅ Return payload voor frontend (setup_match altijd!)
             results.append(
                 {
                     "bot_id": bot["bot_id"],
@@ -681,26 +758,19 @@ def run_trading_bot_agent(
                     "amount_eur": decision["amount_eur"],
                     "reasons": decision.get("reasons", []),
 
-                    # ⭐ CRUCIAAL: card data altijd aanwezig
+                    # ⭐ altijd aanwezig voor de card
                     "setup_match": setup_match,
 
-                    # order (kan None zijn)
                     "order": order_proposal,
 
                     # status info voor UI
-                    "status": status if executed_by else "planned",
+                    "status": status,
                     "executed_by": executed_by,
                 }
             )
 
         conn.commit()
-
-        return {
-            "ok": True,
-            "date": str(report_date),
-            "bots": len(results),
-            "decisions": results,
-        }
+        return {"ok": True, "date": str(report_date), "bots": len(results), "decisions": results}
 
     except Exception:
         conn.rollback()
