@@ -197,10 +197,15 @@ def _build_setup_match(
     snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    ALWAYS return so frontend can always show the card.
-    Also: score can NEVER be 0.
+    UI-CONTRACT (KEIHARD):
+    - setup_match bestaat ALTIJD
+    - score is NOOIT 0
+    - status is EXPLICIET (match / no_match / no_snapshot)
     """
 
+    # -----------------------------
+    # Scores (altijd geldig)
+    # -----------------------------
     macro = _clamp_score(scores.get("macro", 10), default=10)
     technical = _clamp_score(scores.get("technical", 10), default=10)
     market = _clamp_score(scores.get("market", 10), default=10)
@@ -209,56 +214,89 @@ def _build_setup_match(
     combined_score = round((macro + technical + market + setup) / 4, 1)
     combined_score = _clamp_score(combined_score, default=10)
 
+    # -----------------------------
+    # Risk thresholds
+    # -----------------------------
     thresholds = _get_risk_thresholds(bot.get("risk_profile", "balanced"))
     buy_th = float(thresholds["buy"])
     hold_th = float(thresholds["hold"])
 
+    # -----------------------------
+    # Snapshot context
+    # -----------------------------
     has_snapshot = snapshot is not None
-    strategy_confidence = _clamp_score(snapshot.get("confidence", 0) if snapshot else 0, default=10)
-
-    match_buy = has_snapshot and (combined_score >= buy_th) and (strategy_confidence >= buy_th)
-    match_hold = has_snapshot and (combined_score >= hold_th)
+    strategy_confidence = _clamp_score(
+        snapshot.get("confidence", 0) if snapshot else 0,
+        default=10,
+    )
 
     # -----------------------------
-    # Status + reason (UI truth)
+    # Match logic
+    # -----------------------------
+    match_buy = has_snapshot and combined_score >= buy_th and strategy_confidence >= buy_th
+    match_hold = has_snapshot and combined_score >= hold_th
+
+    # -----------------------------
+    # STATUS — EXPLICIET & EENDUIDIG
     # -----------------------------
     if not has_snapshot:
         status = "no_snapshot"
-        reason = "Geen active_strategy_snapshot voor vandaag"
+        reason = "Geen strategy context beschikbaar voor vandaag"
+
     elif match_buy:
         status = "match_buy"
-        reason = "Voldoet aan buy voorwaarden"
-    elif match_hold:
-        status = "match_hold"
-        reason = f"Voldoet aan hold, maar niet aan buy (score {combined_score} < buy {buy_th} of confidence {strategy_confidence} < buy {buy_th})"
-    else:
-        status = "below_threshold"
-        reason = f"Score te laag voor hold: {combined_score} < {hold_th}"
+        reason = "Voldoet aan buy-voorwaarden"
 
+    elif match_hold:
+        status = "no_match"
+        reason = (
+            f"Score {combined_score} ≥ hold ({hold_th}), "
+            f"maar niet voldoende voor buy ({buy_th})"
+        )
+
+    else:
+        status = "no_match"
+        reason = f"Score {combined_score} onder hold-drempel ({hold_th})"
+
+    # -----------------------------
+    # ⚠️ BELANGRIJK
+    # no_match ≠ geen strategy
+    # no_match = strategy BESTAAT, maar DOET NIKS
+    # -----------------------------
     return {
+        # Identiteit (altijd tonen in UI)
         "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
         "symbol": bot.get("symbol", DEFAULT_SYMBOL),
         "timeframe": bot.get("timeframe") or "—",
+
+        # Score info
         "score": combined_score,
         "confidence": _confidence_from_score(combined_score),
 
+        # Score breakdown (voor debug / future UI)
         "components": {
             "macro": macro,
             "technical": technical,
             "market": market,
             "setup": setup,
         },
+
+        # Thresholds (UI + explainability)
         "thresholds": {
             "buy": buy_th,
             "hold": hold_th,
         },
 
+        # Strategy context
         "strategy_confidence": strategy_confidence,
         "has_snapshot": bool(has_snapshot),
+
+        # Match booleans (UI mag hier NOOIT zelf logica doen)
         "match_buy": bool(match_buy),
         "match_hold": bool(match_hold),
 
-        "status": status,
+        # ⭐ ENIGE WAARHEID VOOR DE UI
+        "status": status,        # match_buy | no_match | no_snapshot
         "reason": reason,
     }
 
