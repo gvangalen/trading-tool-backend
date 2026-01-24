@@ -691,6 +691,105 @@ def _decide(
         "score": combined_score,
         "reasons": reasons[:6],
     }
+
+
+# =====================================================
+# 🧠 Decision and order
+# =====================================================
+def _persist_decision_and_order(
+    *,
+    conn,
+    user_id: int,
+    bot_id: int,
+    strategy_id: int,
+    setup_id: Optional[int],
+    report_date: date,
+    decision: Dict[str, Any],
+    scores: Dict[str, float],
+) -> int:
+    """
+    Persist bot decision for today.
+
+    - Eén decision per bot per dag (UPSERT)
+    - scores_json = scores + setup_match
+    - reason_json = reasons (array)
+    """
+
+    action = _normalize_action(decision.get("action"))
+    confidence = _normalize_confidence(decision.get("confidence"))
+    symbol = decision.get("symbol", DEFAULT_SYMBOL)
+
+    reasons = decision.get("reasons", [])
+    if not isinstance(reasons, list):
+        reasons = [str(reasons)]
+
+    setup_match = decision.get("setup_match") or {}
+
+    scores_payload = {
+        "macro": _clamp_score(scores.get("macro", 10)),
+        "technical": _clamp_score(scores.get("technical", 10)),
+        "market": _clamp_score(scores.get("market", 10)),
+        "setup": _clamp_score(scores.get("setup", 10)),
+        "combined": _clamp_score(decision.get("score", 10)),
+        "setup_match": setup_match,
+    }
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO bot_decisions (
+                user_id,
+                bot_id,
+                strategy_id,
+                setup_id,
+                symbol,
+                decision_date,
+                action,
+                confidence,
+                scores_json,
+                reason_json,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                %s,%s,%s,%s,
+                %s,%s,
+                %s,%s,
+                %s,%s,
+                'planned',
+                NOW(), NOW()
+            )
+            ON CONFLICT (user_id, bot_id, decision_date)
+            DO UPDATE SET
+                action       = EXCLUDED.action,
+                confidence   = EXCLUDED.confidence,
+                scores_json  = EXCLUDED.scores_json,
+                reason_json  = EXCLUDED.reason_json,
+                updated_at  = NOW()
+            RETURNING id
+            """,
+            (
+                user_id,
+                bot_id,
+                strategy_id,
+                setup_id,
+                symbol,
+                report_date,
+                action,
+                confidence,
+                json.dumps(scores_payload),
+                json.dumps(reasons),
+            ),
+        )
+
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("Failed to upsert bot_decisions")
+
+        decision_id = int(row[0])
+
+    return decision_id
     
 # =====================================================
 # 🚀 PUBLIC ENTRYPOINT (PER BOT ONDERSTEUND)
