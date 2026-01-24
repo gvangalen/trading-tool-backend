@@ -241,7 +241,7 @@ def _build_setup_match(
     # -----------------------------
     if not has_snapshot:
         status = "no_snapshot"
-        reason = "Geen strategy context beschikbaar voor vandaag"
+        reason = "Strategy actief, maar vandaag geen concreet trade-plan"
 
     elif match_buy:
         status = "match_buy"
