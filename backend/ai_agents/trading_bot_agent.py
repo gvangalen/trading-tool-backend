@@ -31,6 +31,35 @@ def _table_exists(conn, table: str) -> bool:
         )
         return cur.fetchone() is not None
 
+def _clamp_score(v: Any, *, default: float = 10.0, lo: float = 10.0, hi: float = 100.0) -> float:
+    """
+    Scores mogen NOOIT 0 zijn.
+    - None/NaN/invalid -> default
+    - < lo -> lo
+    - > hi -> hi
+    """
+    try:
+        x = float(v)
+        if x != x:  # NaN check
+            x = default
+    except Exception:
+        x = default
+
+    if x < lo:
+        return float(lo)
+    if x > hi:
+        return float(hi)
+    return float(x)
+
+
+def _confidence_from_score(score: float) -> str:
+    s = float(score or 0)
+    if s >= 70:
+        return "high"
+    if s >= 40:
+        return "medium"
+    return "low"
+
 
 def _safe_json(v, fallback):
     if v is None:
@@ -130,6 +159,9 @@ def _get_risk_thresholds(risk_profile: str) -> dict:
         "min_confidence": "medium",
     }
 
+# =====================================================
+# 📦 Build setup match
+# =====================================================
 def _build_setup_match(
     *,
     bot: Dict[str, Any],
@@ -137,44 +169,51 @@ def _build_setup_match(
     snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    ALTIJD teruggeven zodat frontend altijd de card kan tonen.
-    Dit is "strategy/setup match vandaag" (bot score vs totale marktscore).
+    ALWAYS return so frontend can always show the card.
+    Also: score can NEVER be 0.
     """
 
-    macro = float(scores.get("macro", 10))
-    technical = float(scores.get("technical", 10))
-    market = float(scores.get("market", 10))
-    setup = float(scores.get("setup", 10))
+    macro = _clamp_score(scores.get("macro", 10), default=10)
+    technical = _clamp_score(scores.get("technical", 10), default=10)
+    market = _clamp_score(scores.get("market", 10), default=10)
+    setup = _clamp_score(scores.get("setup", 10), default=10)
 
     combined_score = round((macro + technical + market + setup) / 4, 1)
+    combined_score = _clamp_score(combined_score, default=10)
 
     thresholds = _get_risk_thresholds(bot.get("risk_profile", "balanced"))
     buy_th = float(thresholds["buy"])
     hold_th = float(thresholds["hold"])
 
     has_snapshot = snapshot is not None
-    strategy_confidence = float(snapshot.get("confidence", 0) if snapshot else 0)
+    strategy_confidence = _clamp_score(snapshot.get("confidence", 0) if snapshot else 0, default=10)
 
-    # "match" = waarom wel/geen trade
     match_buy = has_snapshot and (combined_score >= buy_th) and (strategy_confidence >= buy_th)
     match_hold = has_snapshot and (combined_score >= hold_th)
 
+    # -----------------------------
+    # Status + reason (UI truth)
+    # -----------------------------
     if not has_snapshot:
-        why = "Geen active_strategy_snapshot voor vandaag"
-    elif combined_score < hold_th:
-        why = f"Score te laag: {combined_score} < hold drempel {hold_th}"
-    elif combined_score < buy_th:
-        why = f"Score ok voor hold, maar niet voor buy: {combined_score} < buy drempel {buy_th}"
-    elif strategy_confidence < buy_th:
-        why = f"Strategy confidence te laag: {strategy_confidence} < buy drempel {buy_th}"
+        status = "no_snapshot"
+        reason = "Geen active_strategy_snapshot voor vandaag"
+    elif match_buy:
+        status = "match_buy"
+        reason = "Voldoet aan buy voorwaarden"
+    elif match_hold:
+        status = "match_hold"
+        reason = f"Voldoet aan hold, maar niet aan buy (score {combined_score} < buy {buy_th} of confidence {strategy_confidence} < buy {buy_th})"
     else:
-        why = "Voldoet aan buy voorwaarden"
+        status = "below_threshold"
+        reason = f"Score te laag voor hold: {combined_score} < {hold_th}"
 
     return {
         "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
         "symbol": bot.get("symbol", DEFAULT_SYMBOL),
         "timeframe": bot.get("timeframe") or "—",
         "score": combined_score,
+        "confidence": _confidence_from_score(combined_score),
+
         "components": {
             "macro": macro,
             "technical": technical,
@@ -185,11 +224,14 @@ def _build_setup_match(
             "buy": buy_th,
             "hold": hold_th,
         },
+
         "strategy_confidence": strategy_confidence,
-        "has_snapshot": has_snapshot,
+        "has_snapshot": bool(has_snapshot),
         "match_buy": bool(match_buy),
         "match_hold": bool(match_hold),
-        "why": why,
+
+        "status": status,
+        "reason": reason,
     }
 
 
@@ -365,6 +407,9 @@ def build_order_proposal(
 # 📊 Daily scores (single source of truth)
 # =====================================================
 def _get_daily_scores(conn, user_id: int, report_date: date) -> Dict[str, float]:
+    """
+    Single source of truth. Returned scores are ALWAYS in [10..100].
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -379,14 +424,15 @@ def _get_daily_scores(conn, user_id: int, report_date: date) -> Dict[str, float]
         row = cur.fetchone()
 
     if not row:
-        return dict(macro=10, technical=10, market=10, setup=10)
+        return dict(macro=10.0, technical=10.0, market=10.0, setup=10.0)
 
     macro, technical, market, setup = row
+
     return {
-        "macro": float(macro or 10),
-        "technical": float(technical or 10),
-        "market": float(market or 10),
-        "setup": float(setup or 10),
+        "macro": _clamp_score(macro, default=10),
+        "technical": _clamp_score(technical, default=10),
+        "market": _clamp_score(market, default=10),
+        "setup": _clamp_score(setup, default=10),
     }
 
 
@@ -578,21 +624,39 @@ def _decide(
     risk_profile = bot.get("risk_profile", "balanced")
     thresholds = _get_risk_thresholds(risk_profile)
 
-    macro = float(scores.get("macro", 10))
-    technical = float(scores.get("technical", 10))
-    market = float(scores.get("market", 10))
-    setup = float(scores.get("setup", 10))
+    # -------------------------------------------------
+    # Scores (NOOIT 0, NOOIT None)
+    # -------------------------------------------------
+    macro = _clamp_score(scores.get("macro", 10), default=10)
+    technical = _clamp_score(scores.get("technical", 10), default=10)
+    market = _clamp_score(scores.get("market", 10), default=10)
+    setup = _clamp_score(scores.get("setup", 10), default=10)
 
     combined_score = round((macro + technical + market + setup) / 4, 1)
-    strategy_confidence = float(snapshot.get("confidence", 0) if snapshot else 0)
+    combined_score = _clamp_score(combined_score, default=10)
 
+    strategy_confidence = _clamp_score(
+        snapshot.get("confidence", 0) if snapshot else 0,
+        default=10,
+    )
+
+    # -------------------------------------------------
+    # Explainable reasons (debug + UI)
+    # -------------------------------------------------
     reasons = [
+        f"Macro score: {macro}",
+        f"Technical score: {technical}",
+        f"Market score: {market}",
+        f"Setup score: {setup}",
         f"Combined score: {combined_score}",
-        f"Risk profile: {risk_profile}",
         f"Strategy confidence: {strategy_confidence}",
+        f"Risk profile: {risk_profile}",
         f"Thresholds → buy ≥ {thresholds['buy']} | hold ≥ {thresholds['hold']}",
     ]
 
+    # -------------------------------------------------
+    # Geen snapshot = nooit traden
+    # -------------------------------------------------
     if not snapshot:
         return {
             "symbol": symbol,
@@ -602,12 +666,20 @@ def _decide(
             "reasons": reasons[:6],
         }
 
-    if combined_score >= thresholds["buy"] and strategy_confidence >= thresholds["buy"]:
+    # -------------------------------------------------
+    # Decision logic
+    # -------------------------------------------------
+    if (
+        combined_score >= thresholds["buy"]
+        and strategy_confidence >= thresholds["buy"]
+    ):
         action = "buy"
         confidence = "high" if risk_profile != "aggressive" else "medium"
+
     elif combined_score >= thresholds["hold"]:
         action = "hold"
         confidence = thresholds["min_confidence"]
+
     else:
         action = "observe"
         confidence = "low"
