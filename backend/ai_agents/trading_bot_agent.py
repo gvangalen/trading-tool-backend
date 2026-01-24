@@ -60,6 +60,34 @@ def _confidence_from_score(score: float) -> str:
         return "medium"
     return "low"
 
+def _empty_decision(
+    *,
+    bot: Dict[str, Any],
+    scores: Dict[str, float],
+    report_date: date,
+    warning: str = "fallback_decision",
+) -> Dict[str, Any]:
+    """
+    Fail-safe decision object.
+    -> UI-contract blijft altijd intact (setup_match altijd aanwezig)
+    -> Gebruik dit als fallback als iets crasht tijdens generate/persist.
+    """
+    setup_match = _build_setup_match(bot=bot, scores=scores, snapshot=None)
+
+    return {
+        "bot_id": bot["bot_id"],
+        "decision_id": None,
+        "symbol": bot.get("symbol", DEFAULT_SYMBOL),
+        "action": "observe",
+        "confidence": "low",
+        "amount_eur": 0.0,
+        "reasons": [f"{warning} ({report_date})"],
+        "setup_match": setup_match,
+        "order": None,
+        "status": "planned",
+        "executed_by": None,
+    }
+
 
 def _safe_json(v, fallback):
     if v is None:
@@ -805,6 +833,9 @@ def run_trading_bot_agent(
     if not conn:
         return {"ok": False, "error": "db_unavailable"}
 
+    bots: List[Dict[str, Any]] = []
+    scores: Dict[str, float] = dict(macro=10.0, technical=10.0, market=10.0, setup=10.0)
+
     try:
         bots = _get_active_bots(conn, user_id)
 
@@ -815,130 +846,143 @@ def run_trading_bot_agent(
             return {"ok": True, "date": str(report_date), "bots": 0, "decisions": []}
 
         scores = _get_daily_scores(conn, user_id, report_date)
-        results = []
+        results: List[Dict[str, Any]] = []
 
         for bot in bots:
-            snapshot = _get_active_strategy_snapshot(
-                conn, user_id, bot["strategy_id"], report_date
-            )
+            try:
+                snapshot = _get_active_strategy_snapshot(
+                    conn, user_id, bot["strategy_id"], report_date
+                )
 
-            # ✅ card data altijd
-            setup_match = _build_setup_match(bot=bot, scores=scores, snapshot=snapshot)
+                # ✅ card data altijd
+                setup_match = _build_setup_match(bot=bot, scores=scores, snapshot=snapshot)
 
-            # ✅ decision
-            decision = _decide(bot, snapshot, scores)
+                # ✅ decision
+                decision = _decide(bot, snapshot, scores)
 
-            # ✅ sizing komt uit strategies.data (niet uit snapshot)
-            strategy_amount = _get_strategy_trade_amount_eur(
-                conn, user_id=user_id, strategy_id=bot["strategy_id"]
-            )
+                # ✅ sizing komt uit strategies.data (niet uit snapshot)
+                strategy_amount = _get_strategy_trade_amount_eur(
+                    conn, user_id=user_id, strategy_id=bot["strategy_id"]
+                )
 
-            amount = 0.0
-            if decision["action"] == "buy":
-                amount = float(strategy_amount or 0)
+                amount = 0.0
+                if decision["action"] == "buy":
+                    amount = float(strategy_amount or 0)
 
-                min_eur = float(bot["budget"].get("min_order_eur") or 0)
-                max_eur = float(bot["budget"].get("max_order_eur") or 0)
+                    min_eur = float(bot["budget"].get("min_order_eur") or 0)
+                    max_eur = float(bot["budget"].get("max_order_eur") or 0)
 
-                if min_eur > 0:
-                    amount = max(amount, min_eur)
-                if max_eur > 0:
-                    amount = min(amount, max_eur)
+                    if min_eur > 0:
+                        amount = max(amount, min_eur)
+                    if max_eur > 0:
+                        amount = min(amount, max_eur)
 
-            decision["amount_eur"] = float(amount)
+                decision["amount_eur"] = float(amount)
 
-            # budget checks
-            today_spent = get_today_spent_eur(conn, user_id, bot["bot_id"], report_date)
-            total_balance = abs(get_bot_balance(conn, user_id, bot["bot_id"]))
+                # budget checks
+                today_spent = get_today_spent_eur(conn, user_id, bot["bot_id"], report_date)
+                total_balance = abs(get_bot_balance(conn, user_id, bot["bot_id"]))
 
-            ok, reason = check_bot_budget(
-                bot_config=bot,
-                today_spent_eur=today_spent,
-                proposed_amount_eur=decision["amount_eur"],
-            )
+                ok, reason = check_bot_budget(
+                    bot_config=bot,
+                    today_spent_eur=today_spent,
+                    proposed_amount_eur=decision["amount_eur"],
+                )
 
-            if not ok:
-                decision["action"] = "observe"
-                decision["confidence"] = "low"
-                decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", [])
-                decision["reasons"].append(f"Budget blokkeert order: {reason}")
+                if not ok:
+                    decision["action"] = "observe"
+                    decision["confidence"] = "low"
+                    decision["amount_eur"] = 0.0
+                    decision.setdefault("reasons", [])
+                    decision["reasons"].append(f"Budget blokkeert order: {reason}")
 
-            # order preview alleen bij BUY
-            order_proposal = build_order_proposal(
-                conn=conn,
-                bot=bot,
-                decision=decision,
-                today_spent_eur=today_spent,
-                total_balance_eur=total_balance,
-            )
+                # order preview alleen bij BUY
+                order_proposal = build_order_proposal(
+                    conn=conn,
+                    bot=bot,
+                    decision=decision,
+                    today_spent_eur=today_spent,
+                    total_balance_eur=total_balance,
+                )
 
-            # ⭐ push setup_match in decision object (zodat _persist het kan opslaan)
-            decision["setup_match"] = setup_match
+                # ⭐ push setup_match in decision object (zodat _persist het kan opslaan)
+                decision["setup_match"] = setup_match
 
-            # persist decision + order
-            decision_id = _persist_decision_and_order(
-                conn=conn,
-                user_id=user_id,
-                bot_id=bot["bot_id"],
-                strategy_id=bot["strategy_id"],
-                setup_id=bot["setup_id"],
-                report_date=report_date,
-                decision=decision,
-                scores=scores,
-            )
-
-            # reserve ledger bij proposal
-            if order_proposal:
-                record_bot_ledger_entry(
+                # persist decision + order
+                decision_id = _persist_decision_and_order(
                     conn=conn,
                     user_id=user_id,
                     bot_id=bot["bot_id"],
-                    entry_type="reserve",
-                    cash_delta_eur=-float(decision["amount_eur"]),
-                    symbol=decision["symbol"],
-                    decision_id=decision_id,
-                    meta={
-                        "estimated_price": order_proposal.get("estimated_price"),
-                        "estimated_qty": order_proposal.get("estimated_qty"),
-                    },
+                    strategy_id=bot["strategy_id"],
+                    setup_id=bot["setup_id"],
+                    report_date=report_date,
+                    decision=decision,
+                    scores=scores,
                 )
 
-            # auto execute enkel als bot.mode == auto + auto_execute flag + proposal
-            executed_by = None
-            status = "planned"
+                # reserve ledger bij proposal
+                if order_proposal:
+                    record_bot_ledger_entry(
+                        conn=conn,
+                        user_id=user_id,
+                        bot_id=bot["bot_id"],
+                        entry_type="reserve",
+                        cash_delta_eur=-float(decision["amount_eur"]),
+                        symbol=decision["symbol"],
+                        decision_id=decision_id,
+                        meta={
+                            "estimated_price": order_proposal.get("estimated_price"),
+                            "estimated_qty": order_proposal.get("estimated_qty"),
+                        },
+                    )
 
-            if bot.get("mode") == "auto" and auto_execute and order_proposal:
-                _auto_execute_decision(
-                    conn=conn,
-                    user_id=user_id,
-                    bot_id=bot["bot_id"],
-                    decision_id=decision_id,
-                    order=order_proposal,
+                # auto execute enkel als bot.mode == auto + auto_execute flag + proposal
+                executed_by = None
+                status = "planned"
+
+                if bot.get("mode") == "auto" and auto_execute and order_proposal:
+                    _auto_execute_decision(
+                        conn=conn,
+                        user_id=user_id,
+                        bot_id=bot["bot_id"],
+                        decision_id=decision_id,
+                        order=order_proposal,
+                    )
+                    executed_by = "auto"
+                    status = "executed"
+
+                results.append(
+                    {
+                        "bot_id": bot["bot_id"],
+                        "decision_id": decision_id,
+                        "symbol": decision["symbol"],
+                        "action": decision["action"],
+                        "confidence": decision["confidence"],
+                        "amount_eur": decision["amount_eur"],
+                        "reasons": decision.get("reasons", []),
+
+                        # ⭐ altijd aanwezig voor de card
+                        "setup_match": setup_match,
+
+                        "order": order_proposal,
+
+                        # status info voor UI
+                        "status": status,
+                        "executed_by": executed_by,
+                    }
                 )
-                executed_by = "auto"
-                status = "executed"
 
-            results.append(
-                {
-                    "bot_id": bot["bot_id"],
-                    "decision_id": decision_id,
-                    "symbol": decision["symbol"],
-                    "action": decision["action"],
-                    "confidence": decision["confidence"],
-                    "amount_eur": decision["amount_eur"],
-                    "reasons": decision.get("reasons", []),
-
-                    # ⭐ altijd aanwezig voor de card
-                    "setup_match": setup_match,
-
-                    "order": order_proposal,
-
-                    # status info voor UI
-                    "status": status,
-                    "executed_by": executed_by,
-                }
-            )
+            except Exception:
+                # ⛑️ PER-BOT FAILSAFE: deze bot faalt, maar page blijft werken
+                logger.exception(f"❌ bot generate crash (bot_id={bot.get('bot_id')})")
+                results.append(
+                    _empty_decision(
+                        bot=bot,
+                        scores=scores,
+                        report_date=report_date,
+                        warning="bot_generate_failed",
+                    )
+                )
 
         conn.commit()
         return {"ok": True, "date": str(report_date), "bots": len(results), "decisions": results}
@@ -946,7 +990,25 @@ def run_trading_bot_agent(
     except Exception:
         conn.rollback()
         logger.exception("❌ trading_bot_agent crash")
-        return {"ok": False, "error": "crash"}
+
+        # ⛑️ GLOBAL FAILSAFE: zelfs bij totale crash altijd UI-contract teruggeven
+        fallback_results = [
+            _empty_decision(
+                bot=b,
+                scores=scores,
+                report_date=report_date,
+                warning="agent_crashed_fallback",
+            )
+            for b in (bots or [])
+        ]
+
+        return {
+            "ok": True,  # belangrijk: frontend mag dit niet als "hard fail" behandelen
+            "date": str(report_date),
+            "bots": len(fallback_results),
+            "decisions": fallback_results,
+            "warning": "fallback_decisions_used",
+        }
 
     finally:
         conn.close()
