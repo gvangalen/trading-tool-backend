@@ -221,16 +221,18 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
 # =====================================
 # 📄 BOT TODAY (decisions + orders + proposal)
 # =====================================
+# =====================================
+# 📄 BOT TODAY (decisions + orders + proposal)
+# =====================================
 @router.get("/bot/today")
 async def get_bot_today(current_user: dict = Depends(get_current_user)):
     """
     HARD UI-CONTRACT:
-    - Elke actieve bot heeft EXACT 1 decision per dag
-    - setup_match komt ALTIJD uit backend
+    - Elke actieve bot heeft EXACT 1 decision per dag (DB of auto-generated observe)
+    - setup_match komt ALTIJD uit backend agent (scores_json.setup_match)
     - GEEN frontend fallback
+    - GEEN setup_match rebuild in API (geen _build_setup_match hier)
     """
-    from backend.ai_agents.trading_bot_agent import build_order_proposal, _build_setup_match
-
     user_id = current_user["id"]
     today = date.today()
     logger.info(f"🤖 [bot/today] user_id={user_id}")
@@ -248,17 +250,26 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         }
 
         # =====================================================
-        # ACTIVE BOTS
+        # ACTIVE BOTS (single list)
         # =====================================================
+        if not _table_exists(conn, "bot_configs"):
+            return {
+                "date": str(today),
+                "scores": daily_scores,
+                "decisions": [],
+                "orders": [],
+                "proposals": {},
+            }
+
         cur.execute(
             """
             SELECT
               b.id,
               b.name,
-              b.risk_profile,
-              s.strategy_type,
-              st.symbol,
-              st.timeframe
+              b.is_active,
+              COALESCE(st.symbol, 'BTC')          AS symbol,
+              COALESCE(st.timeframe, '—')         AS timeframe,
+              COALESCE(s.strategy_type, NULL)     AS strategy_type
             FROM bot_configs b
             LEFT JOIN strategies s ON s.id = b.strategy_id
             LEFT JOIN setups st    ON st.id = s.setup_id
@@ -268,137 +279,176 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             """,
             (user_id,),
         )
+        bot_rows = cur.fetchall()
 
-        bots = cur.fetchall()
-        bots_by_id = {
-            r[0]: {
-                "bot_id": r[0],
-                "bot_name": r[1],
-                "risk_profile": r[2] or "balanced",
-                "strategy_type": r[3],
-                "symbol": r[4] or "BTC",
-                "timeframe": r[5] or "—",
+        # geen actieve bots → lege payload
+        if not bot_rows:
+            return {
+                "date": str(today),
+                "scores": daily_scores,
+                "decisions": [],
+                "orders": [],
+                "proposals": {},
             }
-            for r in bots
-        }
+
+        bots_by_id = {}
+        for r in bot_rows:
+            bot_id, name, is_active, symbol, timeframe, strategy_type = r
+            bots_by_id[int(bot_id)] = {
+                "bot_id": int(bot_id),
+                "bot_name": name,
+                "symbol": (symbol or "BTC").upper(),
+                "timeframe": timeframe or "—",
+                "strategy_type": strategy_type,
+            }
 
         # =====================================================
         # EXISTING DECISIONS TODAY
+        # - we nemen per bot de meest recente (ORDER BY id DESC)
         # =====================================================
-        decisions_by_bot = {}
-        decision_ids = []
+        decisions_by_bot: dict[int, dict] = {}
+        decision_ids: list[int] = []
 
-        cur.execute(
-            """
-            SELECT
-              id,
-              bot_id,
-              symbol,
-              decision_ts,
-              decision_date,
-              action,
-              confidence,
-              scores_json,
-              reason_json,
-              setup_id,
-              strategy_id,
-              status,
-              created_at,
-              updated_at
-            FROM bot_decisions
-            WHERE user_id=%s
-              AND decision_date=%s
-            ORDER BY bot_id ASC, id DESC
-            """,
-            (user_id, today),
-        )
-
-        for r in cur.fetchall():
-            (
-                decision_id,
-                bot_id,
-                symbol,
-                decision_ts,
-                decision_date,
-                action,
-                confidence,
-                scores_json,
-                reason_json,
-                setup_id,
-                strategy_id,
-                status,
-                created_at,
-                updated_at,
-            ) = r
-
-            decision_ids.append(decision_id)
-
-            decisions_by_bot[bot_id] = {
-                "id": decision_id,
-                "bot_id": bot_id,
-                "symbol": symbol,
-                "decision_ts": decision_ts,
-                "date": decision_date,
-                "action": action,
-                "confidence": confidence,
-                "scores": _safe_json(scores_json, daily_scores),
-                "reasons": _safe_json(reason_json, []),
-                "setup_id": setup_id,
-                "strategy_id": strategy_id,
-                "status": status,
-                "created_at": created_at,
-                "updated_at": updated_at,
-            }
-
-        # =====================================================
-        # 🔒 HARD GUARANTEE: EXACT 1 DECISION PER BOT
-        # =====================================================
-        safe_decisions = []
-
-        for bot_id, bot in bots_by_id.items():
-            decision = decisions_by_bot.get(bot_id)
-
-            if decision:
-                snapshot = decision.get("scores")
-            else:
-                snapshot = None
-
-            setup_match = _build_setup_match(
-                bot=bot,
-                scores=daily_scores,
-                snapshot=snapshot,
+        if _table_exists(conn, "bot_decisions"):
+            cur.execute(
+                """
+                SELECT
+                  id,
+                  bot_id,
+                  symbol,
+                  decision_ts,
+                  decision_date,
+                  action,
+                  confidence,
+                  scores_json,
+                  reason_json,
+                  setup_id,
+                  strategy_id,
+                  status,
+                  created_at,
+                  updated_at
+                FROM bot_decisions
+                WHERE user_id=%s
+                  AND decision_date=%s
+                ORDER BY bot_id ASC, id DESC
+                """,
+                (user_id, today),
             )
 
-            if decision:
-                decision["setup_match"] = setup_match
-                safe_decisions.append(decision)
-            else:
-                logger.warning(
-                    f"[bot/today] auto-create observe decision bot_id={bot_id}"
-                )
+            for r in cur.fetchall():
+                (
+                    decision_id,
+                    bot_id,
+                    symbol,
+                    decision_ts,
+                    decision_date,
+                    action,
+                    confidence,
+                    scores_json,
+                    reason_json,
+                    setup_id,
+                    strategy_id,
+                    status,
+                    created_at,
+                    updated_at,
+                ) = r
 
-                safe_decisions.append(
-                    {
-                        "id": None,
-                        "bot_id": bot_id,
-                        "symbol": bot["symbol"],
-                        "decision_ts": None,
-                        "date": today,
-                        "action": "observe",
-                        "confidence": setup_match["confidence"],
-                        "scores": daily_scores,
-                        "reasons": [setup_match["reason"]],
-                        "setup_match": setup_match,
-                        "setup_id": None,
-                        "strategy_id": None,
-                        "status": "planned",
-                        "created_at": None,
-                        "updated_at": None,
-                    }
-                )
+                bot_id = int(bot_id)
+
+                # We willen EXACT 1 decision per bot: eerste hit (id DESC) wint
+                if bot_id in decisions_by_bot:
+                    continue
+
+                scores_payload = _safe_json(scores_json, {})
+                reasons_payload = _safe_json(reason_json, [])
+
+                # setup_match is ALTIJD uit agent (scores_json.setup_match)
+                setup_match = None
+                if isinstance(scores_payload, dict):
+                    setup_match = scores_payload.get("setup_match")
+
+                decisions_by_bot[bot_id] = {
+                    "id": int(decision_id),
+                    "bot_id": bot_id,
+                    "symbol": (symbol or bots_by_id.get(bot_id, {}).get("symbol") or "BTC").upper(),
+                    "decision_ts": decision_ts,
+                    "date": decision_date,
+                    "action": action,
+                    "confidence": confidence,
+                    "scores": scores_payload if isinstance(scores_payload, dict) and scores_payload else daily_scores,
+                    "reasons": reasons_payload if isinstance(reasons_payload, list) else [str(reasons_payload)],
+                    "setup_id": setup_id,
+                    "strategy_id": strategy_id,
+                    "status": status,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "setup_match": setup_match,  # ✅ single source of truth
+                }
+
+                decision_ids.append(int(decision_id))
 
         # =====================================================
-        # ORDERS
+        # 🔒 HARD GUARANTEE: EXACT 1 DECISION PER ACTIVE BOT
+        # - Als geen decision in DB: maak observe decision (NIET opslaan hier)
+        # - setup_match bij ontbrekende DB decision: minimal object (geen rebuild)
+        #   -> dit is geen "frontend fallback": dit is API contract output.
+        # =====================================================
+        safe_decisions: list[dict] = []
+
+        for bot_id, bot in bots_by_id.items():
+            d = decisions_by_bot.get(bot_id)
+
+            if d:
+                # Als agent om wat voor reden setup_match niet meegaf:
+                # maak dan een minimale (maar geen scoring-logica hier)
+                if not d.get("setup_match"):
+                    d["setup_match"] = {
+                        "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
+                        "symbol": bot.get("symbol", "BTC"),
+                        "timeframe": bot.get("timeframe", "—"),
+                        "score": float(daily_scores.get("macro", 10) or 10),
+                        "confidence": d.get("confidence") or "low",
+                        "thresholds": None,
+                        "status": "no_snapshot",
+                        "reason": "Strategy context ontbreekt in opgeslagen decision",
+                    }
+
+                safe_decisions.append(d)
+                continue
+
+            # Geen decision gevonden in DB voor deze bot → observe payload
+            # (UI kan hierdoor altijd renderen; geen frontend fallback nodig)
+            safe_decisions.append(
+                {
+                    "id": None,
+                    "bot_id": bot_id,
+                    "symbol": bot.get("symbol", "BTC"),
+                    "decision_ts": None,
+                    "date": today,
+                    "action": "observe",
+                    "confidence": "low",
+                    "scores": daily_scores,
+                    "reasons": ["Geen decision gegenereerd voor vandaag"],
+                    "setup_id": None,
+                    "strategy_id": None,
+                    "status": "planned",
+                    "created_at": None,
+                    "updated_at": None,
+                    "setup_match": {
+                        "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
+                        "symbol": bot.get("symbol", "BTC"),
+                        "timeframe": bot.get("timeframe", "—"),
+                        "score": float(daily_scores.get("macro", 10) or 10),
+                        "confidence": "low",
+                        "thresholds": None,
+                        "status": "no_snapshot",
+                        "reason": "Nog geen decision opgeslagen voor vandaag",
+                    },
+                }
+            )
+
+        # =====================================================
+        # ORDERS (koppelen op decision_ids)
         # =====================================================
         orders = []
         if decision_ids and _table_exists(conn, "bot_orders"):
@@ -423,12 +473,15 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     }
                 )
 
+        # =====================================================
+        # ✅ RETURN (frontend haalt configs/portfolios apart)
+        # =====================================================
         return {
             "date": str(today),
             "scores": daily_scores,
             "decisions": safe_decisions,
             "orders": orders,
-            "proposals": {},
+            "proposals": {},  # bewust leeg (zoals jij wilt)
         }
 
     except Exception:
