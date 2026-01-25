@@ -810,6 +810,7 @@ def _persist_decision_and_order(
                 setup_id,
                 symbol,
                 decision_date,
+                decision_ts,
                 action,
                 confidence,
                 scores_json,
@@ -821,6 +822,7 @@ def _persist_decision_and_order(
             VALUES (
                 %s,%s,%s,%s,
                 %s,%s,
+                NOW(),
                 %s,%s,
                 %s,%s,
                 'planned',
