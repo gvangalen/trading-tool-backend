@@ -223,17 +223,23 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
 # =====================================
 @router.get("/bot/today")
 async def get_bot_today(current_user: dict = Depends(get_current_user)):
-    from backend.ai_agents.trading_bot_agent import build_order_proposal
+    """
+    HARD UI-CONTRACT:
+    - Elke actieve bot heeft EXACT 1 decision per dag
+    - setup_match komt ALTIJD uit backend
+    - GEEN frontend fallback
+    """
+    from backend.ai_agents.trading_bot_agent import build_order_proposal, _build_setup_match
 
     user_id = current_user["id"]
     today = date.today()
-    logger.info(f"🤖 [get/today] bot today voor user_id={user_id}")
+    logger.info(f"🤖 [bot/today] user_id={user_id}")
 
     conn, cur = get_db_cursor()
     try:
-        # ==========================
-        # SCORES (ALTIJD)
-        # ==========================
+        # =====================================================
+        # SCORES (altijd beschikbaar)
+        # =====================================================
         daily_scores = _get_daily_scores_row(conn, user_id, today) or {
             "macro": 10,
             "technical": 10,
@@ -241,129 +247,148 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             "setup": 10,
         }
 
-        # ==========================
-        # BOT CONFIGS
-        # ==========================
-        bots_by_id = {}
-        if _table_exists(conn, "bot_configs"):
-            cur.execute(
-                """
-                SELECT
-                  b.id,
-                  b.name,
-                  COALESCE(b.budget_total_eur, 0),
-                  COALESCE(b.budget_daily_limit_eur, 0),
-                  COALESCE(b.budget_min_order_eur, 0),
-                  COALESCE(b.budget_max_order_eur, 0)
-                FROM bot_configs b
-                WHERE b.user_id=%s
-                """,
-                (user_id,),
-            )
-            for r in cur.fetchall():
-                bot_id, name, total_eur, daily_limit, min_order, max_order = r
-                bots_by_id[bot_id] = {
-                    "bot_id": bot_id,
-                    "bot_name": name,
-                    "budget": {
-                        "total_eur": float(total_eur),
-                        "daily_limit_eur": float(daily_limit),
-                        "min_order_eur": float(min_order),
-                        "max_order_eur": float(max_order),
-                    },
-                }
+        # =====================================================
+        # ACTIVE BOTS
+        # =====================================================
+        cur.execute(
+            """
+            SELECT
+              b.id,
+              b.name,
+              b.risk_profile,
+              s.strategy_type,
+              st.symbol,
+              st.timeframe
+            FROM bot_configs b
+            LEFT JOIN strategies s ON s.id = b.strategy_id
+            LEFT JOIN setups st    ON st.id = s.setup_id
+            WHERE b.user_id=%s
+              AND b.is_active=TRUE
+            ORDER BY b.id ASC
+            """,
+            (user_id,),
+        )
 
-        # ==========================
-        # DECISIONS VANDAAG
-        # ==========================
-        decisions = []
+        bots = cur.fetchall()
+        bots_by_id = {
+            r[0]: {
+                "bot_id": r[0],
+                "bot_name": r[1],
+                "risk_profile": r[2] or "balanced",
+                "strategy_type": r[3],
+                "symbol": r[4] or "BTC",
+                "timeframe": r[5] or "—",
+            }
+            for r in bots
+        }
+
+        # =====================================================
+        # EXISTING DECISIONS TODAY
+        # =====================================================
         decisions_by_bot = {}
         decision_ids = []
 
-        if _table_exists(conn, "bot_decisions"):
-            cur.execute(
-                """
-                SELECT
-                  id,
-                  bot_id,
-                  symbol,
-                  decision_ts,
-                  decision_date,
-                  action,
-                  confidence,
-                  scores_json,
-                  reason_json,
-                  setup_id,
-                  strategy_id,
-                  status,
-                  created_at,
-                  updated_at
-                FROM bot_decisions
-                WHERE user_id=%s
-                  AND decision_date=%s
-                ORDER BY bot_id ASC, id DESC
-                """,
-                (user_id, today),
+        cur.execute(
+            """
+            SELECT
+              id,
+              bot_id,
+              symbol,
+              decision_ts,
+              decision_date,
+              action,
+              confidence,
+              scores_json,
+              reason_json,
+              setup_id,
+              strategy_id,
+              status,
+              created_at,
+              updated_at
+            FROM bot_decisions
+            WHERE user_id=%s
+              AND decision_date=%s
+            ORDER BY bot_id ASC, id DESC
+            """,
+            (user_id, today),
+        )
+
+        for r in cur.fetchall():
+            (
+                decision_id,
+                bot_id,
+                symbol,
+                decision_ts,
+                decision_date,
+                action,
+                confidence,
+                scores_json,
+                reason_json,
+                setup_id,
+                strategy_id,
+                status,
+                created_at,
+                updated_at,
+            ) = r
+
+            decision_ids.append(decision_id)
+
+            decisions_by_bot[bot_id] = {
+                "id": decision_id,
+                "bot_id": bot_id,
+                "symbol": symbol,
+                "decision_ts": decision_ts,
+                "date": decision_date,
+                "action": action,
+                "confidence": confidence,
+                "scores": _safe_json(scores_json, daily_scores),
+                "reasons": _safe_json(reason_json, []),
+                "setup_id": setup_id,
+                "strategy_id": strategy_id,
+                "status": status,
+                "created_at": created_at,
+                "updated_at": updated_at,
+            }
+
+        # =====================================================
+        # 🔒 HARD GUARANTEE: EXACT 1 DECISION PER BOT
+        # =====================================================
+        safe_decisions = []
+
+        for bot_id, bot in bots_by_id.items():
+            decision = decisions_by_bot.get(bot_id)
+
+            if decision:
+                snapshot = decision.get("scores")
+            else:
+                snapshot = None
+
+            setup_match = _build_setup_match(
+                bot=bot,
+                scores=daily_scores,
+                snapshot=snapshot,
             )
 
-            for r in cur.fetchall():
-                (
-                    decision_id,
-                    bot_id,
-                    symbol,
-                    decision_ts,
-                    decision_date,
-                    action,
-                    confidence,
-                    scores_json,
-                    reason_json,
-                    setup_id,
-                    strategy_id,
-                    status,
-                    created_at,
-                    updated_at,
-                ) = r
+            if decision:
+                decision["setup_match"] = setup_match
+                safe_decisions.append(decision)
+            else:
+                logger.warning(
+                    f"[bot/today] auto-create observe decision bot_id={bot_id}"
+                )
 
-                decision_ids.append(decision_id)
-
-                d = {
-                    "id": decision_id,
-                    "bot_id": bot_id,
-                    "symbol": symbol,
-                    "decision_ts": decision_ts,
-                    "date": decision_date,
-                    "action": action,
-                    "confidence": confidence,
-                    "scores": _safe_json(scores_json, daily_scores),
-                    "reasons": _safe_json(reason_json, []),
-                    "setup_id": setup_id,
-                    "strategy_id": strategy_id,
-                    "status": status,
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                }
-
-                decisions.append(d)
-                decisions_by_bot[bot_id] = d
-
-        # ==========================
-        # 🔒 FAILSAFE: ALTIJD 1 DECISION PER BOT
-        # ==========================
-        safe_decisions = decisions[:]
-
-        for bot_id in bots_by_id.keys():
-            if bot_id not in decisions_by_bot:
                 safe_decisions.append(
                     {
                         "id": None,
                         "bot_id": bot_id,
-                        "symbol": "BTC",
+                        "symbol": bot["symbol"],
                         "decision_ts": None,
                         "date": today,
                         "action": "observe",
-                        "confidence": "low",
+                        "confidence": setup_match["confidence"],
                         "scores": daily_scores,
-                        "reasons": ["Geen decision gegenereerd (fallback)"],
+                        "reasons": [setup_match["reason"]],
+                        "setup_match": setup_match,
                         "setup_id": None,
                         "strategy_id": None,
                         "status": "planned",
@@ -372,9 +397,9 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     }
                 )
 
-        # ==========================
+        # =====================================================
         # ORDERS
-        # ==========================
+        # =====================================================
         orders = []
         if decision_ids and _table_exists(conn, "bot_orders"):
             cur.execute(
@@ -398,42 +423,17 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     }
                 )
 
-        # ==========================
-        # PROPOSALS (optioneel)
-        # ==========================
-        proposals = {}
-
-        for bot_id, d in decisions_by_bot.items():
-            bot = bots_by_id.get(bot_id)
-            if not bot:
-                continue
-
-            proposal = None
-            if d.get("action") == "buy" and d.get("amount_eur"):
-                proposal = build_order_proposal(
-                    conn=conn,
-                    bot=bot,
-                    decision=d,
-                    today_spent_eur=0.0,
-                    total_balance_eur=0.0,
-                )
-
-            proposals[bot_id] = proposal
-
-        # ==========================
-        # ✅ RETURN (BELANGRIJK)
-        # ==========================
         return {
             "date": str(today),
             "scores": daily_scores,
-            "decisions": safe_decisions,  # 🔥 DIT IS DE FIX
+            "decisions": safe_decisions,
             "orders": orders,
-            "proposals": proposals,
+            "proposals": {},
         }
 
     except Exception:
         logger.error("❌ bot/today error", exc_info=True)
-        raise HTTPException(status_code=500, detail="Bot today ophalen mislukt.")
+        raise HTTPException(status_code=500, detail="Bot today ophalen mislukt")
     finally:
         conn.close()
 
@@ -540,23 +540,45 @@ async def generate_bot_today(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    FORCE GENERATE BOT DECISION (TODAY)
+
+    CONTRACT:
+    - Deze endpoint triggert ALLEEN de bot-agent
+    - Stuurt GEEN decisions terug
+    - Frontend moet NA afloop altijd /bot/today ophalen
+    - NOOIT een 500 naar frontend
+    """
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 
     user_id = current_user["id"]
     body = await request.json()
 
     bot_id = body.get("bot_id")
+    if not bot_id:
+        return {
+            "ok": False,
+            "error": "bot_id ontbreekt",
+        }
+
     report_date = date.today()
     if body.get("report_date"):
         report_date = date.fromisoformat(body["report_date"])
 
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
+        return {
+            "ok": False,
+            "bot_id": bot_id,
+            "date": str(report_date),
+            "error": "DB niet beschikbaar",
+        }
 
     try:
         with conn.cursor() as cur:
-            # bestaande decision annuleren (indien aanwezig)
+            # ==========================================
+            # Check bestaande decision vandaag
+            # ==========================================
             cur.execute(
                 """
                 SELECT id, status
@@ -571,20 +593,18 @@ async def generate_bot_today(
             )
             row = cur.fetchone()
 
-            if row:
-                decision_id, status = row
-                if status in ("executed", "skipped"):
-                    cur.execute(
-                        """
-                        UPDATE bot_decisions
-                        SET status='cancelled',
-                            updated_at=NOW()
-                        WHERE id=%s
-                        """,
-                        (decision_id,),
-                    )
+            # Executed / skipped mag niet opnieuw
+            if row and row[1] in ("executed", "skipped"):
+                return {
+                    "ok": False,
+                    "bot_id": bot_id,
+                    "date": str(report_date),
+                    "error": "Decision is al afgehandeld",
+                }
 
-            # bot mode ophalen
+            # ==========================================
+            # Bot mode ophalen (manual / auto)
+            # ==========================================
             cur.execute(
                 """
                 SELECT mode
@@ -598,7 +618,13 @@ async def generate_bot_today(
 
         conn.commit()
 
-        # 🚀 run agent (BELANGRIJK: GEEN EXCEPTION MEER NAAR FRONTEND)
+        # ==========================================
+        # 🚀 RUN TRADING BOT AGENT
+        # ==========================================
+        logger.info(
+            f"🤖 run_trading_bot_agent user_id={user_id} bot_id={bot_id} mode={mode}"
+        )
+
         result = run_trading_bot_agent(
             user_id=user_id,
             report_date=report_date,
@@ -606,36 +632,39 @@ async def generate_bot_today(
             auto_execute=(mode == "auto"),
         )
 
-        # ❗️NOOIT 500 TERUGSTUREN
+        # ==========================================
+        # FAILSAFE RESPONSE (NOOIT 500)
+        # ==========================================
         if not result or not result.get("ok"):
-            logger.warning("⚠️ bot agent failed — returning safe response")
+            logger.warning(
+                f"⚠️ bot agent failed user_id={user_id} bot_id={bot_id}"
+            )
             return {
                 "ok": False,
                 "bot_id": bot_id,
                 "date": str(report_date),
                 "mode": mode,
-                "decisions": [],   # frontend zal /bot/today ophalen
             }
 
+        # ==========================================
+        # ✅ SUCCESS — frontend haalt /bot/today op
+        # ==========================================
         return {
             "ok": True,
             "bot_id": bot_id,
             "date": str(report_date),
             "mode": mode,
-            "decisions": result.get("decisions", []),
         }
 
     except Exception:
-        conn.rollback()
         logger.error("❌ generate_bot_today error", exc_info=True)
 
-        # 🔒 FAIL-SAFE RESPONSE (NOOIT 500)
+        # 🔒 HARD FAILSAFE — NOOIT 500
         return {
             "ok": False,
             "bot_id": bot_id,
             "date": str(report_date),
             "mode": "unknown",
-            "decisions": [],
         }
 
     finally:
