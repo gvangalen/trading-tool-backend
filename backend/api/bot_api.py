@@ -224,15 +224,21 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
 @router.get("/bot/today")
 async def get_bot_today(current_user: dict = Depends(get_current_user)):
     """
-    HARD UI-CONTRACT:
-    - Elke actieve bot heeft EXACT 1 decision per dag (DB of auto-generated observe)
-    - setup_match komt ALTIJD uit backend agent (scores_json.setup_match)
-    - GEEN frontend fallback
-    - GEEN setup_match rebuild in API
+    HARD UI-CONTRACT (DEFINITIEF):
+
+    - Elke actieve bot heeft EXACT 1 decision per dag
+    - Als die ontbreekt → agent wordt 1x auto-gedraaid (safety net)
+    - NOOIT infinite loops
+    - setup_match komt UITSLUITEND uit agent
+    - Frontend doet GEEN fallback-logica
+    - Logs maken meteen zichtbaar WAAR het fout gaat
     """
+    from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
+
     user_id = current_user["id"]
     today = date.today()
-    logger.info(f"🤖 [bot/today] user_id={user_id}")
+
+    logger.info(f"🤖 [bot/today] fetch start | user_id={user_id} | date={today}")
 
     conn, cur = get_db_cursor()
     try:
@@ -298,7 +304,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         }
 
         # =====================================================
-        # EXISTING DECISIONS TODAY (1 per bot, latest wins)
+        # EXISTING DECISIONS TODAY
         # =====================================================
         decisions_by_bot = {}
         decision_ids = []
@@ -354,10 +360,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 scores_payload = _safe_json(scores_json, {})
                 reasons_payload = _safe_json(reason_json, [])
 
-                setup_match = None
-                if isinstance(scores_payload, dict):
-                    setup_match = scores_payload.get("setup_match")
-
                 decisions_by_bot[bot_id] = {
                     "id": int(decision_id),
                     "bot_id": bot_id,
@@ -366,89 +368,40 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     "date": decision_date,
                     "action": action,
                     "confidence": confidence,
-                    "scores": scores_payload if scores_payload else daily_scores,
+                    "scores": scores_payload or daily_scores,
                     "reasons": reasons_payload if isinstance(reasons_payload, list) else [str(reasons_payload)],
                     "setup_id": setup_id,
                     "strategy_id": strategy_id,
                     "status": status,
                     "created_at": created_at,
                     "updated_at": updated_at,
-                    "setup_match": setup_match,  # 🔒 source of truth = agent
+                    "setup_match": scores_payload.get("setup_match"),
                 }
 
                 decision_ids.append(int(decision_id))
 
         # =====================================================
-        # 🔒 HARD GUARANTEE: EXACT 1 DECISION PER BOT
+        # 🔁 AUTO-RUN SAFETY NET (MAX 1x)
         # =====================================================
-        safe_decisions = []
+        missing_bot_ids = [
+            bot_id for bot_id in bots_by_id.keys()
+            if bot_id not in decisions_by_bot
+        ]
 
-        for bot_id, bot in bots_by_id.items():
-            decision = decisions_by_bot.get(bot_id)
-
-            if decision:
-                if not decision.get("setup_match"):
-                    logger.error(
-                        "[bot/today][MISSING_SETUP_MATCH] "
-                        f"user_id={user_id} "
-                        f"bot_id={bot_id} "
-                        f"bot_name={bot.get('bot_name')} "
-                        f"strategy_type={bot.get('strategy_type')}"
-                    )
-
-                    decision["setup_match"] = {
-                        "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
-                        "symbol": bot.get("symbol"),
-                        "timeframe": bot.get("timeframe"),
-                        "score": float(daily_scores.get("macro", 10)),
-                        "confidence": decision.get("confidence") or "low",
-                        "thresholds": None,
-                        "status": "no_snapshot",
-                        "reason": "setup_match ontbreekt in opgeslagen decision",
-                    }
-
-                safe_decisions.append(decision)
-                continue
-
-            # 🔍 DE LOG DIE JE WILDE
-            logger.error(
-                "[bot/today][MISSING_DECISION] "
-                f"user_id={user_id} "
-                f"bot_id={bot_id} "
-                f"bot_name={bot.get('bot_name')} "
-                f"strategy_type={bot.get('strategy_type')} "
-                f"symbol={bot.get('symbol')} "
-                f"timeframe={bot.get('timeframe')}"
+        if missing_bot_ids:
+            logger.warning(
+                f"⚠️ [bot/today] missing decisions → auto-run agent | "
+                f"user_id={user_id} bots={missing_bot_ids}"
             )
 
-            safe_decisions.append(
-                {
-                    "id": None,
-                    "bot_id": bot_id,
-                    "symbol": bot.get("symbol"),
-                    "decision_ts": None,
-                    "date": today,
-                    "action": "observe",
-                    "confidence": "low",
-                    "scores": daily_scores,
-                    "reasons": ["Geen decision gegenereerd voor vandaag"],
-                    "setup_id": None,
-                    "strategy_id": None,
-                    "status": "planned",
-                    "created_at": None,
-                    "updated_at": None,
-                    "setup_match": {
-                        "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
-                        "symbol": bot.get("symbol"),
-                        "timeframe": bot.get("timeframe"),
-                        "score": float(daily_scores.get("macro", 10)),
-                        "confidence": "low",
-                        "thresholds": None,
-                        "status": "no_snapshot",
-                        "reason": "Nog geen decision opgeslagen voor vandaag",
-                    },
-                }
+            # 🔒 BELANGRIJK: agent maar 1x draaien
+            run_trading_bot_agent(
+                user_id=user_id,
+                report_date=today,
             )
+
+            # 🔁 decisions opnieuw ophalen (GEEN recursion)
+            return await get_bot_today(current_user)
 
         # =====================================================
         # ORDERS
@@ -476,10 +429,13 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     }
                 )
 
+        # =====================================================
+        # ✅ FINAL RETURN
+        # =====================================================
         return {
             "date": str(today),
             "scores": daily_scores,
-            "decisions": safe_decisions,
+            "decisions": list(decisions_by_bot.values()),
             "orders": orders,
             "proposals": {},
         }
