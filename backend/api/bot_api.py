@@ -221,9 +221,6 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
 # =====================================
 # 📄 BOT TODAY (decisions + orders + proposal)
 # =====================================
-# =====================================
-# 📄 BOT TODAY (decisions + orders + proposal)
-# =====================================
 @router.get("/bot/today")
 async def get_bot_today(current_user: dict = Depends(get_current_user)):
     """
@@ -231,7 +228,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
     - Elke actieve bot heeft EXACT 1 decision per dag (DB of auto-generated observe)
     - setup_match komt ALTIJD uit backend agent (scores_json.setup_match)
     - GEEN frontend fallback
-    - GEEN setup_match rebuild in API (geen _build_setup_match hier)
+    - GEEN setup_match rebuild in API
     """
     user_id = current_user["id"]
     today = date.today()
@@ -250,7 +247,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         }
 
         # =====================================================
-        # ACTIVE BOTS (single list)
+        # ACTIVE BOTS
         # =====================================================
         if not _table_exists(conn, "bot_configs"):
             return {
@@ -266,10 +263,9 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             SELECT
               b.id,
               b.name,
-              b.is_active,
-              COALESCE(st.symbol, 'BTC')          AS symbol,
-              COALESCE(st.timeframe, '—')         AS timeframe,
-              COALESCE(s.strategy_type, NULL)     AS strategy_type
+              COALESCE(st.symbol, 'BTC')      AS symbol,
+              COALESCE(st.timeframe, '—')     AS timeframe,
+              s.strategy_type
             FROM bot_configs b
             LEFT JOIN strategies s ON s.id = b.strategy_id
             LEFT JOIN setups st    ON st.id = s.setup_id
@@ -281,7 +277,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         )
         bot_rows = cur.fetchall()
 
-        # geen actieve bots → lege payload
         if not bot_rows:
             return {
                 "date": str(today),
@@ -291,23 +286,22 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "proposals": {},
             }
 
-        bots_by_id = {}
-        for r in bot_rows:
-            bot_id, name, is_active, symbol, timeframe, strategy_type = r
-            bots_by_id[int(bot_id)] = {
-                "bot_id": int(bot_id),
-                "bot_name": name,
-                "symbol": (symbol or "BTC").upper(),
-                "timeframe": timeframe or "—",
-                "strategy_type": strategy_type,
+        bots_by_id = {
+            int(r[0]): {
+                "bot_id": int(r[0]),
+                "bot_name": r[1],
+                "symbol": (r[2] or "BTC").upper(),
+                "timeframe": r[3] or "—",
+                "strategy_type": r[4],
             }
+            for r in bot_rows
+        }
 
         # =====================================================
-        # EXISTING DECISIONS TODAY
-        # - we nemen per bot de meest recente (ORDER BY id DESC)
+        # EXISTING DECISIONS TODAY (1 per bot, latest wins)
         # =====================================================
-        decisions_by_bot: dict[int, dict] = {}
-        decision_ids: list[int] = []
+        decisions_by_bot = {}
+        decision_ids = []
 
         if _table_exists(conn, "bot_decisions"):
             cur.execute(
@@ -354,15 +348,12 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 ) = r
 
                 bot_id = int(bot_id)
-
-                # We willen EXACT 1 decision per bot: eerste hit (id DESC) wint
                 if bot_id in decisions_by_bot:
                     continue
 
                 scores_payload = _safe_json(scores_json, {})
                 reasons_payload = _safe_json(reason_json, [])
 
-                # setup_match is ALTIJD uit agent (scores_json.setup_match)
                 setup_match = None
                 if isinstance(scores_payload, dict):
                     setup_match = scores_payload.get("setup_match")
@@ -370,59 +361,71 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 decisions_by_bot[bot_id] = {
                     "id": int(decision_id),
                     "bot_id": bot_id,
-                    "symbol": (symbol or bots_by_id.get(bot_id, {}).get("symbol") or "BTC").upper(),
+                    "symbol": (symbol or bots_by_id[bot_id]["symbol"]).upper(),
                     "decision_ts": decision_ts,
                     "date": decision_date,
                     "action": action,
                     "confidence": confidence,
-                    "scores": scores_payload if isinstance(scores_payload, dict) and scores_payload else daily_scores,
+                    "scores": scores_payload if scores_payload else daily_scores,
                     "reasons": reasons_payload if isinstance(reasons_payload, list) else [str(reasons_payload)],
                     "setup_id": setup_id,
                     "strategy_id": strategy_id,
                     "status": status,
                     "created_at": created_at,
                     "updated_at": updated_at,
-                    "setup_match": setup_match,  # ✅ single source of truth
+                    "setup_match": setup_match,  # 🔒 source of truth = agent
                 }
 
                 decision_ids.append(int(decision_id))
 
         # =====================================================
-        # 🔒 HARD GUARANTEE: EXACT 1 DECISION PER ACTIVE BOT
-        # - Als geen decision in DB: maak observe decision (NIET opslaan hier)
-        # - setup_match bij ontbrekende DB decision: minimal object (geen rebuild)
-        #   -> dit is geen "frontend fallback": dit is API contract output.
+        # 🔒 HARD GUARANTEE: EXACT 1 DECISION PER BOT
         # =====================================================
-        safe_decisions: list[dict] = []
+        safe_decisions = []
 
         for bot_id, bot in bots_by_id.items():
-            d = decisions_by_bot.get(bot_id)
+            decision = decisions_by_bot.get(bot_id)
 
-            if d:
-                # Als agent om wat voor reden setup_match niet meegaf:
-                # maak dan een minimale (maar geen scoring-logica hier)
-                if not d.get("setup_match"):
-                    d["setup_match"] = {
+            if decision:
+                if not decision.get("setup_match"):
+                    logger.error(
+                        "[bot/today][MISSING_SETUP_MATCH] "
+                        f"user_id={user_id} "
+                        f"bot_id={bot_id} "
+                        f"bot_name={bot.get('bot_name')} "
+                        f"strategy_type={bot.get('strategy_type')}"
+                    )
+
+                    decision["setup_match"] = {
                         "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
-                        "symbol": bot.get("symbol", "BTC"),
-                        "timeframe": bot.get("timeframe", "—"),
-                        "score": float(daily_scores.get("macro", 10) or 10),
-                        "confidence": d.get("confidence") or "low",
+                        "symbol": bot.get("symbol"),
+                        "timeframe": bot.get("timeframe"),
+                        "score": float(daily_scores.get("macro", 10)),
+                        "confidence": decision.get("confidence") or "low",
                         "thresholds": None,
                         "status": "no_snapshot",
-                        "reason": "Strategy context ontbreekt in opgeslagen decision",
+                        "reason": "setup_match ontbreekt in opgeslagen decision",
                     }
 
-                safe_decisions.append(d)
+                safe_decisions.append(decision)
                 continue
 
-            # Geen decision gevonden in DB voor deze bot → observe payload
-            # (UI kan hierdoor altijd renderen; geen frontend fallback nodig)
+            # 🔍 DE LOG DIE JE WILDE
+            logger.error(
+                "[bot/today][MISSING_DECISION] "
+                f"user_id={user_id} "
+                f"bot_id={bot_id} "
+                f"bot_name={bot.get('bot_name')} "
+                f"strategy_type={bot.get('strategy_type')} "
+                f"symbol={bot.get('symbol')} "
+                f"timeframe={bot.get('timeframe')}"
+            )
+
             safe_decisions.append(
                 {
                     "id": None,
                     "bot_id": bot_id,
-                    "symbol": bot.get("symbol", "BTC"),
+                    "symbol": bot.get("symbol"),
                     "decision_ts": None,
                     "date": today,
                     "action": "observe",
@@ -436,9 +439,9 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     "updated_at": None,
                     "setup_match": {
                         "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
-                        "symbol": bot.get("symbol", "BTC"),
-                        "timeframe": bot.get("timeframe", "—"),
-                        "score": float(daily_scores.get("macro", 10) or 10),
+                        "symbol": bot.get("symbol"),
+                        "timeframe": bot.get("timeframe"),
+                        "score": float(daily_scores.get("macro", 10)),
                         "confidence": "low",
                         "thresholds": None,
                         "status": "no_snapshot",
@@ -448,7 +451,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             )
 
         # =====================================================
-        # ORDERS (koppelen op decision_ids)
+        # ORDERS
         # =====================================================
         orders = []
         if decision_ids and _table_exists(conn, "bot_orders"):
@@ -473,15 +476,12 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     }
                 )
 
-        # =====================================================
-        # ✅ RETURN (frontend haalt configs/portfolios apart)
-        # =====================================================
         return {
             "date": str(today),
             "scores": daily_scores,
             "decisions": safe_decisions,
             "orders": orders,
-            "proposals": {},  # bewust leeg (zoals jij wilt)
+            "proposals": {},
         }
 
     except Exception:
