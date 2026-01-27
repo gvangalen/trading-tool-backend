@@ -1045,3 +1045,54 @@ async def update_bot_config(
         raise HTTPException(status_code=500, detail="Bot bijwerken mislukt")
     finally:
         conn.close()
+
+
+# =====================================
+# 🗑️ DELETE BOT (HARD DELETE)
+# =====================================
+@router.delete("/bot/configs/{bot_id}")
+async def delete_bot_config(
+    bot_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM bot_configs
+                WHERE id = %s
+                  AND user_id = %s
+                RETURNING id
+                """,
+                (bot_id, user_id),
+            )
+
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Bot niet gevonden of geen toegang"
+                )
+
+        conn.commit()
+        return {
+            "ok": True,
+            "bot_id": bot_id,
+            "deleted": True,
+        }
+
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        logger.error("❌ delete_bot_config error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Bot verwijderen mislukt")
+    finally:
+        conn.close()
