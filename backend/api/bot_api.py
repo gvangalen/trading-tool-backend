@@ -947,16 +947,25 @@ async def update_bot_config(
     current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
-
     body = await request.json()
 
+    # =============================
+    # FIELDS
+    # =============================
     name = body.get("name")
     mode = body.get("mode")
-    risk_profile = body.get("risk_profile")  # ✅ NIEUW
+    risk_profile = body.get("risk_profile")
+    is_active = body.get("is_active")   # ✅ CRUCIAAL (pause / resume)
 
     if risk_profile and risk_profile not in ("conservative", "balanced", "aggressive"):
         raise HTTPException(status_code=400, detail="Ongeldig risk_profile")
 
+    if is_active is not None:
+        is_active = bool(is_active)
+
+    # =============================
+    # BUDGET FIELDS (flexibel)
+    # =============================
     budget_total = body.get("budget_total_eur", body.get("total_eur"))
     budget_daily = body.get("budget_daily_limit_eur", body.get("daily_limit_eur"))
     budget_min = body.get("budget_min_order_eur", body.get("min_order_eur"))
@@ -975,6 +984,9 @@ async def update_bot_config(
     budget_min = _num(budget_min)
     budget_max = _num(budget_max)
 
+    # =============================
+    # DB UPDATE
+    # =============================
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -984,7 +996,8 @@ async def update_bot_config(
                 SET
                     name = COALESCE(%s, name),
                     mode = COALESCE(%s, mode),
-                    risk_profile = COALESCE(%s, risk_profile),   -- ✅
+                    risk_profile = COALESCE(%s, risk_profile),
+                    is_active = COALESCE(%s, is_active),      -- ✅ FIX
                     budget_total_eur = COALESCE(%s, budget_total_eur),
                     budget_daily_limit_eur = COALESCE(%s, budget_daily_limit_eur),
                     budget_min_order_eur = COALESCE(%s, budget_min_order_eur),
@@ -992,12 +1005,13 @@ async def update_bot_config(
                     updated_at = NOW()
                 WHERE id = %s
                   AND user_id = %s
-                RETURNING id, name, mode, risk_profile
+                RETURNING id, name, mode, risk_profile, is_active
                 """,
                 (
                     name,
                     mode,
                     risk_profile,
+                    is_active,
                     budget_total,
                     budget_daily,
                     budget_min,
@@ -1019,6 +1033,7 @@ async def update_bot_config(
             "name": row[1],
             "mode": row[2],
             "risk_profile": row[3],
+            "is_active": row[4],
         }
 
     except HTTPException:
@@ -1028,184 +1043,5 @@ async def update_bot_config(
         conn.rollback()
         logger.error("❌ update_bot_config error", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot bijwerken mislukt")
-    finally:
-        conn.close()
-
-# =====================================
-# 📊 BOT PORTFOLIOS / BUDGET DASHBOARD
-# =====================================
-@router.get("/bot/portfolios")
-async def get_bot_portfolios(
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Volledig budget + portfolio overzicht per bot.
-    Inclusief:
-    - total / remaining / daily_limit / spent_today
-    - min/max per trade (zodat UI dit kan tonen)
-    """
-    user_id = current_user["id"]
-    today = date.today()
-
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                  b.id,
-                  b.name,
-                  b.is_active,
-
-                  COALESCE(b.budget_total_eur, 0)        AS total_budget,
-                  COALESCE(b.budget_daily_limit_eur, 0)  AS daily_limit,
-                  COALESCE(b.budget_min_order_eur, 0)    AS min_order,
-                  COALESCE(b.budget_max_order_eur, 0)    AS max_order,
-
-                  COALESCE(st.symbol, 'BTC')             AS symbol
-                FROM bot_configs b
-                LEFT JOIN strategies s ON s.id = b.strategy_id
-                LEFT JOIN setups st    ON st.id = s.setup_id
-                WHERE b.user_id = %s
-                ORDER BY b.id ASC
-                """,
-                (user_id,),
-            )
-            bots = cur.fetchall()
-
-        results = []
-
-        for (
-            bot_id,
-            bot_name,
-            is_active,
-            total_budget,
-            daily_limit,
-            min_order,
-            max_order,
-            symbol,
-        ) in bots:
-
-            # =============================
-            # SPENT TODAY
-            # =============================
-            spent_today = 0.0
-            if _table_exists(conn, "bot_orders") and _table_exists(conn, "bot_decisions"):
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT COALESCE(SUM(o.quote_amount_eur), 0)
-                        FROM bot_orders o
-                        JOIN bot_decisions d ON d.id = o.decision_id
-                        WHERE o.user_id=%s
-                          AND o.bot_id=%s
-                          AND d.decision_date=%s
-                          AND o.status IN ('ready','filled')
-                        """,
-                        (user_id, bot_id, today),
-                    )
-                    spent_today = float(cur.fetchone()[0] or 0.0)
-
-            # =============================
-            # PORTFOLIO (filled only)
-            # =============================
-            units = 0.0
-            cost_basis = 0.0
-
-            if _table_exists(conn, "bot_orders") and _table_exists(conn, "bot_executions"):
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT
-                          COALESCE(SUM(
-                            CASE
-                              WHEN o.side='buy'  THEN COALESCE(o.quantity, 0)
-                              WHEN o.side='sell' THEN -COALESCE(o.quantity, 0)
-                              ELSE 0
-                            END
-                          ), 0) AS units,
-
-                          COALESCE(SUM(
-                            CASE
-                              WHEN o.side='buy'  THEN COALESCE(o.quote_amount_eur, 0)
-                              WHEN o.side='sell' THEN -COALESCE(o.quote_amount_eur, 0)
-                              ELSE 0
-                            END
-                          ), 0) AS cost_basis
-                        FROM bot_orders o
-                        JOIN bot_executions e ON e.bot_order_id=o.id
-                        WHERE o.user_id=%s
-                          AND o.bot_id=%s
-                          AND e.status='filled'
-                        """,
-                        (user_id, bot_id),
-                    )
-                    row = cur.fetchone()
-                    units = float(row[0] or 0.0)
-                    cost_basis = float(row[1] or 0.0)
-
-            # remaining alleen relevant als total_budget > 0
-            if float(total_budget or 0) > 0:
-                remaining_budget = max(float(total_budget) - float(cost_basis), 0.0)
-            else:
-                remaining_budget = 0.0
-
-            avg_entry = (cost_basis / units) if units > 0 else 0.0
-
-            # =============================
-            # CURRENT PRICE
-            # =============================
-            current_price = 0.0
-            if _table_exists(conn, "market_data"):
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT price
-                        FROM market_data
-                        WHERE symbol=%s
-                        ORDER BY timestamp DESC
-                        LIMIT 1
-                        """,
-                        (symbol,),
-                    )
-                    r = cur.fetchone()
-                    current_price = float(r[0]) if r and r[0] is not None else 0.0
-
-            market_value = units * current_price
-            pnl_eur = market_value - cost_basis
-            pnl_pct = (pnl_eur / cost_basis * 100) if cost_basis > 0 else 0.0
-
-            results.append(
-                {
-                    "bot_id": bot_id,
-                    "bot_name": bot_name,
-                    "symbol": (symbol or "BTC").upper(),
-                    "status": "active" if is_active else "inactive",
-                    "budget": {
-                        "total_eur": round(float(total_budget or 0), 2),
-                        "remaining_eur": round(float(remaining_budget or 0), 2),
-                        "daily_limit_eur": round(float(daily_limit or 0), 2),
-                        "spent_today_eur": round(float(spent_today or 0), 2),
-                        "min_order_eur": round(float(min_order or 0), 2),
-                        "max_order_eur": round(float(max_order or 0), 2),
-                    },
-                    "portfolio": {
-                        "units": round(units, 8),
-                        "avg_entry": round(avg_entry, 2),
-                        "cost_basis_eur": round(cost_basis, 2),
-                        "unrealized_pnl_eur": round(pnl_eur, 2),
-                        "unrealized_pnl_pct": round(pnl_pct, 2),
-                    },
-                }
-            )
-
-        return results
-
-    except Exception:
-        logger.error("❌ get_bot_portfolios error", exc_info=True)
-        raise HTTPException(status_code=500, detail="Bot portfolios ophalen mislukt")
     finally:
         conn.close()
