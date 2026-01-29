@@ -542,7 +542,7 @@ def run_daily_strategy_snapshot(user_id: int):
     DAGELIJKSE STRATEGY SNAPSHOT
 
     Contract:
-    - EXACT 1 snapshot per (user_id, strategy_id, snapshot_date)
+    - EXACT 1 snapshot per (user_id, setup_id, snapshot_date)
     - Snapshot is VERPLICHT voor bot execution
     - Bot-agent leest 1-op-1 uit active_strategy_snapshot
     """
@@ -639,7 +639,10 @@ def run_daily_strategy_snapshot(user_id: int):
 
         entry_num = safe_numeric(entry_value)
         stop_num = safe_numeric(stop_value)
-        confidence = safe_confidence(adjustment.get("confidence_score"), fallback=50)
+        confidence = safe_confidence(
+            adjustment.get("confidence_score"),
+            fallback=50,
+        )
 
         adjustment_reason = adjustment.get(
             "adjustment_reason",
@@ -648,12 +651,14 @@ def run_daily_strategy_snapshot(user_id: int):
 
         # ==================================================
         # 6️⃣ 🔥 SNAPSHOT OPSLAAN — BOT SOURCE OF TRUTH
+        # (GEEN updated_at — bestaat niet in schema)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO active_strategy_snapshot (
                     user_id,
+                    setup_id,
                     strategy_id,
                     snapshot_date,
                     entry,
@@ -661,107 +666,51 @@ def run_daily_strategy_snapshot(user_id: int):
                     stop_loss,
                     confidence_score,
                     adjustment_reason,
-                    created_at,
-                    updated_at
+                    market_context,
+                    changes,
+                    created_at
                 )
                 VALUES (
-                    %s, %s, %s,
+                    %s, %s, %s, %s,
                     %s, %s, %s,
                     %s, %s,
-                    NOW(), NOW()
+                    %s::jsonb,
+                    %s::jsonb,
+                    NOW()
                 )
-                ON CONFLICT (user_id, strategy_id, snapshot_date)
+                ON CONFLICT (user_id, setup_id, snapshot_date)
                 DO UPDATE SET
                     entry = EXCLUDED.entry,
                     targets = EXCLUDED.targets,
                     stop_loss = EXCLUDED.stop_loss,
                     confidence_score = EXCLUDED.confidence_score,
                     adjustment_reason = EXCLUDED.adjustment_reason,
-                    updated_at = NOW();
+                    market_context = EXCLUDED.market_context,
+                    changes = EXCLUDED.changes;
                 """,
                 (
                     user_id,
+                    setup_id,
                     strategy_id,
                     today,
                     entry_num,
-                    json.dumps(targets_value),
+                    ",".join(map(str, targets_value)),
                     stop_num,
                     confidence,
                     adjustment_reason,
+                    json.dumps(market_context),
+                    json.dumps(adjustment.get("changes") or {}, ensure_ascii=False),
                 ),
             )
 
-        # ==================================================
-        # 7️⃣ Strategy AI insight (dashboard)
-        # ==================================================
-        analysis = analyze_strategies(
-            user_id=user_id,
-            strategies=[
-                {
-                    "strategy_id": strategy_id,
-                    "entry": entry_value,
-                    "targets": targets_value,
-                    "stop_loss": stop_value,
-                    "confidence_score": confidence,
-                }
-            ],
-        )
-
-        if analysis:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO ai_category_insights (
-                        category,
-                        user_id,
-                        avg_score,
-                        trend,
-                        bias,
-                        risk,
-                        summary,
-                        top_signals,
-                        date
-                    )
-                    VALUES (
-                        'strategy',
-                        %s, %s,
-                        %s, %s, %s,
-                        %s,
-                        %s::jsonb,
-                        %s
-                    )
-                    ON CONFLICT (user_id, category, date)
-                    DO UPDATE SET
-                        avg_score = EXCLUDED.avg_score,
-                        trend = EXCLUDED.trend,
-                        bias = EXCLUDED.bias,
-                        risk = EXCLUDED.risk,
-                        summary = EXCLUDED.summary,
-                        top_signals = EXCLUDED.top_signals,
-                        created_at = NOW();
-                    """,
-                    (
-                        user_id,
-                        confidence,
-                        "Actief" if confidence >= 60 else "Neutraal",
-                        "Kopen" if confidence >= 60 else "Afwachten",
-                        "Gemiddeld",
-                        analysis.get("comment", ""),
-                        json.dumps(
-                            [analysis.get("recommendation", "")],
-                            ensure_ascii=False,
-                        ),
-                        today,
-                    ),
-                )
-
         conn.commit()
+
         logger.info(
-            f"✅ Active strategy snapshot opgeslagen | strategy_id={strategy_id} | {today}"
+            f"✅ Active strategy snapshot opgeslagen | setup_id={setup_id} | strategy_id={strategy_id} | {today}"
         )
 
     except Exception:
-        logger.error("❌ Daily strategy snapshot fout", exc_info=True)
+        logger.exception("❌ Daily strategy snapshot fout")
         try:
             conn.rollback()
         except Exception:
