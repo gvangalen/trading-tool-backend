@@ -79,33 +79,27 @@ def stringify_top_signals(top_signals: Any) -> List[str]:
     return out[:10]
 
 def calculate_strategy_score(
-    macro: Optional[float],
-    market: Optional[float],
-    technical: Optional[float],
-    setup: Optional[float],
-) -> Optional[float]:
+    *,
+    market: float,
+    technical: float,
+    setup: float,
+) -> float:
     """
-    Berekent de strategy execution score.
-
-    Regels:
-    - setup_score is hard filter
-    - marktcontext kan setup nooit overrulen
-    - bij ontbrekende data → None
+    Strategy score = gewogen verhouding van market + technical + setup
+    GEEN Decimal-logica hier.
     """
 
-    scores = [macro, market, technical, setup]
-    if any(s is None for s in scores):
-        return None
+    market = float(market) if market is not None else 0.0
+    technical = float(technical) if technical is not None else 0.0
+    setup = float(setup) if setup is not None else 0.0
 
-    # Gewogen marktcontext
-    context_score = (
-        0.34 * macro +
+    score = (
         0.33 * market +
-        0.33 * technical
+        0.33 * technical +
+        0.34 * setup
     )
 
-    # Execution score = zwakste schakel
-    return round(min(setup, context_score), 1)
+    return round(score, 1)
 
 
 # ============================================================
