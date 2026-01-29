@@ -78,6 +78,35 @@ def stringify_top_signals(top_signals: Any) -> List[str]:
             out.append(str(item))
     return out[:10]
 
+def calculate_strategy_score(
+    macro: Optional[float],
+    market: Optional[float],
+    technical: Optional[float],
+    setup: Optional[float],
+) -> Optional[float]:
+    """
+    Berekent de strategy execution score.
+
+    Regels:
+    - setup_score is hard filter
+    - marktcontext kan setup nooit overrulen
+    - bij ontbrekende data → None
+    """
+
+    scores = [macro, market, technical, setup]
+    if any(s is None for s in scores):
+        return None
+
+    # Gewogen marktcontext
+    context_score = (
+        0.34 * macro +
+        0.33 * market +
+        0.33 * technical
+    )
+
+    # Execution score = zwakste schakel
+    return round(min(setup, context_score), 1)
+
 
 # ============================================================
 # 📥 1. Insights ophalen → ai_category_insights (lookback)
@@ -141,10 +170,10 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
     numeric: Dict[str, Any] = {"daily_scores": {}, "ai_reflections": {}}
 
     with conn.cursor() as cur:
-        # daily_scores (macro/market/technical ONLY)
+        # daily_scores (macro / market / technical)
         cur.execute(
             """
-            SELECT macro_score, market_score, technical_score
+            SELECT macro_score, market_score, technical_score, setup_score
             FROM daily_scores
             WHERE report_date = CURRENT_DATE AND user_id = %s
             LIMIT 1;
@@ -152,17 +181,26 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
             (user_id,),
         )
         row = cur.fetchone()
+
         if row:
+            macro, market, technical, setup_score = row
+
+            strategy_score = calculate_strategy_score(
+                macro=macro,
+                market=market,
+                technical=technical,
+                setup=setup_score,
+            )
+
             numeric["daily_scores"] = {
-                "macro": row[0],
-                "market": row[1],
-                "technical": row[2],
+                "macro": macro,
+                "market": market,
+                "technical": technical,
+                "setup": setup_score,
+                "strategy": strategy_score,
             }
 
-        # setup-score komt UIT setup agent (ai_category_insights)
-        numeric["daily_scores"]["setup"] = fetch_setup_score_from_insights(insights)
-
-        # ai_reflections aggregatie
+        # ai_reflections aggregatie (ongewijzigd)
         cur.execute(
             """
             SELECT category,
@@ -182,7 +220,6 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
             }
 
     return convert_decimal(numeric)
-
 
 # ============================================================
 # 🧠 3. Master prompt bouwen
@@ -305,9 +342,12 @@ def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
     technical = insights.get("technical", {}).get("avg_score")
     setup_score = fetch_setup_score_from_insights(insights)
 
-    macro_sum = insights.get("macro", {}).get("summary", "")
-    market_sum = insights.get("market", {}).get("summary", "")
-    tech_sum = insights.get("technical", {}).get("summary", "")
+    strategy_score = calculate_strategy_score(
+        macro=macro,
+        market=market,
+        technical=technical,
+        setup=setup_score,
+    )
 
     if macro is None or market is None or technical is None:
         logger.warning(
@@ -315,47 +355,39 @@ def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
         )
         return
 
-    # setup mag None zijn als setup agent nog niet gedraaid heeft
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO daily_scores
-                (report_date, user_id,
-                 macro_score, market_score, technical_score,
-                 macro_interpretation, market_interpretation, technical_interpretation,
-                 setup_score,
-                 macro_top_contributors, market_top_contributors, technical_top_contributors)
+                (
+                    report_date, user_id,
+                    macro_score, market_score, technical_score, setup_score, strategy_score
+                )
             VALUES (
                 CURRENT_DATE, %s,
-                %s, %s, %s,
-                %s, %s, %s,
-                %s,
-                '[]', '[]', '[]'
+                %s, %s, %s, %s, %s
             )
             ON CONFLICT (report_date, user_id)
             DO UPDATE SET
                 macro_score = EXCLUDED.macro_score,
                 market_score = EXCLUDED.market_score,
                 technical_score = EXCLUDED.technical_score,
-                macro_interpretation = EXCLUDED.macro_interpretation,
-                market_interpretation = EXCLUDED.market_interpretation,
-                technical_interpretation = EXCLUDED.technical_interpretation,
-                setup_score = EXCLUDED.setup_score;
+                setup_score = EXCLUDED.setup_score,
+                strategy_score = EXCLUDED.strategy_score;
             """,
             (
                 user_id,
                 macro,
                 market,
                 technical,
-                macro_sum,
-                market_sum,
-                tech_sum,
                 setup_score,
+                strategy_score,
             ),
         )
 
-    logger.info(f"💾 daily_scores bijgewerkt user_id={user_id} (optioneel).")
-
+    logger.info(
+        f"💾 daily_scores bijgewerkt incl. strategy_score={strategy_score} user_id={user_id}"
+    )
 
 # ============================================================
 # 🚀 Per-user runner
