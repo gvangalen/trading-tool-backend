@@ -545,6 +545,7 @@ def run_daily_strategy_snapshot(user_id: int):
     - EXACT 1 snapshot per (user_id, setup_id, snapshot_date)
     - Snapshot is VERPLICHT voor bot execution
     - Bot-agent leest 1-op-1 uit active_strategy_snapshot
+    - Strategy AI insight is UITSLUITEND voor UI
     """
 
     logger.info(f"🟡 Daily strategy snapshot | user={user_id}")
@@ -651,7 +652,6 @@ def run_daily_strategy_snapshot(user_id: int):
 
         # ==================================================
         # 6️⃣ 🔥 SNAPSHOT OPSLAAN — BOT SOURCE OF TRUTH
-        # (GEEN updated_at — bestaat niet in schema)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -708,6 +708,79 @@ def run_daily_strategy_snapshot(user_id: int):
         logger.info(
             f"✅ Active strategy snapshot opgeslagen | setup_id={setup_id} | strategy_id={strategy_id} | {today}"
         )
+
+        # ==================================================
+        # 7️⃣ STRATEGY AI INSIGHT (DASHBOARD / STRATEGY TAB)
+        # ❗ Mag NOOIT snapshot breken
+        # ==================================================
+        try:
+            analysis = analyze_strategies(
+                user_id=user_id,
+                strategies=[
+                    {
+                        "strategy_id": strategy_id,
+                        "setup_id": setup_id,
+                        "entry": entry_value,
+                        "targets": targets_value,
+                        "stop_loss": stop_value,
+                        "confidence_score": confidence,
+                        "market_context": market_context,
+                        "adjustment_reason": adjustment_reason,
+                    }
+                ],
+            )
+
+            if analysis:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO ai_category_insights (
+                            category,
+                            user_id,
+                            avg_score,
+                            trend,
+                            bias,
+                            risk,
+                            summary,
+                            top_signals,
+                            date
+                        )
+                        VALUES (
+                            'strategy',
+                            %s, %s,
+                            %s, %s, %s,
+                            %s,
+                            %s::jsonb,
+                            %s
+                        )
+                        ON CONFLICT (user_id, category, date)
+                        DO UPDATE SET
+                            avg_score = EXCLUDED.avg_score,
+                            trend = EXCLUDED.trend,
+                            bias = EXCLUDED.bias,
+                            risk = EXCLUDED.risk,
+                            summary = EXCLUDED.summary,
+                            top_signals = EXCLUDED.top_signals,
+                            created_at = NOW();
+                        """,
+                        (
+                            user_id,
+                            confidence,
+                            "Actief" if confidence >= 60 else "Neutraal",
+                            "Kopen" if confidence >= 60 else "Afwachten",
+                            "Gemiddeld",
+                            analysis.get("comment", ""),
+                            json.dumps(
+                                [analysis.get("recommendation", "")],
+                                ensure_ascii=False,
+                            ),
+                            today,
+                        ),
+                    )
+                conn.commit()
+
+        except Exception:
+            logger.warning("⚠️ Strategy AI insight mislukt (snapshot blijft geldig)")
 
     except Exception:
         logger.exception("❌ Daily strategy snapshot fout")
