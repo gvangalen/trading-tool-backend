@@ -137,6 +137,10 @@ def adjust_strategy_for_today(
     """
     Past een bestaande strategie subtiel aan voor vandaag.
     Setup blijft ongewijzigd.
+
+    BELANGRIJK:
+    - Deze functie MOET elke dag een geldige snapshot opleveren
+    - Snapshot is required voor bot-agent om te mogen traden
     """
 
     logger.info(
@@ -145,6 +149,9 @@ def adjust_strategy_for_today(
 
     strategy_type = (setup.get("strategy_type") or "").lower()
 
+    # ======================================================
+    # 🧠 Historische context
+    # ======================================================
     agent_context = build_agent_context(
         user_id=user_id,
         category="strategy",
@@ -153,6 +160,9 @@ def adjust_strategy_for_today(
         lookback_days=3,
     )
 
+    # ======================================================
+    # 🎯 AI TASK
+    # ======================================================
     TASK = """
 Je past een BESTAANDE tradingstrategie licht aan.
 
@@ -205,6 +215,9 @@ OUTPUT — ALLEEN GELDIGE JSON:
         "market_context": market_context,
     }
 
+    # ======================================================
+    # 🤖 AI CALL
+    # ======================================================
     result = ask_gpt(
         prompt=json.dumps(payload, ensure_ascii=False, indent=2),
         system_role=system_prompt
@@ -214,22 +227,43 @@ OUTPUT — ALLEEN GELDIGE JSON:
         logger.error("❌ Ongeldige JSON van AI bij strategy-adjustment")
         return None
 
+    # ======================================================
+    # 🧪 VALIDATIE
+    # ======================================================
     required_keys = {"entry", "targets", "stop_loss", "changes", "entry_type"}
     if not required_keys.issubset(result.keys()):
         logger.error("❌ Strategy-adjustment mist verplichte velden")
         return None
 
+    # ======================================================
+    # 🔢 Confidence normaliseren
+    # ======================================================
     score = result.get("confidence_score")
     if not isinstance(score, (int, float)) or not (0 <= score <= 100):
         result["confidence_score"] = 50
 
+    # ======================================================
     # 🔒 DCA-regels afdwingen
+    # ======================================================
     if strategy_type == "dca":
         result["entry_type"] = "reference"
         if result.get("entry") in ("", None):
             result["changes"]["entry"] = "reference"
     else:
         result["entry_type"] = "action"
+
+    # ======================================================
+    # 🔒 SNAPSHOT CONTRACT (CRUCIAAL)
+    # → voorkomt no_snapshot bij bot-agent
+    # ======================================================
+    result.setdefault("entry", None)
+    result.setdefault("targets", [])
+    result.setdefault("stop_loss", None)
+    result.setdefault("confidence_score", 0)
+    result.setdefault(
+        "adjustment_reason",
+        "No explicit execution plan for today"
+    )
 
     return result
 
@@ -321,9 +355,8 @@ def save_ai_explanation_to_strategy(
     finally:
         conn.close()
 
-
 # ===================================================================
-# 🧠 ORCHESTRATOR — ANALYSE → OPSLAG
+# 🧠 ORCHESTRATOR — ANALYSE → SNAPSHOT → OPSLAG
 # ===================================================================
 
 def analyze_and_store_strategy(
@@ -331,27 +364,130 @@ def analyze_and_store_strategy(
     user_id: int,
     strategy_id: int,
     strategies: List[Dict[str, Any]],
+    base_strategy: Dict[str, Any],
+    setup: Dict[str, Any],
+    market_context: Dict[str, Any],
 ):
     """
-    1️⃣ Analyseert bestaande strategie(ën)
-    2️⃣ Slaat AI-uitleg op in strategies.data.ai_explanation
+    DAGELIJKSE STRATEGY RUN
+
+    1️⃣ Analyse (AI reflection)
+    2️⃣ Strategy adjustment voor vandaag
+    3️⃣ 🔥 Snapshot opslaan (VERPLICHT)
     """
 
-    logger.info(f"🧠 Strategy AI analyse gestart | strategy_id={strategy_id}")
+    today = date.today()
+    logger.info(f"🧠 Strategy AI dagrun | strategy_id={strategy_id} | {today}")
 
+    # 1️⃣ Analyse (coach / reflectie)
     ai_result = analyze_strategies(
         user_id=user_id,
         strategies=strategies
     )
 
-    if not ai_result:
-        logger.error("❌ Geen AI-resultaat bij strategy-analyse")
-        return None
+    if ai_result:
+        save_ai_explanation_to_strategy(
+            strategy_id=strategy_id,
+            ai_result=ai_result,
+        )
 
-    save_ai_explanation_to_strategy(
-        strategy_id=strategy_id,
-        ai_result=ai_result,
+    # 2️⃣ DAGELIJKSE STRATEGY SNAPSHOT (ALTijd)
+    snapshot = adjust_strategy_for_today(
+        user_id=user_id,
+        base_strategy=base_strategy,
+        setup=setup,
+        market_context=market_context,
     )
 
-    logger.info(f"✅ AI-uitleg opgeslagen voor strategy_id={strategy_id}")
-    return ai_result
+    if not snapshot:
+        # ⛑️ FAILSAFE — lege snapshot
+        snapshot = {
+            "entry": None,
+            "targets": [],
+            "stop_loss": None,
+            "confidence_score": 0,
+            "adjustment_reason": "Strategy agent failed to produce snapshot",
+        }
+
+    # 3️⃣ 🔥 OPSLAAN — DIT IS WAAR DE BOT OP DRAAIT
+    persist_active_strategy_snapshot(
+        user_id=user_id,
+        strategy_id=strategy_id,
+        snapshot_date=today,
+        snapshot=snapshot,
+    )
+
+    logger.info(f"✅ Active strategy snapshot opgeslagen | strategy_id={strategy_id}")
+
+    return {
+        "analysis": ai_result,
+        "snapshot": snapshot,
+    }
+
+
+# ===================================================================
+# 💾 ACTIVE STRATEGY SNAPSHOT (VERPLICHT VOOR BOT EXECUTION)
+# ===================================================================
+
+def persist_active_strategy_snapshot(
+    *,
+    user_id: int,
+    strategy_id: int,
+    snapshot_date: date,
+    snapshot: Dict[str, Any],
+):
+    """
+    Slaat DAGELIJKS het execution-plan op voor bots.
+
+    Contract:
+    - EXACT 1 snapshot per strategy per dag
+    - Mag lege velden bevatten
+    - Bot-agent is hier volledig afhankelijk van
+    """
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO active_strategy_snapshot (
+                    user_id,
+                    strategy_id,
+                    snapshot_date,
+                    entry,
+                    targets,
+                    stop_loss,
+                    confidence_score,
+                    adjustment_reason,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    %s,%s,%s,
+                    %s,%s,%s,
+                    %s,%s,
+                    NOW(), NOW()
+                )
+                ON CONFLICT (user_id, strategy_id, snapshot_date)
+                DO UPDATE SET
+                    entry              = EXCLUDED.entry,
+                    targets            = EXCLUDED.targets,
+                    stop_loss          = EXCLUDED.stop_loss,
+                    confidence_score   = EXCLUDED.confidence_score,
+                    adjustment_reason  = EXCLUDED.adjustment_reason,
+                    updated_at         = NOW()
+                """,
+                (
+                    user_id,
+                    strategy_id,
+                    snapshot_date,
+                    snapshot.get("entry"),
+                    json.dumps(snapshot.get("targets") or []),
+                    snapshot.get("stop_loss"),
+                    float(snapshot.get("confidence_score") or 0),
+                    snapshot.get("adjustment_reason", ""),
+                ),
+            )
+            conn.commit()
+    finally:
+        conn.close()
