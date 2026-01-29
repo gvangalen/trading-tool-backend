@@ -164,7 +164,7 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
     numeric: Dict[str, Any] = {"daily_scores": {}, "ai_reflections": {}}
 
     with conn.cursor() as cur:
-        # daily_scores (macro / market / technical)
+        # daily_scores (macro / market / technical / setup)
         cur.execute(
             """
             SELECT macro_score, market_score, technical_score, setup_score
@@ -179,18 +179,18 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
         if row:
             macro, market, technical, setup_score = row
 
+            # ✅ STRATEGY SCORE = market + technical + setup
             strategy_score = calculate_strategy_score(
-                macro=macro,
                 market=market,
                 technical=technical,
                 setup=setup_score,
             )
 
             numeric["daily_scores"] = {
-                "macro": macro,
-                "market": market,
-                "technical": technical,
-                "setup": setup_score,
+                "macro": float(macro) if macro is not None else None,
+                "market": float(market) if market is not None else None,
+                "technical": float(technical) if technical is not None else None,
+                "setup": float(setup_score) if setup_score is not None else None,
                 "strategy": strategy_score,
             }
 
@@ -336,29 +336,35 @@ def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
     technical = insights.get("technical", {}).get("avg_score")
     setup_score = fetch_setup_score_from_insights(insights)
 
-    strategy_score = calculate_strategy_score(
-        macro=macro,
-        market=market,
-        technical=technical,
-        setup=setup_score,
-    )
-
     if macro is None or market is None or technical is None:
         logger.warning(
             f"⚠️ daily_scores niet bijgewerkt (macro/market/technical missen) user_id={user_id}"
         )
         return
 
+    # ✅ STRATEGY SCORE = market + technical + setup
+    strategy_score = calculate_strategy_score(
+        market=market,
+        technical=technical,
+        setup=setup_score,
+    )
+
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO daily_scores
                 (
-                    report_date, user_id,
-                    macro_score, market_score, technical_score, setup_score, strategy_score
+                    report_date,
+                    user_id,
+                    macro_score,
+                    market_score,
+                    technical_score,
+                    setup_score,
+                    strategy_score
                 )
             VALUES (
-                CURRENT_DATE, %s,
+                CURRENT_DATE,
+                %s,
                 %s, %s, %s, %s, %s
             )
             ON CONFLICT (report_date, user_id)
@@ -382,7 +388,7 @@ def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
     logger.info(
         f"💾 daily_scores bijgewerkt incl. strategy_score={strategy_score} user_id={user_id}"
     )
-
+    
 # ============================================================
 # 🚀 Per-user runner
 # ============================================================
