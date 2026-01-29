@@ -538,7 +538,17 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.run_daily_strategy_snapshot")
 def run_daily_strategy_snapshot(user_id: int):
+    """
+    DAGELIJKSE STRATEGY SNAPSHOT
+
+    Contract:
+    - EXACT 1 snapshot per (user_id, strategy_id, snapshot_date)
+    - Snapshot is VERPLICHT voor bot execution
+    - Bot-agent leest 1-op-1 uit active_strategy_snapshot
+    """
+
     logger.info(f"🟡 Daily strategy snapshot | user={user_id}")
+    today = date.today()
 
     conn = get_db_connection()
     if not conn:
@@ -555,11 +565,11 @@ def run_daily_strategy_snapshot(user_id: int):
                 SELECT setup_id
                 FROM daily_setup_scores
                 WHERE user_id = %s
-                  AND report_date = CURRENT_DATE
+                  AND report_date = %s
                   AND is_best = TRUE
                 LIMIT 1;
                 """,
-                (user_id,),
+                (user_id, today),
             )
             row = cur.fetchone()
 
@@ -571,12 +581,6 @@ def run_daily_strategy_snapshot(user_id: int):
         setup = load_setup_from_db(setup_id, user_id)
 
         # ==================================================
-        # 🔥 DCA SPLIT — aparte flow
-        # ==================================================
-        if setup.get("strategy_type") == "dca":
-            return run_dca_strategy_snapshot(user_id, setup)
-
-        # ==================================================
         # 2️⃣ Market context (scores van vandaag)
         # ==================================================
         with conn.cursor() as cur:
@@ -585,10 +589,10 @@ def run_daily_strategy_snapshot(user_id: int):
                 SELECT macro_score, technical_score, market_score
                 FROM daily_scores
                 WHERE user_id = %s
-                  AND report_date = CURRENT_DATE
+                  AND report_date = %s
                 LIMIT 1;
                 """,
-                (user_id,),
+                (user_id, today),
             )
             scores = cur.fetchone()
 
@@ -603,18 +607,20 @@ def run_daily_strategy_snapshot(user_id: int):
         }
 
         # ==================================================
-        # 3️⃣ Setup + bestaande base strategy
+        # 3️⃣ Laatste bestaande strategy ophalen
         # ==================================================
         base_strategy = load_latest_strategy(setup_id, user_id)
         if not base_strategy:
             logger.warning("⚠️ Geen base strategy gevonden")
             return
 
+        strategy_id = base_strategy["strategy_id"]
+
         # ==================================================
-        # 4️⃣ AI adjustment (🔥 FIX: user_id EXPLICIET meegeven)
+        # 4️⃣ AI strategy adjustment (dagelijks snapshot)
         # ==================================================
         adjustment = adjust_strategy_for_today(
-            user_id=user_id,                 # ✅ FIX
+            user_id=user_id,
             base_strategy=base_strategy,
             setup=setup,
             market_context=market_context,
@@ -625,91 +631,74 @@ def run_daily_strategy_snapshot(user_id: int):
             return
 
         # ==================================================
-        # 5️⃣ Fallback-logica (NOOIT lege DB-velden)
+        # 5️⃣ Normalisatie & fallback
         # ==================================================
-        entry_value = adjustment.get("entry")
-        targets_value = adjustment.get("targets")
-        stop_value = adjustment.get("stop_loss")
+        entry_value = adjustment.get("entry", base_strategy.get("entry"))
+        targets_value = adjustment.get("targets") or base_strategy.get("targets") or []
+        stop_value = adjustment.get("stop_loss", base_strategy.get("stop_loss"))
 
-        if entry_value is None:
-            entry_value = base_strategy.get("entry")
-
-        if not targets_value:
-            logger.warning("⚠️ Geen targets uit AI — snapshot overgeslagen")
-            return
-
-        if stop_value is None:
-            stop_value = base_strategy.get("stop_loss")
-
-        # ==================================================
-        # 6️⃣ TYPE-SAFETY & NORMALISATIE
-        # ==================================================
         entry_num = safe_numeric(entry_value)
         stop_num = safe_numeric(stop_value)
-        confidence = safe_confidence(
-            adjustment.get("confidence_score"),
-            fallback=50,
+        confidence = safe_confidence(adjustment.get("confidence_score"), fallback=50)
+
+        adjustment_reason = adjustment.get(
+            "adjustment_reason",
+            "Daily strategy snapshot"
         )
 
         # ==================================================
-        # 7️⃣ Snapshot opslaan (DB)
+        # 6️⃣ 🔥 SNAPSHOT OPSLAAN — BOT SOURCE OF TRUTH
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO active_strategy_snapshot (
                     user_id,
-                    setup_id,
                     strategy_id,
                     snapshot_date,
                     entry,
                     targets,
                     stop_loss,
-                    adjustment_reason,
                     confidence_score,
-                    market_context,
-                    changes
-                ) VALUES (
-                    %s, %s, %s, CURRENT_DATE,
+                    adjustment_reason,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    %s, %s, %s,
                     %s, %s, %s,
                     %s, %s,
-                    %s::jsonb,
-                    %s::jsonb
+                    NOW(), NOW()
                 )
-                ON CONFLICT (user_id, setup_id, snapshot_date)
+                ON CONFLICT (user_id, strategy_id, snapshot_date)
                 DO UPDATE SET
                     entry = EXCLUDED.entry,
                     targets = EXCLUDED.targets,
                     stop_loss = EXCLUDED.stop_loss,
-                    adjustment_reason = EXCLUDED.adjustment_reason,
                     confidence_score = EXCLUDED.confidence_score,
-                    market_context = EXCLUDED.market_context,
-                    changes = EXCLUDED.changes,
-                    created_at = NOW();
+                    adjustment_reason = EXCLUDED.adjustment_reason,
+                    updated_at = NOW();
                 """,
                 (
                     user_id,
-                    setup_id,
-                    base_strategy["strategy_id"],
+                    strategy_id,
+                    today,
                     entry_num,
-                    ",".join(map(str, targets_value)),
+                    json.dumps(targets_value),
                     stop_num,
-                    adjustment.get("adjustment_reason"),
                     confidence,
-                    json.dumps(market_context),
-                    json.dumps(adjustment.get("changes") or {}, ensure_ascii=False),
+                    adjustment_reason,
                 ),
             )
 
         # ==================================================
-        # 8️⃣ STRATEGY AI INSIGHT (dashboard kaart)
+        # 7️⃣ Strategy AI insight (dashboard)
         # ==================================================
         analysis = analyze_strategies(
             user_id=user_id,
             strategies=[
                 {
-                    "setup_id": setup_id,
-                    "strategy_id": base_strategy["strategy_id"],
+                    "strategy_id": strategy_id,
                     "entry": entry_value,
                     "targets": targets_value,
                     "stop_loss": stop_value,
@@ -719,9 +708,6 @@ def run_daily_strategy_snapshot(user_id: int):
         )
 
         if analysis:
-            trend = "Actief" if confidence >= 60 else "Neutraal"
-            bias = "Kansrijk" if confidence >= 60 else "Afwachten"
-
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -735,9 +721,14 @@ def run_daily_strategy_snapshot(user_id: int):
                         summary,
                         top_signals,
                         date
-                    ) VALUES (
+                    )
+                    VALUES (
                         'strategy',
-                        %s, %s, %s, %s, %s, %s, %s::jsonb, CURRENT_DATE
+                        %s, %s,
+                        %s, %s, %s,
+                        %s,
+                        %s::jsonb,
+                        %s
                     )
                     ON CONFLICT (user_id, category, date)
                     DO UPDATE SET
@@ -752,19 +743,22 @@ def run_daily_strategy_snapshot(user_id: int):
                     (
                         user_id,
                         confidence,
-                        trend,
-                        bias,
+                        "Actief" if confidence >= 60 else "Neutraal",
+                        "Kopen" if confidence >= 60 else "Afwachten",
                         "Gemiddeld",
-                        analysis.get("comment", "Strategy analyse (AI)"),
+                        analysis.get("comment", ""),
                         json.dumps(
-                            [analysis.get("recommendation", "Geen aanbeveling.")],
+                            [analysis.get("recommendation", "")],
                             ensure_ascii=False,
                         ),
+                        today,
                     ),
                 )
 
         conn.commit()
-        logger.info("✅ Daily strategy snapshot + AI insight opgeslagen")
+        logger.info(
+            f"✅ Active strategy snapshot opgeslagen | strategy_id={strategy_id} | {today}"
+        )
 
     except Exception:
         logger.error("❌ Daily strategy snapshot fout", exc_info=True)
