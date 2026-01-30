@@ -1102,6 +1102,11 @@ async def delete_bot_config(
 # - Single source of truth: DB
 # - Return per bot: budget + ledger stats + (optioneel) price snapshot
 # =====================================
+# =====================================
+# 📦 BOT PORTFOLIOS (UI: Bot cards)
+# - Single source of truth: DB
+# - Return per bot: budget + ledger stats + (optioneel) price snapshot
+# =====================================
 @router.get("/bot/portfolios")
 async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
@@ -1166,23 +1171,24 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
             # Default stats (altijd veilig)
             # -----------------------------
             stats = {
-                "net_cash_delta_eur": 0.0,
-                "net_qty": 0.0,
-                "today_spent_eur": 0.0,     # alle negatieve cash deltas vandaag (reserve+execute)
-                "today_reserved_eur": 0.0,  # alleen reserve entries vandaag
-                "today_executed_eur": 0.0,  # alleen execute entries vandaag
+                "net_cash_delta_eur": 0.0,          # alle cash deltas (reserve + execute + eventueel refunds)
+                "net_executed_cash_delta_eur": 0.0, # alleen execute cash deltas (echte trades)
+                "net_qty": 0.0,                     # holdings qty (alle qty_delta)
+                "today_spent_eur": 0.0,             # ✅ alleen execute vandaag (ECHT uitgegeven)
+                "today_reserved_eur": 0.0,          # reserve entries vandaag (preview/lock)
+                "today_executed_eur": 0.0,          # execute entries vandaag (trade)
                 "last_price": None,
                 "position_value_eur": None,
             }
 
-            symbol = "BTC"  # default; als jij per bot/symbol wil, kun je dit later uitbreiden via joins (strategy/setup)
+            symbol = "BTC"  # default; later per bot uitbreiden via join strategy/setup
 
             # -----------------------------
             # Ledger stats (als table bestaat)
             # -----------------------------
             if has_ledger:
                 with conn.cursor() as c2:
-                    # Net balances
+                    # (A) Net balances - alles
                     c2.execute(
                         """
                         SELECT
@@ -1198,13 +1204,27 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
                     stats["net_cash_delta_eur"] = float(row[0] or 0.0)
                     stats["net_qty"] = float(row[1] or 0.0)
 
-                    # Vandaag: totaal outflow (negatief)
+                    # (B) Net executed cash only (echte trades)
+                    c2.execute(
+                        """
+                        SELECT COALESCE(SUM(cash_delta_eur), 0)
+                        FROM bot_ledger
+                        WHERE user_id=%s
+                          AND bot_id=%s
+                          AND entry_type='execute'
+                        """,
+                        (user_id, bot_id),
+                    )
+                    stats["net_executed_cash_delta_eur"] = float((c2.fetchone() or [0])[0] or 0.0)
+
+                    # (C) Vandaag: ✅ spent = alleen execute outflow
                     c2.execute(
                         """
                         SELECT COALESCE(SUM(ABS(cash_delta_eur)), 0)
                         FROM bot_ledger
                         WHERE user_id=%s
                           AND bot_id=%s
+                          AND entry_type='execute'
                           AND cash_delta_eur < 0
                           AND DATE(ts) = %s
                         """,
@@ -1212,7 +1232,7 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
                     )
                     stats["today_spent_eur"] = float((c2.fetchone() or [0])[0] or 0.0)
 
-                    # Vandaag: reserve
+                    # (D) Vandaag: reserve
                     c2.execute(
                         """
                         SELECT COALESCE(SUM(ABS(cash_delta_eur)), 0)
@@ -1227,7 +1247,7 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
                     )
                     stats["today_reserved_eur"] = float((c2.fetchone() or [0])[0] or 0.0)
 
-                    # Vandaag: execute
+                    # (E) Vandaag: execute
                     c2.execute(
                         """
                         SELECT COALESCE(SUM(ABS(cash_delta_eur)), 0)
@@ -1277,16 +1297,12 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
                     "is_active": bool(is_active),
                     "mode": mode,
                     "risk_profile": risk_profile or "balanced",
-
-                    # ⭐ BotBudgetForm verwacht dit
                     "budget": {
                         "total_eur": float(budget_total_eur or 0),
                         "daily_limit_eur": float(budget_daily_limit_eur or 0),
                         "min_order_eur": float(budget_min_order_eur or 0),
                         "max_order_eur": float(budget_max_order_eur or 0),
                     },
-
-                    # Extra info voor BotAgentCard (handig)
                     "symbol": symbol,
                     "stats": stats,
                 }
