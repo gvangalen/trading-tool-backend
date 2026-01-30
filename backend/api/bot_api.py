@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
+from backend.ai_agents.trading_bot_agent import record_bot_ledger_entry
 
 # (optioneel) onboarding helper — alleen gebruiken als jij dat wil
 # from backend.api.onboarding_api import mark_step_completed
