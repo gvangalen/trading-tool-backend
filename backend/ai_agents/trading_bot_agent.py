@@ -1072,11 +1072,20 @@ def _auto_execute_decision(
 ):
     """
     Marks decision + order as executed by AUTO.
-    Single source of truth.
+
+    BELANGRIJK:
+    - Reserve entry heeft AL het geld al afgeboekt
+    - Execute entry mag GEEN extra cash_delta doen
+    - Execute = alleen qty_delta
     """
 
+    symbol = order.get("symbol", DEFAULT_SYMBOL)
+    qty = float(order.get("estimated_qty") or 0.0)
+
     with conn.cursor() as cur:
-        # ✅ decision executed
+        # =====================================================
+        # 1️⃣ Decision → executed
+        # =====================================================
         cur.execute(
             """
             UPDATE bot_decisions
@@ -1093,7 +1102,10 @@ def _auto_execute_decision(
             (decision_id, user_id, bot_id),
         )
 
-        # ✅ order filled
+        # =====================================================
+        # 2️⃣ Order → filled
+        # =====================================================
+        order_id = None
         if _table_exists(conn, "bot_orders"):
             cur.execute(
                 """
@@ -1111,21 +1123,24 @@ def _auto_execute_decision(
             row = cur.fetchone()
             order_id = row[0] if row else None
 
-        else:
-            order_id = None
-
-        # ✅ ledger execution
-        if order_id:
+        # =====================================================
+        # 3️⃣ Ledger EXECUTE
+        # ❗ GEEN cash_delta hier
+        # =====================================================
+        if order_id and qty > 0:
             record_bot_ledger_entry(
                 conn=conn,
                 user_id=user_id,
                 bot_id=bot_id,
                 entry_type="execute",
-                cash_delta_eur=-float(order.get("quote_amount_eur") or 0),
-                qty_delta=float(order.get("estimated_qty") or 0),
-                symbol=order.get("symbol", DEFAULT_SYMBOL),
+                cash_delta_eur=0.0,              # ✅ GEEN dubbele afboeking
+                qty_delta=qty,                   # ✅ positie neemt toe
+                symbol=symbol,
                 decision_id=decision_id,
                 order_id=order_id,
                 note="Auto executed by bot",
-                meta={"mode": "auto"},
+                meta={
+                    "mode": "auto",
+                    "execution_type": "reserve_conversion",
+                },
             )
