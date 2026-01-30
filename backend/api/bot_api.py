@@ -1370,3 +1370,111 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Bot portfolios ophalen mislukt")
     finally:
         conn.close()
+
+
+# =====================================
+# 📊 BOT TRADES (echte uitgevoerde trades)
+# - Bron: bot_ledger
+# - Alleen entry_type='execute'
+# - UI: tabel onder Bot Portfolio
+# =====================================
+@router.get("/bot/trades")
+async def get_bot_trades(
+    bot_id: int,
+    limit: int = 20,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Return ECHTE trades van een bot.
+
+    Contract:
+    - Alleen entry_type='execute'
+    - qty_delta > 0 (BUY)
+    - price uit meta (fallback: None)
+    - Volledig los van bot_history / decisions
+    """
+    user_id = current_user["id"]
+
+    if limit < 1:
+        limit = 1
+    if limit > 100:
+        limit = 100
+
+    conn, cur = get_db_cursor()
+    try:
+        if not _table_exists(conn, "bot_ledger"):
+            return []
+
+        cur.execute(
+            """
+            SELECT
+              l.id,
+              l.decision_id,
+              l.symbol,
+              l.qty_delta,
+              l.cash_delta_eur,
+              l.meta,
+              l.ts,
+              d.executed_by
+            FROM bot_ledger l
+            LEFT JOIN bot_decisions d
+              ON d.id = l.decision_id
+             AND d.user_id = l.user_id
+            WHERE l.user_id = %s
+              AND l.bot_id = %s
+              AND l.entry_type = 'execute'
+              AND l.qty_delta > 0
+            ORDER BY l.ts DESC
+            LIMIT %s
+            """,
+            (user_id, bot_id, limit),
+        )
+
+        rows = cur.fetchall()
+        out = []
+
+        for (
+            ledger_id,
+            decision_id,
+            symbol,
+            qty_delta,
+            cash_delta_eur,
+            meta,
+            ts,
+            executed_by,
+        ) in rows:
+
+            meta = _safe_json(meta, {})
+
+            price = meta.get("price")
+            reserved_cash = meta.get("reserved_cash")
+
+            # fallback prijs (als qty + cash bekend zijn)
+            if price is None and qty_delta and reserved_cash:
+                try:
+                    price = float(reserved_cash) / float(qty_delta)
+                except Exception:
+                    price = None
+
+            out.append(
+                {
+                    "id": ledger_id,
+                    "bot_id": bot_id,
+                    "decision_id": decision_id,
+                    "symbol": symbol,
+                    "side": "buy" if qty_delta > 0 else "sell",
+                    "qty": round(float(qty_delta), 8),
+                    "price": round(float(price), 2) if price else None,
+                    "amount_eur": round(float(reserved_cash), 2) if reserved_cash else None,
+                    "executed_at": ts,
+                    "mode": executed_by or "manual",
+                }
+            )
+
+        return out
+
+    except Exception:
+        logger.error("❌ bot/trades error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Bot trades ophalen mislukt")
+    finally:
+        conn.close()
