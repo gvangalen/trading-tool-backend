@@ -688,6 +688,17 @@ async def mark_bot_executed(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    HUMAN-IN-THE-LOOP EXECUTION
+
+    CONTRACT (IDENTIEK AAN AUTO-MODE):
+    - reserve-entry bestaat al (cash_delta < 0)
+    - execute-entry:
+        * GEEN cash_delta
+        * WEL qty_delta
+    - portfolio = ledger is single source of truth
+    """
+
     user_id = current_user["id"]
     body = await request.json()
 
@@ -699,9 +710,10 @@ async def mark_bot_executed(
     if body.get("report_date"):
         report_date = date.fromisoformat(body["report_date"])
 
-    exchange = body.get("exchange")
-    price = body.get("price")
-    notes = body.get("notes")
+    # optioneel (handmatige invoer)
+    executed_price = body.get("price")   # echte fill prijs (optioneel)
+    executed_qty   = body.get("qty")     # echte fill qty (optioneel)
+    notes          = body.get("notes")
 
     conn = get_db_connection()
     if not conn:
@@ -709,17 +721,18 @@ async def mark_bot_executed(
 
     try:
         with conn.cursor() as cur:
-            # 🔒 HARD LOCK: alleen planned mag uitgevoerd worden
+            # ==========================================
+            # 1️⃣ Pak geplande decision (LOCK)
+            # ==========================================
             cur.execute(
                 """
-                UPDATE bot_decisions
-                SET status='executed',
-                    updated_at=NOW()
+                SELECT id
+                FROM bot_decisions
                 WHERE user_id=%s
                   AND bot_id=%s
                   AND decision_date=%s
                   AND status='planned'
-                RETURNING id
+                FOR UPDATE
                 """,
                 (user_id, bot_id, report_date),
             )
@@ -728,61 +741,103 @@ async def mark_bot_executed(
             if not row:
                 raise HTTPException(
                     status_code=409,
-                    detail="Decision is al afgehandeld"
+                    detail="Geen geplande decision om uit te voeren"
                 )
 
-            decision_id = row[0]
+            decision_id = int(row[0])
 
-            # orders → filled
-            bot_order_id = None
-            if _table_exists(conn, "bot_orders"):
-                cur.execute(
-                    """
-                    UPDATE bot_orders
-                    SET status='filled',
-                        updated_at=NOW()
-                    WHERE user_id=%s
-                      AND bot_id=%s
-                      AND decision_id=%s
-                    RETURNING id
-                    """,
-                    (user_id, bot_id, decision_id),
-                )
-                orow = cur.fetchone()
-                bot_order_id = orow[0] if orow else None
+            # ==========================================
+            # 2️⃣ Haal reserve-ledger entry op
+            # ==========================================
+            cur.execute(
+                """
+                SELECT cash_delta_eur, meta
+                FROM bot_ledger
+                WHERE user_id=%s
+                  AND bot_id=%s
+                  AND decision_id=%s
+                  AND entry_type='reserve'
+                ORDER BY ts DESC
+                LIMIT 1
+                """,
+                (user_id, bot_id, decision_id),
+            )
+            reserve_row = cur.fetchone()
 
-            # executions log
-            if bot_order_id and _table_exists(conn, "bot_executions"):
-                cur.execute(
-                    """
-                    INSERT INTO bot_executions
-                      (user_id, bot_order_id, exchange, status, avg_fill_price, raw_response, created_at, updated_at)
-                    VALUES (%s,%s,%s,'filled',%s,%s,NOW(),NOW())
-                    ON CONFLICT (bot_order_id)
-                    DO UPDATE SET
-                      exchange=EXCLUDED.exchange,
-                      avg_fill_price=EXCLUDED.avg_fill_price,
-                      raw_response=EXCLUDED.raw_response,
-                      updated_at=NOW()
-                    """,
-                    (
-                        user_id,
-                        bot_order_id,
-                        exchange,
-                        float(price) if price else None,
-                        json.dumps({"notes": notes}),
-                    ),
+            if not reserve_row:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Reserve ledger entry ontbreekt"
                 )
+
+            reserved_cash = abs(float(reserve_row[0] or 0.0))
+            reserve_meta  = reserve_row[1] or {}
+
+            estimated_qty = float(reserve_meta.get("estimated_qty") or 0)
+
+            # ==========================================
+            # 3️⃣ Bepaal qty (prio: user → estimate)
+            # ==========================================
+            qty = float(executed_qty) if executed_qty is not None else estimated_qty
+
+            if qty <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Kan geen execute doen zonder geldige qty"
+                )
+
+            # ==========================================
+            # 4️⃣ Mark decision executed
+            # ==========================================
+            cur.execute(
+                """
+                UPDATE bot_decisions
+                SET
+                  status='executed',
+                  executed_by='manual',
+                  executed_at=NOW(),
+                  updated_at=NOW()
+                WHERE id=%s
+                """,
+                (decision_id,),
+            )
+
+            # ==========================================
+            # 5️⃣ Ledger EXECUTE entry (⚠️ GEEN CASH)
+            # ==========================================
+            record_bot_ledger_entry(
+                conn=conn,
+                user_id=user_id,
+                bot_id=bot_id,
+                entry_type="execute",
+                cash_delta_eur=0.0,               # 🚨 NOOIT nogmaals afboeken
+                qty_delta=qty,                    # ✅ positie opbouwen
+                symbol=DEFAULT_SYMBOL,
+                decision_id=decision_id,
+                note="Manual execution",
+                meta={
+                    "price": executed_price,
+                    "reserved_cash": reserved_cash,
+                    "notes": notes,
+                },
+            )
 
         conn.commit()
-        return {"ok": True, "status": "executed"}
+
+        return {
+            "ok": True,
+            "bot_id": bot_id,
+            "decision_id": decision_id,
+            "executed_qty": qty,
+            "mode": "manual",
+        }
 
     except HTTPException:
         conn.rollback()
         raise
     except Exception:
         conn.rollback()
-        logger.error("❌ mark_executed error", exc_info=True)
+        logger.exception("❌ mark_bot_executed crash")
         raise HTTPException(status_code=500, detail="Mark executed mislukt")
     finally:
         conn.close()
