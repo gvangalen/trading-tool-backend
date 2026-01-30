@@ -69,9 +69,9 @@ def _empty_decision(
 ) -> Dict[str, Any]:
     """
     Fail-safe decision object.
-    -> UI-contract blijft altijd intact (setup_match altijd aanwezig)
-    -> Gebruik dit als fallback als iets crasht tijdens generate/persist.
+    -> UI-contract blijft altijd intact
     """
+
     setup_match = _build_setup_match(bot=bot, scores=scores, snapshot=None)
 
     return {
@@ -80,7 +80,7 @@ def _empty_decision(
         "symbol": bot.get("symbol", DEFAULT_SYMBOL),
         "action": "observe",
         "confidence": "low",
-        "amount_eur": 0.0,
+        "amount_eur": 0.0,        # ✅ expliciet
         "reasons": [f"{warning} ({report_date})"],
         "setup_match": setup_match,
         "order": None,
@@ -779,11 +779,14 @@ def _persist_decision_and_order(
     - Eén decision per bot per dag (UPSERT)
     - scores_json = scores + setup_match
     - reason_json = reasons (array)
+    - amount_eur = SINGLE SOURCE OF TRUTH voor sizing
     """
 
     action = _normalize_action(decision.get("action"))
     confidence = _normalize_confidence(decision.get("confidence"))
     symbol = decision.get("symbol", DEFAULT_SYMBOL)
+
+    amount_eur = float(decision.get("amount_eur") or 0.0)
 
     reasons = decision.get("reasons", [])
     if not isinstance(reasons, list):
@@ -813,6 +816,7 @@ def _persist_decision_and_order(
                 decision_ts,
                 action,
                 confidence,
+                amount_eur,            -- ✅ FIX
                 scores_json,
                 reason_json,
                 status,
@@ -823,7 +827,7 @@ def _persist_decision_and_order(
                 %s,%s,%s,%s,
                 %s,%s,
                 NOW(),
-                %s,%s,
+                %s,%s,%s,
                 %s,%s,
                 'planned',
                 NOW(), NOW()
@@ -832,9 +836,10 @@ def _persist_decision_and_order(
             DO UPDATE SET
                 action       = EXCLUDED.action,
                 confidence   = EXCLUDED.confidence,
+                amount_eur   = EXCLUDED.amount_eur,   -- ✅ FIX
                 scores_json  = EXCLUDED.scores_json,
                 reason_json  = EXCLUDED.reason_json,
-                updated_at  = NOW()
+                updated_at   = NOW()
             RETURNING id
             """,
             (
@@ -846,6 +851,7 @@ def _persist_decision_and_order(
                 report_date,
                 action,
                 confidence,
+                amount_eur,
                 json.dumps(scores_payload),
                 json.dumps(reasons),
             ),
