@@ -547,18 +547,30 @@ def p_bot_strategy(bot_snapshot: Optional[Dict[str, Any]]) -> str:
     if not bot_snapshot:
         return """
 Er is vandaag geen actieve botbeslissing.
+
+Leg uit:
+- waarom de bot vandaag géén actie nam
+- welke voorwaarden ontbraken
+- wat er zou moeten veranderen voordat actie logisch wordt
+
+Formuleer dit als context, niet als statusmelding.
 """
 
     return """
 Er is vandaag een botbeslissing genomen.
 
-Beschrijf:
-- hoe de strategy match scoorde
-- waarom de bot vandaag observeert, wacht of handelt
-- hoe score, drempels en strategy discipline samenkomen
+BELANGRIJK:
+- De feitelijke botactie, confidence en bedragen worden elders getoond
+- Herhaal of parafraseer deze NIET
+- Jij geeft uitsluitend context en motivatie
 
-Gebruik uitsluitend de aangeleverde bot- en strategy-data.
-Voeg geen aannames toe en introduceer geen nieuwe logica.
+Beschrijf:
+- waarom deze beslissing logisch is binnen de huidige scorecombinatie
+- hoe strategy discipline en drempels vandaag doorslaggevend waren
+- waarom dit wel of juist geen actief handelsmoment is
+
+Gebruik uitsluitend de aangeleverde botdata.
+Voeg geen aannames toe en introduceer geen nieuwe beslissingen.
 """
 
 # =====================================================
