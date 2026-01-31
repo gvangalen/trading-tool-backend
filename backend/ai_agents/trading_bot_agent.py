@@ -200,7 +200,8 @@ def _build_setup_match(
     UI-CONTRACT (KEIHARD):
     - setup_match bestaat ALTIJD
     - score is NOOIT 0
-    - status is EXPLICIET (match / no_match / no_snapshot)
+    - status + UI-tekst komen UITSLUITEND uit de backend
+    - frontend mag NIETS interpreteren
     """
 
     # -----------------------------
@@ -237,43 +238,57 @@ def _build_setup_match(
     match_hold = has_snapshot and combined_score >= hold_th
 
     # -----------------------------
-    # STATUS — EXPLICIET & EENDUIDIG
+    # STATUS + UI COPY (⭐ ENIGE WAARHEID)
     # -----------------------------
     if not has_snapshot:
         status = "no_snapshot"
-        reason = "Strategy actief, maar vandaag geen concreet trade-plan"
+        summary = "Geen actueel strategy-plan beschikbaar voor vandaag."
+        detail = (
+            "De marktcondities zijn bekend, maar deze strategie heeft vandaag "
+            "onvoldoende context om gecontroleerd uitgevoerd te worden."
+        )
+        reason = "no_active_strategy_snapshot"
 
     elif match_buy:
         status = "match_buy"
-        reason = "Voldoet aan buy-voorwaarden"
+        summary = "Strategie voldoet aan buy-voorwaarden."
+        detail = (
+            f"Totale score ({combined_score}) en strategie-confidence "
+            f"({strategy_confidence}) liggen boven de buy-drempel ({buy_th})."
+        )
+        reason = "buy_conditions_met"
 
     elif match_hold:
         status = "no_match"
-        reason = (
-            f"Score {combined_score} ≥ hold ({hold_th}), "
-            f"maar niet voldoende voor buy ({buy_th})"
+        summary = "Strategie actief, maar geen buy-signaal."
+        detail = (
+            f"Score ({combined_score}) is voldoende om vast te houden "
+            f"(≥ {hold_th}), maar nog onder de buy-drempel ({buy_th})."
         )
+        reason = "hold_conditions_only"
 
     else:
         status = "no_match"
-        reason = f"Score {combined_score} onder hold-drempel ({hold_th})"
+        summary = "Strategie onder minimumdrempel."
+        detail = (
+            f"Score ({combined_score}) ligt onder de hold-drempel ({hold_th}). "
+            "De strategie blijft inactief."
+        )
+        reason = "below_hold_threshold"
 
     # -----------------------------
-    # ⚠️ BELANGRIJK
-    # no_match ≠ geen strategy
-    # no_match = strategy BESTAAT, maar DOET NIKS
+    # FINAL UI OBJECT
     # -----------------------------
     return {
-        # Identiteit (altijd tonen in UI)
+        # Identiteit
         "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
         "symbol": bot.get("symbol", DEFAULT_SYMBOL),
         "timeframe": bot.get("timeframe") or "—",
 
-        # Score info
+        # Scores
         "score": combined_score,
         "confidence": _confidence_from_score(combined_score),
 
-        # Score breakdown (voor debug / future UI)
         "components": {
             "macro": macro,
             "technical": technical,
@@ -281,7 +296,7 @@ def _build_setup_match(
             "setup": setup,
         },
 
-        # Thresholds (UI + explainability)
+        # Thresholds (UI mag deze alleen tonen)
         "thresholds": {
             "buy": buy_th,
             "hold": hold_th,
@@ -289,15 +304,17 @@ def _build_setup_match(
 
         # Strategy context
         "strategy_confidence": strategy_confidence,
-        "has_snapshot": bool(has_snapshot),
+        "has_snapshot": has_snapshot,
 
-        # Match booleans (UI mag hier NOOIT zelf logica doen)
+        # Match flags (optioneel voor UI badges)
         "match_buy": bool(match_buy),
         "match_hold": bool(match_hold),
 
-        # ⭐ ENIGE WAARHEID VOOR DE UI
-        "status": status,        # match_buy | no_match | no_snapshot
-        "reason": reason,
+        # ⭐ UI-CONTRACT
+        "status": status,      # match_buy | no_match | no_snapshot
+        "summary": summary,    # headline (kaarttitel)
+        "detail": detail,      # toelichting onder de kaart
+        "reason": reason,      # technisch / debug / logging
     }
 
 
