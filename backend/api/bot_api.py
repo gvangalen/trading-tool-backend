@@ -554,10 +554,11 @@ async def generate_bot_today(
     FORCE GENERATE BOT DECISION (TODAY)
 
     CONTRACT:
-    - Deze endpoint triggert ALLEEN de bot-agent
+    - Triggert ALLEEN de bot-agent
     - Stuurt GEEN decisions terug
     - Frontend moet NA afloop altijd /bot/today ophalen
-    - NOOIT een 500 naar frontend
+    - executed = HARD LOCK
+    - skipped = MAG opnieuw gegenereerd worden
     """
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 
@@ -603,14 +604,31 @@ async def generate_bot_today(
             )
             row = cur.fetchone()
 
-            # Executed / skipped mag niet opnieuw
-            if row and row[1] in ("executed", "skipped"):
-                return {
-                    "ok": False,
-                    "bot_id": bot_id,
-                    "date": str(report_date),
-                    "error": "Decision is al afgehandeld",
-                }
+            if row:
+                decision_id, status = row
+
+                # ❌ Executed = definitief klaar
+                if status == "executed":
+                    return {
+                        "ok": False,
+                        "bot_id": bot_id,
+                        "date": str(report_date),
+                        "error": "Decision is al uitgevoerd",
+                    }
+
+                # 🔄 Skipped = reset naar planned
+                if status == "skipped":
+                    cur.execute(
+                        """
+                        UPDATE bot_decisions
+                        SET
+                            status = 'planned',
+                            updated_at = NOW()
+                        WHERE id = %s
+                          AND user_id = %s
+                        """,
+                        (decision_id, user_id),
+                    )
 
             # ==========================================
             # Bot mode ophalen (manual / auto)
@@ -643,7 +661,7 @@ async def generate_bot_today(
         )
 
         # ==========================================
-        # FAILSAFE RESPONSE (NOOIT 500)
+        # FAILSAFE RESPONSE
         # ==========================================
         if not result or not result.get("ok"):
             logger.warning(
@@ -657,7 +675,7 @@ async def generate_bot_today(
             }
 
         # ==========================================
-        # ✅ SUCCESS — frontend haalt /bot/today op
+        # ✅ SUCCESS
         # ==========================================
         return {
             "ok": True,
@@ -668,8 +686,6 @@ async def generate_bot_today(
 
     except Exception:
         logger.error("❌ generate_bot_today error", exc_info=True)
-
-        # 🔒 HARD FAILSAFE — NOOIT 500
         return {
             "ok": False,
             "bot_id": bot_id,
