@@ -10,7 +10,10 @@ from psycopg2.extras import Json
 
 from backend.utils.db import get_db_connection
 from backend.ai_agents.report_ai_agent import generate_daily_report_sections
-from backend.utils.pdf_generator import generate_pdf_report
+
+# ✅ FIX: nieuwe locked PDF renderer
+from backend.utils.pdf_generator import generate_report_pdf
+
 from backend.utils.email_utils import send_email_with_attachment
 
 # =====================================================
@@ -95,7 +98,11 @@ def generate_daily_report(user_id: int):
         technical_analysis   = jsonb(report.get("technical_analysis"), {})
         setup_validation     = jsonb(report.get("setup_validation"), {})
         strategy_implication = jsonb(report.get("strategy_implication"), {})
-        outlook              = jsonb(report.get("outlook"), {})   # ✅ FIX
+        outlook              = jsonb(report.get("outlook"), {})
+
+        # ✅ BOT DATA (was missing)
+        bot_strategy         = jsonb(report.get("bot_strategy"), {})
+        bot_snapshot         = jsonb(report.get("bot_snapshot"))
 
         price      = to_float(report.get("price"))
         change_24h = to_float(report.get("change_24h"))
@@ -115,7 +122,7 @@ def generate_daily_report(user_id: int):
         active_strategy = jsonb(report.get("active_strategy"))
 
         # -------------------------------------------------
-        # 3️⃣ UPSERT daily_reports (MET OUTLOOK)
+        # 3️⃣ UPSERT daily_reports (MET BOT + OUTLOOK)
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -129,6 +136,9 @@ def generate_daily_report(user_id: int):
                 setup_validation,
                 strategy_implication,
                 outlook,
+
+                bot_strategy,
+                bot_snapshot,
 
                 price,
                 change_24h,
@@ -150,6 +160,7 @@ def generate_daily_report(user_id: int):
             VALUES (
                 %s, %s,
                 %s, %s, %s, %s, %s, %s, %s,
+                %s, %s,
                 %s, %s, %s,
                 %s, %s, %s, %s,
                 %s, %s, %s,
@@ -164,6 +175,9 @@ def generate_daily_report(user_id: int):
                 setup_validation               = EXCLUDED.setup_validation,
                 strategy_implication           = EXCLUDED.strategy_implication,
                 outlook                        = EXCLUDED.outlook,
+
+                bot_strategy                   = EXCLUDED.bot_strategy,
+                bot_snapshot                   = EXCLUDED.bot_snapshot,
 
                 price                           = EXCLUDED.price,
                 change_24h                      = EXCLUDED.change_24h,
@@ -192,7 +206,10 @@ def generate_daily_report(user_id: int):
             technical_analysis,
             setup_validation,
             strategy_implication,
-            outlook,                    # ✅ FIX
+            outlook,
+
+            bot_strategy,
+            bot_snapshot,
 
             price,
             change_24h,
@@ -213,10 +230,10 @@ def generate_daily_report(user_id: int):
         ))
 
         conn.commit()
-        logger.info("💾 daily_reports opgeslagen (incl. outlook)")
+        logger.info("💾 daily_reports opgeslagen (incl. bot + outlook)")
 
         # -------------------------------------------------
-        # 4️⃣ PDF GENEREREN
+        # 4️⃣ PDF GENEREREN (exact report → pdf)
         # -------------------------------------------------
         cursor.execute("""
             SELECT *
@@ -229,10 +246,10 @@ def generate_daily_report(user_id: int):
         cols = [d[0] for d in cursor.description]
         report_row = dict(zip(cols, row))
 
-        pdf_buffer = generate_pdf_report(
+        # ✅ FIX: call nieuwe renderer
+        pdf_buffer = generate_report_pdf(
             report_row,
-            report_type="daily",
-            save_to_disk=False
+            report_type="daily"
         )
 
         if not pdf_buffer:
