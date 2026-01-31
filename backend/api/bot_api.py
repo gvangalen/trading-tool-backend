@@ -712,8 +712,8 @@ async def mark_bot_executed(
         report_date = date.fromisoformat(body["report_date"])
 
     # optioneel (handmatige invoer)
-    executed_price = body.get("price")   # echte fill prijs (optioneel)
-    executed_qty   = body.get("qty")     # echte fill qty (optioneel)
+    executed_price = body.get("price")
+    executed_qty   = body.get("qty")
     notes          = body.get("notes")
 
     conn = get_db_connection()
@@ -723,11 +723,11 @@ async def mark_bot_executed(
     try:
         with conn.cursor() as cur:
             # ==========================================
-            # 1️⃣ Pak geplande decision (LOCK)
+            # 1️⃣ Pak geplande decision (LOCK + symbol)
             # ==========================================
             cur.execute(
                 """
-                SELECT id
+                SELECT id, symbol
                 FROM bot_decisions
                 WHERE user_id=%s
                   AND bot_id=%s
@@ -746,6 +746,7 @@ async def mark_bot_executed(
                 )
 
             decision_id = int(row[0])
+            symbol = (row[1] or "BTC").upper()
 
             # ==========================================
             # 2️⃣ Haal reserve-ledger entry op
@@ -804,16 +805,16 @@ async def mark_bot_executed(
             )
 
             # ==========================================
-            # 5️⃣ Ledger EXECUTE entry (⚠️ GEEN CASH)
+            # 5️⃣ Ledger EXECUTE entry (GEEN CASH)
             # ==========================================
             record_bot_ledger_entry(
                 conn=conn,
                 user_id=user_id,
                 bot_id=bot_id,
                 entry_type="execute",
-                cash_delta_eur=0.0,               # 🚨 NOOIT nogmaals afboeken
-                qty_delta=qty,                    # ✅ positie opbouwen
-                symbol=DEFAULT_SYMBOL,
+                cash_delta_eur=0.0,          # 🚨 nooit opnieuw cash afboeken
+                qty_delta=qty,               # ✅ positie opbouwen
+                symbol=symbol,               # ✅ FIX
                 decision_id=decision_id,
                 note="Manual execution",
                 meta={
@@ -830,6 +831,7 @@ async def mark_bot_executed(
             "bot_id": bot_id,
             "decision_id": decision_id,
             "executed_qty": qty,
+            "symbol": symbol,
             "mode": "manual",
         }
 
@@ -842,7 +844,6 @@ async def mark_bot_executed(
         raise HTTPException(status_code=500, detail="Mark executed mislukt")
     finally:
         conn.close()
-
 
 # =====================================
 # ⏭️ ADD BOT 
