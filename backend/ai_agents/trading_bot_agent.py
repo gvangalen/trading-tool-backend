@@ -1084,7 +1084,7 @@ def run_trading_bot_agent(
         conn.close()
 
 # =====================================================
-# 🚀 Bot exute decision functie
+# 🚀 Bot execute decision functie
 # =====================================================
 def _auto_execute_decision(
     *,
@@ -1168,3 +1168,111 @@ def _auto_execute_decision(
                     "execution_type": "reserve_conversion",
                 },
             )
+
+# =====================================================
+# 🚀 Manual execute decision functie
+# =====================================================
+def execute_manual_decision(
+    *,
+    conn,
+    user_id: int,
+    bot_id: int,
+    decision_id: int,
+):
+    """
+    Manually executes a planned bot decision.
+
+    BELANGRIJK:
+    - Werkt ALLEEN op status='planned'
+    - Reserve entry bestaat al (geld is al gereserveerd)
+    - Execute = alleen qty_delta
+    """
+
+    # -------------------------------------------------
+    # 1️⃣ Haal order + qty op
+    # -------------------------------------------------
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              o.id,
+              o.symbol,
+              o.estimated_qty
+            FROM bot_orders o
+            JOIN bot_decisions d ON d.id = o.decision_id
+            WHERE d.id = %s
+              AND d.user_id = %s
+              AND d.bot_id = %s
+              AND d.status = 'planned'
+            LIMIT 1
+            """,
+            (decision_id, user_id, bot_id),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        raise RuntimeError("No executable order found for manual execution")
+
+    order_id, symbol, qty = row
+    qty = float(qty or 0.0)
+
+    if qty <= 0:
+        raise RuntimeError("Invalid quantity for manual execution")
+
+    # -------------------------------------------------
+    # 2️⃣ Decision → executed
+    # -------------------------------------------------
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE bot_decisions
+            SET
+              status='executed',
+              executed_by='manual',
+              executed_at=NOW(),
+              updated_at=NOW()
+            WHERE id=%s
+              AND user_id=%s
+              AND bot_id=%s
+              AND status='planned'
+            """,
+            (decision_id, user_id, bot_id),
+        )
+
+        if cur.rowcount == 0:
+            raise RuntimeError("Decision not in executable state")
+
+    # -------------------------------------------------
+    # 3️⃣ Order → filled
+    # -------------------------------------------------
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE bot_orders
+            SET
+              status='filled',
+              updated_at=NOW()
+            WHERE id=%s
+            """,
+            (order_id,),
+        )
+
+    # -------------------------------------------------
+    # 4️⃣ Ledger EXECUTE
+    # -------------------------------------------------
+    record_bot_ledger_entry(
+        conn=conn,
+        user_id=user_id,
+        bot_id=bot_id,
+        entry_type="execute",
+        cash_delta_eur=0.0,      # ❗ geld was al gereserveerd
+        qty_delta=qty,
+        symbol=symbol,
+        decision_id=decision_id,
+        order_id=order_id,
+        note="Manually executed by user",
+        meta={
+            "mode": "manual",
+            "execution_type": "reserve_conversion",
+        },
+    )
