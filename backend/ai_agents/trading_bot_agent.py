@@ -793,10 +793,11 @@ def _persist_decision_and_order(
     """
     Persist bot decision for today.
 
+    BELANGRIJK:
     - Eén decision per bot per dag (UPSERT)
-    - scores_json = scores + setup_match
-    - reason_json = reasons (array)
-    - amount_eur = SINGLE SOURCE OF TRUTH voor sizing
+    - 'Nieuwe analyse' reset ALTIJD de decision state
+    - status -> planned
+    - executed_by / executed_at -> NULL
     """
 
     action = _normalize_action(decision.get("action"))
@@ -833,7 +834,7 @@ def _persist_decision_and_order(
                 decision_ts,
                 action,
                 confidence,
-                amount_eur,            -- ✅ FIX
+                amount_eur,
                 scores_json,
                 reason_json,
                 status,
@@ -853,9 +854,15 @@ def _persist_decision_and_order(
             DO UPDATE SET
                 action       = EXCLUDED.action,
                 confidence   = EXCLUDED.confidence,
-                amount_eur   = EXCLUDED.amount_eur,   -- ✅ FIX
+                amount_eur   = EXCLUDED.amount_eur,
                 scores_json  = EXCLUDED.scores_json,
                 reason_json  = EXCLUDED.reason_json,
+
+                -- 🔑 DE FIX
+                status       = 'planned',
+                executed_by = NULL,
+                executed_at = NULL,
+
                 updated_at   = NOW()
             RETURNING id
             """,
