@@ -92,6 +92,50 @@ def _flatten_text(obj) -> List[str]:
 
     return out
 
+# =====================================================
+# BOT DAILY SNAPSHOT (BACKEND = TRUTH)
+# =====================================================
+def get_bot_daily_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Leest de botbeslissing van vandaag.
+    GEEN logica. Alleen feiten.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                  b.name AS bot_name,
+                  d.action,
+                  d.confidence,
+                  d.amount_eur,
+                  d.scores_json
+                FROM bot_decisions d
+                JOIN bot_configs b ON b.id = d.bot_id
+                WHERE d.user_id = %s
+                  AND d.decision_date = CURRENT_DATE
+                ORDER BY d.updated_at DESC
+                LIMIT 1;
+            """, (user_id,))
+            row = cur.fetchone()
+
+        if not row:
+            return None
+
+        bot_name, action, confidence, amount_eur, scores_json = row
+        scores_json = scores_json or {}
+
+        return {
+            "bot_name": bot_name,
+            "action": action,
+            "confidence": confidence,
+            "amount_eur": float(amount_eur or 0),
+            # ⭐ DIRECT UIT trading_bot_agent
+            "setup_match": scores_json.get("setup_match"),
+        }
+    finally:
+        conn.close()
+
 
 def generate_text(prompt: str, fallback: str) -> str:
     """
@@ -496,6 +540,26 @@ Analyseer deze strategie door:
 - te beoordelen of deze strategie vandaag ongewijzigd geldig blijft
 """
 
+# =====================================================
+# BOT STRATEGY PROMPT
+# =====================================================
+def p_bot_strategy(bot_snapshot: Optional[Dict[str, Any]]) -> str:
+    if not bot_snapshot:
+        return """
+Er is vandaag geen actieve botbeslissing.
+"""
+
+    return """
+Er is vandaag een botbeslissing genomen.
+
+Beschrijf:
+- hoe de strategy match scoorde
+- waarom de bot vandaag observeert, wacht of handelt
+- hoe score, drempels en strategy discipline samenkomen
+
+Gebruik uitsluitend de aangeleverde bot- en strategy-data.
+Voeg geen aannames toe en introduceer geen nieuwe logica.
+"""
 
 # =====================================================
 # MAIN BUILDER — REPORT AGENT 2.0 (SAFE + CONTEXT-AWARE)
@@ -541,6 +605,7 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     setup_snapshot = get_setup_snapshot(user_id)
     best_setup = setup_snapshot.get("best_setup")
     active_strategy = get_active_strategy_snapshot(user_id)
+    bot_snapshot = get_bot_daily_snapshot(user_id)
 
     # -------------------------------------------------
     # 2) Extra context (AI + vorig rapport)
@@ -613,6 +678,9 @@ Setup: {scores.get("setup_score")}
 === ACTIEVE STRATEGIE ===
 {json.dumps(_safe_json(active_strategy), ensure_ascii=False)}
 
+=== BOT STRATEGY MATCH ===
+{json.dumps(_safe_json(bot_snapshot), ensure_ascii=False)}
+
 === AI INSIGHTS ===
 {json.dumps(_safe_json(ai_insights), ensure_ascii=False)}
 
@@ -663,6 +731,14 @@ BELANGRIJK:
         seen_sentences
     )
 
+    bot_strategy = reduce_repetition(
+        generate_text(
+            context_blob + "\n\n" + p_bot_strategy(bot_snapshot),
+            "De bot bleef vandaag afwachtend."
+        ),
+        seen_sentences
+    )
+
     outlook = reduce_repetition(
         generate_text(
             context_blob + "\n\nSchrijf een scenario-vooruitblik zonder prijsniveaus.",
@@ -681,6 +757,8 @@ BELANGRIJK:
         "technical_analysis": technical_analysis,
         "setup_validation": setup_validation,
         "strategy_implication": strategy_implication,
+        "bot_strategy": bot_strategy,
+        "bot_snapshot": bot_snapshot,
         "outlook": outlook,
 
         "price": market.get("price"),
