@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
-from backend.ai_agents.trading_bot_agent import record_bot_ledger_entry
+from backend.ai_agents.trading_bot_agent import execute_manual_decision
 
 # (optioneel) onboarding helper — alleen gebruiken als jij dat wil
 # from backend.api.onboarding_api import mark_step_completed
@@ -691,138 +691,33 @@ async def mark_bot_executed(
 ):
     """
     HUMAN-IN-THE-LOOP EXECUTION
-
-    CONTRACT (IDENTIEK AAN AUTO-MODE):
-    - reserve-entry bestaat al (cash_delta < 0)
-    - execute-entry:
-        * GEEN cash_delta
-        * WEL qty_delta
-    - portfolio = ledger is single source of truth
+    → gedelegeerd aan trading_bot_agent
+    → identiek aan auto-execute, maar user-triggered
     """
 
     user_id = current_user["id"]
     body = await request.json()
 
     bot_id = body.get("bot_id")
-    if not bot_id:
-        raise HTTPException(status_code=400, detail="bot_id is verplicht")
+    decision_id = body.get("decision_id")
 
-    report_date = date.today()
-    if body.get("report_date"):
-        report_date = date.fromisoformat(body["report_date"])
-
-    # optioneel (handmatige invoer)
-    executed_price = body.get("price")
-    executed_qty   = body.get("qty")
-    notes          = body.get("notes")
+    if not bot_id or not decision_id:
+        raise HTTPException(
+            status_code=400,
+            detail="bot_id en decision_id zijn verplicht"
+        )
 
     conn = get_db_connection()
     if not conn:
         raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
     try:
-        with conn.cursor() as cur:
-            # ==========================================
-            # 1️⃣ Pak geplande decision (LOCK + symbol)
-            # ==========================================
-            cur.execute(
-                """
-                SELECT id, symbol
-                FROM bot_decisions
-                WHERE user_id=%s
-                  AND bot_id=%s
-                  AND decision_date=%s
-                  AND status='planned'
-                FOR UPDATE
-                """,
-                (user_id, bot_id, report_date),
-            )
-            row = cur.fetchone()
-
-            if not row:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Geen geplande decision om uit te voeren"
-                )
-
-            decision_id = int(row[0])
-            symbol = (row[1] or "BTC").upper()
-
-            # ==========================================
-            # 2️⃣ Haal reserve-ledger entry op
-            # ==========================================
-            cur.execute(
-                """
-                SELECT cash_delta_eur, meta
-                FROM bot_ledger
-                WHERE user_id=%s
-                  AND bot_id=%s
-                  AND decision_id=%s
-                  AND entry_type='reserve'
-                ORDER BY ts DESC
-                LIMIT 1
-                """,
-                (user_id, bot_id, decision_id),
-            )
-            reserve_row = cur.fetchone()
-
-            if not reserve_row:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Reserve ledger entry ontbreekt"
-                )
-
-            reserved_cash = abs(float(reserve_row[0] or 0.0))
-            reserve_meta  = reserve_row[1] or {}
-
-            estimated_qty = float(reserve_meta.get("estimated_qty") or 0)
-
-            # ==========================================
-            # 3️⃣ Bepaal qty (prio: user → estimate)
-            # ==========================================
-            qty = float(executed_qty) if executed_qty is not None else estimated_qty
-
-            if qty <= 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Kan geen execute doen zonder geldige qty"
-                )
-
-            # ==========================================
-            # 4️⃣ Mark decision executed
-            # ==========================================
-            cur.execute(
-                """
-                UPDATE bot_decisions
-                SET
-                  status='executed',
-                  executed_by='manual',
-                  executed_at=NOW(),
-                  updated_at=NOW()
-                WHERE id=%s
-                """,
-                (decision_id,),
-            )
-
-            # ==========================================
-            # 5️⃣ Ledger EXECUTE entry (GEEN CASH)
-            # ==========================================
-            record_bot_ledger_entry(
-                conn=conn,
-                user_id=user_id,
-                bot_id=bot_id,
-                entry_type="execute",
-                cash_delta_eur=0.0,          # 🚨 nooit opnieuw cash afboeken
-                qty_delta=qty,               # ✅ positie opbouwen
-                symbol=symbol,               # ✅ FIX
-                decision_id=decision_id,
-                note="Manual execution",
-                meta={
-                    "price": executed_price,
-                    "reserved_cash": reserved_cash,
-                    "notes": notes,
-                },
-            )
+        execute_manual_decision(
+            conn=conn,
+            user_id=user_id,
+            bot_id=int(bot_id),
+            decision_id=int(decision_id),
+        )
 
         conn.commit()
 
@@ -830,18 +725,16 @@ async def mark_bot_executed(
             "ok": True,
             "bot_id": bot_id,
             "decision_id": decision_id,
-            "executed_qty": qty,
-            "symbol": symbol,
             "mode": "manual",
         }
 
-    except HTTPException:
+    except Exception as e:
         conn.rollback()
-        raise
-    except Exception:
-        conn.rollback()
-        logger.exception("❌ mark_bot_executed crash")
-        raise HTTPException(status_code=500, detail="Mark executed mislukt")
+        logger.exception("❌ manual execute failed")
+        raise HTTPException(
+            status_code=409,
+            detail=str(e),
+        )
     finally:
         conn.close()
 
