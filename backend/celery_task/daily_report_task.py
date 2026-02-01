@@ -247,7 +247,7 @@ def generate_daily_report(user_id: int):
         report_row = dict(zip(cols, row))
 
         # ✅ FIX: call nieuwe renderer
-        pdf_buffer = generate_report_pdf(
+        pdf_buffer = generate_pdf_report(
             report_row,
             report_type="daily"
         )
