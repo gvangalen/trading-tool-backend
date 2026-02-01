@@ -678,6 +678,9 @@ Leg uit:
 - welke voorwaarden of drempels niet voldeden
 - waarom discipline en risicobeheer vandaag belangrijker waren dan actie
 - wat er moet veranderen voordat een trade logisch wordt
+
+Gebruik uitsluitend de aangeleverde botdata.
+Voeg geen aannames toe en introduceer geen nieuwe beslissingen.
 """
 
     return """
@@ -692,7 +695,6 @@ Beschrijf:
 - waarom deze beslissing logisch is binnen de huidige scorecombinatie
 - hoe discipline en drempels doorslaggevend waren
 - waarom dit een geschikt handelsmoment was
-"""
 
 Gebruik uitsluitend de aangeleverde botdata.
 Voeg geen aannames toe en introduceer geen nieuwe beslissingen.
