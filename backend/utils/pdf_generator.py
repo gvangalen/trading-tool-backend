@@ -32,7 +32,7 @@ SECTION_ORDER = [
 # =====================================================
 
 def _clean_text(text: Optional[str]) -> str:
-    if not text:
+    if text is None or text == "":
         return "–"
     if not isinstance(text, str):
         text = str(text)
@@ -41,14 +41,16 @@ def _clean_text(text: Optional[str]) -> str:
     text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
 
     try:
-        return unicodedata.normalize("NFKD", text).encode(
-            "latin-1", "ignore"
-        ).decode("latin-1")
+        return (
+            unicodedata.normalize("NFKD", text)
+            .encode("latin-1", "ignore")
+            .decode("latin-1")
+        )
     except Exception:
         return re.sub(r"[^\x00-\x7F]+", "", text)
 
 
-def _fmt_percent(v):
+def _fmt_percent(v) -> str:
     if v is None:
         return "–"
     try:
@@ -57,29 +59,49 @@ def _fmt_percent(v):
         return "–"
 
 
-def _fmt_eur(v):
+def _fmt_eur(v) -> str:
     if v is None:
         return "–"
     try:
+        # let op: comma formatting in NL is prima voor pdf (UI is toch Engels-ish)
         return f"€{float(v):,.0f}"
     except Exception:
         return "–"
 
 
+def _as_text(value) -> str:
+    """
+    daily_reports velden zijn jsonb.
+    Soms komt het als dict/list, soms als string, soms als 'None'.
+    Voor PDF willen we: als het tekst is -> tekst. Als dict/list -> leesbaar dumpen.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        try:
+            import json
+            return json.dumps(value, ensure_ascii=False, indent=2)
+        except Exception:
+            return str(value)
+    return str(value)
+
 # =====================================================
 # 🖨️ MAIN PDF RENDERER
 # =====================================================
 
-def generate_report_pdf(
+def generate_pdf_report(
     report: Dict[str, Any],
     report_type: str = "daily",
+    save_to_disk: bool = False,  # signature compat (wordt in task meegegeven)
 ) -> io.BytesIO:
     """
-    🔒 Definitieve PDF renderer
+    Definitieve PDF renderer (LOCKED)
     - Gebruikt bestaande report data
     - Geen AI
     - Geen interpretatie
-    - Exacte inhoud
+    - Print 1-op-1 de report inhoud
     """
 
     buffer = io.BytesIO()
@@ -127,7 +149,7 @@ def generate_report_pdf(
     story = []
 
     # =====================================================
-    # 🧾 HEADER
+    # HEADER
     # =====================================================
     story.append(Paragraph(
         _clean_text(f"{report_type.capitalize()} Trading Report"),
@@ -142,7 +164,7 @@ def generate_report_pdf(
     story.append(Spacer(1, 14))
 
     # =====================================================
-    # 📊 SCORES (exact dashboard waarden)
+    # SCORES (percentages)
     # =====================================================
     scores_line = (
         f"Macro: {_fmt_percent(report.get('macro_score'))} · "
@@ -150,68 +172,66 @@ def generate_report_pdf(
         f"Market: {_fmt_percent(report.get('market_score'))} · "
         f"Setup: {_fmt_percent(report.get('setup_score'))}"
     )
-
-    story.append(Paragraph(
-        _clean_text(scores_line),
-        styles["Body"]
-    ))
-
+    story.append(Paragraph(_clean_text(scores_line), styles["Body"]))
     story.append(Spacer(1, 16))
 
     # =====================================================
-    # 📄 CONTENT SECTIONS (1-op-1 report)
+    # CONTENT SECTIONS (1-op-1 report)
     # =====================================================
     for key, title in SECTION_ORDER:
 
-        # --- Botbeslissing is speciaal (facts + tekst)
+        # --- Botbeslissing: facts + tekst
         if key == "bot_decision":
-            bot_text = report.get("bot_strategy")
+            bot_text = _as_text(report.get("bot_strategy"))
             bot_snapshot = report.get("bot_snapshot")
+
+            # jsonb kan als string binnenkomen
+            if isinstance(bot_snapshot, str):
+                try:
+                    import json
+                    bot_snapshot = json.loads(bot_snapshot)
+                except Exception:
+                    bot_snapshot = None
 
             if not bot_text and not bot_snapshot:
                 continue
 
-            story.append(Paragraph(title, styles["SectionTitle"]))
+            story.append(Paragraph(_clean_text(title), styles["SectionTitle"]))
 
-            if bot_snapshot:
+            if isinstance(bot_snapshot, dict):
                 lines = [
                     f"Bot: {bot_snapshot.get('bot_name', '–')}",
                     f"Actie: {bot_snapshot.get('action', '–')}",
-                    f"Confidence: {_fmt_percent(bot_snapshot.get('confidence'))}",
+                    # confidence is vaak 'low/medium/high' -> geen percent formatter gebruiken
+                    f"Confidence: {str(bot_snapshot.get('confidence', '–')).upper()}",
                     f"Bedrag: {_fmt_eur(bot_snapshot.get('amount_eur'))}",
                 ]
 
-                if bot_snapshot.get("setup_match"):
-                    lines.append(f"Setup match: {bot_snapshot['setup_match']}")
+                if bot_snapshot.get("setup_match") is not None:
+                    lines.append(f"Setup match: {bot_snapshot.get('setup_match')}")
 
-                story.append(Paragraph(
-                    _clean_text(" · ".join(lines)),
-                    styles["Body"]
-                ))
+                story.append(Paragraph(_clean_text(" · ".join(lines)), styles["Body"]))
 
             if bot_text:
-                story.append(Paragraph(
-                    _clean_text(bot_text),
-                    styles["Body"]
-                ))
+                story.append(Paragraph(_clean_text(bot_text).replace("\n", "<br/>"), styles["Body"]))
 
             continue
 
         # --- Normale secties
-        value = report.get(key)
+        value = _as_text(report.get(key))
         if not value:
             continue
 
-        story.append(Paragraph(title, styles["SectionTitle"]))
-
-        text = _clean_text(value).replace("\n", "<br/>")
-        story.append(Paragraph(text, styles["Body"]))
+        story.append(Paragraph(_clean_text(title), styles["SectionTitle"]))
+        story.append(Paragraph(_clean_text(value).replace("\n", "<br/>"), styles["Body"]))
 
     # =====================================================
-    # 🖨️ BUILD
+    # BUILD
     # =====================================================
     doc.build(story)
     buffer.seek(0)
 
     logger.info("✅ PDF render gereed")
     return buffer
+
+
