@@ -95,21 +95,43 @@ def _flatten_text(obj) -> List[str]:
 # =====================================================
 # BOT DAILY SNAPSHOT (BACKEND = TRUTH)
 # =====================================================
-def get_bot_daily_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
+def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
     """
     Leest de botbeslissing van vandaag.
-    GEEN logica. Alleen feiten.
+    ALTIJD een snapshot teruggeven (BUY/SELL/HOLD).
+    HOLD = bewuste keuze met reason (waarom geen trade).
+
+    Frontend Report Card contract:
+    {
+      bot_name, action, confidence, amount_eur, setup_match, reason
+    }
     """
     conn = get_db_connection()
+    if not conn:
+        # Ultra-safe fallback
+        return {
+            "bot_name": "Bot",
+            "action": "hold",
+            "confidence": None,
+            "amount_eur": None,
+            "setup_match": None,
+            "reason": "Geen databaseverbinding — bot snapshot niet beschikbaar.",
+        }
+
     try:
         with conn.cursor() as cur:
+            # ⚠️ Belangrijk:
+            # - Pak reason_json mee (die hebben jullie in andere code al)
+            # - Pak ook eventueel 'reason' mee als plain text kolom (als die bestaat)
+            # - Selecteer 1 bot decision voor vandaag
             cur.execute("""
                 SELECT
                   b.name AS bot_name,
                   d.action,
                   d.confidence,
                   d.amount_eur,
-                  d.scores_json
+                  d.scores_json,
+                  d.reason_json
                 FROM bot_decisions d
                 JOIN bot_configs b ON b.id = d.bot_id
                 WHERE d.user_id = %s
@@ -119,20 +141,90 @@ def get_bot_daily_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
             """, (user_id,))
             row = cur.fetchone()
 
+        # ✅ Geen decision vandaag? -> return HOLD snapshot (ALTIJD)
         if not row:
-            return None
+            return {
+                "bot_name": "Bot",
+                "action": "hold",
+                "confidence": None,
+                "amount_eur": None,
+                "setup_match": None,
+                "reason": "Geen bot decision gevonden voor vandaag (bot heeft geen actie geplaatst).",
+            }
 
-        bot_name, action, confidence, amount_eur, scores_json = row
-        scores_json = scores_json or {}
+        bot_name, action, confidence, amount_eur, scores_json, reason_json = row
+
+        # scores_json kan string/jsonb/dict zijn
+        if scores_json is None:
+            scores_json = {}
+        elif isinstance(scores_json, str):
+            try:
+                scores_json = json.loads(scores_json)
+            except Exception:
+                scores_json = {}
+
+        # reason_json kan list/dict/string/jsonb zijn
+        reason_text = None
+        if reason_json is not None:
+            if isinstance(reason_json, str):
+                try:
+                    parsed = json.loads(reason_json)
+                    reason_json = parsed
+                except Exception:
+                    # plain text string
+                    reason_text = reason_json
+
+            if reason_text is None:
+                if isinstance(reason_json, list):
+                    # lijst met redenen -> 1 string
+                    reason_text = "; ".join([str(x) for x in reason_json if str(x).strip()])
+                elif isinstance(reason_json, dict):
+                    # dict -> probeer keys / fallback stringify
+                    # (soms zit er bijv. {"reason": "..."} of {"reasons":[...]} )
+                    if reason_json.get("reason"):
+                        reason_text = str(reason_json.get("reason"))
+                    elif reason_json.get("reasons") and isinstance(reason_json.get("reasons"), list):
+                        reason_text = "; ".join([str(x) for x in reason_json["reasons"] if str(x).strip()])
+                    else:
+                        reason_text = str(reason_json)
+
+        # Default reason bij HOLD als er geen reason is opgeslagen
+        normalized_action = (action or "hold").lower()
+        if normalized_action not in ("buy", "sell", "hold"):
+            normalized_action = "hold"
+
+        if normalized_action == "hold" and not reason_text:
+            reason_text = "Geen trade: voorwaarden/drempels niet gehaald."
+
+        # amount_eur safe
+        amount_val = None
+        try:
+            if amount_eur is not None:
+                amount_val = float(amount_eur)
+        except Exception:
+            amount_val = None
+
+        # confidence safe (kan numeric of string zijn afhankelijk van jullie agent)
+        conf_val = confidence
+        try:
+            if confidence is not None and isinstance(confidence, (int, float, Decimal, str)):
+                # als string numeric -> float
+                if isinstance(confidence, str) and confidence.strip().replace(".", "", 1).isdigit():
+                    conf_val = float(confidence)
+        except Exception:
+            conf_val = confidence
 
         return {
-            "bot_name": bot_name,
-            "action": action,
-            "confidence": confidence,
-            "amount_eur": float(amount_eur or 0),
-            # ⭐ DIRECT UIT trading_bot_agent
+            "bot_name": bot_name or "Bot",
+            "action": normalized_action,
+            "confidence": conf_val,
+            "amount_eur": amount_val,
+            # ⭐ setup_match uit scores_json (direct vanuit trading_bot_agent)
             "setup_match": scores_json.get("setup_match"),
+            # ⭐ reason voor HOLD/no-trade uitleg
+            "reason": reason_text,
         }
+
     finally:
         conn.close()
 
