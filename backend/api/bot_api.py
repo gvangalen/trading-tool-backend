@@ -470,17 +470,32 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 # 📜 BOT HISTORY (laatste N dagen)
 # =====================================
 @router.get("/bot/history")
-async def get_bot_history(days: int = 30, current_user: dict = Depends(get_current_user)):
+async def get_bot_history(
+    days: int = 30,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    BOT DECISION HISTORY (GEEN TRADES)
+
+    Betekenis:
+    - Wat heeft de bot per dag BESLOTEN
+    - Dit is GEEN execution / GEEN PnL
+    - Trades komen UITSLUITEND uit /bot/trades (bot_ledger)
+
+    UI:
+    - Tijdlijn / overzicht
+    - Context + discipline
+    """
+
     user_id = current_user["id"]
-    logger.info(f"🤖 [get/history] bot history voor user_id={user_id} (days={days})")
 
     if days < 1:
         days = 1
     if days > 365:
         days = 365
 
-    end = date.today()
-    start = end - timedelta(days=days - 1)
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days - 1)
 
     conn, cur = get_db_cursor()
     try:
@@ -490,72 +505,65 @@ async def get_bot_history(days: int = 30, current_user: dict = Depends(get_curre
         cur.execute(
             """
             SELECT
-              id,
-              bot_id,
-              symbol,
-              decision_ts,
-              decision_date,
-              action,
-              confidence,
-              scores_json,
-              reason_json,
-              setup_id,
-              strategy_id,
-              status,
-              created_at,
-              updated_at
-            FROM bot_decisions
-            WHERE user_id=%s
-              AND decision_date BETWEEN %s AND %s
-            ORDER BY decision_date DESC, bot_id ASC NULLS LAST, id DESC
+              d.id,
+              d.bot_id,
+              b.name AS bot_name,
+              d.symbol,
+              d.decision_ts,
+              d.decision_date,
+              d.action,
+              d.confidence,
+              d.scores_json,
+              d.reason_json,
+              d.status
+            FROM bot_decisions d
+            JOIN bot_configs b ON b.id = d.bot_id
+            WHERE d.user_id=%s
+              AND d.decision_date BETWEEN %s AND %s
+            ORDER BY d.decision_date DESC, d.bot_id ASC, d.id DESC
             """,
-            (user_id, start, end),
+            (user_id, start_date, end_date),
         )
+
         rows = cur.fetchall()
-
         out = []
-        for r in rows:
-            (
-                decision_id,
-                bot_id,
-                symbol,
-                decision_ts,
-                decision_date,
-                action,
-                confidence,
-                scores_json,
-                reason_json,
-                setup_id,
-                strategy_id,
-                status,
-                created_at,
-                updated_at,
-            ) = r
 
-            out.append(
-                {
-                    "id": decision_id,
-                    "bot_id": bot_id,
-                    "symbol": symbol,
-                    "decision_ts": decision_ts,
-                    "date": decision_date,
-                    "action": action,
-                    "confidence": confidence,
-                    "scores": scores_json or {},
-                    "reasons": reason_json or {},
-                    "setup_id": setup_id,
-                    "strategy_id": strategy_id,
-                    "status": status,
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                }
-            )
+        for (
+            decision_id,
+            bot_id,
+            bot_name,
+            symbol,
+            decision_ts,
+            decision_date,
+            action,
+            confidence,
+            scores_json,
+            reason_json,
+            status,
+        ) in rows:
+
+            scores = _safe_json(scores_json, {})
+            reasons = _safe_json(reason_json, [])
+
+            out.append({
+                "decision_id": decision_id,
+                "bot_id": bot_id,
+                "bot_name": bot_name,
+                "symbol": symbol,
+                "date": decision_date,
+                "decision_ts": decision_ts,
+                "action": action,              # buy / sell / hold
+                "confidence": confidence,
+                "setup_match": scores.get("setup_match"),
+                "reasons": reasons if isinstance(reasons, list) else [str(reasons)],
+                "status": status,              # planned / executed / skipped
+            })
 
         return out
 
-    except Exception as e:
-        logger.error(f"❌ bot/history error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Bot history ophalen mislukt.")
+    except Exception:
+        logger.error("❌ bot/history error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Bot history ophalen mislukt")
     finally:
         conn.close()
 
