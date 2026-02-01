@@ -112,7 +112,7 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
     BELANGRIJK:
     - Deze functie retourneert ALTIJD een dict
     - HOLD is een geldige, bewuste beslissing
-    - Nooit None teruggeven
+    - setup_match is ALTIJD string of None (NOOIT object)
     """
 
     conn = get_db_connection()
@@ -178,7 +178,29 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
             except Exception:
                 scores_json = {}
 
-        setup_match = scores_json.get("setup_match")
+        # ─────────────────────────────────────────────
+        # setup_match NORMALISEREN → STRING
+        # ─────────────────────────────────────────────
+        raw_match = scores_json.get("setup_match")
+        setup_match = None
+
+        if isinstance(raw_match, dict):
+            setup_match = (
+                raw_match.get("name")
+                or raw_match.get("label")
+                or raw_match.get("id")
+            )
+        elif isinstance(raw_match, list):
+            setup_match = ", ".join(
+                str(
+                    x.get("name")
+                    if isinstance(x, dict) and x.get("name")
+                    else x
+                )
+                for x in raw_match
+            )
+        elif isinstance(raw_match, (str, int, float)):
+            setup_match = str(raw_match)
 
         # ─────────────────────────────────────────────
         # reason_json → nette tekst
@@ -196,14 +218,14 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
             if reason_text is None:
                 if isinstance(reason_json, list):
                     reason_text = "; ".join(
-                        [str(x) for x in reason_json if str(x).strip()]
+                        str(x) for x in reason_json if str(x).strip()
                     )
                 elif isinstance(reason_json, dict):
                     if "reason" in reason_json:
                         reason_text = str(reason_json["reason"])
                     elif "reasons" in reason_json and isinstance(reason_json["reasons"], list):
                         reason_text = "; ".join(
-                            [str(x) for x in reason_json["reasons"] if str(x).strip()]
+                            str(x) for x in reason_json["reasons"] if str(x).strip()
                         )
                     else:
                         reason_text = str(reason_json)
