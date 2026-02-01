@@ -98,17 +98,25 @@ def _flatten_text(obj) -> List[str]:
 def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
     """
     Leest de botbeslissing van vandaag.
-    ALTIJD een snapshot teruggeven (BUY/SELL/HOLD).
-    HOLD = bewuste keuze met reason (waarom geen trade).
 
-    Frontend Report Card contract:
+    CONTRACT (frontend + report + pdf):
     {
-      bot_name, action, confidence, amount_eur, setup_match, reason
+      bot_name: str,
+      action: "buy" | "sell" | "hold",
+      confidence: float | str | None,
+      amount_eur: float | None,
+      setup_match: str | None,
+      reason: str | None
     }
+
+    BELANGRIJK:
+    - Deze functie retourneert ALTIJD een dict
+    - HOLD is een geldige, bewuste beslissing
+    - Nooit None teruggeven
     """
+
     conn = get_db_connection()
     if not conn:
-        # Ultra-safe fallback
         return {
             "bot_name": "Bot",
             "action": "hold",
@@ -120,10 +128,6 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
-            # ⚠️ Belangrijk:
-            # - Pak reason_json mee (die hebben jullie in andere code al)
-            # - Pak ook eventueel 'reason' mee als plain text kolom (als die bestaat)
-            # - Selecteer 1 bot decision voor vandaag
             cur.execute("""
                 SELECT
                   b.name AS bot_name,
@@ -141,7 +145,9 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
             """, (user_id,))
             row = cur.fetchone()
 
-        # ✅ Geen decision vandaag? -> return HOLD snapshot (ALTIJD)
+        # ─────────────────────────────────────────────
+        # Geen bot decision vandaag → expliciete HOLD
+        # ─────────────────────────────────────────────
         if not row:
             return {
                 "bot_name": "Bot",
@@ -149,12 +155,21 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
                 "confidence": None,
                 "amount_eur": None,
                 "setup_match": None,
-                "reason": "Geen bot decision gevonden voor vandaag (bot heeft geen actie geplaatst).",
+                "reason": "Geen botbeslissing vandaag — drempels of voorwaarden niet gehaald.",
             }
 
         bot_name, action, confidence, amount_eur, scores_json, reason_json = row
 
-        # scores_json kan string/jsonb/dict zijn
+        # ─────────────────────────────────────────────
+        # Action normaliseren
+        # ─────────────────────────────────────────────
+        normalized_action = (action or "hold").lower()
+        if normalized_action not in ("buy", "sell", "hold"):
+            normalized_action = "hold"
+
+        # ─────────────────────────────────────────────
+        # scores_json veilig parsen
+        # ─────────────────────────────────────────────
         if scores_json is None:
             scores_json = {}
         elif isinstance(scores_json, str):
@@ -163,40 +178,42 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
             except Exception:
                 scores_json = {}
 
-        # reason_json kan list/dict/string/jsonb zijn
+        setup_match = scores_json.get("setup_match")
+
+        # ─────────────────────────────────────────────
+        # reason_json → nette tekst
+        # ─────────────────────────────────────────────
         reason_text = None
+
         if reason_json is not None:
             if isinstance(reason_json, str):
                 try:
                     parsed = json.loads(reason_json)
                     reason_json = parsed
                 except Exception:
-                    # plain text string
                     reason_text = reason_json
 
             if reason_text is None:
                 if isinstance(reason_json, list):
-                    # lijst met redenen -> 1 string
-                    reason_text = "; ".join([str(x) for x in reason_json if str(x).strip()])
+                    reason_text = "; ".join(
+                        [str(x) for x in reason_json if str(x).strip()]
+                    )
                 elif isinstance(reason_json, dict):
-                    # dict -> probeer keys / fallback stringify
-                    # (soms zit er bijv. {"reason": "..."} of {"reasons":[...]} )
-                    if reason_json.get("reason"):
-                        reason_text = str(reason_json.get("reason"))
-                    elif reason_json.get("reasons") and isinstance(reason_json.get("reasons"), list):
-                        reason_text = "; ".join([str(x) for x in reason_json["reasons"] if str(x).strip()])
+                    if "reason" in reason_json:
+                        reason_text = str(reason_json["reason"])
+                    elif "reasons" in reason_json and isinstance(reason_json["reasons"], list):
+                        reason_text = "; ".join(
+                            [str(x) for x in reason_json["reasons"] if str(x).strip()]
+                        )
                     else:
                         reason_text = str(reason_json)
 
-        # Default reason bij HOLD als er geen reason is opgeslagen
-        normalized_action = (action or "hold").lower()
-        if normalized_action not in ("buy", "sell", "hold"):
-            normalized_action = "hold"
-
         if normalized_action == "hold" and not reason_text:
-            reason_text = "Geen trade: voorwaarden/drempels niet gehaald."
+            reason_text = "Geen trade: voorwaarden of risicodrempels niet gehaald."
 
-        # amount_eur safe
+        # ─────────────────────────────────────────────
+        # amount / confidence veilig
+        # ─────────────────────────────────────────────
         amount_val = None
         try:
             if amount_eur is not None:
@@ -204,13 +221,10 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
         except Exception:
             amount_val = None
 
-        # confidence safe (kan numeric of string zijn afhankelijk van jullie agent)
         conf_val = confidence
         try:
-            if confidence is not None and isinstance(confidence, (int, float, Decimal, str)):
-                # als string numeric -> float
-                if isinstance(confidence, str) and confidence.strip().replace(".", "", 1).isdigit():
-                    conf_val = float(confidence)
+            if isinstance(confidence, str) and confidence.strip().replace(".", "", 1).isdigit():
+                conf_val = float(confidence)
         except Exception:
             conf_val = confidence
 
@@ -219,9 +233,7 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
             "action": normalized_action,
             "confidence": conf_val,
             "amount_eur": amount_val,
-            # ⭐ setup_match uit scores_json (direct vanuit trading_bot_agent)
-            "setup_match": scores_json.get("setup_match"),
-            # ⭐ reason voor HOLD/no-trade uitleg
+            "setup_match": setup_match,
             "reason": reason_text,
         }
 
@@ -635,17 +647,15 @@ Analyseer deze strategie door:
 # =====================================================
 # BOT STRATEGY PROMPT
 # =====================================================
-def p_bot_strategy(bot_snapshot: Optional[Dict[str, Any]]) -> str:
-    if not bot_snapshot:
+def p_bot_strategy(bot_snapshot: Dict[str, Any]) -> str:
+    if bot_snapshot.get("action") == "hold":
         return """
-Er is vandaag geen actieve botbeslissing.
+De bot heeft vandaag bewust geen trade geplaatst.
 
 Leg uit:
-- waarom de bot vandaag géén actie nam
-- welke voorwaarden ontbraken
-- wat er zou moeten veranderen voordat actie logisch wordt
-
-Formuleer dit als context, niet als statusmelding.
+- welke voorwaarden of drempels niet voldeden
+- waarom discipline en risicobeheer vandaag belangrijker waren dan actie
+- wat er moet veranderen voordat een trade logisch wordt
 """
 
     return """
@@ -658,8 +668,9 @@ BELANGRIJK:
 
 Beschrijf:
 - waarom deze beslissing logisch is binnen de huidige scorecombinatie
-- hoe strategy discipline en drempels vandaag doorslaggevend waren
-- waarom dit wel of juist geen actief handelsmoment is
+- hoe discipline en drempels doorslaggevend waren
+- waarom dit een geschikt handelsmoment was
+"""
 
 Gebruik uitsluitend de aangeleverde botdata.
 Voeg geen aannames toe en introduceer geen nieuwe beslissingen.
