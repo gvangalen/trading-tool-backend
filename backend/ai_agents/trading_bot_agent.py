@@ -607,21 +607,24 @@ def get_today_spent_eur(
     report_date: date,
 ) -> float:
     """
-    Total EUR spent TODAY by this bot (from ledger)
+    Total EUR spent TODAY by this bot.
+    ❗ Alleen ECHTE uitgevoerde trades (execute).
+    Reserve entries tellen NIET mee.
     """
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT COALESCE(SUM(cash_delta_eur), 0)
+            SELECT COALESCE(SUM(ABS(cash_delta_eur)), 0)
             FROM bot_ledger
             WHERE user_id = %s
               AND bot_id = %s
+              AND entry_type = 'execute'
               AND cash_delta_eur < 0
               AND DATE(ts) = %s
             """,
             (user_id, bot_id, report_date),
         )
-        return abs(float(cur.fetchone()[0] or 0.0))
+        return float(cur.fetchone()[0] or 0.0)
 
 # =====================================================
 # 📸 BOT RECORD LEDGER
@@ -1105,11 +1108,10 @@ def _auto_execute_decision(
 
     symbol = order.get("symbol", DEFAULT_SYMBOL)
     qty = float(order.get("estimated_qty") or 0.0)
+    price = order.get("estimated_price")
 
     with conn.cursor() as cur:
-        # =====================================================
         # 1️⃣ Decision → executed
-        # =====================================================
         cur.execute(
             """
             UPDATE bot_decisions
@@ -1126,9 +1128,7 @@ def _auto_execute_decision(
             (decision_id, user_id, bot_id),
         )
 
-        # =====================================================
         # 2️⃣ Order → filled
-        # =====================================================
         order_id = None
         if _table_exists(conn, "bot_orders"):
             cur.execute(
@@ -1147,18 +1147,15 @@ def _auto_execute_decision(
             row = cur.fetchone()
             order_id = row[0] if row else None
 
-        # =====================================================
-        # 3️⃣ Ledger EXECUTE
-        # ❗ GEEN cash_delta hier
-        # =====================================================
+        # 3️⃣ Ledger EXECUTE (qty only)
         if order_id and qty > 0:
             record_bot_ledger_entry(
                 conn=conn,
                 user_id=user_id,
                 bot_id=bot_id,
                 entry_type="execute",
-                cash_delta_eur=0.0,              # ✅ GEEN dubbele afboeking
-                qty_delta=qty,                   # ✅ positie neemt toe
+                cash_delta_eur=0.0,          # ❗ geen dubbele cash
+                qty_delta=qty,
                 symbol=symbol,
                 decision_id=decision_id,
                 order_id=order_id,
@@ -1166,6 +1163,7 @@ def _auto_execute_decision(
                 meta={
                     "mode": "auto",
                     "execution_type": "reserve_conversion",
+                    "price": price,          # ✅ NIEUW (belangrijk)
                 },
             )
 
