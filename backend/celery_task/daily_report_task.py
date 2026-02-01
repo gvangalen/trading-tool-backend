@@ -12,7 +12,7 @@ from backend.utils.db import get_db_connection
 from backend.ai_agents.report_ai_agent import generate_daily_report_sections
 
 # ✅ FIX: nieuwe locked PDF renderer
-from backend.utils.pdf_generator import generate_report_pdf
+from backend.utils.pdf_generator import generate_pdf_report
 
 from backend.utils.email_utils import send_email_with_attachment
 
