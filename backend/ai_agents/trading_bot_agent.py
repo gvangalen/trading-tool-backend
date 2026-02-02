@@ -156,6 +156,54 @@ def _get_strategy_trade_amount_eur(
     except Exception:
         return 0.0
 
+def _persist_bot_order(
+    *,
+    conn,
+    user_id: int,
+    bot_id: int,
+    decision_id: int,
+    order: dict,
+) -> int:
+    """
+    Single source of truth voor geplande orders.
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO bot_orders (
+                user_id,
+                bot_id,
+                decision_id,
+                symbol,
+                side,
+                quote_amount_eur,
+                estimated_price,
+                estimated_qty,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'planned',NOW(),NOW())
+            RETURNING id
+            """,
+            (
+                user_id,
+                bot_id,
+                decision_id,
+                order["symbol"],
+                order["side"],
+                order["quote_amount_eur"],
+                order["estimated_price"],
+                order["estimated_qty"],
+            ),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("Failed to insert bot_order")
+
+        return int(row[0])
+
 
 # =====================================================
 # 📦 Risk profiles
@@ -901,6 +949,7 @@ def run_trading_bot_agent(
     bot_id: Optional[int] = None,
     auto_execute: bool = False,
 ) -> Dict[str, Any]:
+
     report_date = report_date or date.today()
     conn = get_db_connection()
     if not conn:
@@ -927,20 +976,26 @@ def run_trading_bot_agent(
                     conn, user_id, bot["strategy_id"], report_date
                 )
 
-                # ✅ card data altijd
-                setup_match = _build_setup_match(bot=bot, scores=scores, snapshot=snapshot)
+                # 1️⃣ Setup match (ALTIJD)
+                setup_match = _build_setup_match(
+                    bot=bot,
+                    scores=scores,
+                    snapshot=snapshot,
+                )
 
-                # ✅ decision
+                # 2️⃣ Decision
                 decision = _decide(bot, snapshot, scores)
 
-                # ✅ sizing komt uit strategies.data (niet uit snapshot)
+                # 3️⃣ Trade sizing uit strategy
                 strategy_amount = _get_strategy_trade_amount_eur(
-                    conn, user_id=user_id, strategy_id=bot["strategy_id"]
+                    conn,
+                    user_id=user_id,
+                    strategy_id=bot["strategy_id"],
                 )
 
                 amount = 0.0
                 if decision["action"] == "buy":
-                    amount = float(strategy_amount or 0)
+                    amount = float(strategy_amount or 0.0)
 
                     min_eur = float(bot["budget"].get("min_order_eur") or 0)
                     max_eur = float(bot["budget"].get("max_order_eur") or 0)
@@ -951,10 +1006,15 @@ def run_trading_bot_agent(
                         amount = min(amount, max_eur)
 
                 decision["amount_eur"] = float(amount)
+                decision["setup_match"] = setup_match
 
-                # budget checks
-                today_spent = get_today_spent_eur(conn, user_id, bot["bot_id"], report_date)
-                total_balance = abs(get_bot_balance(conn, user_id, bot["bot_id"]))
+                # 4️⃣ Budget checks
+                today_spent = get_today_spent_eur(
+                    conn, user_id, bot["bot_id"], report_date
+                )
+                total_balance = abs(
+                    get_bot_balance(conn, user_id, bot["bot_id"])
+                )
 
                 ok, reason = check_bot_budget(
                     bot_config=bot,
@@ -969,7 +1029,7 @@ def run_trading_bot_agent(
                     decision.setdefault("reasons", [])
                     decision["reasons"].append(f"Budget blokkeert order: {reason}")
 
-                # order preview alleen bij BUY
+                # 5️⃣ Order preview
                 order_proposal = build_order_proposal(
                     conn=conn,
                     bot=bot,
@@ -978,10 +1038,7 @@ def run_trading_bot_agent(
                     total_balance_eur=total_balance,
                 )
 
-                # ⭐ push setup_match in decision object (zodat _persist het kan opslaan)
-                decision["setup_match"] = setup_match
-
-                # persist decision + order
+                # 6️⃣ Persist decision
                 decision_id = _persist_decision_and_order(
                     conn=conn,
                     user_id=user_id,
@@ -993,8 +1050,18 @@ def run_trading_bot_agent(
                     scores=scores,
                 )
 
-                # reserve ledger bij proposal
+                # 🔥 7️⃣ PERSIST ORDER (DIT WAS DE MISSENDE SCHAKEL)
+                order_id = None
                 if order_proposal:
+                    order_id = _persist_bot_order(
+                        conn=conn,
+                        user_id=user_id,
+                        bot_id=bot["bot_id"],
+                        decision_id=decision_id,
+                        order=order_proposal,
+                    )
+
+                    # 8️⃣ Reserve ledger (gekoppeld aan order!)
                     record_bot_ledger_entry(
                         conn=conn,
                         user_id=user_id,
@@ -1003,17 +1070,22 @@ def run_trading_bot_agent(
                         cash_delta_eur=-float(decision["amount_eur"]),
                         symbol=decision["symbol"],
                         decision_id=decision_id,
+                        order_id=order_id,
                         meta={
                             "estimated_price": order_proposal.get("estimated_price"),
                             "estimated_qty": order_proposal.get("estimated_qty"),
                         },
                     )
 
-                # auto execute enkel als bot.mode == auto + auto_execute flag + proposal
+                # 9️⃣ Auto execute (optioneel)
                 executed_by = None
                 status = "planned"
 
-                if bot.get("mode") == "auto" and auto_execute and order_proposal:
+                if (
+                    bot.get("mode") == "auto"
+                    and auto_execute
+                    and order_proposal
+                ):
                     _auto_execute_decision(
                         conn=conn,
                         user_id=user_id,
@@ -1033,21 +1105,17 @@ def run_trading_bot_agent(
                         "confidence": decision["confidence"],
                         "amount_eur": decision["amount_eur"],
                         "reasons": decision.get("reasons", []),
-
-                        # ⭐ altijd aanwezig voor de card
                         "setup_match": setup_match,
-
                         "order": order_proposal,
-
-                        # status info voor UI
                         "status": status,
                         "executed_by": executed_by,
                     }
                 )
 
             except Exception:
-                # ⛑️ PER-BOT FAILSAFE: deze bot faalt, maar page blijft werken
-                logger.exception(f"❌ bot generate crash (bot_id={bot.get('bot_id')})")
+                logger.exception(
+                    f"❌ bot generate crash (bot_id={bot.get('bot_id')})"
+                )
                 results.append(
                     _empty_decision(
                         bot=bot,
@@ -1058,13 +1126,17 @@ def run_trading_bot_agent(
                 )
 
         conn.commit()
-        return {"ok": True, "date": str(report_date), "bots": len(results), "decisions": results}
+        return {
+            "ok": True,
+            "date": str(report_date),
+            "bots": len(results),
+            "decisions": results,
+        }
 
     except Exception:
         conn.rollback()
         logger.exception("❌ trading_bot_agent crash")
 
-        # ⛑️ GLOBAL FAILSAFE: zelfs bij totale crash altijd UI-contract teruggeven
         fallback_results = [
             _empty_decision(
                 bot=b,
@@ -1072,11 +1144,11 @@ def run_trading_bot_agent(
                 report_date=report_date,
                 warning="agent_crashed_fallback",
             )
-            for b in (bots or [])
+            for b in bots
         ]
 
         return {
-            "ok": True,  # belangrijk: frontend mag dit niet als "hard fail" behandelen
+            "ok": True,
             "date": str(report_date),
             "bots": len(fallback_results),
             "decisions": fallback_results,
