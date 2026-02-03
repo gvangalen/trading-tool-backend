@@ -14,7 +14,7 @@ logger.setLevel(logging.INFO)
 
 
 # =====================================================
-# 🧠 QUARTERLY REPORT TASK (NIEUWE ARCHITECTUUR)
+# 🧠 QUARTERLY REPORT TASK — CANONICAL ARCHITECTUUR
 # =====================================================
 
 @shared_task(name="backend.celery_task.quarterly_report_task.generate_quarterly_report")
@@ -24,8 +24,9 @@ def generate_quarterly_report(user_id: int):
 
     Architectuur:
     - AI agent genereert ALLE inhoud
-    - Task doet alleen orchestratie + DB write
+    - Task orkestreert + slaat op
     - DB is single source of truth
+    - Canonieke kolomnamen (zelfde als weekly / monthly)
     """
 
     logger.info("🟢 Start quarterly report generation (user_id=%s)", user_id)
@@ -56,7 +57,7 @@ def generate_quarterly_report(user_id: int):
                     report_date,
 
                     executive_summary,
-                    quarterly_market_review,
+                    market_overview,
                     macro_trends,
                     technical_structure,
                     setup_performance,
@@ -65,8 +66,7 @@ def generate_quarterly_report(user_id: int):
                     outlook,
 
                     meta_json,
-                    created_at,
-                    updated_at
+                    created_at
                 ) VALUES (
                     %s,
                     %s,
@@ -81,27 +81,25 @@ def generate_quarterly_report(user_id: int):
                     %s,
 
                     %s,
-                    NOW(),
                     NOW()
                 )
                 ON CONFLICT (user_id, report_date)
                 DO UPDATE SET
-                    executive_summary        = EXCLUDED.executive_summary,
-                    quarterly_market_review = EXCLUDED.quarterly_market_review,
-                    macro_trends             = EXCLUDED.macro_trends,
-                    technical_structure      = EXCLUDED.technical_structure,
-                    setup_performance        = EXCLUDED.setup_performance,
-                    bot_performance          = EXCLUDED.bot_performance,
-                    strategic_lessons        = EXCLUDED.strategic_lessons,
-                    outlook                  = EXCLUDED.outlook,
-                    meta_json                = EXCLUDED.meta_json,
-                    updated_at               = NOW();
+                    executive_summary   = EXCLUDED.executive_summary,
+                    market_overview     = EXCLUDED.market_overview,
+                    macro_trends        = EXCLUDED.macro_trends,
+                    technical_structure = EXCLUDED.technical_structure,
+                    setup_performance   = EXCLUDED.setup_performance,
+                    bot_performance     = EXCLUDED.bot_performance,
+                    strategic_lessons   = EXCLUDED.strategic_lessons,
+                    outlook             = EXCLUDED.outlook,
+                    meta_json           = EXCLUDED.meta_json;
             """, (
                 user_id,
                 today,
 
                 report.get("executive_summary"),
-                report.get("quarterly_market_review"),
+                report.get("market_overview"),
                 report.get("macro_trends"),
                 report.get("technical_structure"),
                 report.get("setup_performance"),
