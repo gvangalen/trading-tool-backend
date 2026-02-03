@@ -1,201 +1,126 @@
-import os
-import json
 import logging
-from datetime import datetime, timedelta
-from pytz import timezone
+from datetime import date
+
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
+from backend.ai_agents.quarterly_report_agent import generate_quarterly_report_sections
 
-# === 🧩 Logging configuratie
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# =====================================================
+# Logging
+# =====================================================
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 # =====================================================
-# 🔧 Helpers
+# 🧠 QUARTERLY REPORT TASK (NIEUWE ARCHITECTUUR)
 # =====================================================
 
-def sanitize_field(val):
-    """Zorgt dat alle velden veilig naar tekst worden omgezet."""
-    if val is None:
-        return ""
-    if isinstance(val, (dict, list)):
-        return json.dumps(val, ensure_ascii=False)
-    return str(val)
+@shared_task(name="backend.celery_task.quarterly_report_task.generate_quarterly_report")
+def generate_quarterly_report(user_id: int):
+    """
+    Genereert een kwartaalrapport voor één user.
 
+    Architectuur:
+    - AI agent genereert ALLE inhoud
+    - Task doet alleen orchestratie + DB write
+    - DB is single source of truth
+    """
 
-def avg(values):
-    """Gemiddelde van een lijst berekenen met fallback."""
-    nums = [v for v in values if isinstance(v, (int, float))]
-    return round(sum(nums) / len(nums), 2) if nums else 0
+    logger.info("🟢 Start quarterly report generation (user_id=%s)", user_id)
 
+    # -------------------------------------------------
+    # 1️⃣ AI AGENT
+    # -------------------------------------------------
+    report = generate_quarterly_report_sections(user_id=user_id)
 
-# =====================================================
-# 📅 Maandrapporten ophalen voor HET KWARTAAL — PER USER
-# =====================================================
+    if not report or not isinstance(report, dict):
+        logger.error("❌ Quarterly report agent gaf geen geldig resultaat")
+        raise RuntimeError("Quarterly report agent failed")
 
-def fetch_monthly_reports_for_quarter(user_id: int):
+    # -------------------------------------------------
+    # 2️⃣ OPSLAAN IN DATABASE
+    # -------------------------------------------------
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen databaseverbinding bij ophalen maandrapporten.")
-        return []
+        raise RuntimeError("Geen databaseverbinding beschikbaar")
 
-    try:
-        today = datetime.now(timezone("UTC")).date()
-        start_date = today - timedelta(days=93)  # ± drie maanden
-
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT report_date,
-                       summary,
-                       macro_score,
-                       technical_score,
-                       setup_score,
-                       market_score
-                FROM monthly_reports
-                WHERE report_date >= %s
-                  AND user_id = %s
-                ORDER BY report_date ASC
-            """, (start_date, user_id))
-
-            results = cur.fetchall()
-            logger.info(f"📊 {len(results)} maandrapporten gevonden voor kwartaalanalyse (user={user_id}).")
-            return results
-
-    except Exception as e:
-        logger.error(f"❌ Fout bij ophalen maandrapporten: {e}", exc_info=True)
-        return []
-    finally:
-        conn.close()
-
-
-# =====================================================
-# 💾 Opslaan in quarterly_reports — PER USER
-# =====================================================
-
-def save_quarterly_report_to_db(date, report_data, user_id: int):
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Geen databaseverbinding beschikbaar.")
-        return False
+    today = date.today()
 
     try:
         with conn.cursor() as cur:
             cur.execute("""
                 INSERT INTO quarterly_reports (
-                    report_date,
                     user_id,
-                    summary,
-                    top_performance,
-                    major_mistake,
-                    ai_reflection,
+                    report_date,
+
+                    executive_summary,
+                    quarterly_market_review,
+                    macro_trends,
+                    technical_structure,
+                    setup_performance,
+                    bot_performance,
+                    strategic_lessons,
                     outlook,
-                    macro_score,
-                    technical_score,
-                    setup_score,
-                    market_score
-                ) VALUES (%s, %s,
-                          %s, %s, %s, %s, %s,
-                          %s, %s, %s, %s)
-                ON CONFLICT (report_date, user_id) DO UPDATE SET
-                    summary = EXCLUDED.summary,
-                    top_performance = EXCLUDED.top_performance,
-                    major_mistake = EXCLUDED.major_mistake,
-                    ai_reflection = EXCLUDED.ai_reflection,
-                    outlook = EXCLUDED.outlook,
-                    macro_score = EXCLUDED.macro_score,
-                    technical_score = EXCLUDED.technical_score,
-                    setup_score = EXCLUDED.setup_score,
-                    market_score = EXCLUDED.market_score
+
+                    meta_json,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    %s,
+                    %s,
+
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+
+                    %s,
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (user_id, report_date)
+                DO UPDATE SET
+                    executive_summary        = EXCLUDED.executive_summary,
+                    quarterly_market_review = EXCLUDED.quarterly_market_review,
+                    macro_trends             = EXCLUDED.macro_trends,
+                    technical_structure      = EXCLUDED.technical_structure,
+                    setup_performance        = EXCLUDED.setup_performance,
+                    bot_performance          = EXCLUDED.bot_performance,
+                    strategic_lessons        = EXCLUDED.strategic_lessons,
+                    outlook                  = EXCLUDED.outlook,
+                    meta_json                = EXCLUDED.meta_json,
+                    updated_at               = NOW();
             """, (
-                date,
                 user_id,
-                report_data.get("summary"),
-                report_data.get("top_performance"),
-                report_data.get("major_mistake"),
-                report_data.get("ai_reflection"),
-                report_data.get("outlook"),
-                report_data.get("macro_score"),
-                report_data.get("technical_score"),
-                report_data.get("setup_score"),
-                report_data.get("market_score"),
+                today,
+
+                report.get("executive_summary"),
+                report.get("quarterly_market_review"),
+                report.get("macro_trends"),
+                report.get("technical_structure"),
+                report.get("setup_performance"),
+                report.get("bot_performance"),
+                report.get("strategic_lessons"),
+                report.get("outlook"),
+
+                report
             ))
 
-            conn.commit()
-            logger.info(f"✅ Kwartaalrapport opgeslagen of bijgewerkt ({date}, user={user_id})")
-            return True
+        conn.commit()
+        logger.info("✅ Quarterly report opgeslagen (user=%s, date=%s)", user_id, today)
 
-    except Exception as e:
-        logger.error(f"❌ Fout bij opslaan kwartaalrapport: {e}", exc_info=True)
-        return False
     finally:
         conn.close()
 
-
-# =====================================================
-# 🚀 Hoofd Celery-task — draait per user
-# =====================================================
-
-@shared_task(name="backend.celery_task.quarterly_report_task.generate_quarterly_report")
-def generate_quarterly_report(user_id: int):
-    logger.info(f"📊 Start genereren kwartaalrapport voor user_id={user_id}...")
-
-    # 1️⃣ Maandrapporten ophalen
-    monthly_reports = fetch_monthly_reports_for_quarter(user_id=user_id)
-    if not monthly_reports:
-        logger.warning(f"⚠️ Geen maandrapporten beschikbaar voor dit kwartaal (user={user_id}).")
-        return {"status": "no_data", "user_id": user_id}
-
-    today = datetime.now(timezone("UTC")).date()
-
-    # 2️⃣ Samenvatting & scoreberekening
-    quarter_summary = "📆 Kwartaaloverzicht:\n\n" + "\n\n".join(
-        [f"{r[0]}:\n{sanitize_field(r[1])}" for r in monthly_reports]
-    )
-
-    macro_scores     = [r[2] for r in monthly_reports]
-    technical_scores = [r[3] for r in monthly_reports]
-    setup_scores     = [r[4] for r in monthly_reports]
-    market_scores    = [r[5] for r in monthly_reports]
-
-    report_data = {
-        "summary": sanitize_field(quarter_summary),
-        "top_performance": "Setup X leverde sterke rendementen in dit kwartaal.",
-        "major_mistake": "Verkeerde inschatting van volatiliteit tijdens CPI/FOMC week.",
-        "ai_reflection": (
-            "Het kwartaal toonde structureel bullish momentum. "
-            "Breakouts werkten goed wanneer macro-data dit ondersteunden. "
-            "Risk management blijft verbeterpunt, vooral bij low-volume omstandigheden."
-        ),
-        "outlook": "Komend kwartaal waarschijnlijk consolidatie; macro blijft bepalend.",
-        "macro_score": avg(macro_scores),
-        "technical_score": avg(technical_scores),
-        "setup_score": avg(setup_scores),
-        "market_score": avg(market_scores),
-    }
-
-    # 3️⃣ Backup (per user)
-    try:
-        backup_dir = "backend/backups/quarterly"
-        os.makedirs(backup_dir, exist_ok=True)
-        backup_path = os.path.join(backup_dir, f"quarterly_report_{today}_u{user_id}.json")
-        with open(backup_path, "w") as f:
-            json.dump(report_data, f, indent=2, ensure_ascii=False)
-        logger.info(f"🧾 Backup opgeslagen: {backup_path}")
-    except Exception as e:
-        logger.warning(f"⚠️ Backup JSON mislukt voor user {user_id}: {e}")
-
-    # 4️⃣ Opslaan in DB
-    success = save_quarterly_report_to_db(today, report_data, user_id=user_id)
-
-    status = "ok" if success else "db_failed"
-    logger.info(f"🏁 Kwartaalrapport afgerond ({today}) voor user {user_id} → {status.upper()}")
-
     return {
-        "status": status,
-        "date": str(today),
+        "status": "ok",
         "user_id": user_id,
-        "records": len(monthly_reports),
-        "report_data": report_data,
+        "report_date": str(today),
+        "keys": list(report.keys()),
     }
