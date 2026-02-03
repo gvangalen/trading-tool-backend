@@ -1,210 +1,126 @@
-import os
-import json
 import logging
-from datetime import datetime, timedelta
-from pytz import timezone
+from datetime import date
+
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
+from backend.ai_agents.weekly_report_agent import generate_weekly_report_sections
 
-# === 🧩 Logging configuratie
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# =====================================================
+# Logging
+# =====================================================
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 # =====================================================
-# 🔧 Helpers
-# =====================================================
-
-def sanitize_field(val):
-    """Zorgt dat alle velden veilig naar tekst worden omgezet."""
-    if val is None:
-        return ""
-    if isinstance(val, (dict, list)):
-        return json.dumps(val, ensure_ascii=False)
-    return str(val)
-
-
-def avg(values):
-    """Gemiddelde van een lijst berekenen met fallback."""
-    nums = [v for v in values if isinstance(v, (int, float))]
-    return round(sum(nums) / len(nums), 2) if nums else 0
-
-
-# =====================================================
-# 📅 Daily reports ophalen (laatste 7 dagen PER USER)
-# =====================================================
-
-def fetch_daily_reports_for_week(user_id: int):
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Geen databaseverbinding bij ophalen daily reports.")
-        return []
-
-    try:
-        today = datetime.now(timezone("UTC")).date()
-        start_date = today - timedelta(days=7)
-
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT report_date,
-                       btc_summary,
-                       macro_summary,
-                       setup_checklist,
-                       priorities,
-                       wyckoff_analysis,
-                       recommendations,
-                       conclusion,
-                       outlook,
-                       macro_score,
-                       technical_score,
-                       setup_score,
-                       market_score
-                FROM daily_reports
-                WHERE report_date >= %s
-                  AND user_id = %s
-                ORDER BY report_date ASC
-            """, (start_date, user_id))
-
-            results = cur.fetchall()
-            logger.info(f"📊 {len(results)} daily reports gevonden voor weekanalyse (user={user_id}).")
-            return results
-
-    except Exception as e:
-        logger.error(f"❌ Fout bij ophalen daily reports: {e}", exc_info=True)
-        return []
-    finally:
-        conn.close()
-
-
-# =====================================================
-# 💾 Opslaan in database (PER USER)
-# =====================================================
-
-def save_weekly_report_to_db(date, report_data, user_id: int):
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Geen databaseverbinding beschikbaar.")
-        return False
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO weekly_reports (
-                    report_date,
-                    user_id,
-                    summary,
-                    best_setup,
-                    missed_opportunity,
-                    ai_reflection,
-                    outlook,
-                    macro_score,
-                    technical_score,
-                    setup_score,
-                    market_score
-                ) VALUES (%s, %s,
-                          %s, %s, %s, %s, %s,
-                          %s, %s, %s, %s)
-                ON CONFLICT (report_date, user_id) DO UPDATE SET
-                    summary = EXCLUDED.summary,
-                    best_setup = EXCLUDED.best_setup,
-                    missed_opportunity = EXCLUDED.missed_opportunity,
-                    ai_reflection = EXCLUDED.ai_reflection,
-                    outlook = EXCLUDED.outlook,
-                    macro_score = EXCLUDED.macro_score,
-                    technical_score = EXCLUDED.technical_score,
-                    setup_score = EXCLUDED.setup_score,
-                    market_score = EXCLUDED.market_score
-            """, (
-                date,
-                user_id,
-                report_data.get("summary"),
-                report_data.get("best_setup"),
-                report_data.get("missed_opportunity"),
-                report_data.get("ai_reflection"),
-                report_data.get("outlook"),
-                report_data.get("macro_score"),
-                report_data.get("technical_score"),
-                report_data.get("setup_score"),
-                report_data.get("market_score"),
-            ))
-            conn.commit()
-            logger.info(f"✅ Weekrapport opgeslagen of bijgewerkt ({date}, user={user_id})")
-            return True
-
-    except Exception as e:
-        logger.error(f"❌ Fout bij opslaan weekrapport: {e}", exc_info=True)
-        return False
-    finally:
-        conn.close()
-
-
-# =====================================================
-# 🚀 Hoofd Celery-task (PER USER)
+# 🧠 WEEKLY REPORT TASK (NIEUWE ARCHITECTUUR)
 # =====================================================
 
 @shared_task(name="backend.celery_task.weekly_report_task.generate_weekly_report")
 def generate_weekly_report(user_id: int):
     """
-    Genereert een weekrapport voor een specifieke user.
+    Genereert een weekly report voor één user.
+
+    Architectuur:
+    - AI agent doet ALLE inhoud
+    - Task orkestreert + slaat op
+    - DB is single source of truth
     """
-    logger.info(f"📅 Start genereren van weekrapport voor user_id={user_id}...")
 
-    # 1️⃣ Daily reports ophalen
-    daily_reports = fetch_daily_reports_for_week(user_id=user_id)
-    if not daily_reports:
-        logger.warning(f"⚠️ Geen daily reports beschikbaar voor weekrapport (user={user_id}).")
-        return {"status": "no_data", "user_id": user_id}
+    logger.info("🟢 Start weekly report generation (user_id=%s)", user_id)
 
-    today = datetime.now(timezone("UTC")).date()
+    # -------------------------------------------------
+    # 1️⃣ AI AGENT
+    # -------------------------------------------------
+    report = generate_weekly_report_sections(user_id=user_id)
 
-    # 2️⃣ Samenvatting maken
-    week_summary = "📆 Samenvatting van de week:\n\n" + "\n\n".join(
-        [f"{r[0]}:\n{sanitize_field(r[1])}" for r in daily_reports]
-    )
+    if not report or not isinstance(report, dict):
+        logger.error("❌ Weekly report agent gaf geen geldig resultaat")
+        raise RuntimeError("Weekly report agent failed")
 
-    macro_scores     = [r[9] for r in daily_reports]
-    technical_scores = [r[10] for r in daily_reports]
-    setup_scores     = [r[11] for r in daily_reports]
-    market_scores    = [r[12] for r in daily_reports]
+    # -------------------------------------------------
+    # 2️⃣ OPSLAAN IN DATABASE
+    # -------------------------------------------------
+    conn = get_db_connection()
+    if not conn:
+        raise RuntimeError("Geen databaseverbinding beschikbaar")
 
-    report_data = {
-        "summary": sanitize_field(week_summary),
-        "best_setup": "Setup A – breakout gaf +15% rendement op woensdag.",
-        "missed_opportunity": "Setup C werd niet geactiveerd door lage volatiliteit, maar had potentieel.",
-        "ai_reflection": (
-            "Deze week was de RSI vaak oversold terwijl volume achterbleef. "
-            "Breakouts werkten vooral goed in combinatie met bullish macro momentum. "
-            "Volgende week letten op DXY als risicosignaal."
-        ),
-        "outlook": "Volgende week mogelijk voortzetting bullish trend zolang macro en volume dit ondersteunen.",
-        "macro_score": avg(macro_scores),
-        "technical_score": avg(technical_scores),
-        "setup_score": avg(setup_scores),
-        "market_score": avg(market_scores),
-    }
+    today = date.today()
 
-    # 3️⃣ Backup maken (PER USER)
     try:
-        backup_dir = "backend/backups/weekly"
-        os.makedirs(backup_dir, exist_ok=True)
-        backup_path = os.path.join(backup_dir, f"weekly_report_{today}_u{user_id}.json")
-        with open(backup_path, "w") as f:
-            json.dump(report_data, f, indent=2, ensure_ascii=False)
-        logger.info(f"🧾 Backup opgeslagen: {backup_path}")
-    except Exception as e:
-        logger.warning(f"⚠️ Backup JSON maken mislukt: {e}")
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO weekly_reports (
+                    user_id,
+                    report_date,
 
-    # 4️⃣ Opslaan in database
-    success = save_weekly_report_to_db(today, report_data, user_id=user_id)
+                    executive_summary,
+                    weekly_market_review,
+                    macro_context,
+                    technical_structure,
+                    setup_overview,
+                    bot_activity,
+                    strategic_implications,
+                    outlook,
 
-    status = "ok" if success else "db_failed"
-    logger.info(f"🏁 Weekrapport afgerond voor user={user_id}: {status.upper()} ({today})")
+                    meta_json,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    %s,
+                    %s,
+
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+
+                    %s,
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (user_id, report_date)
+                DO UPDATE SET
+                    executive_summary      = EXCLUDED.executive_summary,
+                    weekly_market_review   = EXCLUDED.weekly_market_review,
+                    macro_context          = EXCLUDED.macro_context,
+                    technical_structure    = EXCLUDED.technical_structure,
+                    setup_overview         = EXCLUDED.setup_overview,
+                    bot_activity           = EXCLUDED.bot_activity,
+                    strategic_implications = EXCLUDED.strategic_implications,
+                    outlook                = EXCLUDED.outlook,
+                    meta_json              = EXCLUDED.meta_json,
+                    updated_at             = NOW();
+            """, (
+                user_id,
+                today,
+
+                report.get("executive_summary"),
+                report.get("weekly_market_review"),
+                report.get("macro_context"),
+                report.get("technical_structure"),
+                report.get("setup_overview"),
+                report.get("bot_activity"),
+                report.get("strategic_implications"),
+                report.get("outlook"),
+
+                report
+            ))
+
+        conn.commit()
+        logger.info("✅ Weekly report opgeslagen (user=%s, date=%s)", user_id, today)
+
+    finally:
+        conn.close()
 
     return {
-        "status": status,
-        "date": str(today),
+        "status": "ok",
         "user_id": user_id,
-        "records": len(daily_reports),
-        "report_data": report_data,
+        "report_date": str(today),
+        "keys": list(report.keys()),
     }
