@@ -193,10 +193,13 @@ try:
     import backend.celery_task.setup_task
     import backend.celery_task.strategy_task
     import backend.celery_task.trading_bot_task
+
     import backend.celery_task.daily_report_task
+    import backend.celery_task.weekly_report_task
+    import backend.celery_task.monthly_report_task      # ✅
+    import backend.celery_task.quarterly_report_task    # ✅
 
     logger.info("✅ Alle Celery TASKS succesvol geïmporteerd")
-
 except Exception:
     logger.error("❌ Fout bij Celery task imports", exc_info=True)
 
