@@ -1,4 +1,5 @@
 import logging
+import json
 from datetime import date
 
 from celery import shared_task
@@ -51,7 +52,8 @@ def generate_quarterly_report(user_id: int):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO quarterly_reports (
                     user_id,
                     report_date,
@@ -94,21 +96,23 @@ def generate_quarterly_report(user_id: int):
                     strategic_lessons   = EXCLUDED.strategic_lessons,
                     outlook             = EXCLUDED.outlook,
                     meta_json           = EXCLUDED.meta_json;
-            """, (
-                user_id,
-                today,
+                """,
+                (
+                    user_id,
+                    today,
 
-                report.get("executive_summary"),
-                report.get("market_overview"),
-                report.get("macro_trends"),
-                report.get("technical_structure"),
-                report.get("setup_performance"),
-                report.get("bot_performance"),
-                report.get("strategic_lessons"),
-                report.get("outlook"),
+                    report.get("executive_summary"),
+                    report.get("market_overview"),
+                    report.get("macro_trends"),
+                    report.get("technical_structure"),
+                    report.get("setup_performance"),
+                    report.get("bot_performance"),
+                    report.get("strategic_lessons"),
+                    report.get("outlook"),
 
-                report
-            ))
+                    json.dumps(report),  # ✅ CRUCIALE FIX
+                ),
+            )
 
         conn.commit()
         logger.info("✅ Quarterly report opgeslagen (user=%s, date=%s)", user_id, today)
