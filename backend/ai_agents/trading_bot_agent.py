@@ -992,7 +992,7 @@ def run_trading_bot_agent(
                     snapshot=snapshot,
                 )
 
-                # 2️⃣ Decision
+                # 2️⃣ Decision (PUUR LOGICA, NOG GEEN GELD)
                 decision = _decide(bot, snapshot, scores)
 
                 # 3️⃣ Trade sizing uit strategy
@@ -1016,6 +1016,17 @@ def run_trading_bot_agent(
 
                 decision["amount_eur"] = float(amount)
                 decision["setup_match"] = setup_match
+
+                # -------------------------------------------------
+                # 🔥 3.5 HARD FIX — NOOIT BUY MET €0
+                # -------------------------------------------------
+                if decision.get("action") == "buy" and decision["amount_eur"] <= 0.0:
+                    decision["action"] = "observe"
+                    decision["confidence"] = "low"
+                    decision.setdefault("reasons", [])
+                    decision["reasons"].append(
+                        "Buy-condities gehaald, maar trade_amount_eur ontbreekt of is 0 → geen order gepland."
+                    )
 
                 # 4️⃣ Budget checks
                 today_spent = get_today_spent_eur(
@@ -1059,7 +1070,7 @@ def run_trading_bot_agent(
                     scores=scores,
                 )
 
-                # 🔥 7️⃣ PERSIST ORDER (DIT WAS DE MISSENDE SCHAKEL)
+                # 7️⃣ Persist order (alleen als er echt iets is)
                 order_id = None
                 if order_proposal:
                     order_id = _persist_bot_order(
@@ -1070,7 +1081,7 @@ def run_trading_bot_agent(
                         order=order_proposal,
                     )
 
-                    # 8️⃣ Reserve ledger (gekoppeld aan order!)
+                    # 8️⃣ Reserve ledger
                     record_bot_ledger_entry(
                         conn=conn,
                         user_id=user_id,
