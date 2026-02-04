@@ -165,7 +165,7 @@ def _persist_bot_order(
     order: dict,
 ) -> int:
     """
-    Single source of truth voor geplande orders.
+    Persist PLANNED bot order (pre-exchange).
     """
 
     with conn.cursor() as cur:
@@ -177,14 +177,22 @@ def _persist_bot_order(
                 decision_id,
                 symbol,
                 side,
+                order_type,
                 quote_amount_eur,
-                estimated_price,
+                estimated_price_eur,
                 estimated_qty,
                 status,
                 created_at,
                 updated_at
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'planned',NOW(),NOW())
+            VALUES (
+                %s,%s,%s,
+                %s,%s,
+                'market',
+                %s,%s,%s,
+                'ready',
+                NOW(), NOW()
+            )
             RETURNING id
             """,
             (
@@ -198,6 +206,7 @@ def _persist_bot_order(
                 order["estimated_qty"],
             ),
         )
+
         row = cur.fetchone()
         if not row:
             raise RuntimeError("Failed to insert bot_order")
