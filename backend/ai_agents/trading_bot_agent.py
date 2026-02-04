@@ -116,21 +116,27 @@ def _get_strategy_trade_amount_eur(
     strategy_id: int,
 ) -> float:
     """
-    Single source of truth voor trade sizing:
-    → strategies.data -> trade_amount_eur (of amount_eur als fallback)
+    Single source of truth voor trade sizing.
 
-    Verwachte JSON:
-      {"trade_amount_eur": 250}
+    Leest UITSLUITEND uit:
+      - strategies.trade_amount
+      - strategies.trade_amount_unit
+
+    v1:
+      - alleen 'eur' toegestaan
+      - andere units -> 0 (geen trade)
     """
+
     if not _table_exists(conn, "strategies"):
         return 0.0
 
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT data
+            SELECT trade_amount, trade_amount_unit
             FROM strategies
-            WHERE id=%s AND user_id=%s
+            WHERE id = %s
+              AND user_id = %s
             LIMIT 1
             """,
             (strategy_id, user_id),
@@ -140,19 +146,26 @@ def _get_strategy_trade_amount_eur(
     if not row:
         return 0.0
 
-    data = row[0] or {}
-    if isinstance(data, str):
-        data = _safe_json(data, {})
+    trade_amount, unit = row
 
-    if not isinstance(data, dict):
+    if trade_amount is None:
         return 0.0
 
-    val = data.get("trade_amount_eur", None)
-    if val is None:
-        val = data.get("amount_eur", None)  # fallback key
+    unit = (unit or "eur").lower().strip()
+
+    # -------------------------------------------------
+    # v1: alleen EUR toegestaan
+    # -------------------------------------------------
+    if unit != "eur":
+        logger.warning(
+            "Strategy %s heeft unsupported trade_amount_unit=%s (v1 alleen eur)",
+            strategy_id,
+            unit,
+        )
+        return 0.0
 
     try:
-        return float(val or 0.0)
+        return float(trade_amount)
     except Exception:
         return 0.0
 
