@@ -1328,8 +1328,11 @@ async def get_bot_trades(
 ):
     """
     Return ECHTE uitgevoerde trades.
-    ENIGE BRON: bot_executions
+    ENIGE BRON:
+      - bot_executions (status + fills)
+      - bot_orders     (symbol, side, amount)
     """
+
     user_id = current_user["id"]
 
     if limit < 1:
@@ -1339,57 +1342,58 @@ async def get_bot_trades(
 
     conn, cur = get_db_cursor()
     try:
-        if not _table_exists(conn, "bot_executions"):
+        if not _table_exists(conn, "bot_executions") or not _table_exists(conn, "bot_orders"):
             return []
 
         cur.execute(
             """
             SELECT
-              id,
-              decision_id,
-              symbol,
-              side,
-              qty,
-              price_eur,
-              amount_eur,
-              mode,
-              executed_at
-            FROM bot_executions
-            WHERE user_id=%s
-              AND bot_id=%s
-            ORDER BY executed_at DESC
+              e.id                    AS execution_id,
+              o.id                    AS order_id,
+              o.symbol,
+              o.side,
+              e.filled_qty,
+              e.avg_fill_price,
+              o.quote_amount_eur,
+              e.status,
+              e.created_at
+            FROM bot_executions e
+            JOIN bot_orders o ON o.id = e.bot_order_id
+            WHERE e.user_id = %s
+              AND o.bot_id = %s
+              AND e.status IN ('filled', 'partial')
+            ORDER BY e.created_at DESC
             LIMIT %s
             """,
             (user_id, bot_id, limit),
         )
 
-        out = []
+        trades = []
         for (
-            exec_id,
-            decision_id,
+            execution_id,
+            order_id,
             symbol,
             side,
             qty,
-            price_eur,
+            price,
             amount_eur,
-            mode,
-            executed_at,
+            status,
+            created_at,
         ) in cur.fetchall():
 
-            out.append({
-                "id": exec_id,
+            trades.append({
+                "id": execution_id,
                 "bot_id": bot_id,
-                "decision_id": decision_id,
                 "symbol": symbol,
                 "side": side,
                 "qty": float(qty or 0),
-                "price": float(price_eur) if price_eur is not None else None,
+                "price": float(price) if price is not None else None,
                 "amount_eur": float(amount_eur) if amount_eur is not None else None,
-                "executed_at": executed_at,
-                "mode": mode or "manual",
+                "executed_at": created_at,
+                "mode": "auto" if status == "filled" else "manual",
             })
 
-        return out
+        return trades
 
     except Exception:
         logger.error("❌ bot/trades error", exc_info=True)
