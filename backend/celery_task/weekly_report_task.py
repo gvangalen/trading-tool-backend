@@ -48,7 +48,7 @@ def generate_weekly_report(user_id: int):
     period_start, period_end = _get_week_period(today)
 
     # -------------------------------------------------
-    # 1️⃣ AI AGENT (GEEN PERIODE!)
+    # 1️⃣ AI AGENT
     # -------------------------------------------------
     report = generate_weekly_report_sections(user_id=user_id)
 
@@ -122,8 +122,7 @@ def generate_weekly_report(user_id: int):
                     strategic_lessons   = EXCLUDED.strategic_lessons,
                     outlook             = EXCLUDED.outlook,
 
-                    meta_json           = EXCLUDED.meta_json,
-                    updated_at          = NOW();
+                    meta_json           = EXCLUDED.meta_json;
                 """,
                 (
                     user_id,
@@ -162,4 +161,5 @@ def generate_weekly_report(user_id: int):
         "period_start": str(period_start),
         "period_end": str(period_end),
         "sections": list(report.keys()),
+    }
     }
