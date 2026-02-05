@@ -151,7 +151,7 @@ def _get_strategy_trade_amount_eur(
     if trade_amount is None:
         return 0.0
 
-    unit = (unit or "eur").lower().strip()
+    unit = (unit or "").lower().strip()
 
     # -------------------------------------------------
     # v1: alleen EUR toegestaan
@@ -165,7 +165,8 @@ def _get_strategy_trade_amount_eur(
         return 0.0
 
     try:
-        return float(trade_amount)
+        amount = float(trade_amount)
+        return amount if amount > 0 else 0.0
     except Exception:
         return 0.0
 
@@ -977,9 +978,6 @@ def run_trading_bot_agent(
     if not conn:
         return {"ok": False, "error": "db_unavailable"}
 
-    bots: List[Dict[str, Any]] = []
-    scores: Dict[str, float] = dict(macro=10.0, technical=10.0, market=10.0, setup=10.0)
-
     try:
         bots = _get_active_bots(conn, user_id)
 
@@ -993,170 +991,144 @@ def run_trading_bot_agent(
         results: List[Dict[str, Any]] = []
 
         for bot in bots:
-            try:
-                snapshot = _get_active_strategy_snapshot(
-                    conn, user_id, bot["strategy_id"], report_date
+            snapshot = _get_active_strategy_snapshot(
+                conn, user_id, bot["strategy_id"], report_date
+            )
+
+            # 1️⃣ Setup match (ALTIJD)
+            setup_match = _build_setup_match(
+                bot=bot,
+                scores=scores,
+                snapshot=snapshot,
+            )
+
+            # 2️⃣ Decision (PUUR LOGICA)
+            decision = _decide(bot, snapshot, scores)
+
+            # 3️⃣ Strategy sizing
+            strategy_amount = _get_strategy_trade_amount_eur(
+                conn,
+                user_id=user_id,
+                strategy_id=bot["strategy_id"],
+            )
+
+            amount = 0.0
+            if decision["action"] == "buy":
+                amount = float(strategy_amount or 0.0)
+
+                min_eur = float(bot["budget"].get("min_order_eur") or 0)
+                max_eur = float(bot["budget"].get("max_order_eur") or 0)
+
+                if min_eur > 0:
+                    amount = max(amount, min_eur)
+                if max_eur > 0:
+                    amount = min(amount, max_eur)
+
+            decision["amount_eur"] = float(amount)
+            decision["setup_match"] = setup_match
+
+            # -------------------------------------------------
+            # 🔥 HARD FIX — BUY ZONDER AMOUNT = GEEN BUY
+            # -------------------------------------------------
+            if decision["action"] == "buy" and decision["amount_eur"] <= 0:
+                decision["action"] = "observe"
+                decision["confidence"] = "low"
+                decision.setdefault("reasons", [])
+                decision["reasons"].append(
+                    "Buy-condities gehaald, maar strategy.trade_amount ontbreekt of is 0 → geen trade gepland."
                 )
 
-                # 1️⃣ Setup match (ALTIJD)
-                setup_match = _build_setup_match(
-                    bot=bot,
-                    scores=scores,
-                    snapshot=snapshot,
+            # 4️⃣ Budget checks
+            today_spent = get_today_spent_eur(
+                conn, user_id, bot["bot_id"], report_date
+            )
+            total_balance = abs(
+                get_bot_balance(conn, user_id, bot["bot_id"])
+            )
+
+            ok, reason = check_bot_budget(
+                bot_config=bot,
+                today_spent_eur=today_spent,
+                proposed_amount_eur=decision["amount_eur"],
+            )
+
+            if not ok:
+                decision["action"] = "observe"
+                decision["confidence"] = "low"
+                decision["amount_eur"] = 0.0
+                decision.setdefault("reasons", [])
+                decision["reasons"].append(f"Budget blokkeert order: {reason}")
+
+            # 5️⃣ Order preview
+            order_proposal = build_order_proposal(
+                conn=conn,
+                bot=bot,
+                decision=decision,
+                today_spent_eur=today_spent,
+                total_balance_eur=total_balance,
+            )
+
+            # 🔒 EXTRA VEILIGHEID
+            if decision["action"] == "buy" and not order_proposal:
+                decision["action"] = "observe"
+                decision["confidence"] = "low"
+                decision["amount_eur"] = 0.0
+                decision.setdefault("reasons", [])
+                decision["reasons"].append(
+                    "Geen valide order voorstel beschikbaar → trade geblokkeerd."
                 )
 
-                # 2️⃣ Decision (PUUR LOGICA, NOG GEEN GELD)
-                decision = _decide(bot, snapshot, scores)
+            # 6️⃣ Persist decision
+            decision_id = _persist_decision_and_order(
+                conn=conn,
+                user_id=user_id,
+                bot_id=bot["bot_id"],
+                strategy_id=bot["strategy_id"],
+                setup_id=bot["setup_id"],
+                report_date=report_date,
+                decision=decision,
+                scores=scores,
+            )
 
-                # 3️⃣ Trade sizing uit strategy
-                strategy_amount = _get_strategy_trade_amount_eur(
-                    conn,
-                    user_id=user_id,
-                    strategy_id=bot["strategy_id"],
-                )
-
-                amount = 0.0
-                if decision["action"] == "buy":
-                    amount = float(strategy_amount or 0.0)
-
-                    min_eur = float(bot["budget"].get("min_order_eur") or 0)
-                    max_eur = float(bot["budget"].get("max_order_eur") or 0)
-
-                    if min_eur > 0:
-                        amount = max(amount, min_eur)
-                    if max_eur > 0:
-                        amount = min(amount, max_eur)
-
-                decision["amount_eur"] = float(amount)
-                decision["setup_match"] = setup_match
-
-                # -------------------------------------------------
-                # 🔥 3.5 HARD FIX — NOOIT BUY MET €0
-                # -------------------------------------------------
-                if decision.get("action") == "buy" and decision["amount_eur"] <= 0.0:
-                    decision["action"] = "observe"
-                    decision["confidence"] = "low"
-                    decision.setdefault("reasons", [])
-                    decision["reasons"].append(
-                        "Buy-condities gehaald, maar trade_amount_eur ontbreekt of is 0 → geen order gepland."
-                    )
-
-                # 4️⃣ Budget checks
-                today_spent = get_today_spent_eur(
-                    conn, user_id, bot["bot_id"], report_date
-                )
-                total_balance = abs(
-                    get_bot_balance(conn, user_id, bot["bot_id"])
-                )
-
-                ok, reason = check_bot_budget(
-                    bot_config=bot,
-                    today_spent_eur=today_spent,
-                    proposed_amount_eur=decision["amount_eur"],
-                )
-
-                if not ok:
-                    decision["action"] = "observe"
-                    decision["confidence"] = "low"
-                    decision["amount_eur"] = 0.0
-                    decision.setdefault("reasons", [])
-                    decision["reasons"].append(f"Budget blokkeert order: {reason}")
-
-                # 5️⃣ Order preview
-                order_proposal = build_order_proposal(
-                    conn=conn,
-                    bot=bot,
-                    decision=decision,
-                    today_spent_eur=today_spent,
-                    total_balance_eur=total_balance,
-                )
-
-                # 6️⃣ Persist decision
-                decision_id = _persist_decision_and_order(
+            # 7️⃣ Persist order + reserve (alleen als order bestaat)
+            if order_proposal:
+                order_id = _persist_bot_order(
                     conn=conn,
                     user_id=user_id,
                     bot_id=bot["bot_id"],
-                    strategy_id=bot["strategy_id"],
-                    setup_id=bot["setup_id"],
-                    report_date=report_date,
-                    decision=decision,
-                    scores=scores,
+                    decision_id=decision_id,
+                    order=order_proposal,
                 )
 
-                # 7️⃣ Persist order (alleen als er echt iets is)
-                order_id = None
-                if order_proposal:
-                    order_id = _persist_bot_order(
-                        conn=conn,
-                        user_id=user_id,
-                        bot_id=bot["bot_id"],
-                        decision_id=decision_id,
-                        order=order_proposal,
-                    )
-
-                    # 8️⃣ Reserve ledger
-                    record_bot_ledger_entry(
-                        conn=conn,
-                        user_id=user_id,
-                        bot_id=bot["bot_id"],
-                        entry_type="reserve",
-                        cash_delta_eur=-float(decision["amount_eur"]),
-                        symbol=decision["symbol"],
-                        decision_id=decision_id,
-                        order_id=order_id,
-                        meta={
-                            "estimated_price": order_proposal.get("estimated_price"),
-                            "estimated_qty": order_proposal.get("estimated_qty"),
-                        },
-                    )
-
-                # 9️⃣ Auto execute (optioneel)
-                executed_by = None
-                status = "planned"
-
-                if (
-                    bot.get("mode") == "auto"
-                    and auto_execute
-                    and order_proposal
-                ):
-                    _auto_execute_decision(
-                        conn=conn,
-                        user_id=user_id,
-                        bot_id=bot["bot_id"],
-                        decision_id=decision_id,
-                        order=order_proposal,
-                    )
-                    executed_by = "auto"
-                    status = "executed"
-
-                results.append(
-                    {
-                        "bot_id": bot["bot_id"],
-                        "decision_id": decision_id,
-                        "symbol": decision["symbol"],
-                        "action": decision["action"],
-                        "confidence": decision["confidence"],
-                        "amount_eur": decision["amount_eur"],
-                        "reasons": decision.get("reasons", []),
-                        "setup_match": setup_match,
-                        "order": order_proposal,
-                        "status": status,
-                        "executed_by": executed_by,
-                    }
+                record_bot_ledger_entry(
+                    conn=conn,
+                    user_id=user_id,
+                    bot_id=bot["bot_id"],
+                    entry_type="reserve",
+                    cash_delta_eur=-decision["amount_eur"],
+                    symbol=decision["symbol"],
+                    decision_id=decision_id,
+                    order_id=order_id,
+                    meta={
+                        "estimated_price": order_proposal["estimated_price"],
+                        "estimated_qty": order_proposal["estimated_qty"],
+                    },
                 )
 
-            except Exception:
-                logger.exception(
-                    f"❌ bot generate crash (bot_id={bot.get('bot_id')})"
-                )
-                results.append(
-                    _empty_decision(
-                        bot=bot,
-                        scores=scores,
-                        report_date=report_date,
-                        warning="bot_generate_failed",
-                    )
-                )
+            results.append(
+                {
+                    "bot_id": bot["bot_id"],
+                    "decision_id": decision_id,
+                    "symbol": decision["symbol"],
+                    "action": decision["action"],
+                    "confidence": decision["confidence"],
+                    "amount_eur": decision["amount_eur"],
+                    "reasons": decision.get("reasons", []),
+                    "setup_match": setup_match,
+                    "order": order_proposal,
+                    "status": "planned",
+                }
+            )
 
         conn.commit()
         return {
@@ -1164,28 +1136,6 @@ def run_trading_bot_agent(
             "date": str(report_date),
             "bots": len(results),
             "decisions": results,
-        }
-
-    except Exception:
-        conn.rollback()
-        logger.exception("❌ trading_bot_agent crash")
-
-        fallback_results = [
-            _empty_decision(
-                bot=b,
-                scores=scores,
-                report_date=report_date,
-                warning="agent_crashed_fallback",
-            )
-            for b in bots
-        ]
-
-        return {
-            "ok": True,
-            "date": str(report_date),
-            "bots": len(fallback_results),
-            "decisions": fallback_results,
-            "warning": "fallback_decisions_used",
         }
 
     finally:
