@@ -29,18 +29,17 @@ def _get_week_period(d: date):
 
 
 # =====================================================
-# 🧠 WEEKLY REPORT TASK — CANONICAL ARCHITECTUUR
+# 🧠 WEEKLY REPORT TASK — CANONICAL
 # =====================================================
 @shared_task(name="backend.celery_task.weekly_report_task.generate_weekly_report")
 def generate_weekly_report(user_id: int):
     """
     Genereert een weekly report voor één user.
 
-    Architectuur:
-    - AI agent genereert ALLE inhoud
-    - Task orkestreert + slaat op
-    - DB is single source of truth
-    - period_start / period_end zijn verplicht (DB constraint)
+    Principes:
+    - AI agent = content only
+    - Task = periode + opslag
+    - DB = single source of truth
     """
 
     logger.info("🟢 Start weekly report generation (user_id=%s)", user_id)
@@ -49,13 +48,9 @@ def generate_weekly_report(user_id: int):
     period_start, period_end = _get_week_period(today)
 
     # -------------------------------------------------
-    # 1️⃣ AI AGENT
+    # 1️⃣ AI AGENT (GEEN PERIODE!)
     # -------------------------------------------------
-    report = generate_weekly_report_sections(
-        user_id=user_id,
-        period_start=period_start,
-        period_end=period_end,
-    )
+    report = generate_weekly_report_sections(user_id=user_id)
 
     if not report or not isinstance(report, dict):
         logger.error("❌ Weekly report agent gaf geen geldig resultaat")
@@ -115,20 +110,20 @@ def generate_weekly_report(user_id: int):
                 )
                 ON CONFLICT (user_id, period_start)
                 DO UPDATE SET
-                    report_date          = EXCLUDED.report_date,
-                    period_end           = EXCLUDED.period_end,
+                    report_date         = EXCLUDED.report_date,
+                    period_end          = EXCLUDED.period_end,
 
-                    executive_summary    = EXCLUDED.executive_summary,
-                    market_overview      = EXCLUDED.market_overview,
-                    macro_trends         = EXCLUDED.macro_trends,
-                    technical_structure  = EXCLUDED.technical_structure,
-                    setup_performance    = EXCLUDED.setup_performance,
-                    bot_performance      = EXCLUDED.bot_performance,
-                    strategic_lessons    = EXCLUDED.strategic_lessons,
-                    outlook              = EXCLUDED.outlook,
+                    executive_summary   = EXCLUDED.executive_summary,
+                    market_overview     = EXCLUDED.market_overview,
+                    macro_trends        = EXCLUDED.macro_trends,
+                    technical_structure = EXCLUDED.technical_structure,
+                    setup_performance   = EXCLUDED.setup_performance,
+                    bot_performance     = EXCLUDED.bot_performance,
+                    strategic_lessons   = EXCLUDED.strategic_lessons,
+                    outlook             = EXCLUDED.outlook,
 
-                    meta_json            = EXCLUDED.meta_json,
-                    updated_at           = NOW();
+                    meta_json           = EXCLUDED.meta_json,
+                    updated_at          = NOW();
                 """,
                 (
                     user_id,
@@ -145,7 +140,7 @@ def generate_weekly_report(user_id: int):
                     report.get("strategic_lessons"),
                     report.get("outlook"),
 
-                    json.dumps(report),  # ✅ JSONB safe
+                    json.dumps(report),
                 ),
             )
 
