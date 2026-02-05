@@ -229,7 +229,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
     - Elke actieve bot heeft exact 1 decision per dag
     - Decision ≠ execution
-    - Executions komen UITSLUITEND uit bot_ledger (entry_type='execute')
+    - Executions komen UITSLUITEND uit bot_executions
     - Frontend mag NOOIT trades afleiden uit decisions
     """
 
@@ -241,7 +241,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
     conn, cur = get_db_cursor()
     try:
         # =====================================================
-        # SCORES (altijd beschikbaar)
+        # SCORES
         # =====================================================
         daily_scores = _get_daily_scores_row(conn, user_id, today) or {
             "macro": 10,
@@ -367,7 +367,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             decision_ids.append(decision_id)
 
         # =====================================================
-        # SAFETY NET: ontbrekende decisions → 1x agent run
+        # SAFETY NET
         # =====================================================
         missing = [bid for bid in bots_by_id if bid not in decisions_by_bot]
         if missing:
@@ -375,7 +375,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             return await get_bot_today(current_user)
 
         # =====================================================
-        # ORDERS (optioneel / informatief)
+        # ORDERS (informatief)
         # =====================================================
         orders = []
         if decision_ids and _table_exists(conn, "bot_orders"):
@@ -399,64 +399,63 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 })
 
         # =====================================================
-        # ✅ EXECUTIONS = ECHTE TRADES (DE MISSENDE SCHAKEL)
+        # ✅ EXECUTIONS — ENIGE WAARHEID
         # =====================================================
         executions = []
-        if decision_ids and _table_exists(conn, "bot_ledger"):
+        if decision_ids and _table_exists(conn, "bot_executions"):
             cur.execute(
                 """
                 SELECT
-                  l.id,
-                  l.bot_id,
-                  l.decision_id,
-                  l.symbol,
-                  l.qty_delta,
-                  l.cash_delta_eur,
-                  l.meta,
-                  l.ts
-                FROM bot_ledger l
-                WHERE l.user_id=%s
-                  AND l.decision_id = ANY(%s)
-                  AND l.entry_type='execute'
-                ORDER BY l.ts ASC
+                  id,
+                  bot_id,
+                  decision_id,
+                  symbol,
+                  side,
+                  qty,
+                  price_eur,
+                  amount_eur,
+                  mode,
+                  executed_at
+                FROM bot_executions
+                WHERE user_id=%s
+                  AND decision_id = ANY(%s)
+                ORDER BY executed_at ASC
                 """,
                 (user_id, decision_ids),
             )
 
             for (
-                ledger_id,
+                exec_id,
                 bot_id,
                 decision_id,
                 symbol,
-                qty_delta,
-                cash_delta_eur,
-                meta,
-                ts,
+                side,
+                qty,
+                price_eur,
+                amount_eur,
+                mode,
+                executed_at,
             ) in cur.fetchall():
 
-                meta = _safe_json(meta, {})
-                price = meta.get("price")
-
                 executions.append({
-                    "id": ledger_id,
+                    "id": exec_id,
                     "bot_id": bot_id,
                     "decision_id": decision_id,
                     "symbol": symbol,
-                    "side": "buy" if qty_delta > 0 else "sell",
-                    "qty": float(qty_delta),
-                    "price": price,
-                    "executed_at": ts,
+                    "side": side,
+                    "qty": float(qty or 0),
+                    "price": float(price_eur) if price_eur is not None else None,
+                    "amount_eur": float(amount_eur) if amount_eur is not None else None,
+                    "executed_at": executed_at,
+                    "mode": mode or "manual",
                 })
 
-        # =====================================================
-        # FINAL RETURN (FRONTEND = GEEN LOGICA MEER)
-        # =====================================================
         return {
             "date": str(today),
             "scores": daily_scores,
             "decisions": list(decisions_by_bot.values()),
             "orders": orders,
-            "executions": executions,  # 🔥 DIT WAS DE ONTBREKENDE
+            "executions": executions,
         }
 
     except Exception:
@@ -1090,11 +1089,7 @@ async def delete_bot_config(
     finally:
         conn.close()
 
-# =====================================
-# 📦 BOT PORTFOLIOS (UI: Bot cards)
-# - Single source of truth: DB
-# - Return per bot: budget + ledger stats + (optioneel) price snapshot
-# =====================================
+
 # =====================================
 # 📦 BOT PORTFOLIOS (UI: Bot cards)
 # - Single source of truth: DB
@@ -1323,13 +1318,8 @@ async def get_bot_trades(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Return ECHTE trades van een bot.
-
-    Contract:
-    - Alleen entry_type='execute'
-    - qty_delta > 0 (BUY)
-    - price uit meta (fallback: None)
-    - Volledig los van bot_history / decisions
+    Return ECHTE uitgevoerde trades.
+    ENIGE BRON: bot_executions
     """
     user_id = current_user["id"]
 
@@ -1340,74 +1330,55 @@ async def get_bot_trades(
 
     conn, cur = get_db_cursor()
     try:
-        if not _table_exists(conn, "bot_ledger"):
+        if not _table_exists(conn, "bot_executions"):
             return []
 
         cur.execute(
             """
             SELECT
-              l.id,
-              l.decision_id,
-              l.symbol,
-              l.qty_delta,
-              l.cash_delta_eur,
-              l.meta,
-              l.ts,
-              d.executed_by
-            FROM bot_ledger l
-            LEFT JOIN bot_decisions d
-              ON d.id = l.decision_id
-             AND d.user_id = l.user_id
-            WHERE l.user_id = %s
-              AND l.bot_id = %s
-              AND l.entry_type = 'execute'
-              AND l.qty_delta > 0
-            ORDER BY l.ts DESC
+              id,
+              decision_id,
+              symbol,
+              side,
+              qty,
+              price_eur,
+              amount_eur,
+              mode,
+              executed_at
+            FROM bot_executions
+            WHERE user_id=%s
+              AND bot_id=%s
+            ORDER BY executed_at DESC
             LIMIT %s
             """,
             (user_id, bot_id, limit),
         )
 
-        rows = cur.fetchall()
         out = []
-
         for (
-            ledger_id,
+            exec_id,
             decision_id,
             symbol,
-            qty_delta,
-            cash_delta_eur,
-            meta,
-            ts,
-            executed_by,
-        ) in rows:
+            side,
+            qty,
+            price_eur,
+            amount_eur,
+            mode,
+            executed_at,
+        ) in cur.fetchall():
 
-            meta = _safe_json(meta, {})
-
-            price = meta.get("price")
-            reserved_cash = meta.get("reserved_cash")
-
-            # fallback prijs (als qty + cash bekend zijn)
-            if price is None and qty_delta and reserved_cash:
-                try:
-                    price = float(reserved_cash) / float(qty_delta)
-                except Exception:
-                    price = None
-
-            out.append(
-                {
-                    "id": ledger_id,
-                    "bot_id": bot_id,
-                    "decision_id": decision_id,
-                    "symbol": symbol,
-                    "side": "buy" if qty_delta > 0 else "sell",
-                    "qty": round(float(qty_delta), 8),
-                    "price": round(float(price), 2) if price else None,
-                    "amount_eur": round(float(reserved_cash), 2) if reserved_cash else None,
-                    "executed_at": ts,
-                    "mode": executed_by or "manual",
-                }
-            )
+            out.append({
+                "id": exec_id,
+                "bot_id": bot_id,
+                "decision_id": decision_id,
+                "symbol": symbol,
+                "side": side,
+                "qty": float(qty or 0),
+                "price": float(price_eur) if price_eur is not None else None,
+                "amount_eur": float(amount_eur) if amount_eur is not None else None,
+                "executed_at": executed_at,
+                "mode": mode or "manual",
+            })
 
         return out
 
