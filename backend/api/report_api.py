@@ -241,8 +241,16 @@ async def export_daily_pdf(
 
 @router.get("/report/weekly/latest")
 async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
+    """
+    ⚠️ BELANGRIJK:
+    - IDENTIEK gedrag aan daily/latest
+    - GEEN 404 als report er (nog) niet is
+    - {} betekent: "nog bezig / nog niet beschikbaar"
+    - Frontend loader blijft daardoor correct lopen
+    """
     user_id = current_user["id"]
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -256,10 +264,16 @@ async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
                 (user_id,),
             )
             row = cur.fetchone()
+
+            # ✅ CRUCIAAL VERSCHIL MET OUD GEDRAG
+            # ❌ GEEN 404
+            # ✅ Lege dict = frontend blijft wachten
             if not row:
-                raise HTTPException(status_code=404, detail="Geen weekrapport gevonden")
+                return {}
+
             cols = [desc[0] for desc in cur.description]
             return dict(zip(cols, row))
+
     finally:
         conn.close()
 
