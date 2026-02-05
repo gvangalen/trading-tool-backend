@@ -988,24 +988,24 @@ def run_trading_bot_agent(
             return {"ok": True, "date": str(report_date), "bots": 0, "decisions": []}
 
         scores = _get_daily_scores(conn, user_id, report_date)
-        results: List[Dict[str, Any]] = []
+        results = []
 
         for bot in bots:
             snapshot = _get_active_strategy_snapshot(
                 conn, user_id, bot["strategy_id"], report_date
             )
 
-            # 1️⃣ Setup match (ALTIJD)
+            # 1️⃣ Setup match (altijd)
             setup_match = _build_setup_match(
                 bot=bot,
                 scores=scores,
                 snapshot=snapshot,
             )
 
-            # 2️⃣ Decision (PUUR LOGICA)
+            # 2️⃣ Decision (logica)
             decision = _decide(bot, snapshot, scores)
 
-            # 3️⃣ Strategy sizing
+            # 3️⃣ Trade sizing (SINGLE SOURCE OF TRUTH)
             strategy_amount = _get_strategy_trade_amount_eur(
                 conn,
                 user_id=user_id,
@@ -1024,21 +1024,19 @@ def run_trading_bot_agent(
                 if max_eur > 0:
                     amount = min(amount, max_eur)
 
-            decision["amount_eur"] = float(amount)
+            decision["amount_eur"] = round(float(amount), 2)
             decision["setup_match"] = setup_match
 
-            # -------------------------------------------------
-            # 🔥 HARD FIX — BUY ZONDER AMOUNT = GEEN BUY
-            # -------------------------------------------------
+            # 🔥 HARD RULE 1 — NOOIT BUY MET €0
             if decision["action"] == "buy" and decision["amount_eur"] <= 0:
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
-                decision.setdefault("reasons", [])
-                decision["reasons"].append(
-                    "Buy-condities gehaald, maar strategy.trade_amount ontbreekt of is 0 → geen trade gepland."
+                decision["amount_eur"] = 0.0
+                decision.setdefault("reasons", []).append(
+                    "Buy-condities gehaald, maar trade_amount ontbreekt → geen order."
                 )
 
-            # 4️⃣ Budget checks
+            # 4️⃣ Budget check
             today_spent = get_today_spent_eur(
                 conn, user_id, bot["bot_id"], report_date
             )
@@ -1056,10 +1054,11 @@ def run_trading_bot_agent(
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", [])
-                decision["reasons"].append(f"Budget blokkeert order: {reason}")
+                decision.setdefault("reasons", []).append(
+                    f"Budget blokkeert order: {reason}"
+                )
 
-            # 5️⃣ Order preview
+            # 5️⃣ Order proposal
             order_proposal = build_order_proposal(
                 conn=conn,
                 bot=bot,
@@ -1068,17 +1067,16 @@ def run_trading_bot_agent(
                 total_balance_eur=total_balance,
             )
 
-            # 🔒 EXTRA VEILIGHEID
+            # 🔥 HARD RULE 2 — BUY ZONDER ORDER BESTAAT NIET
             if decision["action"] == "buy" and not order_proposal:
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", [])
-                decision["reasons"].append(
-                    "Geen valide order voorstel beschikbaar → trade geblokkeerd."
+                decision.setdefault("reasons", []).append(
+                    "Geen valide order gegenereerd → BUY geannuleerd."
                 )
 
-            # 6️⃣ Persist decision
+            # 6️⃣ Persist decision (NU PAS!)
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -1090,7 +1088,8 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            # 7️⃣ Persist order + reserve (alleen als order bestaat)
+            # 7️⃣ Persist order + reserve ledger
+            order_id = None
             if order_proposal:
                 order_id = _persist_bot_order(
                     conn=conn,
@@ -1119,12 +1118,9 @@ def run_trading_bot_agent(
                 {
                     "bot_id": bot["bot_id"],
                     "decision_id": decision_id,
-                    "symbol": decision["symbol"],
                     "action": decision["action"],
                     "confidence": decision["confidence"],
                     "amount_eur": decision["amount_eur"],
-                    "reasons": decision.get("reasons", []),
-                    "setup_match": setup_match,
                     "order": order_proposal,
                     "status": "planned",
                 }
@@ -1137,6 +1133,11 @@ def run_trading_bot_agent(
             "bots": len(results),
             "decisions": results,
         }
+
+    except Exception:
+        conn.rollback()
+        logger.exception("❌ trading_bot_agent crash")
+        return {"ok": False, "error": "agent_crash"}
 
     finally:
         conn.close()
