@@ -1154,74 +1154,100 @@ def _auto_execute_decision(
     order: dict,
 ):
     """
-    Marks decision + order as executed by AUTO.
-
-    BELANGRIJK:
-    - Reserve entry heeft AL het geld al afgeboekt
-    - Execute entry mag GEEN extra cash_delta doen
-    - Execute = alleen qty_delta
+    Auto execute:
+    - reserve is al geboekt
+    - execute = qty only
+    - bot_executions = SINGLE SOURCE OF TRUTH VOOR UI
     """
 
     symbol = order.get("symbol", DEFAULT_SYMBOL)
     qty = float(order.get("estimated_qty") or 0.0)
-    price = order.get("estimated_price")
+    price = float(order.get("estimated_price") or 0.0)
+    amount_eur = round(qty * price, 2)
+
+    if qty <= 0 or price <= 0:
+        raise RuntimeError("Invalid execution parameters")
 
     with conn.cursor() as cur:
         # 1️⃣ Decision → executed
         cur.execute(
             """
             UPDATE bot_decisions
-            SET
-              status='executed',
-              executed_by='auto',
-              executed_at=NOW(),
-              updated_at=NOW()
-            WHERE id=%s
-              AND user_id=%s
-              AND bot_id=%s
-              AND status='planned'
+            SET status='executed',
+                executed_by='auto',
+                executed_at=NOW(),
+                updated_at=NOW()
+            WHERE id=%s AND user_id=%s AND bot_id=%s
             """,
             (decision_id, user_id, bot_id),
         )
 
         # 2️⃣ Order → filled
-        order_id = None
-        if _table_exists(conn, "bot_orders"):
-            cur.execute(
-                """
-                UPDATE bot_orders
-                SET
-                  status='filled',
-                  updated_at=NOW()
-                WHERE decision_id=%s
-                  AND user_id=%s
-                  AND bot_id=%s
-                RETURNING id
-                """,
-                (decision_id, user_id, bot_id),
-            )
-            row = cur.fetchone()
-            order_id = row[0] if row else None
+        cur.execute(
+            """
+            UPDATE bot_orders
+            SET status='filled',
+                executed_price_eur=%s,
+                executed_qty=%s,
+                executed_at=NOW(),
+                updated_at=NOW()
+            WHERE decision_id=%s
+            RETURNING id
+            """,
+            (price, qty, decision_id),
+        )
+        order_id = cur.fetchone()[0]
 
         # 3️⃣ Ledger EXECUTE (qty only)
-        if order_id and qty > 0:
-            record_bot_ledger_entry(
-                conn=conn,
-                user_id=user_id,
-                bot_id=bot_id,
-                entry_type="execute",
-                cash_delta_eur=0.0,          # ❗ geen dubbele cash
-                qty_delta=qty,
-                symbol=symbol,
-                decision_id=decision_id,
-                order_id=order_id,
-                note="Auto executed by bot",
-                meta={
-                    "mode": "auto",
-                    "execution_type": "reserve_conversion",
-                    "price": price,          # ✅ NIEUW (belangrijk)
-                },
+        record_bot_ledger_entry(
+            conn=conn,
+            user_id=user_id,
+            bot_id=bot_id,
+            entry_type="execute",
+            cash_delta_eur=0.0,
+            qty_delta=qty,
+            symbol=symbol,
+            decision_id=decision_id,
+            order_id=order_id,
+            note="Auto execution",
+        )
+
+        # 4️⃣ 🔥 BOT_EXECUTIONS (DIT ONTBRAK)
+        cur.execute(
+            """
+            INSERT INTO bot_executions (
+                user_id,
+                bot_id,
+                decision_id,
+                order_id,
+                symbol,
+                side,
+                qty,
+                price_eur,
+                amount_eur,
+                mode,
+                executed_at,
+                created_at
             )
+            VALUES (
+                %s,%s,%s,%s,
+                %s,'buy',
+                %s,%s,%s,
+                'auto',
+                NOW(), NOW()
+            )
+            """,
+            (
+                user_id,
+                bot_id,
+                decision_id,
+                order_id,
+                symbol,
+                qty,
+                price,
+                amount_eur,
+            ),
+        )
 
 # =====================================================
 # 🚀 Manual execute decision functie
@@ -1234,99 +1260,106 @@ def execute_manual_decision(
     decision_id: int,
 ):
     """
-    Manually executes a planned bot decision.
-
-    BELANGRIJK:
-    - Werkt ALLEEN op status='planned'
-    - Reserve entry bestaat al (geld is al gereserveerd)
-    - Execute = alleen qty_delta
+    Manual execution.
+    UI verwacht bot_executions record.
     """
 
-    # -------------------------------------------------
-    # 1️⃣ Haal order + qty op
-    # -------------------------------------------------
     with conn.cursor() as cur:
+        # 1️⃣ Haal order
         cur.execute(
             """
-            SELECT
-              o.id,
-              o.symbol,
-              o.estimated_qty
+            SELECT o.id, o.symbol, o.estimated_qty, o.estimated_price_eur
             FROM bot_orders o
             JOIN bot_decisions d ON d.id = o.decision_id
-            WHERE d.id = %s
-              AND d.user_id = %s
-              AND d.bot_id = %s
-              AND d.status = 'planned'
-            LIMIT 1
+            WHERE d.id=%s AND d.user_id=%s AND d.bot_id=%s AND d.status='planned'
             """,
             (decision_id, user_id, bot_id),
         )
         row = cur.fetchone()
 
     if not row:
-        raise RuntimeError("No executable order found for manual execution")
+        raise RuntimeError("No executable order")
 
-    order_id, symbol, qty = row
-    qty = float(qty or 0.0)
+    order_id, symbol, qty, price = row
+    qty = float(qty)
+    price = float(price)
+    amount_eur = round(qty * price, 2)
 
-    if qty <= 0:
-        raise RuntimeError("Invalid quantity for manual execution")
-
-    # -------------------------------------------------
-    # 2️⃣ Decision → executed
-    # -------------------------------------------------
     with conn.cursor() as cur:
+        # 2️⃣ Decision → executed
         cur.execute(
             """
             UPDATE bot_decisions
-            SET
-              status='executed',
-              executed_by='manual',
-              executed_at=NOW(),
-              updated_at=NOW()
+            SET status='executed',
+                executed_by='manual',
+                executed_at=NOW(),
+                updated_at=NOW()
             WHERE id=%s
-              AND user_id=%s
-              AND bot_id=%s
-              AND status='planned'
             """,
-            (decision_id, user_id, bot_id),
+            (decision_id,),
         )
 
-        if cur.rowcount == 0:
-            raise RuntimeError("Decision not in executable state")
-
-    # -------------------------------------------------
-    # 3️⃣ Order → filled
-    # -------------------------------------------------
-    with conn.cursor() as cur:
+        # 3️⃣ Order → filled
         cur.execute(
             """
             UPDATE bot_orders
-            SET
-              status='filled',
-              updated_at=NOW()
+            SET status='filled',
+                executed_price_eur=%s,
+                executed_qty=%s,
+                executed_at=NOW(),
+                updated_at=NOW()
             WHERE id=%s
             """,
-            (order_id,),
+            (price, qty, order_id),
         )
 
-    # -------------------------------------------------
-    # 4️⃣ Ledger EXECUTE
-    # -------------------------------------------------
-    record_bot_ledger_entry(
-        conn=conn,
-        user_id=user_id,
-        bot_id=bot_id,
-        entry_type="execute",
-        cash_delta_eur=0.0,      # ❗ geld was al gereserveerd
-        qty_delta=qty,
-        symbol=symbol,
-        decision_id=decision_id,
-        order_id=order_id,
-        note="Manually executed by user",
-        meta={
-            "mode": "manual",
-            "execution_type": "reserve_conversion",
-        },
-    )
+        # 4️⃣ Ledger EXECUTE
+        record_bot_ledger_entry(
+            conn=conn,
+            user_id=user_id,
+            bot_id=bot_id,
+            entry_type="execute",
+            cash_delta_eur=0.0,
+            qty_delta=qty,
+            symbol=symbol,
+            decision_id=decision_id,
+            order_id=order_id,
+            note="Manual execution",
+        )
+
+        # 5️⃣ 🔥 BOT_EXECUTIONS (DIT WAS ER NOOIT)
+        cur.execute(
+            """
+            INSERT INTO bot_executions (
+                user_id,
+                bot_id,
+                decision_id,
+                order_id,
+                symbol,
+                side,
+                qty,
+                price_eur,
+                amount_eur,
+                mode,
+                executed_at,
+                created_at
+            )
+            VALUES (
+                %s,%s,%s,%s,
+                %s,'buy',
+                %s,%s,%s,
+                'manual',
+                NOW(), NOW()
+            )
+            """,
+            (
+                user_id,
+                bot_id,
+                decision_id,
+                order_id,
+                symbol,
+                qty,
+                price,
+                amount_eur,
+            ),
+        )
