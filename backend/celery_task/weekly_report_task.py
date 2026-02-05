@@ -19,7 +19,7 @@ logger.setLevel(logging.INFO)
 # =====================================================
 def _get_week_period(d: date):
     """
-    ISO week:
+    ISO-week:
     - maandag = start
     - zondag  = einde
     """
@@ -29,17 +29,15 @@ def _get_week_period(d: date):
 
 
 # =====================================================
-# 🧠 WEEKLY REPORT TASK — CANONICAL
+# 🧠 WEEKLY REPORT TASK — MATCHT DB SCHEMA
 # =====================================================
 @shared_task(name="backend.celery_task.weekly_report_task.generate_weekly_report")
 def generate_weekly_report(user_id: int):
     """
-    Genereert een weekly report voor één user.
+    Genereert en slaat een weekly report op.
 
-    Principes:
-    - AI agent = content only
-    - Task = periode + opslag
-    - DB = single source of truth
+    DB is single source of truth.
+    Deze task sluit EXACT aan op public.weekly_reports.
     """
 
     logger.info("🟢 Start weekly report generation (user_id=%s)", user_id)
@@ -48,7 +46,7 @@ def generate_weekly_report(user_id: int):
     period_start, period_end = _get_week_period(today)
 
     # -------------------------------------------------
-    # 1️⃣ AI AGENT
+    # 1️⃣ AI AGENT — CONTENT ONLY
     # -------------------------------------------------
     report = generate_weekly_report_sections(user_id=user_id)
 
@@ -61,8 +59,11 @@ def generate_weekly_report(user_id: int):
         list(report.keys()),
     )
 
+    # Fallback summary (vereist veld in tabel)
+    summary = report.get("executive_summary") or report.get("outlook") or "Weekly market summary"
+
     # -------------------------------------------------
-    # 2️⃣ OPSLAAN IN DATABASE
+    # 2️⃣ OPSLAAN IN DATABASE (SCHEMA-EXACT)
     # -------------------------------------------------
     conn = get_db_connection()
     if not conn:
@@ -78,6 +79,7 @@ def generate_weekly_report(user_id: int):
                     period_start,
                     period_end,
 
+                    summary,
                     executive_summary,
                     market_overview,
                     macro_trends,
@@ -87,8 +89,11 @@ def generate_weekly_report(user_id: int):
                     strategic_lessons,
                     outlook,
 
-                    meta_json,
-                    created_at
+                    macro_score,
+                    technical_score,
+                    setup_score,
+
+                    meta_json
                 )
                 VALUES (
                     %s,
@@ -104,15 +109,20 @@ def generate_weekly_report(user_id: int):
                     %s,
                     %s,
                     %s,
+                    %s,
 
                     %s,
-                    NOW()
+                    %s,
+                    %s,
+
+                    %s
                 )
-                ON CONFLICT (user_id, period_start)
+                ON CONFLICT (user_id, report_date)
                 DO UPDATE SET
-                    report_date         = EXCLUDED.report_date,
+                    period_start        = EXCLUDED.period_start,
                     period_end          = EXCLUDED.period_end,
 
+                    summary             = EXCLUDED.summary,
                     executive_summary   = EXCLUDED.executive_summary,
                     market_overview     = EXCLUDED.market_overview,
                     macro_trends        = EXCLUDED.macro_trends,
@@ -122,6 +132,10 @@ def generate_weekly_report(user_id: int):
                     strategic_lessons   = EXCLUDED.strategic_lessons,
                     outlook             = EXCLUDED.outlook,
 
+                    macro_score         = EXCLUDED.macro_score,
+                    technical_score     = EXCLUDED.technical_score,
+                    setup_score         = EXCLUDED.setup_score,
+
                     meta_json           = EXCLUDED.meta_json;
                 """,
                 (
@@ -130,6 +144,7 @@ def generate_weekly_report(user_id: int):
                     period_start,
                     period_end,
 
+                    summary,
                     report.get("executive_summary"),
                     report.get("market_overview"),
                     report.get("macro_trends"),
@@ -139,6 +154,10 @@ def generate_weekly_report(user_id: int):
                     report.get("strategic_lessons"),
                     report.get("outlook"),
 
+                    report.get("macro_score"),
+                    report.get("technical_score"),
+                    report.get("setup_score"),
+
                     json.dumps(report),
                 ),
             )
@@ -146,8 +165,9 @@ def generate_weekly_report(user_id: int):
         conn.commit()
 
         logger.info(
-            "✅ Weekly report opgeslagen (user=%s, week=%s → %s)",
+            "✅ Weekly report opgeslagen (user=%s, report_date=%s, week=%s → %s)",
             user_id,
+            today,
             period_start,
             period_end,
         )
@@ -158,8 +178,8 @@ def generate_weekly_report(user_id: int):
     return {
         "status": "ok",
         "user_id": user_id,
+        "report_date": str(today),
         "period_start": str(period_start),
         "period_end": str(period_end),
         "sections": list(report.keys()),
-    }
     }
