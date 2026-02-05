@@ -170,7 +170,7 @@ def _get_strategy_trade_amount_eur(
     except Exception:
         return 0.0
 
-def _persist_bot_order(
+ddef _persist_bot_order(
     *,
     conn,
     user_id: int,
@@ -179,10 +179,12 @@ def _persist_bot_order(
     order: dict,
 ) -> int:
     """
-    Persist PLANNED bot order (pre-exchange).
+    Persist PLANNED bot order + bot_execution placeholder.
+    bot_executions is SINGLE SOURCE OF TRUTH voor UI.
     """
 
     with conn.cursor() as cur:
+        # 1️⃣ bot_orders
         cur.execute(
             """
             INSERT INTO bot_orders (
@@ -221,11 +223,24 @@ def _persist_bot_order(
             ),
         )
 
-        row = cur.fetchone()
-        if not row:
-            raise RuntimeError("Failed to insert bot_order")
+        bot_order_id = cur.fetchone()[0]
 
-        return int(row[0])
+        # 2️⃣ bot_executions (PENDING = voorstel)
+        cur.execute(
+            """
+            INSERT INTO bot_executions (
+                user_id,
+                bot_order_id,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (%s, %s, 'pending', NOW(), NOW())
+            """,
+            (user_id, bot_order_id),
+        )
+
+        return int(bot_order_id)
 
 
 # =====================================================
@@ -1157,13 +1172,12 @@ def _auto_execute_decision(
     Auto execute:
     - reserve is al geboekt
     - execute = qty only
-    - bot_executions = SINGLE SOURCE OF TRUTH VOOR UI
+    - bot_executions wordt UPDATE → filled
     """
 
     symbol = order.get("symbol", DEFAULT_SYMBOL)
     qty = float(order.get("estimated_qty") or 0.0)
     price = float(order.get("estimated_price") or 0.0)
-    amount_eur = round(qty * price, 2)
 
     if qty <= 0 or price <= 0:
         raise RuntimeError("Invalid execution parameters")
@@ -1189,14 +1203,13 @@ def _auto_execute_decision(
             SET status='filled',
                 executed_price_eur=%s,
                 executed_qty=%s,
-                executed_at=NOW(),
                 updated_at=NOW()
             WHERE decision_id=%s
             RETURNING id
             """,
             (price, qty, decision_id),
         )
-        order_id = cur.fetchone()[0]
+        bot_order_id = cur.fetchone()[0]
 
         # 3️⃣ Ledger EXECUTE (qty only)
         record_bot_ledger_entry(
@@ -1208,47 +1221,23 @@ def _auto_execute_decision(
             qty_delta=qty,
             symbol=symbol,
             decision_id=decision_id,
-            order_id=order_id,
+            order_id=bot_order_id,
             note="Auto execution",
         )
 
-        # 4️⃣ 🔥 BOT_EXECUTIONS (DIT ONTBRAK)
+        # 4️⃣ bot_executions → FILLED
         cur.execute(
             """
-            INSERT INTO bot_executions (
-                user_id,
-                bot_id,
-                decision_id,
-                order_id,
-                symbol,
-                side,
-                qty,
-                price_eur,
-                amount_eur,
-                mode,
-                executed_at,
-                created_at
-            )
-            VALUES (
-                %s,%s,%s,%s,
-                %s,'buy',
-                %s,%s,%s,
-                'auto',
-                NOW(), NOW()
-            )
+            UPDATE bot_executions
+            SET status='filled',
+                filled_qty=%s,
+                avg_fill_price=%s,
+                updated_at=NOW()
+            WHERE bot_order_id=%s
             """,
-            (
-                user_id,
-                bot_id,
-                decision_id,
-                order_id,
-                symbol,
-                qty,
-                price,
-                amount_eur,
-            ),
+            (qty, price, bot_order_id),
         )
-
+        
 # =====================================================
 # 🚀 Manual execute decision functie
 # =====================================================
@@ -1280,10 +1269,9 @@ def execute_manual_decision(
     if not row:
         raise RuntimeError("No executable order")
 
-    order_id, symbol, qty, price = row
+    bot_order_id, symbol, qty, price = row
     qty = float(qty)
     price = float(price)
-    amount_eur = round(qty * price, 2)
 
     with conn.cursor() as cur:
         # 2️⃣ Decision → executed
@@ -1306,11 +1294,10 @@ def execute_manual_decision(
             SET status='filled',
                 executed_price_eur=%s,
                 executed_qty=%s,
-                executed_at=NOW(),
                 updated_at=NOW()
             WHERE id=%s
             """,
-            (price, qty, order_id),
+            (price, qty, bot_order_id),
         )
 
         # 4️⃣ Ledger EXECUTE
@@ -1323,43 +1310,19 @@ def execute_manual_decision(
             qty_delta=qty,
             symbol=symbol,
             decision_id=decision_id,
-            order_id=order_id,
+            order_id=bot_order_id,
             note="Manual execution",
         )
 
-        # 5️⃣ 🔥 BOT_EXECUTIONS (DIT WAS ER NOOIT)
+        # 5️⃣ bot_executions → FILLED
         cur.execute(
             """
-            INSERT INTO bot_executions (
-                user_id,
-                bot_id,
-                decision_id,
-                order_id,
-                symbol,
-                side,
-                qty,
-                price_eur,
-                amount_eur,
-                mode,
-                executed_at,
-                created_at
-            )
-            VALUES (
-                %s,%s,%s,%s,
-                %s,'buy',
-                %s,%s,%s,
-                'manual',
-                NOW(), NOW()
-            )
+            UPDATE bot_executions
+            SET status='filled',
+                filled_qty=%s,
+                avg_fill_price=%s,
+                updated_at=NOW()
+            WHERE bot_order_id=%s
             """,
-            (
-                user_id,
-                bot_id,
-                decision_id,
-                order_id,
-                symbol,
-                qty,
-                price,
-                amount_eur,
-            ),
+            (qty, price, bot_order_id),
         )
