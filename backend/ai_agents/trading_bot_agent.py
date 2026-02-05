@@ -170,7 +170,7 @@ def _get_strategy_trade_amount_eur(
     except Exception:
         return 0.0
 
-ddef _persist_bot_order(
+def _persist_bot_order(
     *,
     conn,
     user_id: int,
