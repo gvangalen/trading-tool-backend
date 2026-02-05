@@ -417,7 +417,7 @@ async def get_monthly_latest(current_user: dict = Depends(get_current_user)):
             )
             row = cur.fetchone()
             if not row:
-                raise HTTPException(status_code=404, detail="Geen maandrapport gevonden")
+                return {}  # ✅ FIX
             cols = [desc[0] for desc in cur.description]
             return dict(zip(cols, row))
     finally:
@@ -560,7 +560,7 @@ async def get_quarterly_latest(current_user: dict = Depends(get_current_user)):
             )
             row = cur.fetchone()
             if not row:
-                raise HTTPException(status_code=404, detail="Geen kwartaalrapport gevonden")
+                return {}  # ✅ FIX
             cols = [desc[0] for desc in cur.description]
             return dict(zip(cols, row))
     finally:
