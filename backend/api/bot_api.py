@@ -225,12 +225,12 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
 @router.get("/bot/today")
 async def get_bot_today(current_user: dict = Depends(get_current_user)):
     """
-    DEFINITIEF CONTRACT
+    DEFINITIEF CONTRACT (STABIEL)
 
-    - Elke actieve bot heeft exact 1 decision per dag
-    - Decision ≠ execution
-    - Executions komen UITSLUITEND uit bot_executions
-    - Frontend mag NOOIT trades afleiden uit decisions
+    - 1 decision per actieve bot per dag
+    - setup_match bestaat ALTIJD
+    - executions = bot_executions + bot_orders (JOIN)
+    - frontend hoeft niets te raden
     """
 
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
@@ -241,7 +241,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
     conn, cur = get_db_cursor()
     try:
         # =====================================================
-        # SCORES
+        # SCORES (fallback-safe)
         # =====================================================
         daily_scores = _get_daily_scores_row(conn, user_id, today) or {
             "macro": 10,
@@ -251,7 +251,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         }
 
         # =====================================================
-        # ACTIVE BOTS
+        # ACTIEVE BOTS
         # =====================================================
         cur.execute(
             """
@@ -271,6 +271,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             (user_id,),
         )
         bot_rows = cur.fetchall()
+
         if not bot_rows:
             return {
                 "date": str(today),
@@ -304,7 +305,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
               bot_id,
               symbol,
               decision_ts,
-              decision_date,
               action,
               confidence,
               scores_json,
@@ -328,7 +328,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 bot_id,
                 symbol,
                 decision_ts,
-                decision_date,
                 action,
                 confidence,
                 scores_json,
@@ -347,6 +346,15 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             scores_payload = _safe_json(scores_json, {})
             reasons_payload = _safe_json(reason_json, [])
 
+            # 🔒 HARD DEFAULT — setup_match bestaat ALTIJD
+            setup_match = scores_payload.get("setup_match") or {
+                "status": "no_snapshot",
+                "summary": "Geen strategie context",
+                "detail": "Er is vandaag geen actief strategy snapshot beschikbaar.",
+                "score": 10,
+                "confidence": "low",
+            }
+
             decisions_by_bot[bot_id] = {
                 "id": decision_id,
                 "bot_id": bot_id,
@@ -361,13 +369,13 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "status": status,
                 "created_at": created_at,
                 "updated_at": updated_at,
-                "setup_match": scores_payload.get("setup_match"),
+                "setup_match": setup_match,
             }
 
             decision_ids.append(decision_id)
 
         # =====================================================
-        # SAFETY NET
+        # SAFETY NET — ontbrekende decisions genereren
         # =====================================================
         missing = [bid for bid in bots_by_id if bid not in decisions_by_bot]
         if missing:
@@ -399,27 +407,28 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 })
 
         # =====================================================
-        # ✅ EXECUTIONS — ENIGE WAARHEID
+        # ✅ EXECUTIONS — CORRECTE BRON
         # =====================================================
         executions = []
         if decision_ids and _table_exists(conn, "bot_executions"):
             cur.execute(
                 """
                 SELECT
-                  id,
-                  bot_id,
-                  decision_id,
-                  symbol,
-                  side,
-                  qty,
-                  price_eur,
-                  amount_eur,
-                  mode,
-                  executed_at
-                FROM bot_executions
-                WHERE user_id=%s
-                  AND decision_id = ANY(%s)
-                ORDER BY executed_at ASC
+                  e.id,
+                  o.bot_id,
+                  o.decision_id,
+                  o.symbol,
+                  o.side,
+                  e.filled_qty,
+                  e.avg_fill_price,
+                  o.quote_amount_eur,
+                  o.status,
+                  e.created_at
+                FROM bot_executions e
+                JOIN bot_orders o ON o.id = e.bot_order_id
+                WHERE e.user_id=%s
+                  AND o.decision_id = ANY(%s)
+                ORDER BY e.created_at ASC
                 """,
                 (user_id, decision_ids),
             )
@@ -431,10 +440,10 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 symbol,
                 side,
                 qty,
-                price_eur,
+                price,
                 amount_eur,
-                mode,
-                executed_at,
+                status,
+                created_at,
             ) in cur.fetchall():
 
                 executions.append({
@@ -444,10 +453,10 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     "symbol": symbol,
                     "side": side,
                     "qty": float(qty or 0),
-                    "price": float(price_eur) if price_eur is not None else None,
+                    "price": float(price) if price is not None else None,
                     "amount_eur": float(amount_eur) if amount_eur is not None else None,
-                    "executed_at": executed_at,
-                    "mode": mode or "manual",
+                    "executed_at": created_at,
+                    "mode": "auto" if status == "filled" else "manual",
                 })
 
         return {
