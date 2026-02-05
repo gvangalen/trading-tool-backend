@@ -1,6 +1,6 @@
 import logging
 import json
-from datetime import date
+from datetime import date, timedelta
 
 from celery import shared_task
 
@@ -15,22 +15,43 @@ logger.setLevel(logging.INFO)
 
 
 # =====================================================
-# 🧠 MONTHLY REPORT TASK — CANONICAL ARCHITECTUUR
+# 🧠 Helpers
 # =====================================================
+def _get_month_period(d: date):
+    """
+    Bepaalt maandperiode:
+    - eerste dag van maand
+    - laatste dag van maand
+    """
+    period_start = d.replace(day=1)
 
+    if d.month == 12:
+        next_month = d.replace(year=d.year + 1, month=1, day=1)
+    else:
+        next_month = d.replace(month=d.month + 1, day=1)
+
+    period_end = next_month - timedelta(days=1)
+    return period_start, period_end
+
+
+# =====================================================
+# 🧠 MONTHLY REPORT TASK — CANONICAL
+# =====================================================
 @shared_task(name="backend.celery_task.monthly_report_task.generate_monthly_report")
 def generate_monthly_report(user_id: int):
     """
-    Genereert een maandrapport voor één user.
+    Genereert een monthly report voor één user.
 
-    Architectuur:
-    - AI agent genereert ALLE inhoud
-    - Task orkestreert + slaat op
-    - DB is single source of truth
-    - Canonieke kolomnamen (zelfde als weekly / quarterly)
+    Principes:
+    - AI agent = content only
+    - Task = periode + opslag
+    - DB = single source of truth
     """
 
     logger.info("🟢 Start monthly report generation (user_id=%s)", user_id)
+
+    today = date.today()
+    period_start, period_end = _get_month_period(today)
 
     # -------------------------------------------------
     # 1️⃣ AI AGENT
@@ -41,14 +62,14 @@ def generate_monthly_report(user_id: int):
         logger.error("❌ Monthly report agent gaf geen geldig resultaat")
         raise RuntimeError("Monthly report agent failed")
 
+    logger.info("✅ Monthly report agent OK")
+
     # -------------------------------------------------
     # 2️⃣ OPSLAAN IN DATABASE
     # -------------------------------------------------
     conn = get_db_connection()
     if not conn:
         raise RuntimeError("Geen databaseverbinding beschikbaar")
-
-    today = date.today()
 
     try:
         with conn.cursor() as cur:
@@ -57,6 +78,8 @@ def generate_monthly_report(user_id: int):
                 INSERT INTO monthly_reports (
                     user_id,
                     report_date,
+                    period_start,
+                    period_end,
 
                     executive_summary,
                     market_overview,
@@ -69,7 +92,10 @@ def generate_monthly_report(user_id: int):
 
                     meta_json,
                     created_at
-                ) VALUES (
+                )
+                VALUES (
+                    %s,
+                    %s,
                     %s,
                     %s,
 
@@ -87,6 +113,9 @@ def generate_monthly_report(user_id: int):
                 )
                 ON CONFLICT (user_id, report_date)
                 DO UPDATE SET
+                    period_start        = EXCLUDED.period_start,
+                    period_end          = EXCLUDED.period_end,
+
                     executive_summary   = EXCLUDED.executive_summary,
                     market_overview     = EXCLUDED.market_overview,
                     macro_trends        = EXCLUDED.macro_trends,
@@ -95,11 +124,14 @@ def generate_monthly_report(user_id: int):
                     bot_performance     = EXCLUDED.bot_performance,
                     strategic_lessons   = EXCLUDED.strategic_lessons,
                     outlook             = EXCLUDED.outlook,
+
                     meta_json           = EXCLUDED.meta_json;
                 """,
                 (
                     user_id,
                     today,
+                    period_start,
+                    period_end,
 
                     report.get("executive_summary"),
                     report.get("market_overview"),
@@ -110,12 +142,18 @@ def generate_monthly_report(user_id: int):
                     report.get("strategic_lessons"),
                     report.get("outlook"),
 
-                    json.dumps(report),  # ✅ FIX
+                    json.dumps(report),
                 ),
             )
 
         conn.commit()
-        logger.info("✅ Monthly report opgeslagen (user=%s, date=%s)", user_id, today)
+
+        logger.info(
+            "✅ Monthly report opgeslagen (user=%s, maand=%s → %s)",
+            user_id,
+            period_start,
+            period_end,
+        )
 
     finally:
         conn.close()
@@ -124,5 +162,7 @@ def generate_monthly_report(user_id: int):
         "status": "ok",
         "user_id": user_id,
         "report_date": str(today),
-        "keys": list(report.keys()),
+        "period_start": str(period_start),
+        "period_end": str(period_end),
+        "sections": list(report.keys()),
     }
