@@ -5,13 +5,8 @@ from datetime import date, timedelta
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.ai_agents.quarterly_report_agent import (
-    generate_quarterly_report_sections,
-)
+from backend.ai_agents.quarterly_report_agent import generate_quarterly_report_sections
 
-# =====================================================
-# Logging
-# =====================================================
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -20,13 +15,6 @@ logger.setLevel(logging.INFO)
 # 🧠 Helpers
 # =====================================================
 def _get_quarter_period(d: date):
-    """
-    Bepaalt kwartaalperiode:
-    - Q1: jan–mrt
-    - Q2: apr–jun
-    - Q3: jul–sep
-    - Q4: okt–dec
-    """
     quarter = (d.month - 1) // 3 + 1
     start_month = (quarter - 1) * 3 + 1
     end_month = start_month + 2
@@ -44,41 +32,25 @@ def _get_quarter_period(d: date):
 # =====================================================
 # 🧠 QUARTERLY REPORT TASK — CANONICAL
 # =====================================================
-@shared_task(
-    name="backend.celery_task.quarterly_report_task.generate_quarterly_report"
-)
+@shared_task(name="backend.celery_task.quarterly_report_task.generate_quarterly_report")
 def generate_quarterly_report(user_id: int):
-    """
-    Genereert een kwartaalrapport voor één user.
-
-    Principes:
-    - AI agent = content only
-    - Task = periode + opslag
-    - DB = single source of truth
-    """
-
     logger.info("🟢 Start quarterly report generation (user_id=%s)", user_id)
 
     today = date.today()
     period_start, period_end = _get_quarter_period(today)
 
-    # -------------------------------------------------
     # 1️⃣ AI AGENT
-    # -------------------------------------------------
     report = generate_quarterly_report_sections(user_id=user_id)
 
-    if not report or not isinstance(report, dict):
-        logger.error("❌ Quarterly report agent gaf geen geldig resultaat")
+    if not isinstance(report, dict):
         raise RuntimeError("Quarterly report agent failed")
 
     logger.info("✅ Quarterly report agent OK")
 
-    # -------------------------------------------------
-    # 2️⃣ OPSLAAN IN DATABASE
-    # -------------------------------------------------
+    # 2️⃣ OPSLAAN
     conn = get_db_connection()
     if not conn:
-        raise RuntimeError("Geen databaseverbinding beschikbaar")
+        raise RuntimeError("Geen databaseverbinding")
 
     try:
         with conn.cursor() as cur:
@@ -103,22 +75,9 @@ def generate_quarterly_report(user_id: int):
                     created_at
                 )
                 VALUES (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-
-                    %s,
-                    NOW()
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, NOW()
                 )
                 ON CONFLICT (user_id, period_start)
                 DO UPDATE SET
@@ -164,19 +123,12 @@ def generate_quarterly_report(user_id: int):
             period_end,
         )
 
-    except Exception:
-        conn.rollback()
-        logger.exception("❌ Fout bij opslaan quarterly report")
-        raise
-
     finally:
         conn.close()
 
     return {
         "status": "ok",
         "user_id": user_id,
-        "report_date": str(today),
         "period_start": str(period_start),
         "period_end": str(period_end),
-        "sections": list(report.keys()),
     }
