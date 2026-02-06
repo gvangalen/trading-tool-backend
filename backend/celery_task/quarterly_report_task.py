@@ -30,7 +30,7 @@ def _get_quarter_period(d: date):
 
 
 # =====================================================
-# 🧠 QUARTERLY REPORT TASK — CANONICAL
+# 🧠 QUARTERLY REPORT TASK — FIXED
 # =====================================================
 @shared_task(name="backend.celery_task.quarterly_report_task.generate_quarterly_report")
 def generate_quarterly_report(user_id: int):
@@ -39,15 +39,14 @@ def generate_quarterly_report(user_id: int):
     today = date.today()
     period_start, period_end = _get_quarter_period(today)
 
-    # 1️⃣ AI AGENT
+    # 1️⃣ AI agent
     report = generate_quarterly_report_sections(user_id=user_id)
-
     if not isinstance(report, dict):
         raise RuntimeError("Quarterly report agent failed")
 
     logger.info("✅ Quarterly report agent OK")
 
-    # 2️⃣ OPSLAAN
+    # 2️⃣ Opslaan
     conn = get_db_connection()
     if not conn:
         raise RuntimeError("Geen databaseverbinding")
@@ -79,9 +78,9 @@ def generate_quarterly_report(user_id: int):
                     %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, NOW()
                 )
-                ON CONFLICT (user_id, period_start)
+                ON CONFLICT (user_id, report_date)
                 DO UPDATE SET
-                    report_date         = EXCLUDED.report_date,
+                    period_start        = EXCLUDED.period_start,
                     period_end          = EXCLUDED.period_end,
 
                     executive_summary   = EXCLUDED.executive_summary,
@@ -115,12 +114,10 @@ def generate_quarterly_report(user_id: int):
             )
 
         conn.commit()
-
         logger.info(
-            "✅ Quarterly report opgeslagen (user=%s, kwartaal=%s → %s)",
+            "✅ Quarterly report opgeslagen (user=%s, report_date=%s)",
             user_id,
-            period_start,
-            period_end,
+            today,
         )
 
     finally:
@@ -129,6 +126,7 @@ def generate_quarterly_report(user_id: int):
     return {
         "status": "ok",
         "user_id": user_id,
+        "report_date": str(today),
         "period_start": str(period_start),
         "period_end": str(period_end),
     }
