@@ -4,9 +4,6 @@ import logging
 from datetime import datetime
 import os
 
-from datetime import timedelta
-REPORT_TIMEOUT = timedelta(minutes=5)
-
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import StreamingResponse
 
@@ -251,7 +248,7 @@ async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT *, NOW() - created_at AS age
+                SELECT *
                 FROM weekly_reports
                 WHERE user_id = %s
                 ORDER BY report_date DESC
@@ -261,21 +258,12 @@ async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
             )
             row = cur.fetchone()
 
-            # ⏳ Nog geen report → AI bezig
+            # 🔑 Loader-signaal
             if not row:
                 return {}
 
             cols = [desc[0] for desc in cur.description]
-            report = dict(zip(cols, row))
-
-            age = report.get("age")
-            if age and age > REPORT_TIMEOUT:
-                return {
-                    "status": "failed",
-                    "reason": "weekly_report_timeout",
-                }
-
-            return report
+            return dict(zip(cols, row))
 
     finally:
         conn.close()
@@ -410,7 +398,7 @@ async def get_monthly_latest(current_user: dict = Depends(get_current_user)):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT *, NOW() - created_at AS age
+                SELECT *
                 FROM monthly_reports
                 WHERE user_id = %s
                 ORDER BY report_date DESC
@@ -420,21 +408,11 @@ async def get_monthly_latest(current_user: dict = Depends(get_current_user)):
             )
             row = cur.fetchone()
 
-            # ⏳ Nog bezig
             if not row:
                 return {}
 
             cols = [desc[0] for desc in cur.description]
-            report = dict(zip(cols, row))
-
-            age = report.get("age")
-            if age and age > REPORT_TIMEOUT:
-                return {
-                    "status": "failed",
-                    "reason": "monthly_report_timeout",
-                }
-
-            return report
+            return dict(zip(cols, row))
 
     finally:
         conn.close()
@@ -567,7 +545,7 @@ async def get_quarterly_latest(current_user: dict = Depends(get_current_user)):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT *, NOW() - created_at AS age
+                SELECT *
                 FROM quarterly_reports
                 WHERE user_id = %s
                 ORDER BY report_date DESC
@@ -577,21 +555,11 @@ async def get_quarterly_latest(current_user: dict = Depends(get_current_user)):
             )
             row = cur.fetchone()
 
-            # ⏳ Nog bezig
             if not row:
                 return {}
 
             cols = [desc[0] for desc in cur.description]
-            report = dict(zip(cols, row))
-
-            age = report.get("age")
-            if age and age > REPORT_TIMEOUT:
-                return {
-                    "status": "failed",
-                    "reason": "quarterly_report_timeout",
-                }
-
-            return report
+            return dict(zip(cols, row))
 
     finally:
         conn.close()
