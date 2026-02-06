@@ -4,6 +4,9 @@ import logging
 from datetime import datetime
 import os
 
+from datetime import timedelta
+REPORT_TIMEOUT = timedelta(minutes=5)
+
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import StreamingResponse
 
@@ -241,13 +244,6 @@ async def export_daily_pdf(
 
 @router.get("/report/weekly/latest")
 async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
-    """
-    ⚠️ BELANGRIJK:
-    - IDENTIEK gedrag aan daily/latest
-    - GEEN 404 als report er (nog) niet is
-    - {} betekent: "nog bezig / nog niet beschikbaar"
-    - Frontend loader blijft daardoor correct lopen
-    """
     user_id = current_user["id"]
     conn = get_db_connection()
 
@@ -255,7 +251,7 @@ async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT *
+                SELECT *, NOW() - created_at AS age
                 FROM weekly_reports
                 WHERE user_id = %s
                 ORDER BY report_date DESC
@@ -265,18 +261,24 @@ async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
             )
             row = cur.fetchone()
 
-            # ✅ CRUCIAAL VERSCHIL MET OUD GEDRAG
-            # ❌ GEEN 404
-            # ✅ Lege dict = frontend blijft wachten
+            # ⏳ Nog geen report → AI bezig
             if not row:
                 return {}
 
             cols = [desc[0] for desc in cur.description]
-            return dict(zip(cols, row))
+            report = dict(zip(cols, row))
+
+            age = report.get("age")
+            if age and age > REPORT_TIMEOUT:
+                return {
+                    "status": "failed",
+                    "reason": "weekly_report_timeout",
+                }
+
+            return report
 
     finally:
         conn.close()
-
 
 @router.get("/report/weekly/by-date")
 async def get_weekly_by_date(
@@ -403,11 +405,12 @@ async def export_weekly_pdf(
 async def get_monthly_latest(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT *
+                SELECT *, NOW() - created_at AS age
                 FROM monthly_reports
                 WHERE user_id = %s
                 ORDER BY report_date DESC
@@ -416,10 +419,23 @@ async def get_monthly_latest(current_user: dict = Depends(get_current_user)):
                 (user_id,),
             )
             row = cur.fetchone()
+
+            # ⏳ Nog bezig
             if not row:
-                return {}  # ✅ FIX
+                return {}
+
             cols = [desc[0] for desc in cur.description]
-            return dict(zip(cols, row))
+            report = dict(zip(cols, row))
+
+            age = report.get("age")
+            if age and age > REPORT_TIMEOUT:
+                return {
+                    "status": "failed",
+                    "reason": "monthly_report_timeout",
+                }
+
+            return report
+
     finally:
         conn.close()
 
@@ -546,11 +562,12 @@ async def export_monthly_pdf(
 async def get_quarterly_latest(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT *
+                SELECT *, NOW() - created_at AS age
                 FROM quarterly_reports
                 WHERE user_id = %s
                 ORDER BY report_date DESC
@@ -559,13 +576,25 @@ async def get_quarterly_latest(current_user: dict = Depends(get_current_user)):
                 (user_id,),
             )
             row = cur.fetchone()
+
+            # ⏳ Nog bezig
             if not row:
-                return {}  # ✅ FIX
+                return {}
+
             cols = [desc[0] for desc in cur.description]
-            return dict(zip(cols, row))
+            report = dict(zip(cols, row))
+
+            age = report.get("age")
+            if age and age > REPORT_TIMEOUT:
+                return {
+                    "status": "failed",
+                    "reason": "quarterly_report_timeout",
+                }
+
+            return report
+
     finally:
         conn.close()
-
 
 @router.get("/report/quarterly/by-date")
 async def get_quarterly_by_date(
