@@ -1,11 +1,13 @@
 import logging
 import json
-from datetime import date
+from datetime import date, timedelta
 
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.ai_agents.quarterly_report_agent import generate_quarterly_report_sections
+from backend.ai_agents.quarterly_report_agent import (
+    generate_quarterly_report_sections,
+)
 
 # =====================================================
 # Logging
@@ -42,7 +44,9 @@ def _get_quarter_period(d: date):
 # =====================================================
 # 🧠 QUARTERLY REPORT TASK — CANONICAL
 # =====================================================
-@shared_task(name="backend.celery_task.quarterly_report_task.generate_quarterly_report")
+@shared_task(
+    name="backend.celery_task.quarterly_report_task.generate_quarterly_report"
+)
 def generate_quarterly_report(user_id: int):
     """
     Genereert een kwartaalrapport voor één user.
@@ -159,6 +163,11 @@ def generate_quarterly_report(user_id: int):
             period_start,
             period_end,
         )
+
+    except Exception:
+        conn.rollback()
+        logger.exception("❌ Fout bij opslaan quarterly report")
+        raise
 
     finally:
         conn.close()
