@@ -985,7 +985,6 @@ def run_trading_bot_agent(
     user_id: int,
     report_date: Optional[date] = None,
     bot_id: Optional[int] = None,
-    auto_execute: bool = False,
 ) -> Dict[str, Any]:
 
     report_date = report_date or date.today()
@@ -1017,10 +1016,10 @@ def run_trading_bot_agent(
                 snapshot=snapshot,
             )
 
-            # 2️⃣ Decision (logica)
+            # 2️⃣ Decision
             decision = _decide(bot, snapshot, scores)
 
-            # 3️⃣ Trade sizing (SINGLE SOURCE OF TRUTH)
+            # 3️⃣ Trade sizing
             strategy_amount = _get_strategy_trade_amount_eur(
                 conn,
                 user_id=user_id,
@@ -1039,24 +1038,18 @@ def run_trading_bot_agent(
                 if max_eur > 0:
                     amount = min(amount, max_eur)
 
-            decision["amount_eur"] = round(float(amount), 2)
+            decision["amount_eur"] = round(amount, 2)
             decision["setup_match"] = setup_match
 
-            # 🔥 HARD RULE 1 — NOOIT BUY MET €0
+            # ❌ NO BUY WITH €0
             if decision["action"] == "buy" and decision["amount_eur"] <= 0:
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", []).append(
-                    "Buy-condities gehaald, maar trade_amount ontbreekt → geen order."
-                )
 
-            # 4️⃣ Budget check
+            # 4️⃣ Budget check (EXECUTE ONLY)
             today_spent = get_today_spent_eur(
                 conn, user_id, bot["bot_id"], report_date
-            )
-            total_balance = abs(
-                get_bot_balance(conn, user_id, bot["bot_id"])
             )
 
             ok, reason = check_bot_budget(
@@ -1069,9 +1062,6 @@ def run_trading_bot_agent(
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", []).append(
-                    f"Budget blokkeert order: {reason}"
-                )
 
             # 5️⃣ Order proposal
             order_proposal = build_order_proposal(
@@ -1079,19 +1069,15 @@ def run_trading_bot_agent(
                 bot=bot,
                 decision=decision,
                 today_spent_eur=today_spent,
-                total_balance_eur=total_balance,
+                total_balance_eur=abs(get_bot_balance(conn, user_id, bot["bot_id"])),
             )
 
-            # 🔥 HARD RULE 2 — BUY ZONDER ORDER BESTAAT NIET
             if decision["action"] == "buy" and not order_proposal:
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", []).append(
-                    "Geen valide order gegenereerd → BUY geannuleerd."
-                )
 
-            # 6️⃣ Persist decision (NU PAS!)
+            # 6️⃣ Persist decision
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -1103,9 +1089,11 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            # 7️⃣ Persist order + reserve ledger
             order_id = None
+            executed = False
+
             if order_proposal:
+                # 7️⃣ Persist order
                 order_id = _persist_bot_order(
                     conn=conn,
                     user_id=user_id,
@@ -1114,20 +1102,16 @@ def run_trading_bot_agent(
                     order=order_proposal,
                 )
 
-                record_bot_ledger_entry(
-                    conn=conn,
-                    user_id=user_id,
-                    bot_id=bot["bot_id"],
-                    entry_type="reserve",
-                    cash_delta_eur=-decision["amount_eur"],
-                    symbol=decision["symbol"],
-                    decision_id=decision_id,
-                    order_id=order_id,
-                    meta={
-                        "estimated_price": order_proposal["estimated_price"],
-                        "estimated_qty": order_proposal["estimated_qty"],
-                    },
-                )
+                # 🔥 AUTO MODE = DIRECT EXECUTE
+                if bot["mode"] == "auto":
+                    _auto_execute_decision(
+                        conn=conn,
+                        user_id=user_id,
+                        bot_id=bot["bot_id"],
+                        decision_id=decision_id,
+                        order=order_proposal,
+                    )
+                    executed = True
 
             results.append(
                 {
@@ -1137,7 +1121,7 @@ def run_trading_bot_agent(
                     "confidence": decision["confidence"],
                     "amount_eur": decision["amount_eur"],
                     "order": order_proposal,
-                    "status": "planned",
+                    "status": "executed" if executed else "planned",
                 }
             )
 
