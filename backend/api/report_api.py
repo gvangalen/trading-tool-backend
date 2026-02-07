@@ -258,12 +258,16 @@ async def get_weekly_latest(current_user: dict = Depends(get_current_user)):
             )
             row = cur.fetchone()
 
-            # 🔑 Loader-signaal
             if not row:
-                return {}
+                return { "_status": "pending" }
 
             cols = [desc[0] for desc in cur.description]
-            return dict(zip(cols, row))
+            report = dict(zip(cols, row))
+
+            return {
+                "_status": "ready",
+                **report,
+            }
 
     finally:
         conn.close()
@@ -409,10 +413,15 @@ async def get_monthly_latest(current_user: dict = Depends(get_current_user)):
             row = cur.fetchone()
 
             if not row:
-                return {}
+                return { "_status": "pending" }
 
             cols = [desc[0] for desc in cur.description]
-            return dict(zip(cols, row))
+            report = dict(zip(cols, row))
+
+            return {
+                "_status": "ready",
+                **report,
+            }
 
     finally:
         conn.close()
@@ -556,10 +565,15 @@ async def get_quarterly_latest(current_user: dict = Depends(get_current_user)):
             row = cur.fetchone()
 
             if not row:
-                return {}
+                return { "_status": "pending" }
 
             cols = [desc[0] for desc in cur.description]
-            return dict(zip(cols, row))
+            report = dict(zip(cols, row))
+
+            return {
+                "_status": "ready",
+                **report,
+            }
 
     finally:
         conn.close()
