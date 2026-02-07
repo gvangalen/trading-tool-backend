@@ -74,23 +74,45 @@ def build_agent_context(
     finally:
         conn.close()
 
+    # -------------------------------------------------
+    # 📊 Delta-berekening t.o.v. meest recente historie
+    # -------------------------------------------------
     previous = history[0] if history else None
     prev_score = previous["avg_score"] if previous else None
 
-    score_change = (
-        round(current_score - prev_score, 2)
-        if current_score is not None and prev_score is not None
-        else None
-    )
+    if current_score is not None and prev_score is not None:
+        score_change = round(current_score - prev_score, 2)
+    else:
+        score_change = None
 
-    direction = (
-        "verbetering" if score_change and score_change > 0
-        else "verslechtering" if score_change and score_change < 0
-        else "onveranderd"
-    )
+    # Richting (expliciet onderscheid)
+    if score_change is None:
+        direction = "onbekend"
+    elif score_change > 0:
+        direction = "verbetering"
+    elif score_change < 0:
+        direction = "verslechtering"
+    else:
+        direction = "onveranderd"
 
+    # Grootte van verandering (voor verklarende AI-tekst)
+    if score_change is None:
+        magnitude = None
+    else:
+        abs_change = abs(score_change)
+        if abs_change >= 10:
+            magnitude = "groot"
+        elif abs_change >= 4:
+            magnitude = "matig"
+        else:
+            magnitude = "klein"
+
+    # -------------------------------------------------
+    # 🧱 Definitieve context
+    # -------------------------------------------------
     context = {
         "today": {
+            "date": date.today().isoformat(),
             "avg_score": current_score,
             "items": current_items or [],
         },
@@ -98,13 +120,15 @@ def build_agent_context(
         "delta": {
             "score_change": score_change,
             "direction": direction,
+            "magnitude": magnitude,
         },
     }
 
     logger.info(
-        "🧠 Agent context built | user=%s | category=%s | delta=%s",
+        "🧠 Agent context built | user=%s | category=%s | score=%s | delta=%s",
         user_id,
         category,
+        current_score,
         score_change,
     )
 
