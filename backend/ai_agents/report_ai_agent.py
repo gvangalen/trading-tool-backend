@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
 from backend.ai_core.system_prompt_builder import build_system_prompt
+from backend.ai_core.ai_style_report import AI_STYLE_REPORT
 
 # =====================================================
 # Logging
@@ -386,7 +387,11 @@ def generate_text(prompt: str, fallback: str) -> str:
     - JSON-defensieve parsing
     GEEN deduplicatie (doen we hogerop)
     """
-    system_prompt = build_system_prompt(agent="report", task=REPORT_TASK)
+    system_prompt = build_system_prompt(
+    agent="report",
+    task=REPORT_TASK,
+    style_override=AI_STYLE_REPORT,
+)
     raw = ask_gpt_text(prompt, system_role=system_prompt)
 
     if not raw:
