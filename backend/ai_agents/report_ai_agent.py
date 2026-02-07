@@ -92,6 +92,58 @@ def _flatten_text(obj) -> List[str]:
 
     return out
 
+def get_daily_deltas(user_id: int) -> Dict[str, Any]:
+    """
+    Berekent veranderingen t.o.v. gisteren.
+    Dit is analytische brandstof voor het rapport.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    today.macro_score - prev.macro_score AS macro_delta,
+                    today.technical_score - prev.technical_score AS technical_delta,
+                    today.market_score - prev.market_score AS market_delta,
+                    today.setup_score - prev.setup_score AS setup_delta,
+                    today.price - prev.price AS price_delta,
+                    today.change_24h - prev.change_24h AS change_delta,
+                    today.volume - prev.volume AS volume_delta
+                FROM (
+                    SELECT macro_score, technical_score, market_score, setup_score,
+                           price, change_24h, volume
+                    FROM daily_scores ds
+                    JOIN market_data md ON DATE(md.timestamp) = ds.report_date
+                    WHERE ds.user_id = %s
+                    ORDER BY ds.report_date DESC
+                    LIMIT 1
+                ) today
+                JOIN (
+                    SELECT macro_score, technical_score, market_score, setup_score,
+                           price, change_24h, volume
+                    FROM daily_scores ds
+                    JOIN market_data md ON DATE(md.timestamp) = ds.report_date
+                    WHERE ds.user_id = %s
+                      AND ds.report_date < CURRENT_DATE
+                    ORDER BY ds.report_date DESC
+                    LIMIT 1
+                ) prev ON TRUE;
+            """, (user_id, user_id))
+            row = cur.fetchone()
+
+        if not row:
+            return {}
+
+        keys = [
+            "macro_delta", "technical_delta", "market_delta", "setup_delta",
+            "price_delta", "change_delta", "volume_delta"
+        ]
+
+        return {k: to_float(v) for k, v in zip(keys, row)}
+
+    finally:
+        conn.close()
+
 # =====================================================
 # BOT DAILY SNAPSHOT (BACKEND = TRUTH)
 # =====================================================
@@ -561,68 +613,56 @@ def get_active_strategy_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
 # =====================================================
 
 def p_exec(scores, market):
-    return f"""
-Vat de huidige marktsituatie samen tot één helder dagoverzicht.
+    return """
+Formuleer één centrale markthypothese voor vandaag.
 
-Gebruik hierbij:
-- de combinatie van macro-, market-, technical- en setup-scores
-- de actuele prijs en recente marktactiviteit
-- de context van gisteren indien relevant
+Structuur:
+- Wat is het belangrijkste verschil t.o.v. gisteren?
+- Waarom reageerde de markt juist vandaag?
+- Is dit een structurele verschuiving of een reactieve beweging?
 
-Doel:
-- schets het grotere plaatje
-- benoem of de markt vandaag uitnodigt tot actie of juist terughoudendheid
-- geef één duidelijk, professioneel handelsoordeel
+Schrijf als één analytisch openingsverhaal.
+Geen opsommingen.
 """
 
 
 def p_market(scores, market, indicators):
-    names = ", ".join(i["indicator"] for i in indicators)
-
     return f"""
-De market score staat vandaag op {scores.get('market_score')}.
+Analyseer de marktbeweging van vandaag.
 
-Belangrijke marktindicatoren zijn: {names}.
+Verplicht:
+- Begin met de verandering t.o.v. gisteren
+- Verklaar waarom prijs en market score veranderden
+- Benoem waarom volume dit wel of niet ondersteunt
+- Leg uit wat dit zegt over de duurzaamheid van de beweging
 
-Ga inhoudelijk in op:
-- waarom deze indicatoren vandaag hoger of lager scoren
-- wat dit zegt over volatiliteit, liquiditeit en richting
-- of dit een voortzetting is van gisteren of juist een verandering
-
-Beschrijf dit als één logisch verhaal, geen losse observaties.
+Geen herhaling van cijfers zonder causaliteit.
 """
 
-
 def p_macro(scores, indicators):
-    names = ", ".join(i["indicator"] for i in indicators)
-
     return f"""
-De macro score staat vandaag op {scores.get('macro_score')}.
+Analyseer de macro-omgeving van vandaag.
 
-Relevante macro-indicatoren zijn: {names}.
+Verplicht:
+- Benoem welke macro-krachten dominant bleven
+- Leg uit waarom macro-indicatoren niet meebewegen met prijs
+- Beschrijf de spanning tussen veiligheid (Bitcoin) en risicobereidheid
 
-Leg uit:
-- welke krachten vandaag dominant zijn in de macro-omgeving
-- waarom deze indicatoren zo scoren
-- hoe dit het bredere speelveld voor Bitcoin beïnvloedt
-
-Koppel expliciet terug naar risico, timing en positionering.
+Focus op krachten, niet op labels.
 """
 
 
 def p_technical(scores, indicators):
-    weak = ", ".join(i["indicator"] for i in indicators if i.get("score") is not None and i["score"] < 40)
-    strong = ", ".join(i["indicator"] for i in indicators if i.get("score") is not None and i["score"] >= 60)
-
     return f"""
-De technische score komt vandaag uit op {scores.get('technical_score')}.
+Analyseer de technische structuur van vandaag.
 
-Analyseer de technische structuur door:
-- uit te leggen waarom bepaalde indicatoren zwakker zijn ({weak})
-- te verklaren waarom andere indicatoren steun geven ({strong})
-- te beschrijven wat dit zegt over trend, momentum en betrouwbaarheid
+Verplicht:
+- Leg uit waarom technische signalen achterblijven of bevestigen
+- Benoem welke signalen betrouwbaarheid ONDERMIJNEN
+- Beschrijf of dit herstel, consolidatie of ruis is
 
-Vermijd algemene termen en koppel alles aan de huidige marktconditie.
+Geen klassieke TA-uitleg.
+Koppel alles aan betrouwbaarheid van de beweging.
 """
 
 
@@ -787,9 +827,21 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     # -------------------------------------------------
     # 3) Context blob (ENIGE input voor AI)
     # -------------------------------------------------
-    context_blob = f"""
+    deltas = get_daily_deltas(user_id)
+
+context_blob = f"""
 Je schrijft het rapport voor vandaag.
 Gebruik UITSLUITEND onderstaande data.
+Analyseer VERANDERINGEN, geen herhaling.
+
+=== VERANDERINGEN T.O.V. GISTEREN ===
+Macro score delta: {deltas.get("macro_delta")}
+Market score delta: {deltas.get("market_delta")}
+Technical score delta: {deltas.get("technical_delta")}
+Setup score delta: {deltas.get("setup_delta")}
+Prijs delta: {deltas.get("price_delta")}
+24h change delta: {deltas.get("change_delta")}
+Volume delta: {deltas.get("volume_delta")}
 
 === ACTUELE MARKT ===
 Prijs: {market.get("price")}
@@ -798,8 +850,8 @@ Volume: {market.get("volume")}
 
 === SCORES ===
 Macro: {scores.get("macro_score")}
-Technisch: {scores.get("technical_score")}
 Market: {scores.get("market_score")}
+Technical: {scores.get("technical_score")}
 Setup: {scores.get("setup_score")}
 
 === MARKET INDICATORS ===
@@ -817,22 +869,17 @@ Setup: {scores.get("setup_score")}
 === ACTIEVE STRATEGIE ===
 {json.dumps(_safe_json(active_strategy), ensure_ascii=False)}
 
-=== BOT STRATEGY MATCH ===
+=== BOT SNAPSHOT ===
 {json.dumps(_safe_json(bot_snapshot), ensure_ascii=False)}
 
-=== AI INSIGHTS ===
-{json.dumps(_safe_json(ai_insights), ensure_ascii=False)}
-
-=== AI REFLECTIONS ===
-{json.dumps(_safe_json(ai_reflections), ensure_ascii=False)}
-
-=== VORIG RAPPORT ===
+=== VORIG RAPPORT (TER REFERENTIE) ===
 {json.dumps(_safe_json(prev_report), ensure_ascii=False)}
 
 BELANGRIJK:
-- Geen absolute prijsniveaus noemen
-- Verklaar WAAROM indicatoren vandaag hoger/lager zijn
-- Bouw logisch voort op gisteren
+- Begin elke sectie met WAT IS VERANDERD
+- Benoem WAAROM die verandering plaatsvond
+- Benoem wat ONVERANDERD bleef ondanks beweging
+- Geen herhaling van cijfers zonder verklaring
 """.strip()
 
     # -------------------------------------------------
