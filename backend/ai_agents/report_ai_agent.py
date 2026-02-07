@@ -3,7 +3,7 @@ import json
 import re
 from difflib import SequenceMatcher
 from decimal import Decimal
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from backend.utils.db import get_db_connection
 from backend.utils.openai_client import ask_gpt_text
@@ -32,7 +32,8 @@ Belangrijk:
 - Bouw expliciet voort op gisteren
 - Verklaar waarom indicatoren vandaag hoger/lager zijn
 - Trek geen nieuwe conclusies zonder data
-- Gebruik geen absolute prijsniveaus behalve de actuele prijs
+- Gebruik geen absolute prijsniveaus behalve de actuele prijs (de huidige prijs mag, geen levels/support/resistance)
+- Geen herhaling van dezelfde claims in elke sectie
 
 Stijl:
 - Vloeiend, professioneel Nederlands
@@ -57,6 +58,7 @@ Output:
 # =====================================================
 # Helpers
 # =====================================================
+
 
 def to_float(v):
     if v is None:
@@ -92,61 +94,127 @@ def _flatten_text(obj) -> List[str]:
 
     return out
 
+
+def _safe_json(obj):
+    """
+    JSON-safe serialization (Decimal/date/datetime-safe).
+    """
+    from datetime import date, datetime
+
+    if obj is None:
+        return None
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _safe_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_safe_json(v) for v in obj]
+    return obj
+
+
+# =====================================================
+# Delta helpers (today vs previous report_date)
+# =====================================================
+
+
+def _get_latest_market_row_for_date(cur, report_date) -> Optional[Tuple]:
+    """
+    Haal de meest recente market_data snapshot voor een bepaalde datum.
+    Verwacht: (price, change_24h, volume)
+    """
+    cur.execute(
+        """
+        SELECT price, change_24h, volume
+        FROM market_data
+        WHERE DATE(timestamp) = %s
+        ORDER BY timestamp DESC
+        LIMIT 1;
+        """,
+        (report_date,),
+    )
+    return cur.fetchone()
+
+
 def get_daily_deltas(user_id: int) -> Dict[str, Any]:
     """
-    Berekent veranderingen t.o.v. gisteren.
-    Dit is analytische brandstof voor het rapport.
+    Berekent veranderingen t.o.v. de vorige beschikbare report_date.
+    Deze deltas zijn analytische brandstof en reduceren herhaling,
+    omdat elke sectie begint vanuit verandering (of juist het uitblijven daarvan).
+
+    Output keys:
+    - macro_delta, technical_delta, market_delta, setup_delta
+    - price_delta, change_delta, volume_delta
     """
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    today.macro_score - prev.macro_score AS macro_delta,
-                    today.technical_score - prev.technical_score AS technical_delta,
-                    today.market_score - prev.market_score AS market_delta,
-                    today.setup_score - prev.setup_score AS setup_delta,
-                    today.price - prev.price AS price_delta,
-                    today.change_24h - prev.change_24h AS change_delta,
-                    today.volume - prev.volume AS volume_delta
-                FROM (
-                    SELECT macro_score, technical_score, market_score, setup_score,
-                           price, change_24h, volume
-                    FROM daily_scores ds
-                    JOIN market_data md ON DATE(md.timestamp) = ds.report_date
-                    WHERE ds.user_id = %s
-                    ORDER BY ds.report_date DESC
-                    LIMIT 1
-                ) today
-                JOIN (
-                    SELECT macro_score, technical_score, market_score, setup_score,
-                           price, change_24h, volume
-                    FROM daily_scores ds
-                    JOIN market_data md ON DATE(md.timestamp) = ds.report_date
-                    WHERE ds.user_id = %s
-                      AND ds.report_date < CURRENT_DATE
-                    ORDER BY ds.report_date DESC
-                    LIMIT 1
-                ) prev ON TRUE;
-            """, (user_id, user_id))
-            row = cur.fetchone()
+            # Pak laatste 2 dagen scores (beschikbaar voor user)
+            cur.execute(
+                """
+                SELECT report_date, macro_score, technical_score, market_score, setup_score
+                FROM daily_scores
+                WHERE user_id = %s
+                ORDER BY report_date DESC
+                LIMIT 2;
+                """,
+                (user_id,),
+            )
+            rows = cur.fetchall()
 
-        if not row:
-            return {}
+            if not rows or len(rows) < 2:
+                return {}
 
-        keys = [
-            "macro_delta", "technical_delta", "market_delta", "setup_delta",
-            "price_delta", "change_delta", "volume_delta"
-        ]
+            today_date, today_macro, today_tech, today_market, today_setup = rows[0]
+            prev_date, prev_macro, prev_tech, prev_market, prev_setup = rows[1]
 
-        return {k: to_float(v) for k, v in zip(keys, row)}
+            # Markt snapshots per datum (laatste snapshot die dag)
+            today_m = _get_latest_market_row_for_date(cur, today_date)
+            prev_m = _get_latest_market_row_for_date(cur, prev_date)
 
+            # Deltas scores
+            macro_delta = to_float(today_macro) - to_float(prev_macro) if (today_macro is not None and prev_macro is not None) else None
+            technical_delta = to_float(today_tech) - to_float(prev_tech) if (today_tech is not None and prev_tech is not None) else None
+            market_delta = to_float(today_market) - to_float(prev_market) if (today_market is not None and prev_market is not None) else None
+            setup_delta = to_float(today_setup) - to_float(prev_setup) if (today_setup is not None and prev_setup is not None) else None
+
+            # Deltas market (price/change/volume)
+            price_delta = None
+            change_delta = None
+            volume_delta = None
+
+            if today_m and prev_m:
+                t_price, t_change, t_vol = today_m
+                p_price, p_change, p_vol = prev_m
+
+                if t_price is not None and p_price is not None:
+                    price_delta = to_float(t_price) - to_float(p_price)
+                if t_change is not None and p_change is not None:
+                    change_delta = to_float(t_change) - to_float(p_change)
+                if t_vol is not None and p_vol is not None:
+                    volume_delta = to_float(t_vol) - to_float(p_vol)
+
+            return {
+                "macro_delta": macro_delta,
+                "technical_delta": technical_delta,
+                "market_delta": market_delta,
+                "setup_delta": setup_delta,
+                "price_delta": price_delta,
+                "change_delta": change_delta,
+                "volume_delta": volume_delta,
+                "today_date": today_date.isoformat() if today_date else None,
+                "prev_date": prev_date.isoformat() if prev_date else None,
+            }
     finally:
         conn.close()
+
 
 # =====================================================
 # BOT DAILY SNAPSHOT (BACKEND = TRUTH)
 # =====================================================
+
+
 def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
     """
     Leest de botbeslissing van vandaag.
@@ -180,7 +248,8 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT
                   b.name AS bot_name,
                   d.action,
@@ -194,7 +263,9 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
                   AND d.decision_date = CURRENT_DATE
                 ORDER BY d.updated_at DESC
                 LIMIT 1;
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             row = cur.fetchone()
 
         # ─────────────────────────────────────────────
@@ -237,19 +308,10 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
         setup_match = None
 
         if isinstance(raw_match, dict):
-            setup_match = (
-                raw_match.get("name")
-                or raw_match.get("label")
-                or raw_match.get("id")
-            )
+            setup_match = raw_match.get("name") or raw_match.get("label") or raw_match.get("id")
         elif isinstance(raw_match, list):
             setup_match = ", ".join(
-                str(
-                    x.get("name")
-                    if isinstance(x, dict) and x.get("name")
-                    else x
-                )
-                for x in raw_match
+                str(x.get("name") if isinstance(x, dict) and x.get("name") else x) for x in raw_match
             )
         elif isinstance(raw_match, (str, int, float)):
             setup_match = str(raw_match)
@@ -269,16 +331,12 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
 
             if reason_text is None:
                 if isinstance(reason_json, list):
-                    reason_text = "; ".join(
-                        str(x) for x in reason_json if str(x).strip()
-                    )
+                    reason_text = "; ".join(str(x) for x in reason_json if str(x).strip())
                 elif isinstance(reason_json, dict):
                     if "reason" in reason_json:
                         reason_text = str(reason_json["reason"])
                     elif "reasons" in reason_json and isinstance(reason_json["reasons"], list):
-                        reason_text = "; ".join(
-                            str(x) for x in reason_json["reasons"] if str(x).strip()
-                        )
+                        reason_text = "; ".join(str(x) for x in reason_json["reasons"] if str(x).strip())
                     else:
                         reason_text = str(reason_json)
 
@@ -315,6 +373,11 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
         conn.close()
 
 
+# =====================================================
+# Text generation (AI) + defensive parsing
+# =====================================================
+
+
 def generate_text(prompt: str, fallback: str) -> str:
     """
     Verantwoordelijk voor:
@@ -342,14 +405,17 @@ def generate_text(prompt: str, fallback: str) -> str:
         parts = _flatten_text(parsed)
 
         blacklist = {
-            "GO", "NO-GO", "STATUS", "RISICO", "IMPACT",
-            "ACTIE", "ONVOLDOENDE DATA", "CONDITIONAL"
+            "GO",
+            "NO-GO",
+            "STATUS",
+            "RISICO",
+            "IMPACT",
+            "ACTIE",
+            "ONVOLDOENDE DATA",
+            "CONDITIONAL",
         }
 
-        cleaned = [
-            p for p in parts
-            if p.strip() and p.strip().upper() not in blacklist
-        ]
+        cleaned = [p for p in parts if p.strip() and p.strip().upper() not in blacklist]
 
         if cleaned:
             return "\n\n".join(cleaned)
@@ -367,6 +433,7 @@ def generate_text(prompt: str, fallback: str) -> str:
 # Repetition control (cross-section deduplication)
 # =====================================================
 
+
 def _normalize_sentence(s: str) -> str:
     s = s.lower().strip()
     s = re.sub(r"\s+", " ", s)
@@ -378,12 +445,12 @@ def _is_too_similar(a: str, b: str, threshold: float = 0.82) -> bool:
     return SequenceMatcher(None, a, b).ratio() >= threshold
 
 
-def reduce_repetition(text: str, seen: list[str]) -> str:
+def reduce_repetition(text: str, seen: List[str]) -> str:
     """
     Verwijdert zinnen die semantisch te sterk lijken
     op eerder geschreven zinnen in andere secties.
     """
-    sentences = re.split(r'(?<=[.!?])\s+', text)
+    sentences = re.split(r"(?<=[.!?])\s+", text)
     output: List[str] = []
 
     for s in sentences:
@@ -404,17 +471,22 @@ def reduce_repetition(text: str, seen: list[str]) -> str:
 # =====================================================
 # SCORES & MARKET
 # =====================================================
+
+
 def get_daily_scores(user_id: int) -> Dict[str, Any]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT macro_score, technical_score, market_score, setup_score
                 FROM daily_scores
                 WHERE user_id = %s
                 ORDER BY report_date DESC
                 LIMIT 1;
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             row = cur.fetchone()
 
         return {
@@ -431,12 +503,14 @@ def get_market_snapshot() -> Dict[str, Any]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT price, change_24h, volume
                 FROM market_data
                 ORDER BY timestamp DESC
                 LIMIT 1;
-            """)
+                """
+            )
             row = cur.fetchone()
 
         return {
@@ -451,22 +525,29 @@ def get_market_snapshot() -> Dict[str, Any]:
 def _indicator_list(cur, sql, user_id):
     cur.execute(sql, (user_id,))
     rows = cur.fetchall()
-    return [{
-        "indicator": r[0],
-        "value": to_float(r[1]),
-        "score": to_float(r[2]),
-        "interpretation": r[3],
-    } for r in rows]
+    return [
+        {
+            "indicator": r[0],
+            "value": to_float(r[1]),
+            "score": to_float(r[2]),
+            "interpretation": r[3],
+        }
+        for r in rows
+    ]
+
 
 # =====================================================
 # INDICATOR HIGHLIGHTS (UNIFORM STRUCTUUR – GEEN DUPLICATEN)
 # =====================================================
 
+
 def get_market_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            return _indicator_list(cur, """
+            return _indicator_list(
+                cur,
+                """
                 SELECT DISTINCT ON (name)
                     name,
                     value,
@@ -478,7 +559,9 @@ def get_market_indicator_highlights(user_id: int) -> List[dict]:
                   AND DATE(timestamp) = CURRENT_DATE
                 ORDER BY name, timestamp DESC
                 LIMIT 5;
-            """, user_id)
+                """,
+                user_id,
+            )
     finally:
         conn.close()
 
@@ -487,7 +570,9 @@ def get_macro_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            return _indicator_list(cur, """
+            return _indicator_list(
+                cur,
+                """
                 SELECT DISTINCT ON (name)
                     name,
                     value,
@@ -499,7 +584,9 @@ def get_macro_indicator_highlights(user_id: int) -> List[dict]:
                   AND DATE(timestamp) = CURRENT_DATE
                 ORDER BY name, timestamp DESC
                 LIMIT 5;
-            """, user_id)
+                """,
+                user_id,
+            )
     finally:
         conn.close()
 
@@ -508,7 +595,9 @@ def get_technical_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            return _indicator_list(cur, """
+            return _indicator_list(
+                cur,
+                """
                 SELECT DISTINCT ON (indicator)
                     indicator,
                     value,
@@ -520,35 +609,46 @@ def get_technical_indicator_highlights(user_id: int) -> List[dict]:
                   AND DATE(timestamp) = CURRENT_DATE
                 ORDER BY indicator, timestamp DESC
                 LIMIT 5;
-            """, user_id)
+                """,
+                user_id,
+            )
     finally:
         conn.close()
+
 
 # =====================================================
 # SETUP SNAPSHOT
 # =====================================================
+
+
 def get_setup_snapshot(user_id: int) -> Dict[str, Any]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT s.id, s.name, s.symbol, s.timeframe, d.score
                 FROM daily_setup_scores d
                 JOIN setups s ON s.id = d.setup_id
                 WHERE d.user_id = %s
                 ORDER BY d.report_date DESC, d.is_best DESC, d.score DESC
                 LIMIT 1;
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             best = cur.fetchone()
 
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT s.id, s.name, d.score
                 FROM daily_setup_scores d
                 JOIN setups s ON s.id = d.setup_id
                 WHERE d.user_id = %s
                 ORDER BY d.report_date DESC, d.score DESC
                 LIMIT 5;
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             rows = cur.fetchall()
 
         if not best:
@@ -562,23 +662,23 @@ def get_setup_snapshot(user_id: int) -> Dict[str, Any]:
                 "timeframe": best[3],
                 "score": to_float(best[4]),
             },
-            "top_setups": [
-                {"id": r[0], "name": r[1], "score": to_float(r[2])}
-                for r in rows
-            ],
+            "top_setups": [{"id": r[0], "name": r[1], "score": to_float(r[2])} for r in rows],
         }
     finally:
         conn.close()
-        
+
 
 # =====================================================
 # STRATEGY SNAPSHOT
 # =====================================================
+
+
 def get_active_strategy_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT
                     s.name, s.symbol, s.timeframe,
                     a.entry, a.targets, a.stop_loss,
@@ -588,7 +688,9 @@ def get_active_strategy_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
                 WHERE a.user_id = %s
                 ORDER BY a.snapshot_date DESC, a.created_at DESC
                 LIMIT 1;
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             row = cur.fetchone()
 
         if not row:
@@ -612,116 +714,121 @@ def get_active_strategy_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
 # PROMPTS (REPORT AGENT 2.0 — SAMENHANG & VERKLARING)
 # =====================================================
 
-def p_exec(scores, market):
+
+def p_exec() -> str:
     return """
 Formuleer één centrale markthypothese voor vandaag.
 
-Structuur:
-- Wat is het belangrijkste verschil t.o.v. gisteren?
-- Waarom reageerde de markt juist vandaag?
-- Is dit een structurele verschuiving of een reactieve beweging?
+Verplicht:
+- Begin met wat er veranderde t.o.v. de vorige dag (of benoem expliciet dat het beeld gelijk bleef)
+- Geef de belangrijkste oorzaak/driver die uit de data volgt
+- Maak duidelijk of dit een structurele verschuiving lijkt of een reactieve beweging
 
 Schrijf als één analytisch openingsverhaal.
-Geen opsommingen.
-"""
+Geen opsommingen, geen labels, geen herhaling van dezelfde zinstructuren.
+""".strip()
 
 
-def p_market(scores, market, indicators):
-    return f"""
+def p_market() -> str:
+    return """
 Analyseer de marktbeweging van vandaag.
 
 Verplicht:
-- Begin met de verandering t.o.v. gisteren
-- Verklaar waarom prijs en market score veranderden
-- Benoem waarom volume dit wel of niet ondersteunt
-- Leg uit wat dit zegt over de duurzaamheid van de beweging
+- Start met de verandering t.o.v. gisteren (prijs/volume/market score)
+- Verklaar waarom de market score bewoog of juist niet
+- Leg uit wat volume zegt over de kwaliteit van de beweging
+- Eindig met een kort oordeel over duurzaamheid (zonder prijsniveaus)
 
-Geen herhaling van cijfers zonder causaliteit.
-"""
+Geen lijstjes, geen herhaling van cijfers zonder causaliteit.
+""".strip()
 
-def p_macro(scores, indicators):
-    return f"""
+
+def p_macro() -> str:
+    return """
 Analyseer de macro-omgeving van vandaag.
 
 Verplicht:
-- Benoem welke macro-krachten dominant bleven
-- Leg uit waarom macro-indicatoren niet meebewegen met prijs
-- Beschrijf de spanning tussen veiligheid (Bitcoin) en risicobereidheid
+- Benoem welke macro-krachten dominant bleven en wat dat betekent voor het speelveld
+- Leg uit waarom macro-indicatoren meebewegen of juist NIET meebewegen met de koers
+- Maak de spanning concreet tussen veiligheid (Bitcoin) en risicobereidheid (market context)
 
-Focus op krachten, niet op labels.
-"""
+Geen macro-boekjesuitleg, alleen interpretatie van de aangeleverde data.
+""".strip()
 
 
-def p_technical(scores, indicators):
-    return f"""
+def p_technical() -> str:
+    return """
 Analyseer de technische structuur van vandaag.
 
 Verplicht:
-- Leg uit waarom technische signalen achterblijven of bevestigen
-- Benoem welke signalen betrouwbaarheid ONDERMIJNEN
-- Beschrijf of dit herstel, consolidatie of ruis is
+- Leg uit of techniek bevestigt, achterblijft of tegenwerkt t.o.v. de beweging
+- Noem welke signalen betrouwbaarheid ONDERMIJNEN of juist VERSTERKEN (alleen uit data)
+- Beschrijf of dit herstel, consolidatie of ruis is, en waarom
 
-Geen klassieke TA-uitleg.
-Koppel alles aan betrouwbaarheid van de beweging.
-"""
+Geen klassieke TA-uitleg, geen indicator-definities, geen prijsniveaus.
+""".strip()
 
 
-def p_setup(best_setup):
+def p_setup(best_setup: Optional[Dict[str, Any]]) -> str:
     if not best_setup:
         return """
 Er is vandaag geen setup die voldoende aansluit bij de huidige marktomstandigheden.
 
-Leg uit:
-- waarom setups momenteel niet goed passen
-- wat er zou moeten veranderen voordat dat wel zo is
-"""
+Verplicht:
+- Leg uit waarom setups nu niet passen (koppel aan scorecombinatie + indicatorcontext)
+- Benoem wat er in de data zou moeten veranderen voordat setups weer logisch worden
+
+Geen aannames buiten de data.
+""".strip()
 
     return f"""
-De best scorende setup vandaag is {best_setup.get('name')}
-op timeframe {best_setup.get('timeframe')} met een score van {best_setup.get('score')}.
+De best scorende setup vandaag is "{best_setup.get('name')}" op timeframe {best_setup.get('timeframe')} (score {best_setup.get('score')}).
 
-Beoordeel:
-- waarom deze setup relatief beter scoort dan de rest
-- of de marktomstandigheden deze setup daadwerkelijk ondersteunen
-- of dit een setup is om actief te gebruiken of slechts te monitoren
-"""
+Verplicht:
+- Verklaar waarom deze setup relatief beter scoort dan de rest (koppel aan actuele context)
+- Beoordeel of de omstandigheden deze setup ondersteunen of slechts tolereren
+- Maak duidelijk of dit iets is om actief te gebruiken of vooral te monitoren (zonder trade-instructies)
+
+Geen herhaling van de setup-naam in elke zin.
+""".strip()
 
 
-def p_strategy(scores, active_strategy):
+def p_strategy(active_strategy: Optional[Dict[str, Any]]) -> str:
     if not active_strategy:
         return """
 Er is momenteel geen actieve strategie.
 
-Licht toe:
-- waarom de huidige scorecombinatie geen duidelijke strategie rechtvaardigt
-- welke voorwaarden eerst vervuld moeten worden voordat actie logisch wordt
-"""
+Verplicht:
+- Leg uit waarom de huidige scorecombinatie geen strategie rechtvaardigt
+- Benoem welke voorwaarden in de data eerst moeten verbeteren/verslechteren voordat een strategie logisch wordt
+
+Geen hypothetische trades, geen prijsniveaus.
+""".strip()
 
     return """
 Er is een actieve strategie aanwezig.
 
-Analyseer deze strategie door:
-- haar te plaatsen binnen de huidige macro-, market- en technische context
-- de belangrijkste risico’s en aannames te benoemen
-- te beoordelen of deze strategie vandaag ongewijzigd geldig blijft
-"""
+Verplicht:
+- Plaats de strategie in de huidige macro-, market- en technische context
+- Benoem de belangrijkste aannames die vandaag waar moeten blijven
+- Beoordeel of de strategie robuust blijft of fragieler wordt (zonder aanpassingen voor te schrijven)
 
-# =====================================================
-# BOT STRATEGY PROMPT
-# =====================================================
+Geen herhaling van entries/targets/stop; die staan elders.
+""".strip()
+
+
 def p_bot_strategy(bot_snapshot: Dict[str, Any]) -> str:
     if bot_snapshot.get("action") == "hold":
         return """
 De bot heeft vandaag bewust geen trade geplaatst.
 
-Leg uit:
-- welke voorwaarden of drempels niet voldeden
-- waarom discipline en risicobeheer vandaag belangrijker waren dan actie
-- wat er moet veranderen voordat een trade logisch wordt
+Verplicht:
+- Leg uit welke voorwaarden/drempels uit de botdata onvoldoende waren
+- Plaats dit in de bredere context: waarom terughoudendheid vandaag logisch was
+- Benoem wat er in de data moet veranderen voordat actie logisch wordt (algemeen, niet als tradeplan)
 
-Gebruik uitsluitend de aangeleverde botdata.
-Voeg geen aannames toe en introduceer geen nieuwe beslissingen.
-"""
+Gebruik uitsluitend de aangeleverde botdata. Geen aannames. Geen nieuwe beslissingen.
+""".strip()
 
     return """
 Er is vandaag een botbeslissing genomen.
@@ -729,20 +836,34 @@ Er is vandaag een botbeslissing genomen.
 BELANGRIJK:
 - De feitelijke botactie, confidence en bedragen worden elders getoond
 - Herhaal of parafraseer deze NIET
-- Jij geeft uitsluitend context en motivatie
 
-Beschrijf:
-- waarom deze beslissing logisch is binnen de huidige scorecombinatie
-- hoe discipline en drempels doorslaggevend waren
-- waarom dit een geschikt handelsmoment was
+Verplicht:
+- Geef context waarom de beslissing logisch is binnen de scorecombinatie
+- Benadruk discipline/drempels als reden, niet emotie of aannames
+- Koppel aan marktkader (zonder prijsniveaus)
 
-Gebruik uitsluitend de aangeleverde botdata.
-Voeg geen aannames toe en introduceer geen nieuwe beslissingen.
-"""
+Gebruik uitsluitend de aangeleverde botdata. Geen aannames. Geen nieuwe beslissingen.
+""".strip()
+
+
+def p_outlook() -> str:
+    return """
+Schrijf een scenario-vooruitblik voor de komende 24-48 uur.
+
+Verplicht:
+- Benoem welke factoren bevestiging vereisen
+- Benoem welke signalen een regime-shift zouden aangeven
+- Houd het conditioneel (als/dan), zonder prijsniveaus
+
+Geen opsommingen, één doorlopend stuk tekst.
+""".strip()
+
 
 # =====================================================
 # MAIN BUILDER — REPORT AGENT 2.0 (SAFE + CONTEXT-AWARE)
 # =====================================================
+
+
 def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     """
     Report Agent 2.0
@@ -752,24 +873,6 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     - Bouwt één samenhangend dagverhaal
     - JSON-safe (Decimal / date proof)
     """
-
-    # -------------------------------------------------
-    # 0) JSON-safe helper
-    # -------------------------------------------------
-    from datetime import date, datetime
-
-    def _safe_json(obj):
-        if obj is None:
-            return None
-        if isinstance(obj, Decimal):
-            return float(obj)
-        if isinstance(obj, (date, datetime)):
-            return obj.isoformat()
-        if isinstance(obj, dict):
-            return {k: _safe_json(v) for k, v in obj.items()}
-        if isinstance(obj, (list, tuple)):
-            return [_safe_json(v) for v in obj]
-        return obj
 
     # -------------------------------------------------
     # 1) Basis data
@@ -786,13 +889,17 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     active_strategy = get_active_strategy_snapshot(user_id)
     bot_snapshot = get_bot_daily_snapshot(user_id)
 
+    # Deltas (today vs prev)
+    deltas = get_daily_deltas(user_id)
+
     # -------------------------------------------------
     # 2) Extra context (AI + vorig rapport)
     # -------------------------------------------------
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT report_date, executive_summary, market_analysis,
                        macro_context, technical_analysis,
                        setup_validation, strategy_implication, outlook
@@ -801,25 +908,33 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
                   AND report_date < CURRENT_DATE
                 ORDER BY report_date DESC
                 LIMIT 1;
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             prev_report = cur.fetchone()
 
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT category, avg_score, trend, bias, risk, summary
                 FROM ai_category_insights
                 WHERE user_id = %s
                 ORDER BY date DESC
                 LIMIT 10;
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             ai_insights = cur.fetchall()
 
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT category, indicator, ai_score, comment, recommendation
                 FROM ai_reflections
                 WHERE user_id = %s
                 ORDER BY date DESC
                 LIMIT 10;
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             ai_reflections = cur.fetchall()
     finally:
         conn.close()
@@ -827,14 +942,13 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     # -------------------------------------------------
     # 3) Context blob (ENIGE input voor AI)
     # -------------------------------------------------
-    deltas = get_daily_deltas(user_id)
-
-context_blob = f"""
+    context_blob = f"""
 Je schrijft het rapport voor vandaag.
 Gebruik UITSLUITEND onderstaande data.
-Analyseer VERANDERINGEN, geen herhaling.
+Focus op veranderingen en causaliteit: geen herhaling.
 
-=== VERANDERINGEN T.O.V. GISTEREN ===
+=== VERANDERINGEN T.O.V. VORIGE DAG ===
+Beschikbare datums: vandaag={deltas.get("today_date")}, vorige={deltas.get("prev_date")}
 Macro score delta: {deltas.get("macro_delta")}
 Market score delta: {deltas.get("market_delta")}
 Technical score delta: {deltas.get("technical_delta")}
@@ -854,13 +968,13 @@ Market: {scores.get("market_score")}
 Technical: {scores.get("technical_score")}
 Setup: {scores.get("setup_score")}
 
-=== MARKET INDICATORS ===
+=== MARKET INDICATORS (top) ===
 {json.dumps(_safe_json(market_ind), ensure_ascii=False)}
 
-=== MACRO INDICATORS ===
+=== MACRO INDICATORS (top) ===
 {json.dumps(_safe_json(macro_ind), ensure_ascii=False)}
 
-=== TECHNICAL INDICATORS ===
+=== TECHNICAL INDICATORS (top) ===
 {json.dumps(_safe_json(tech_ind), ensure_ascii=False)}
 
 === BESTE SETUP ===
@@ -872,14 +986,20 @@ Setup: {scores.get("setup_score")}
 === BOT SNAPSHOT ===
 {json.dumps(_safe_json(bot_snapshot), ensure_ascii=False)}
 
-=== VORIG RAPPORT (TER REFERENTIE) ===
+=== AI INSIGHTS (context) ===
+{json.dumps(_safe_json(ai_insights), ensure_ascii=False)}
+
+=== AI REFLECTIONS (context) ===
+{json.dumps(_safe_json(ai_reflections), ensure_ascii=False)}
+
+=== VORIG RAPPORT (referentie) ===
 {json.dumps(_safe_json(prev_report), ensure_ascii=False)}
 
-BELANGRIJK:
-- Begin elke sectie met WAT IS VERANDERD
-- Benoem WAAROM die verandering plaatsvond
-- Benoem wat ONVERANDERD bleef ondanks beweging
-- Geen herhaling van cijfers zonder verklaring
+HARD RULES:
+- Begin elke sectie met: wat is er veranderd of wat bleef opmerkelijk gelijk
+- Verklaar waarom (causaliteit) op basis van data; geen aannames
+- Noem geen prijsniveaus/support/resistance; alleen de actuele prijs mag
+- Vermijd herhaling tussen secties; maak elke sectie uniek
 """.strip()
 
     # -------------------------------------------------
@@ -888,53 +1008,47 @@ BELANGRIJK:
     seen_sentences: List[str] = []
 
     executive_summary = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_exec(scores, market), "Markt in afwachting."),
-        seen_sentences
+        generate_text(context_blob + "\n\n" + p_exec(), "Markt in afwachting."),
+        seen_sentences,
     )
 
     market_analysis = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_market(scores, market, market_ind), "Beperkte richting."),
-        seen_sentences
+        generate_text(context_blob + "\n\n" + p_market(), "Beperkte richting."),
+        seen_sentences,
     )
 
     macro_context = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_macro(scores, macro_ind), "Macro gemengd."),
-        seen_sentences
+        generate_text(context_blob + "\n\n" + p_macro(), "Macro gemengd."),
+        seen_sentences,
     )
 
     technical_analysis = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_technical(scores, tech_ind), "Technisch voorzichtig."),
-        seen_sentences
+        generate_text(context_blob + "\n\n" + p_technical(), "Technisch voorzichtig."),
+        seen_sentences,
     )
 
     setup_validation = reduce_repetition(
         generate_text(context_blob + "\n\n" + p_setup(best_setup), "Selectieve setups."),
-        seen_sentences
+        seen_sentences,
     )
 
     strategy_implication = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_strategy(scores, active_strategy), "Voorzichtigheid."),
-        seen_sentences
+        generate_text(context_blob + "\n\n" + p_strategy(active_strategy), "Voorzichtigheid."),
+        seen_sentences,
     )
 
     bot_strategy = reduce_repetition(
-        generate_text(
-            context_blob + "\n\n" + p_bot_strategy(bot_snapshot),
-            "De bot bleef vandaag afwachtend."
-        ),
-        seen_sentences
+        generate_text(context_blob + "\n\n" + p_bot_strategy(bot_snapshot), "De bot bleef vandaag afwachtend."),
+        seen_sentences,
     )
 
     outlook = reduce_repetition(
-        generate_text(
-            context_blob + "\n\nSchrijf een scenario-vooruitblik zonder prijsniveaus.",
-            "Vooruitblik: wachten op bevestiging."
-        ),
-        seen_sentences
+        generate_text(context_blob + "\n\n" + p_outlook(), "Vooruitblik: wachten op bevestiging."),
+        seen_sentences,
     )
 
     # -------------------------------------------------
-    # 5) RESULT
+    # 5) RESULT (keys bewust stabiel gehouden)
     # -------------------------------------------------
     result = {
         "executive_summary": executive_summary,
@@ -946,23 +1060,25 @@ BELANGRIJK:
         "bot_strategy": bot_strategy,
         "bot_snapshot": bot_snapshot,
         "outlook": outlook,
-
+        # Market snapshot
         "price": market.get("price"),
         "change_24h": market.get("change_24h"),
         "volume": market.get("volume"),
-
+        # Scores
         "macro_score": scores.get("macro_score"),
         "technical_score": scores.get("technical_score"),
         "market_score": scores.get("market_score"),
         "setup_score": scores.get("setup_score"),
-
+        # Highlights
         "market_indicator_highlights": market_ind,
         "macro_indicator_highlights": macro_ind,
         "technical_indicator_highlights": tech_ind,
-
+        # Setup & strategy
         "best_setup": best_setup,
         "top_setups": setup_snapshot.get("top_setups", []),
         "active_strategy": active_strategy,
+        # Extra (handig voor debugging/kwaliteit, breekt niets)
+        "deltas": deltas,
     }
 
     logger.info("✅ Report agent OK, return keys=%s", list(result.keys()))
