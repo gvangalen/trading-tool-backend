@@ -36,11 +36,10 @@ def format_setup_rows(rows, cursor=None):
             "account_type": item.get("account_type"),
             "strategy_type": item.get("strategy_type"),
             "min_investment": item.get("min_investment"),
-            "dynamic_investment": item.get("dynamic_investment"),
-            "tags": item.get("tags"),
+            "tags": item.get("tags") or [],
             "trend": item.get("trend"),
             "score_logic": item.get("score_logic"),
-            "favorite": item.get("favorite"),
+            "favorite": bool(item.get("favorite")),
             "explanation": item.get("explanation"),
             "description": item.get("description"),
             "action": item.get("action"),
@@ -71,6 +70,7 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
         if not data.get(f):
             raise HTTPException(400, f"'{f}' is verplicht")
 
+    # ✅ Validatie score ranges
     for cat in ["macro", "technical", "market"]:
         mn = data.get(f"min_{cat}_score")
         mx = data.get(f"max_{cat}_score")
@@ -81,10 +81,13 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id FROM setups
                 WHERE name=%s AND symbol=%s AND user_id=%s
-            """, (data["name"], data["symbol"], user_id))
+                """,
+                (data["name"], data["symbol"], user_id),
+            )
 
             if cur.fetchone():
                 raise HTTPException(409, "Setup met deze naam bestaat al")
@@ -93,10 +96,11 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",") if t.strip()]
 
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO setups (
                     name, symbol, timeframe, account_type, strategy_type,
-                    min_investment, dynamic_investment, tags, trend,
+                    min_investment, tags, trend,
                     score_logic, favorite, explanation, description, action,
                     category,
                     min_macro_score, max_macro_score,
@@ -104,33 +108,42 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
                     min_market_score, max_market_score,
                     created_at, user_id
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-                        %s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """, (
-                data["name"],
-                data["symbol"],
-                data.get("timeframe"),
-                data.get("account_type"),
-                data.get("strategy_type"),
-                data.get("min_investment"),
-                data.get("dynamic_investment", False),
-                tags,
-                data.get("trend"),
-                data.get("score_logic"),
-                data.get("favorite", False),
-                data.get("explanation"),
-                data.get("description"),
-                data.get("action"),
-                data.get("category"),
-                data.get("min_macro_score"),
-                data.get("max_macro_score"),
-                data.get("min_technical_score"),
-                data.get("max_technical_score"),
-                data.get("min_market_score"),
-                data.get("max_market_score"),
-                datetime.utcnow(),
-                user_id,
-            ))
+                VALUES (
+                    %s,%s,%s,%s,%s,
+                    %s,%s,%s,
+                    %s,%s,%s,%s,%s,
+                    %s,
+                    %s,%s,
+                    %s,%s,
+                    %s,%s,
+                    %s,%s
+                )
+                """,
+                (
+                    data["name"],
+                    data["symbol"],
+                    data.get("timeframe"),
+                    data.get("account_type"),
+                    data.get("strategy_type"),
+                    data.get("min_investment"),
+                    tags,
+                    data.get("trend"),
+                    data.get("score_logic"),
+                    data.get("favorite", False),
+                    data.get("explanation"),
+                    data.get("description"),
+                    data.get("action"),
+                    data.get("category"),
+                    data.get("min_macro_score"),
+                    data.get("max_macro_score"),
+                    data.get("min_technical_score"),
+                    data.get("max_technical_score"),
+                    data.get("min_market_score"),
+                    data.get("max_market_score"),
+                    datetime.utcnow(),
+                    user_id,
+                ),
+            )
 
             conn.commit()
 
@@ -142,12 +155,12 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
 
 
 # ============================================================
-# 🔟 Laatste setup (MOET BOVEN {setup_id})
+# 🔟 Laatste setup
 # ============================================================
 @router.get("/setups/last")
 async def last_setup(
     setup_id: Optional[int] = Query(None),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     conn = get_db_connection()
@@ -155,25 +168,24 @@ async def last_setup(
     try:
         with conn.cursor() as cur:
             if setup_id:
-                cur.execute("""
-                    SELECT * FROM setups
-                    WHERE id=%s AND user_id=%s
-                    LIMIT 1
-                """, (setup_id, user_id))
+                cur.execute(
+                    "SELECT * FROM setups WHERE id=%s AND user_id=%s LIMIT 1",
+                    (setup_id, user_id),
+                )
                 row = cur.fetchone()
                 return {"setup": format_setup_rows([row], cur)[0]} if row else {"setup": None}
 
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT * FROM setups
                 WHERE user_id=%s
                 ORDER BY created_at DESC
                 LIMIT 1
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             row = cur.fetchone()
             return {"setup": format_setup_rows([row], cur)[0]} if row else {"setup": None}
-
-    except Exception:
-        return {"setup": None}
 
     finally:
         conn.close()
@@ -186,7 +198,7 @@ async def last_setup(
 async def get_setups(
     strategy_type: Optional[str] = Query(None),
     exclude_strategy_type: Optional[str] = Query(None),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     conn = get_db_connection()
@@ -223,19 +235,23 @@ async def get_dca_setups(current_user: dict = Depends(get_current_user)):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT * FROM setups
                 WHERE LOWER(strategy_type)='dca'
-                AND user_id=%s
+                  AND user_id=%s
                 ORDER BY created_at DESC
-            """, (user_id,))
+                """,
+                (user_id,),
+            )
             return format_setup_rows(cur.fetchall(), cur)
 
     finally:
         conn.close()
 
+
 # ============================================================
-# 🔟 Daily setup scores (voor SetupMatchCard)
+# 🔟 Daily setup scores
 # ============================================================
 @router.get("/setups/daily-scores")
 async def get_daily_setup_scores(current_user: dict = Depends(get_current_user)):
@@ -261,7 +277,6 @@ async def get_daily_setup_scores(current_user: dict = Depends(get_current_user))
                 """,
                 (user_id,),
             )
-
             rows = cur.fetchall()
 
         return [
@@ -281,35 +296,28 @@ async def get_daily_setup_scores(current_user: dict = Depends(get_current_user))
 
 
 # ============================================================
-# 4️⃣ Setup bijwerken (FIX: min/max validatie)
+# 4️⃣ Setup bijwerken
 # ============================================================
 @router.patch("/setups/{setup_id}")
 async def update_setup(
     setup_id: int,
     request: Request,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
     data = await request.json()
 
-    # -------------------------------
-    # ✅ Validatie min/max scores
-    # -------------------------------
+    # Validatie score ranges
     for cat in ["macro", "technical", "market"]:
         mn = data.get(f"min_{cat}_score")
         mx = data.get(f"max_{cat}_score")
         if mn is not None and mx is not None and int(mn) > int(mx):
-            raise HTTPException(
-                400, f"min_{cat}_score mag niet hoger zijn dan max_{cat}_score"
-            )
+            raise HTTPException(400, f"min_{cat}_score mag niet hoger zijn dan max_{cat}_score")
 
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-            # -------------------------------
-            # 🔐 Ownership check
-            # -------------------------------
             cur.execute(
                 "SELECT id FROM setups WHERE id=%s AND user_id=%s",
                 (setup_id, user_id),
@@ -317,16 +325,10 @@ async def update_setup(
             if not cur.fetchone():
                 raise HTTPException(403, "Geen toegang")
 
-            # -------------------------------
-            # 🏷️ Tags normaliseren
-            # -------------------------------
-            tags = data.get("tags", [])
+            tags = data.get("tags")
             if isinstance(tags, str):
                 tags = [t.strip() for t in tags.split(",") if t.strip()]
 
-            # -------------------------------
-            # 🧠 Dynamische UPDATE (BELANGRIJK)
-            # -------------------------------
             update_fields = []
             values = []
 
@@ -334,38 +336,25 @@ async def update_setup(
                 update_fields.append(f"{field}=%s")
                 values.append(value)
 
-            add("name", data.get("name"))
-            add("symbol", data.get("symbol"))
-            add("timeframe", data.get("timeframe"))
-            add("account_type", data.get("account_type"))
-            add("strategy_type", data.get("strategy_type"))
-            add("min_investment", data.get("min_investment"))
-            add("dynamic_investment", data.get("dynamic_investment"))
-            add("tags", tags)
-            add("trend", data.get("trend"))
-            add("score_logic", data.get("score_logic"))
-            add("favorite", data.get("favorite"))
-            add("description", data.get("description"))
-            add("action", data.get("action"))
-            add("category", data.get("category"))
+            for field in [
+                "name", "symbol", "timeframe", "account_type", "strategy_type",
+                "min_investment", "trend", "score_logic",
+                "favorite", "description", "action", "category",
+                "min_macro_score", "max_macro_score",
+                "min_technical_score", "max_technical_score",
+                "min_market_score", "max_market_score",
+            ]:
+                if field in data:
+                    add(field, data.get(field))
 
-            add("min_macro_score", data.get("min_macro_score"))
-            add("max_macro_score", data.get("max_macro_score"))
-            add("min_technical_score", data.get("min_technical_score"))
-            add("max_technical_score", data.get("max_technical_score"))
-            add("min_market_score", data.get("min_market_score"))
-            add("max_market_score", data.get("max_market_score"))
+            if tags is not None:
+                add("tags", tags)
+
+            if "explanation" in data:
+                add("explanation", data.get("explanation"))
 
             add("last_validated", datetime.utcnow())
 
-            # 🚨 CRUCIAAL:
-            # explanation ALLEEN aanpassen als frontend hem expliciet stuurt
-            if "explanation" in data:
-                add("explanation", data["explanation"])
-
-            # -------------------------------
-            # 🧱 SQL uitvoeren
-            # -------------------------------
             query = f"""
                 UPDATE setups SET
                     {", ".join(update_fields)}
@@ -374,7 +363,6 @@ async def update_setup(
 
             values.extend([setup_id, user_id])
             cur.execute(query, tuple(values))
-
             conn.commit()
 
         mark_step_completed(conn, user_id, "setup")
@@ -438,21 +426,15 @@ async def check_name(name: str, current_user: dict = Depends(get_current_user)):
 # 7️⃣ AI explanation
 # ============================================================
 @router.post("/setups/explanation/{setup_id}")
-async def ai_explanation(
-    setup_id: int,
-    current_user: dict = Depends(get_current_user)
-):
+async def ai_explanation(setup_id: int, current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     conn = get_db_connection()
 
     try:
-        # 1️⃣ AI tekst genereren
         explanation = generate_setup_explanation(setup_id, user_id)
-
         if not explanation:
             raise HTTPException(500, "AI uitleg kon niet worden gegenereerd")
 
-        # 2️⃣ OPSLAAN IN DB  ✅ DIT ONTBRAK
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -463,19 +445,11 @@ async def ai_explanation(
                 """,
                 (explanation, setup_id, user_id),
             )
-
             if cur.rowcount == 0:
                 raise HTTPException(404, "Setup niet gevonden")
 
         conn.commit()
-
-        # 3️⃣ Teruggeven aan frontend
         return {"explanation": explanation}
-
-    except Exception:
-        conn.rollback()
-        logger.exception("❌ AI setup explanation failed")
-        raise
 
     finally:
         conn.close()
@@ -491,12 +465,15 @@ async def get_top_setups(limit: int = 3, current_user: dict = Depends(get_curren
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT * FROM setups
                 WHERE user_id=%s
                 ORDER BY created_at DESC
                 LIMIT %s
-            """, (user_id, limit))
+                """,
+                (user_id, limit),
+            )
             return format_setup_rows(cur.fetchall(), cur)
 
     finally:
@@ -536,7 +513,8 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT
                     ds.setup_id,
                     ds.score,
@@ -547,7 +525,6 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
                     s.trend,
                     s.strategy_type,
                     s.min_investment,
-                    s.dynamic_investment,
                     s.tags,
                     s.favorite,
                     s.action,
@@ -558,8 +535,9 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
                   AND ds.user_id = %s
                   AND ds.is_best = TRUE
                 LIMIT 1
-            """, (user_id,))
-
+                """,
+                (user_id,),
+            )
             row = cur.fetchone()
 
         if not row:
@@ -567,7 +545,7 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
 
         (
             setup_id, score, ai_exp, name, symbol, timeframe,
-            trend, strategy_type, min_inv, dyn_inv,
+            trend, strategy_type, min_inv,
             tags, favorite, action, setup_exp
         ) = row
 
@@ -582,7 +560,6 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
                 "trend": trend,
                 "strategy_type": strategy_type,
                 "min_investment": min_inv,
-                "dynamic_investment": dyn_inv,
                 "tags": tags,
                 "favorite": favorite,
                 "action": action,
@@ -592,4 +569,3 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
 
     finally:
         conn.close()
-
