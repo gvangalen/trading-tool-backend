@@ -28,13 +28,17 @@ def format_strategy_row(row: dict):
         "setup_id": row.get("setup_id"),
         "strategy_type": row.get("strategy_type"),
 
-        # Core
+        # Execution (NIEUW 2.0)
+        "execution_mode": row.get("execution_mode"),
+        "base_amount": row.get("base_amount"),
+        "frequency": row.get("frequency"),
+        "decision_curve": row.get("decision_curve"),
+
+        # Core (uit data)
         "symbol": data.get("symbol"),
         "timeframe": data.get("timeframe"),
-        "amount": data.get("amount"),
-        "frequency": data.get("frequency"),
 
-        # Trading velden
+        # Trading levels
         "entry": row.get("entry") or data.get("entry"),
         "target": row.get("target") or data.get("target"),
         "stop_loss": row.get("stop_loss") or data.get("stop_loss"),
@@ -57,10 +61,13 @@ def format_strategy_row(row: dict):
 
 
 # ==========================================================
-# 1. CREATE STRATEGY
+# 1️⃣ CREATE STRATEGY
 # ==========================================================
 @router.post("/strategies")
-async def save_strategy(request: Request, current_user: dict = Depends(get_current_user)):
+async def save_strategy(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     user_id = current_user["id"]
     data = await request.json()
 
@@ -68,31 +75,30 @@ async def save_strategy(request: Request, current_user: dict = Depends(get_curre
     if strategy_type not in ["manual", "trading", "dca"]:
         raise HTTPException(400, "Ongeldig strategy_type")
 
-    required = ["setup_id"]
-    if strategy_type == "dca":
-        required += ["amount", "frequency"]
-    else:
-        required += ["entry", "stop_loss"]
+    execution_mode = data.get("execution_mode", "none")
+    if execution_mode not in ["none", "fixed", "custom"]:
+        raise HTTPException(400, "Ongeldige execution_mode")
 
-    for field in required:
-        if data.get(field) in (None, "", []):
-            raise HTTPException(400, f"Veld '{field}' is verplicht")
+    # ----------------------------
+    # Validaties
+    # ----------------------------
+    if not data.get("setup_id"):
+        raise HTTPException(400, "setup_id is verplicht")
 
-    def safe_str(v):
-        return str(v) if v not in (None, "") else None
+    if execution_mode in ["fixed", "custom"] and not data.get("base_amount"):
+        raise HTTPException(400, "base_amount is verplicht bij execution")
 
-    def safe_first(lst):
-        if isinstance(lst, list) and lst:
-            return str(lst[0])
-        return None
+    if execution_mode == "custom" and not data.get("decision_curve"):
+        raise HTTPException(400, "decision_curve is verplicht bij custom execution")
 
-    entry = safe_str(data.get("entry"))
-    stop_loss = safe_str(data.get("stop_loss"))
-    target = safe_first(data.get("targets"))
+    if strategy_type != "dca":
+        if not data.get("entry") or not data.get("stop_loss"):
+            raise HTTPException(400, "entry en stop_loss zijn verplicht")
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+            # Ownership setup check
             cur.execute(
                 "SELECT id FROM setups WHERE id=%s AND user_id=%s",
                 (data["setup_id"], user_id)
@@ -100,6 +106,7 @@ async def save_strategy(request: Request, current_user: dict = Depends(get_curre
             if not cur.fetchone():
                 raise HTTPException(403, "Setup niet van gebruiker")
 
+            # Uniek per setup + type
             cur.execute("""
                 SELECT id FROM strategies
                 WHERE setup_id=%s AND strategy_type=%s AND user_id=%s
@@ -109,20 +116,41 @@ async def save_strategy(request: Request, current_user: dict = Depends(get_curre
 
             cur.execute("""
                 INSERT INTO strategies (
-                    setup_id, entry, target, stop_loss,
-                    explanation, risk_profile,
-                    strategy_type, data, created_at, user_id
+                    setup_id,
+                    strategy_type,
+                    execution_mode,
+                    base_amount,
+                    decision_curve,
+                    frequency,
+                    entry,
+                    target,
+                    stop_loss,
+                    explanation,
+                    risk_profile,
+                    data,
+                    created_at,
+                    user_id
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,NOW(),%s)
+                VALUES (
+                    %s,%s,%s,%s,%s,%s,
+                    %s,%s,%s,
+                    %s,%s,
+                    %s::jsonb,
+                    NOW(),%s
+                )
                 RETURNING id
             """, (
                 data["setup_id"],
-                entry,
-                target,
-                stop_loss,
-                safe_str(data.get("explanation")),
-                safe_str(data.get("risk_profile")),
                 strategy_type,
+                execution_mode,
+                data.get("base_amount"),
+                json.dumps(data.get("decision_curve")) if data.get("decision_curve") else None,
+                data.get("frequency"),
+                str(data.get("entry")) if data.get("entry") else None,
+                data.get("target"),
+                str(data.get("stop_loss")) if data.get("stop_loss") else None,
+                data.get("explanation"),
+                data.get("risk_profile"),
                 json.dumps(data),
                 user_id
             ))
@@ -131,17 +159,20 @@ async def save_strategy(request: Request, current_user: dict = Depends(get_curre
             conn.commit()
 
         mark_step_completed(conn, user_id, "strategy")
-        return {"id": strategy_id, "message": "✅ Strategie succesvol opgeslagen"}
+        return {"id": strategy_id, "message": "✅ Strategie opgeslagen"}
 
     finally:
         conn.close()
 
 
 # ==========================================================
-# 2. QUERY STRATEGIES (🔥 FIX VOOR CARDS)
+# 2️⃣ QUERY STRATEGIES (cards)
 # ==========================================================
 @router.post("/strategies/query")
-async def query_strategies(request: Request, current_user: dict = Depends(get_current_user)):
+async def query_strategies(
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     filters = await request.json()
     user_id = current_user["id"]
 
@@ -149,11 +180,7 @@ async def query_strategies(request: Request, current_user: dict = Depends(get_cu
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             q = """
-                SELECT
-                    id, setup_id, strategy_type,
-                    entry, target, stop_loss,
-                    explanation, risk_profile,
-                    data, created_at
+                SELECT *
                 FROM strategies
                 WHERE user_id=%s
             """
@@ -168,7 +195,6 @@ async def query_strategies(request: Request, current_user: dict = Depends(get_cu
                 p.append(filters["timeframe"])
 
             q += " ORDER BY created_at DESC"
-
             cur.execute(q, tuple(p))
             rows = cur.fetchall()
 
@@ -179,20 +205,30 @@ async def query_strategies(request: Request, current_user: dict = Depends(get_cu
 
 
 # ==========================================================
-# 3. GENERATE STRATEGY
+# 3️⃣ GENERATE STRATEGY (AI)
 # ==========================================================
 @router.post("/strategies/generate/{setup_id}")
-async def generate_strategy_for_setup(setup_id: int, current_user: dict = Depends(get_current_user)):
+async def generate_strategy_for_setup(
+    setup_id: int,
+    current_user: dict = Depends(get_current_user)
+):
     from backend.celery_task.strategy_task import generate_for_setup
-    task = generate_for_setup.delay(user_id=current_user["id"], setup_id=setup_id)
+    task = generate_for_setup.delay(
+        user_id=current_user["id"],
+        setup_id=setup_id
+    )
     return {"task_id": task.id}
 
 
 # ==========================================================
-# 4. UPDATE STRATEGY
+# 4️⃣ UPDATE STRATEGY (incl curve editor)
 # ==========================================================
 @router.put("/strategies/{strategy_id}")
-async def update_strategy(strategy_id: int, request: Request, current_user: dict = Depends(get_current_user)):
+async def update_strategy(
+    strategy_id: int,
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
     data = await request.json()
 
     conn = get_db_connection()
@@ -200,19 +236,29 @@ async def update_strategy(strategy_id: int, request: Request, current_user: dict
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE strategies SET
+                    execution_mode=%s,
+                    base_amount=%s,
+                    decision_curve=%s,
+                    frequency=%s,
                     data=%s,
                     explanation=%s,
                     risk_profile=%s
                 WHERE id=%s AND user_id=%s
             """, (
+                data.get("execution_mode"),
+                data.get("base_amount"),
+                json.dumps(data.get("decision_curve")) if data.get("decision_curve") else None,
+                data.get("frequency"),
                 json.dumps(data),
                 data.get("explanation"),
                 data.get("risk_profile"),
                 strategy_id,
                 current_user["id"]
             ))
+
             if cur.rowcount == 0:
                 raise HTTPException(404, "Strategie niet gevonden")
+
             conn.commit()
 
         return {"message": "✅ Strategie bijgewerkt"}
@@ -222,10 +268,13 @@ async def update_strategy(strategy_id: int, request: Request, current_user: dict
 
 
 # ==========================================================
-# 5. DELETE STRATEGY
+# 5️⃣ DELETE STRATEGY
 # ==========================================================
 @router.delete("/strategies/{strategy_id}")
-async def delete_strategy(strategy_id: int, current_user: dict = Depends(get_current_user)):
+async def delete_strategy(
+    strategy_id: int,
+    current_user: dict = Depends(get_current_user)
+):
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -243,23 +292,20 @@ async def delete_strategy(strategy_id: int, current_user: dict = Depends(get_cur
 
 
 # ==========================================================
-# 6. AI STRATEGY ANALYSE
+# 6️⃣ AI STRATEGY ANALYSE
 # ==========================================================
 @router.post("/strategies/analyze/{strategy_id}")
 async def analyze_strategy(
     strategy_id: int,
     current_user: dict = Depends(get_current_user)
 ):
-    user_id = current_user["id"]
-
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT data
-                FROM strategies
-                WHERE id = %s AND user_id = %s
-            """, (strategy_id, user_id))
+            cur.execute(
+                "SELECT data FROM strategies WHERE id=%s AND user_id=%s",
+                (strategy_id, current_user["id"])
+            )
             row = cur.fetchone()
 
         if not row:
@@ -271,34 +317,31 @@ async def analyze_strategy(
         conn.close()
 
     from backend.ai_agents.strategy_ai_agent import analyze_and_store_strategy
-
-    # 🔑 ORCHESTRATOR AANROEP
     analyze_and_store_strategy(
         strategy_id=strategy_id,
-        strategies=[strategy_data],  # verwacht LIST
+        strategies=[strategy_data]
     )
 
-    return {
-        "message": "🧠 Strategy AI analyse uitgevoerd en opgeslagen"
-    }
+    return {"message": "🧠 Strategy AI analyse uitgevoerd"}
+
 
 # ==========================================================
-# 7. GET STRATEGY BY SETUP
+# 7️⃣ GET STRATEGY BY SETUP
 # ==========================================================
 @router.get("/strategies/by_setup/{setup_id}")
-async def get_strategy_by_setup(setup_id: int, current_user: dict = Depends(get_current_user)):
+async def get_strategy_by_setup(
+    setup_id: int,
+    current_user: dict = Depends(get_current_user)
+):
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT
-                    id, setup_id, strategy_type,
-                    entry, target, stop_loss,
-                    explanation, risk_profile,
-                    data, created_at
+                SELECT *
                 FROM strategies
                 WHERE setup_id=%s AND user_id=%s
-                ORDER BY created_at DESC LIMIT 1
+                ORDER BY created_at DESC
+                LIMIT 1
             """, (setup_id, current_user["id"]))
             row = cur.fetchone()
 
@@ -312,7 +355,7 @@ async def get_strategy_by_setup(setup_id: int, current_user: dict = Depends(get_
 
 
 # ==========================================================
-# 8. LAST STRATEGY
+# 8️⃣ LAST STRATEGY
 # ==========================================================
 @router.get("/strategies/last")
 async def get_last_strategy(current_user: dict = Depends(get_current_user)):
@@ -320,14 +363,11 @@ async def get_last_strategy(current_user: dict = Depends(get_current_user)):
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT
-                    id, setup_id, strategy_type,
-                    entry, target, stop_loss,
-                    explanation, risk_profile,
-                    data, created_at
+                SELECT *
                 FROM strategies
                 WHERE user_id=%s
-                ORDER BY created_at DESC LIMIT 1
+                ORDER BY created_at DESC
+                LIMIT 1
             """, (current_user["id"],))
             row = cur.fetchone()
 
@@ -338,26 +378,31 @@ async def get_last_strategy(current_user: dict = Depends(get_current_user)):
 
 
 # ==========================================================
-# 9. FAVORITE TOGGLE
+# 9️⃣ FAVORITE TOGGLE
 # ==========================================================
 @router.patch("/strategies/{strategy_id}/favorite")
-async def toggle_favorite(strategy_id: int, current_user: dict = Depends(get_current_user)):
+async def toggle_favorite(
+    strategy_id: int,
+    current_user: dict = Depends(get_current_user)
+):
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT data FROM strategies WHERE id=%s AND user_id=%s
-            """, (strategy_id, current_user["id"]))
+            cur.execute(
+                "SELECT data FROM strategies WHERE id=%s AND user_id=%s",
+                (strategy_id, current_user["id"])
+            )
             row = cur.fetchone()
             if not row:
                 raise HTTPException(404, "Niet gevonden")
 
-            data = row[0]
+            data = row[0] or {}
             data["favorite"] = not data.get("favorite", False)
 
-            cur.execute("""
-                UPDATE strategies SET data=%s WHERE id=%s
-            """, (json.dumps(data), strategy_id))
+            cur.execute(
+                "UPDATE strategies SET data=%s WHERE id=%s",
+                (json.dumps(data), strategy_id)
+            )
             conn.commit()
 
         return {"favorite": data["favorite"]}
@@ -367,7 +412,7 @@ async def toggle_favorite(strategy_id: int, current_user: dict = Depends(get_cur
 
 
 # ==========================================================
-# 10. EXPORT CSV
+# 🔟 EXPORT CSV
 # ==========================================================
 @router.get("/strategies/export")
 async def export_strategies(current_user: dict = Depends(get_current_user)):
@@ -375,20 +420,21 @@ async def export_strategies(current_user: dict = Depends(get_current_user)):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, data, created_at FROM strategies
-                WHERE user_id=%s ORDER BY created_at DESC
+                SELECT id, data, created_at
+                FROM strategies
+                WHERE user_id=%s
+                ORDER BY created_at DESC
             """, (current_user["id"],))
             rows = cur.fetchall()
 
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["ID", "Symbol", "Setup", "Entry", "SL", "Created"])
+        writer.writerow(["ID", "Symbol", "Entry", "Stop Loss", "Created"])
 
         for id_, s, created in rows:
             writer.writerow([
                 id_,
                 s.get("symbol"),
-                s.get("setup_name"),
                 s.get("entry"),
                 s.get("stop_loss"),
                 created.strftime("%Y-%m-%d %H:%M")
@@ -400,46 +446,6 @@ async def export_strategies(current_user: dict = Depends(get_current_user)):
             media_type="text/csv",
             headers={"Content-Disposition": "attachment; filename=strategies.csv"}
         )
-
-    finally:
-        conn.close()
-
-
-# ==========================================================
-# 11. ACTIEVE STRATEGIE VANDAAG
-# ==========================================================
-@router.get("/strategy/active-today")
-async def get_active_strategy_today(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
-    conn = get_db_connection()
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    s.name, s.symbol, s.timeframe,
-                    a.entry, a.targets, a.stop_loss,
-                    a.adjustment_reason, a.confidence_score
-                FROM active_strategy_snapshot a
-                JOIN setups s ON s.id = a.setup_id
-                WHERE a.user_id=%s AND a.snapshot_date=CURRENT_DATE
-                LIMIT 1
-            """, (user_id,))
-            row = cur.fetchone()
-
-        if not row:
-            return None
-
-        return {
-            "setup_name": row[0],
-            "symbol": row[1],
-            "timeframe": row[2],
-            "entry": row[3],
-            "targets": row[4],
-            "stop_loss": row[5],
-            "adjustment_reason": row[6],
-            "confidence_score": row[7],
-        }
 
     finally:
         conn.close()
