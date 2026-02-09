@@ -1,5 +1,3 @@
-# backend/engine/decision_validator.py
-
 from typing import Dict, List
 
 
@@ -7,19 +5,18 @@ class DecisionCurveError(Exception):
     pass
 
 
+MIN_MULTIPLIER = 0.05
+MAX_MULTIPLIER = 3.0
+
+
 def validate_decision_curve(curve: Dict) -> None:
     """
     Valideert decision_curve JSON.
 
-    Vereist formaat:
-    {
-        "input": "market_score",
-        "points": [
-            {"x": 0, "y": 1.5},
-            {"x": 50, "y": 1.0},
-            {"x": 100, "y": 0.0}
-        ]
-    }
+    Institutionele safeguards:
+    - score coverage (0–100)
+    - multiplier caps
+    - oplopende x
     """
 
     if not isinstance(curve, dict):
@@ -31,9 +28,11 @@ def validate_decision_curve(curve: Dict) -> None:
     if len(curve["points"]) < 2:
         raise DecisionCurveError("Decision curve vereist minimaal 2 punten")
 
+    points: List[Dict] = curve["points"]
+
     prev_x = None
 
-    for p in curve["points"]:
+    for p in points:
         if not isinstance(p, dict):
             raise DecisionCurveError("Curve point moet object zijn")
 
@@ -49,13 +48,22 @@ def validate_decision_curve(curve: Dict) -> None:
         if not isinstance(y, (int, float)):
             raise DecisionCurveError("y moet numeriek zijn")
 
-        if x < 0 or x > 100:
+        if not 0 <= x <= 100:
             raise DecisionCurveError("x moet tussen 0 en 100 liggen")
 
-        if y < 0:
-            raise DecisionCurveError("y mag niet negatief zijn")
+        if not MIN_MULTIPLIER <= y <= MAX_MULTIPLIER:
+            raise DecisionCurveError(
+                f"Multiplier moet tussen {MIN_MULTIPLIER} en {MAX_MULTIPLIER} liggen"
+            )
 
         if prev_x is not None and x <= prev_x:
-            raise DecisionCurveError("x-waarden moeten oplopend zijn")
+            raise DecisionCurveError("x-waarden moeten strikt oplopend zijn")
 
         prev_x = x
+
+    # 🔥 Coverage checks
+    if points[0]["x"] != 0:
+        raise DecisionCurveError("Curve moet beginnen bij x=0")
+
+    if points[-1]["x"] != 100:
+        raise DecisionCurveError("Curve moet eindigen bij x=100")
