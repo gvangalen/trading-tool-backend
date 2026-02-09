@@ -109,22 +109,29 @@ def _normalize_confidence(v: str) -> str:
     v = (v or "").lower().strip()
     return v if v in CONFIDENCE_LEVELS else "low"
 
+
+# =====================================================
+# 🔧 Strategy trade amount
+# =====================================================
 def _get_strategy_trade_amount_eur(
     conn,
     *,
     user_id: int,
     strategy_id: int,
+    confidence_score: Optional[float] = None,
 ) -> float:
     """
     Single source of truth voor trade sizing.
 
-    Leest UITSLUITEND uit:
-      - strategies.trade_amount
-      - strategies.trade_amount_unit
+    Nieuwe architectuur:
+    - base_amount = fundamentele sizing
+    - execution_mode:
+        fixed   -> altijd base_amount
+        custom  -> decision_curve gebruiken
+        none    -> geen trade
 
-    v1:
-      - alleen 'eur' toegestaan
-      - andere units -> 0 (geen trade)
+    FAIL-SAFE:
+    Bot mag NOOIT crashen.
     """
 
     if not _table_exists(conn, "strategies"):
@@ -133,7 +140,10 @@ def _get_strategy_trade_amount_eur(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT trade_amount, trade_amount_unit
+            SELECT
+                base_amount,
+                execution_mode,
+                decision_curve
             FROM strategies
             WHERE id = %s
               AND user_id = %s
@@ -146,29 +156,82 @@ def _get_strategy_trade_amount_eur(
     if not row:
         return 0.0
 
-    trade_amount, unit = row
+    base_amount, execution_mode, decision_curve = row
 
-    if trade_amount is None:
-        return 0.0
-
-    unit = (unit or "").lower().strip()
-
-    # -------------------------------------------------
-    # v1: alleen EUR toegestaan
-    # -------------------------------------------------
-    if unit != "eur":
-        logger.warning(
-            "Strategy %s heeft unsupported trade_amount_unit=%s (v1 alleen eur)",
-            strategy_id,
-            unit,
-        )
+    if base_amount is None:
         return 0.0
 
     try:
-        amount = float(trade_amount)
-        return amount if amount > 0 else 0.0
+        base_amount = float(base_amount)
     except Exception:
+        logger.warning("Invalid base_amount for strategy %s", strategy_id)
         return 0.0
+
+    execution_mode = (execution_mode or "fixed").lower().strip()
+
+    # =====================================================
+    # FIXED MODE
+    # =====================================================
+    if execution_mode == "fixed":
+        return base_amount if base_amount > 0 else 0.0
+
+    # =====================================================
+    # NONE → nooit traden
+    # =====================================================
+    if execution_mode == "none":
+        return 0.0
+
+    # =====================================================
+    # CUSTOM CURVE
+    # =====================================================
+    if execution_mode == "custom":
+
+        curve = _safe_json(decision_curve, {})
+
+        if not curve:
+            return base_amount
+
+        if confidence_score is None:
+            return base_amount
+
+        try:
+            confidence_score = float(confidence_score)
+        except Exception:
+            return base_amount
+
+        # voorbeeld curve:
+        # {
+        #   "low": 0.5,
+        #   "medium": 1.0,
+        #   "high": 1.5
+        # }
+
+        if confidence_score >= 75:
+            multiplier = curve.get("high", 1.0)
+        elif confidence_score >= 50:
+            multiplier = curve.get("medium", 1.0)
+        else:
+            multiplier = curve.get("low", 1.0)
+
+        try:
+            multiplier = float(multiplier)
+        except Exception:
+            multiplier = 1.0
+
+        amount = base_amount * multiplier
+
+        return round(amount, 2) if amount > 0 else 0.0
+
+    # =====================================================
+    # UNKNOWN MODE → FAIL SAFE
+    # =====================================================
+    logger.warning(
+        "Unknown execution_mode '%s' for strategy %s",
+        execution_mode,
+        strategy_id,
+    )
+
+    return base_amount if base_amount > 0 else 0.0
 
 def _persist_bot_order(
     *,
@@ -1009,24 +1072,36 @@ def run_trading_bot_agent(
                 conn, user_id, bot["strategy_id"], report_date
             )
 
-            # 1️⃣ Setup match (altijd)
+            # -------------------------------------------------
+            # 1️⃣ Setup match (ALTIJD)
+            # -------------------------------------------------
             setup_match = _build_setup_match(
                 bot=bot,
                 scores=scores,
                 snapshot=snapshot,
             )
 
+            # -------------------------------------------------
             # 2️⃣ Decision
+            # -------------------------------------------------
             decision = _decide(bot, snapshot, scores)
 
-            # 3️⃣ Trade sizing
-            strategy_amount = _get_strategy_trade_amount_eur(
-                conn,
-                user_id=user_id,
-                strategy_id=bot["strategy_id"],
-            )
+            # -------------------------------------------------
+            # 3️⃣ Trade sizing (🔥 UPDATED)
+            # -------------------------------------------------
+            try:
+                strategy_amount = _get_strategy_trade_amount_eur(
+                    conn,
+                    user_id=user_id,
+                    strategy_id=bot["strategy_id"],
+                    confidence_score=decision.get("score"),  # 🔥 KEY UPDATE
+                )
+            except Exception:
+                logger.exception("Sizing failure for strategy %s", bot["strategy_id"])
+                strategy_amount = 0.0
 
             amount = 0.0
+
             if decision["action"] == "buy":
                 amount = float(strategy_amount or 0.0)
 
@@ -1035,19 +1110,24 @@ def run_trading_bot_agent(
 
                 if min_eur > 0:
                     amount = max(amount, min_eur)
+
                 if max_eur > 0:
                     amount = min(amount, max_eur)
 
             decision["amount_eur"] = round(amount, 2)
             decision["setup_match"] = setup_match
 
+            # -------------------------------------------------
             # ❌ NO BUY WITH €0
+            # -------------------------------------------------
             if decision["action"] == "buy" and decision["amount_eur"] <= 0:
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
 
-            # 4️⃣ Budget check (EXECUTE ONLY)
+            # -------------------------------------------------
+            # 4️⃣ Budget check
+            # -------------------------------------------------
             today_spent = get_today_spent_eur(
                 conn, user_id, bot["bot_id"], report_date
             )
@@ -1059,11 +1139,18 @@ def run_trading_bot_agent(
             )
 
             if not ok:
+                logger.info(
+                    "Bot %s blocked by budget rule: %s",
+                    bot["bot_id"],
+                    reason,
+                )
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
 
+            # -------------------------------------------------
             # 5️⃣ Order proposal
+            # -------------------------------------------------
             order_proposal = build_order_proposal(
                 conn=conn,
                 bot=bot,
@@ -1073,11 +1160,14 @@ def run_trading_bot_agent(
             )
 
             if decision["action"] == "buy" and not order_proposal:
+                logger.warning("Order proposal failed → switching to observe")
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
 
+            # -------------------------------------------------
             # 6️⃣ Persist decision
+            # -------------------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -1093,7 +1183,9 @@ def run_trading_bot_agent(
             executed = False
 
             if order_proposal:
+                # -------------------------------------------------
                 # 7️⃣ Persist order
+                # -------------------------------------------------
                 order_id = _persist_bot_order(
                     conn=conn,
                     user_id=user_id,
@@ -1102,7 +1194,7 @@ def run_trading_bot_agent(
                     order=order_proposal,
                 )
 
-                # 🔥 AUTO MODE = DIRECT EXECUTE
+                # 🔥 AUTO MODE
                 if bot["mode"] == "auto":
                     _auto_execute_decision(
                         conn=conn,
@@ -1126,6 +1218,7 @@ def run_trading_bot_agent(
             )
 
         conn.commit()
+
         return {
             "ok": True,
             "date": str(report_date),
