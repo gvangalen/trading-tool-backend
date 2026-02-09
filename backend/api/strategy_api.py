@@ -449,3 +449,58 @@ async def export_strategies(current_user: dict = Depends(get_current_user)):
 
     finally:
         conn.close()
+
+
+# ==========================================================
+# 1️⃣1️⃣ ACTIVE STRATEGY FOR TODAY
+# ==========================================================
+@router.get("/strategies/active-today")
+async def get_active_strategy_today(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Geeft exact 1 strategie terug die vandaag uitgevoerd moet worden.
+    Deterministisch — geen AI — pure execution logica.
+    """
+    user_id = current_user["id"]
+    today = datetime.utcnow().date()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT *
+                FROM strategies
+                WHERE user_id = %s
+                  AND execution_mode IN ('fixed', 'custom')
+                ORDER BY created_at DESC
+            """, (user_id,))
+            rows = cur.fetchall()
+
+        if not rows:
+            return {"active": False}
+
+        # ----------------------------
+        # Execution filter (simpel & robuust)
+        # ----------------------------
+        for row in rows:
+            frequency = row.get("frequency")
+
+            if frequency == "daily":
+                return {
+                    "active": True,
+                    "strategy": format_strategy_row(row)
+                }
+
+            if frequency == "weekly":
+                created = row.get("created_at")
+                if created and created.date().weekday() == today.weekday():
+                    return {
+                        "active": True,
+                        "strategy": format_strategy_row(row)
+                    }
+
+        return {"active": False}
+
+    finally:
+        conn.close()
