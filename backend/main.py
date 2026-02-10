@@ -110,6 +110,8 @@ safe_include("backend.api.agents_api", "agents_api")
 safe_include("backend.api.bot_api", "bot_api")
 safe_include("backend.api.report_api", "report_api")
 
+safe_include("backend.api.report_public_api", "report_public_api")
+
 # ==================================================================
 # 🗂 Legacy routes
 # ==================================================================
