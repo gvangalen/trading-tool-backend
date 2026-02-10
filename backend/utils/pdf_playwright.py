@@ -7,19 +7,31 @@ import hashlib
 import logging
 from typing import Optional
 
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 logger = logging.getLogger(__name__)
 
-# URL van je frontend (Next.js)
-FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://143.47.186.148:3000")
+# =========================================================
+# CONFIG
+# =========================================================
 
-# Secret voor signed tokens
-PDF_TOKEN_SECRET = os.getenv("PDF_TOKEN_SECRET", "CHANGE_ME_PLEASE")
+FRONTEND_BASE_URL = os.getenv(
+    "FRONTEND_BASE_URL",
+    "http://143.47.186.148:3000"
+)
 
-# timeout/waits
-DEFAULT_TIMEOUT_MS = int(os.getenv("PDF_RENDER_TIMEOUT_MS", "45000"))
+PDF_TOKEN_SECRET = os.getenv(
+    "PDF_TOKEN_SECRET",
+    "CHANGE_ME_PLEASE"
+)
 
+DEFAULT_TIMEOUT_MS = int(
+    os.getenv("PDF_RENDER_TIMEOUT_MS", "60000")  # iets ruimer
+)
+
+# =========================================================
+# BASE64 HELPERS
+# =========================================================
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
@@ -29,84 +41,162 @@ def _b64url_decode(s: str) -> bytes:
     pad = "=" * (-len(s) % 4)
     return base64.urlsafe_b64decode((s + pad).encode("utf-8"))
 
+# =========================================================
+# TOKEN
+# =========================================================
 
-def make_print_token(user_id: int, report_type: str, date_str: str, ttl_seconds: int = 120) -> str:
+def make_print_token(
+    user_id: int,
+    report_type: str,
+    date_str: str,
+    ttl_seconds: int = 180,
+) -> str:
     """
-    Eenvoudige HMAC-signed token:
-    payload = {"uid":..,"t":..,"d":..,"exp":..}
-    token = base64(payload) + "." + base64(sig)
+    Signed token zonder JWT overhead.
+    Sneller + minder deps.
     """
+
     payload = {
         "uid": int(user_id),
         "t": str(report_type),
         "d": str(date_str),
-        "exp": int(time.time()) + int(ttl_seconds),
+        "exp": int(time.time()) + ttl_seconds,
     }
-    payload_bytes = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+    payload_bytes = json.dumps(
+        payload,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+
     payload_b64 = _b64url(payload_bytes)
 
-    sig = hmac.new(PDF_TOKEN_SECRET.encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+    sig = hmac.new(
+        PDF_TOKEN_SECRET.encode("utf-8"),
+        payload_b64.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+
     sig_b64 = _b64url(sig)
 
     return f"{payload_b64}.{sig_b64}"
 
 
 def verify_print_token(token: str) -> Optional[dict]:
+    """
+    Gebruik deze in je PUBLIC endpoint.
+    """
+
     try:
         payload_b64, sig_b64 = token.split(".", 1)
-        expected = hmac.new(PDF_TOKEN_SECRET.encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+
+        expected = hmac.new(
+            PDF_TOKEN_SECRET.encode("utf-8"),
+            payload_b64.encode("utf-8"),
+            hashlib.sha256,
+        ).digest()
+
         if not hmac.compare_digest(_b64url(expected), sig_b64):
             return None
 
-        payload = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
+        payload = json.loads(
+            _b64url_decode(payload_b64).decode("utf-8")
+        )
+
         if int(payload.get("exp", 0)) < int(time.time()):
             return None
+
         return payload
+
     except Exception:
         return None
 
 
-async def render_report_pdf_via_playwright(report_type: str, date_str: str, user_id: int) -> bytes:
-    """
-    Render de Next.js print pagina en maak PDF bytes.
-    """
-    token = make_print_token(user_id=user_id, report_type=report_type, date_str=date_str)
-    url = f"{FRONTEND_BASE_URL}/print/{report_type}?date={date_str}&token={token}"
+# =========================================================
+# 🔥 MAIN RENDERER (PRO)
+# =========================================================
+
+async def render_report_pdf_via_playwright(
+    report_type: str,
+    date_str: str,
+    user_id: int,
+) -> bytes:
+
+    token = make_print_token(
+        user_id=user_id,
+        report_type=report_type,
+        date_str=date_str,
+    )
+
+    # 🔥 LET OP — GEEN date param meer nodig
+    url = f"{FRONTEND_BASE_URL}/print/{report_type}?token={token}"
 
     logger.info("🧾 Playwright PDF render: %s", url)
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-            ],
-        )
+    try:
 
-        context = await browser.new_context(
-            viewport={"width": 1440, "height": 900},
-            device_scale_factor=1,
-        )
+        async with async_playwright() as p:
 
-        page = await context.new_page()
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                ],
+            )
 
-        # ga naar pagina
-        await page.goto(url, wait_until="networkidle", timeout=DEFAULT_TIMEOUT_MS)
+            context = await browser.new_context(
+                viewport={"width": 1280, "height": 900},
+                device_scale_factor=2,  # 🔥 retina -> super sharp charts
+            )
 
-        # wacht expliciet op "print-ready" marker
-        await page.wait_for_selector('[data-print-ready="true"]', timeout=DEFAULT_TIMEOUT_MS)
+            page = await context.new_page()
 
-        # PDF
-        pdf_bytes = await page.pdf(
-            format="A4",
-            print_background=True,  # belangrijk: cards/kleuren
-            margin={"top": "14mm", "right": "14mm", "bottom": "14mm", "left": "14mm"},
-            prefer_css_page_size=True,
-        )
+            # sneller dan networkidle vaak
+            await page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=DEFAULT_TIMEOUT_MS,
+            )
 
-        await context.close()
-        await browser.close()
+            # 🔥 wacht op print-ready marker
+            await page.wait_for_selector(
+                '[data-print-ready="true"]',
+                timeout=DEFAULT_TIMEOUT_MS,
+            )
 
-        logger.info("✅ Playwright PDF bytes klaar (%d bytes)", len(pdf_bytes))
-        return pdf_bytes
+            # kleine stabilisatie
+            await page.wait_for_timeout(400)
+
+            pdf_bytes = await page.pdf(
+                format="A4",
+                print_background=True,
+                prefer_css_page_size=True,
+                margin={
+                    "top": "12mm",
+                    "right": "12mm",
+                    "bottom": "12mm",
+                    "left": "12mm",
+                },
+            )
+
+            await context.close()
+            await browser.close()
+
+            logger.info(
+                "✅ Playwright PDF klaar (%d bytes)",
+                len(pdf_bytes),
+            )
+
+            return pdf_bytes
+
+    except PlaywrightTimeout:
+
+        logger.exception("❌ PDF render timeout")
+        raise Exception("PDF render timeout — check print-ready marker")
+
+    except Exception as e:
+
+        logger.exception("❌ Playwright crash")
+        raise Exception(f"PDF render error: {str(e)}")
