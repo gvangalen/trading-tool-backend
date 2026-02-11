@@ -1,5 +1,6 @@
 """
-AI Report Policy — v3.0
+AI Report Policy — v3.1
+
 Van toepassing op:
 - Daily report agent
 - Weekly report agent
@@ -41,58 +42,8 @@ Uitgangspunten:
 
 Context:
 - Gebruiker is ervaren
-- Focus: Bitcoin
+- Primaire focus: Bitcoin
 - Analyse = macro + market + technical + setups
-"""
-
-# =====================================================
-# AI STYLE — HOE ER GESCHREVEN WORDT
-# 🔥 BELANGRIJKSTE FILE VOOR LENGTE
-# =====================================================
-AI_STYLE = """
-Schrijfstijl (HARD AFDWINGEN):
-
-- Kort
-- Informatie-dicht
-- Analytisch
-- Zakelijk
-- Geen narratief
-- Geen storytelling
-
-Lengte-regels:
-
-- Maximaal 5 zinnen per sectie
-- Maximaal 18 woorden per zin
-- Elke zin moet nieuwe informatie bevatten
-- Geen opvulzinnen
-
-Verboden:
-
-- Context zonder implicatie
-- Herhaling
-- Macro-verhalen
-- Marktbeschrijvingen zonder gevolg
-- Samenvattingen van eerder genoemde data
-- Educatieve uitleg
-
-Formulering:
-
-Schrijf alsof je een senior trader briefed,
-niet alsof je een rapport schrijft.
-
-Gebruik compacte, institutionele taal.
-
-Voorbeeld toon:
-
-✔ "Momentum verzwakt terwijl liquiditeit afneemt. Dit beperkt opwaarts vervolg."
-✘ "De markt laat momenteel tekenen zien dat het momentum mogelijk aan het afnemen is."
-
-Doel:
-
-→ Besliscontext geven  
-Niet informeren.  
-Niet uitleggen.  
-Niet overtuigen.
 """
 
 # =====================================================
