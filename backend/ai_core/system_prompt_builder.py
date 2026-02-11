@@ -1,12 +1,11 @@
 """
 Central AI system prompt builder.
 
-Deze helper zorgt voor:
-- Consistente AI-rol over de hele applicatie
-- Geen herhaling van identity / constraints / style
-- Schaalbaarheid naar meerdere agents (report, strategy, bot, etc.)
-- Automatische style-selectie per agent
-- Optionele style-override per agent (non-breaking)
+Zorgt voor:
+- Consistente AI-rol
+- Geen dubbele identity/style
+- Multi-agent schaalbaarheid
+- Automatische style selectie
 """
 
 from backend.ai_core.ai_identity import AI_IDENTITY
@@ -15,6 +14,22 @@ from backend.ai_core.ai_style import AI_STYLE
 from backend.ai_core.ai_style_report import AI_STYLE_REPORT
 
 
+# =====================================================
+# 🔥 STYLE MAPPING (SUPER BELANGRIJK)
+# =====================================================
+STYLE_MAP = {
+    # alle report agents
+    "report": AI_STYLE_REPORT,
+
+    # future proof:
+    # "strategy": AI_STYLE_STRATEGY,
+    # "bot": AI_STYLE_BOT,
+}
+
+
+# =====================================================
+# 🧠 SYSTEM PROMPT BUILDER
+# =====================================================
 def build_system_prompt(
     task: str,
     agent: str = "general",
@@ -22,30 +37,34 @@ def build_system_prompt(
 ) -> str:
     """
     Bouwt een complete system prompt voor OpenAI.
-
-    Parameters:
-    - task (str): de specifieke taak van de agent
-    - agent (str): type agent (report, strategy, bot, etc.)
-    - style_override (str | None):
-        Optionele stijl-instructies die de automatische stijl vervangen.
-
-    Returns:
-    - str: volledige system prompt
     """
 
     if not task or not isinstance(task, str):
         raise ValueError("AI task description is verplicht en moet een string zijn.")
 
+    # normalize (voorkomt bugs)
+    agent = agent.lower()
+
     # -------------------------------------------------
-    # 🧠 Style selectie (auto + override)
+    # 🔥 STYLE SELECTIE (SCHAALBAAR)
     # -------------------------------------------------
     if isinstance(style_override, str) and style_override.strip():
-        style_block = style_override.strip()
-    elif agent == "report":
-        style_block = AI_STYLE_REPORT.strip()
-    else:
-        style_block = AI_STYLE.strip()
 
+        style_block = style_override.strip()
+
+    else:
+        style_block = next(
+            (
+                style
+                for key, style in STYLE_MAP.items()
+                if key in agent   # <<< MAGIC LINE
+            ),
+            AI_STYLE,  # fallback
+        ).strip()
+
+    # -------------------------------------------------
+    # 🧱 PROMPT BUILD
+    # -------------------------------------------------
     prompt = f"""
 {AI_IDENTITY.strip()}
 
