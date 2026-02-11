@@ -13,23 +13,28 @@ load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 model = os.getenv("OPENAI_MODEL", "gpt-5.2")
 
+if not api_key:
+    raise RuntimeError("OPENAI_API_KEY ontbreekt.")
+
 client = OpenAI(api_key=api_key)
 
 LOG_FILE = "/tmp/ai_agent_debug.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
 )
+
 logger = logging.getLogger(__name__)
+
+DEFAULT_TEMP = float(os.getenv("OPENAI_TEMP", "0.2"))
+MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "700"))
 
 # ============================================================
 # 🧰 JSON Sanitize Helper
 # ============================================================
 def sanitize_json_output(raw_text: str) -> dict:
-    """
-    Probeert AI-output veilig om te zetten naar JSON.
-    """
     if not raw_text:
         return {}
 
@@ -53,6 +58,7 @@ def sanitize_json_output(raw_text: str) -> dict:
     logger.warning("⚠️ AI-output kon niet als JSON worden gelezen.")
     return {"raw_text": raw_text[:400]}
 
+
 # ============================================================
 # 🧠 GPT JSON Helper
 # ============================================================
@@ -62,12 +68,6 @@ def ask_gpt(
     retries: int = 3,
     delay: float = 2.0,
 ) -> dict:
-    """
-    Voor agents die JSON-output verwachten.
-    """
-    if not api_key:
-        logger.error("❌ OPENAI_API_KEY ontbreekt.")
-        return {"error": "Geen API-key"}
 
     for attempt in range(1, retries + 1):
         try:
@@ -75,6 +75,9 @@ def ask_gpt(
 
             response = client.responses.create(
                 model=model,
+                temperature=DEFAULT_TEMP,
+                max_output_tokens=MAX_TOKENS,
+                timeout=45,
                 input=[
                     {"role": "system", "content": system_role},
                     {"role": "user", "content": prompt},
@@ -83,16 +86,19 @@ def ask_gpt(
 
             content = response.output_text.strip()
             parsed = sanitize_json_output(content)
-            logger.info(f"✅ [AI JSON OK] {str(parsed)[:120]}")
+
+            logger.info(f"✅ [AI JSON OK]")
             return parsed
 
         except Exception as e:
             logger.warning(f"⚠️ AI JSON fout (attempt {attempt}): {e}")
+
             if attempt < retries:
                 time.sleep(delay * attempt)
 
     logger.error("❌ Alle AI JSON pogingen mislukt.")
     return {"error": "AI JSON mislukt"}
+
 
 # ============================================================
 # 🧠 GPT TEXT Helper
@@ -103,12 +109,6 @@ def ask_gpt_text(
     retries: int = 3,
     delay: float = 2.0,
 ) -> str:
-    """
-    Voor agents die vrije tekst schrijven (reports, uitleg).
-    """
-    if not api_key:
-        logger.error("❌ OPENAI_API_KEY ontbreekt.")
-        return "AI-error: geen API-key."
 
     for attempt in range(1, retries + 1):
         try:
@@ -116,6 +116,9 @@ def ask_gpt_text(
 
             response = client.responses.create(
                 model=model,
+                temperature=DEFAULT_TEMP,
+                max_output_tokens=MAX_TOKENS,
+                timeout=45,
                 input=[
                     {"role": "system", "content": system_role},
                     {"role": "user", "content": prompt},
@@ -123,11 +126,13 @@ def ask_gpt_text(
             )
 
             content = response.output_text.strip()
-            logger.info(f"📝 [AI Text OK] {content[:120]}")
+
+            logger.info("📝 [AI Text OK]")
             return content
 
         except Exception as e:
             logger.warning(f"⚠️ AI Text fout (attempt {attempt}): {e}")
+
             if attempt < retries:
                 time.sleep(delay * attempt)
 
