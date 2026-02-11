@@ -365,8 +365,6 @@ def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
 # =====================================================
 # Text generation (AI) + defensive parsing
 # =====================================================
-
-
 def generate_text(prompt: str, fallback: str) -> str:
     """
     Verantwoordelijk voor:
@@ -375,23 +373,25 @@ def generate_text(prompt: str, fallback: str) -> str:
     - JSON-defensieve parsing
     GEEN deduplicatie (doen we hogerop)
     """
-    system_prompt = build_system_prompt(
-    agent="report",
-    task=REPORT_TASK,
-)
+
+    # 🔥 PRO safeguard — voorkomt silent context explosions
+    if len(prompt) > 12000:
+        logger.warning("⚠️ Large AI prompt detected (%s chars)", len(prompt))
+
     raw = ask_gpt_text(prompt, system_role=SYSTEM_PROMPT)
 
     if not raw:
+        logger.warning("⚠️ AI gaf lege response — fallback gebruikt.")
         return fallback
 
-    # 1) Strip code fences / markdown
+    # 1️⃣ Strip code fences / markdown
     text = raw.replace("```json", "").replace("```", "").strip()
 
-    # 2) Als het normale tekst is → direct terug
+    # 2️⃣ Normale tekst → direct terug
     if not text.lstrip().startswith("{"):
         return text if len(text) > 5 else fallback
 
-    # 3) Defensieve JSON-parse (als AI zich niet houdt aan instructies)
+    # 3️⃣ Defensieve JSON-parse (voor wanneer model zich niet aan instructies houdt)
     try:
         parsed = json.loads(text)
         parts = _flatten_text(parsed)
@@ -407,7 +407,10 @@ def generate_text(prompt: str, fallback: str) -> str:
             "CONDITIONAL",
         }
 
-        cleaned = [p for p in parts if p.strip() and p.strip().upper() not in blacklist]
+        cleaned = [
+            p for p in parts
+            if p.strip() and p.strip().upper() not in blacklist
+        ]
 
         if cleaned:
             return "\n\n".join(cleaned)
@@ -415,8 +418,8 @@ def generate_text(prompt: str, fallback: str) -> str:
         if parts:
             return "\n\n".join(parts)
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("⚠️ JSON parsing mislukt — ruwe tekst gebruikt. Error=%s", e)
 
     return text if len(text) > 5 else fallback
 
@@ -424,8 +427,6 @@ def generate_text(prompt: str, fallback: str) -> str:
 # =====================================================
 # Repetition control (cross-section deduplication)
 # =====================================================
-
-
 def _normalize_sentence(s: str) -> str:
     s = s.lower().strip()
     s = re.sub(r"\s+", " ", s)
