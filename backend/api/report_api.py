@@ -4,13 +4,6 @@ import logging
 from datetime import datetime
 import os
 
-import io
-from fastapi import Header
-from backend.utils.pdf_playwright import (
-    render_report_pdf_via_playwright,
-    verify_print_token,
-)
-
 from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import StreamingResponse
 
@@ -60,27 +53,49 @@ def export_pdf(report_type: str, report: dict, date: str, user_id: int):
         headers=headers,
     )
 
-def get_user_id_for_report(
+async def generate_pdf_response(
     *,
-    current_user: dict | None,
-    x_print_token: str | None,
+    table: str,
     report_type: str,
     date: str,
-) -> int:
-    if x_print_token:
-        payload = verify_print_token(x_print_token)
-        if not payload:
-            raise HTTPException(status_code=401, detail="Invalid print token")
+    user_id: int,
+):
+    conn = get_db_connection()
 
-        if payload["t"] != report_type or payload["d"] != date:
-            raise HTTPException(status_code=401, detail="Print token mismatch")
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT 1
+                FROM {table}
+                WHERE report_date = %s
+                AND user_id = %s
+                LIMIT 1;
+                """,
+                (date, user_id),
+            )
 
-        return int(payload["uid"])
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Report niet gevonden")
 
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    finally:
+        conn.close()
 
-    return current_user["id"]
+    pdf_bytes = await render_report_pdf_via_playwright(
+        report_type=report_type,
+        date_str=date,
+        user_id=user_id,
+    )
+
+    filename = f"{report_type}_report_user_{user_id}_{date}.pdf"
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
 
 
 # ======================================================
@@ -244,25 +259,14 @@ async def export_daily_pdf(
     try:
         datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
-        raise HTTPException(status_code=400, detail="Ongeldig datumformaat")
+        raise HTTPException(status_code=400, detail="Invalid date")
 
-    # Bestaat report?
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT 1
-                FROM daily_reports
-                WHERE report_date = %s AND user_id = %s
-                LIMIT 1;
-                """,
-                (date, user_id),
-            )
-            if not cur.fetchone():
-                raise HTTPException(status_code=404, detail="Geen daily report")
-    finally:
-        conn.close()
+    return await generate_pdf_response(
+        table="daily_reports",
+        report_type="daily",
+        date=date,
+        user_id=user_id,
+    )
 
     pdf_bytes = await render_report_pdf_via_playwright(
         report_type="daily",
@@ -406,45 +410,26 @@ async def generate_weekly(current_user: dict = Depends(get_current_user)):
         logger.exception("[/report/weekly/generate] Fout:")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/report/weekly/by-date")
-async def get_weekly_by_date(
+@router.get("/report/weekly/export/pdf")
+async def export_weekly_pdf(
     date: str = Query(...),
     current_user: dict = Depends(get_current_user),
-    x_print_token: str = Header(default=None, alias="X-PRINT-TOKEN"),
 ):
-    user_id = get_user_id_for_report(
-        current_user=current_user,
-        x_print_token=x_print_token,
+    user_id = current_user["id"]
+
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date")
+
+    return await generate_pdf_response(
+        table="weekly_reports",
         report_type="weekly",
         date=date,
+        user_id=user_id,
     )
 
-    try:
-        parsed_date = datetime.strptime(date, "%Y-%m-%d").date()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Ongeldig datumformaat")
 
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT *
-                FROM weekly_reports
-                WHERE report_date = %s AND user_id = %s
-                LIMIT 1;
-                """,
-                (parsed_date, user_id),
-            )
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Geen weekrapport gevonden")
-
-            cols = [desc[0] for desc in cur.description]
-            return dict(zip(cols, row))
-    finally:
-        conn.close()
 
 # ======================================================
 # 📅 MONTHLY REPORTS
@@ -609,6 +594,25 @@ async def get_monthly_by_date(
     finally:
         conn.close()
 
+@router.get("/report/monthly/export/pdf")
+async def export_monthly_pdf(
+    date: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
+
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date")
+
+    return await generate_pdf_response(
+        table="monthly_reports",
+        report_type="monthly",
+        date=date,
+        user_id=user_id,
+    )
+
 
 # ======================================================
 # 📊 QUARTERLY REPORTS
@@ -743,24 +747,14 @@ async def export_quarterly_pdf(
     try:
         datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
-        raise HTTPException(status_code=400, detail="Ongeldig datumformaat")
+        raise HTTPException(status_code=400, detail="Invalid date")
 
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT 1
-                FROM quarterly_reports
-                WHERE report_date = %s AND user_id = %s
-                LIMIT 1;
-                """,
-                (date, user_id),
-            )
-            if not cur.fetchone():
-                raise HTTPException(status_code=404, detail="Geen kwartaalrapport gevonden")
-    finally:
-        conn.close()
+    return await generate_pdf_response(
+        table="quarterly_reports",
+        report_type="quarterly",
+        date=date,
+        user_id=user_id,
+    )
 
     pdf_bytes = await render_report_pdf_via_playwright(
         report_type="quarterly",
