@@ -28,8 +28,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TEMP = float(os.getenv("OPENAI_TEMP", "0.2"))
-MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "700"))
+# 🔥 SPLIT DEFAULTS (ZEER BELANGRIJK)
+TEXT_TEMP = float(os.getenv("OPENAI_TEXT_TEMP", "0.4"))
+JSON_TEMP = float(os.getenv("OPENAI_JSON_TEMP", "0.2"))
+
+TEXT_MAX_TOKENS = int(os.getenv("OPENAI_TEXT_MAX_TOKENS", "900"))
+JSON_MAX_TOKENS = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "500"))
 
 # ============================================================
 # 🧰 JSON Sanitize Helper
@@ -75,9 +79,13 @@ def ask_gpt(
 
             response = client.responses.create(
                 model=model,
-                temperature=DEFAULT_TEMP,
-                max_output_tokens=MAX_TOKENS,
+
+                # 🔥 JSON = LOW CREATIVITY
+                temperature=JSON_TEMP,
+                top_p=0.8,
+                max_output_tokens=JSON_MAX_TOKENS,
                 timeout=45,
+
                 input=[
                     {"role": "system", "content": system_role},
                     {"role": "user", "content": prompt},
@@ -87,7 +95,7 @@ def ask_gpt(
             content = response.output_text.strip()
             parsed = sanitize_json_output(content)
 
-            logger.info(f"✅ [AI JSON OK]")
+            logger.info("✅ [AI JSON OK]")
             return parsed
 
         except Exception as e:
@@ -116,9 +124,13 @@ def ask_gpt_text(
 
             response = client.responses.create(
                 model=model,
-                temperature=DEFAULT_TEMP,
-                max_output_tokens=MAX_TOKENS,
+
+                # 🔥 TEXT = institutional writing
+                temperature=TEXT_TEMP,
+                top_p=0.9,
+                max_output_tokens=TEXT_MAX_TOKENS,
                 timeout=45,
+
                 input=[
                     {"role": "system", "content": system_role},
                     {"role": "user", "content": prompt},
