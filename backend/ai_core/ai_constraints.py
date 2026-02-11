@@ -13,7 +13,7 @@ NIET gebruiken voor:
 - Execution agents
 """
 
-AI_CONSTRAINTS_REPORT = """
+AI_CONSTRAINTS = """
 Harde regels (NOOIT overtreden):
 
 DATA-INTEGRITEIT
