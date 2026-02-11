@@ -19,8 +19,8 @@ STRUCTUUR:
 - Geen vaste formats.
 
 LENGTE-DISCIPLINE:
-- Maximaal 4–5 zinnen per sectie.
-- Streef naar ≤18 woorden per zin.
+- Maximaal 3–4 zinnen per sectie.
+- Streef naar ≤14 woorden per zin.
 - Elke zin moet nieuwe informatie bevatten.
 - Geen opvulzinnen.
 
