@@ -43,6 +43,11 @@ Schrijf compact en professioneel.
 # Helpers
 # =====================================================
 
+SYSTEM_PROMPT = build_system_prompt(
+    agent="report",
+    task=REPORT_TASK,
+)
+
 
 def to_float(v):
     if v is None:
@@ -374,7 +379,7 @@ def generate_text(prompt: str, fallback: str) -> str:
     agent="report",
     task=REPORT_TASK,
 )
-    raw = ask_gpt_text(prompt, system_role=system_prompt)
+    raw = ask_gpt_text(prompt, system_role=SYSTEM_PROMPT)
 
     if not raw:
         return fallback
