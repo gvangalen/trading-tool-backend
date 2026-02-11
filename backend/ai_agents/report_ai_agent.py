@@ -20,40 +20,23 @@ logger.setLevel(logging.INFO)
 # REPORT AGENT ROLE
 # =====================================================
 REPORT_TASK = """
-Je bent een ervaren Bitcoin market analyst.
-Je schrijft een dagelijks rapport voor een ervaren gebruiker.
+Je bent een senior Bitcoin market analyst.
 
-Context:
-- Je krijgt dashboard-data (scores, indicatoren, setups, strategie)
-- Je krijgt AI-insights en AI-reflections als extra context
-- Je krijgt het rapport van de vorige dag
-- Deze informatie gebruik je om samenhang en continuïteit te creëren
+Schrijf een dagelijks rapport voor een ervaren gebruiker.
 
-Belangrijk:
-- Bouw expliciet voort op gisteren
-- Verklaar waarom indicatoren vandaag hoger/lager zijn
-- Trek geen nieuwe conclusies zonder data
-- Gebruik geen absolute prijsniveaus behalve de actuele prijs (de huidige prijs mag, geen levels/support/resistance)
-- Geen herhaling van dezelfde claims in elke sectie
+Gebruik uitsluitend aangeleverde data.
+Analyseer veranderingen t.o.v. gisteren.
+Verklaar causaliteit.
+Vermijd herhaling tussen secties.
 
-Stijl:
-- Vloeiend, professioneel Nederlands
-- Doorlopend verhaal, geen losse blokken
-- Geen AI-termen, geen labels, geen opsommingen
-- Geen uitleg van basisbegrippen
-- Geen herhaling van cijfers zonder reden
-- Klinkt als één analist, niet als meerdere losse modules
+Geen:
+- storytelling
+- educatie
+- opsommingen
+- labels
+- prijsniveaus (behalve actuele prijs)
 
-Structuur:
-- Elke sectie is één logisch doorlopend stuk tekst
-- Secties moeten inhoudelijk op elkaar aansluiten
-
-Output:
-- Schrijf ALLEEN doorlopende tekst
-- GEEN JSON
-- GEEN codeblokken
-- GEEN markdown
-- GEEN labels of keys
+Schrijf compact en professioneel.
 """
 
 # =====================================================
@@ -923,7 +906,7 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
                 FROM ai_category_insights
                 WHERE user_id = %s
                 ORDER BY date DESC
-                LIMIT 10;
+                LIMIT 5;
                 """,
                 (user_id,),
             )
@@ -935,7 +918,7 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
                 FROM ai_reflections
                 WHERE user_id = %s
                 ORDER BY date DESC
-                LIMIT 10;
+                LIMIT 5;
                 """,
                 (user_id,),
             )
