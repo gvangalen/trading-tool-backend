@@ -501,46 +501,6 @@ async def generate_monthly(current_user: dict = Depends(get_current_user)):
         logger.exception("[/report/monthly/generate] Fout:")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/report/monthly/by-date")
-async def get_monthly_by_date(
-    date: str = Query(...),
-    current_user: dict = Depends(get_current_user),
-    x_print_token: str = Header(default=None, alias="X-PRINT-TOKEN"),
-):
-    user_id = get_user_id_for_report(
-        current_user=current_user,
-        x_print_token=x_print_token,
-        report_type="monthly",
-        date=date,
-    )
-
-    try:
-        parsed_date = datetime.strptime(date, "%Y-%m-%d").date()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Ongeldig datumformaat")
-
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT *
-                FROM monthly_reports
-                WHERE report_date = %s AND user_id = %s
-                LIMIT 1;
-                """,
-                (parsed_date, user_id),
-            )
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Geen maandrapport gevonden")
-
-            cols = [desc[0] for desc in cur.description]
-            return dict(zip(cols, row))
-    finally:
-        conn.close()
-
 @router.get("/report/monthly/export/pdf")
 async def export_monthly_pdf(
     date: str = Query(...),
