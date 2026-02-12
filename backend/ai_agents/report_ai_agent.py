@@ -119,7 +119,17 @@ def get_regime_memory(user_id: int):
                 LIMIT 1;
             """, (user_id,))
 
-            return cur.fetchone()
+            row = cur.fetchone()
+
+            if not row:
+                return None
+
+            return {
+                "label": row[0],
+                "confidence": float(row[1]) if row[1] else None,
+                "signals": row[2],
+                "narrative": row[3],
+            }
 
     finally:
         conn.close()
@@ -966,56 +976,74 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     # -------------------------------------------------
     # 3) Context blob (ENIGE input voor AI)
     # -------------------------------------------------
-    context_blob = f"""
-Je schrijft het rapport voor vandaag.
+    regime = get_regime_memory(user_id)
 
-⚠️ BELANGRIJK:
-Je schrijft GEEN nieuw rapport.
-Je UPDATE een bestaand marktverhaal.
+context_blob = f"""
+YOU ARE NOT WRITING A DAILY REPORT.
 
-Gebruik uitsluitend onderstaande data.
+YOU ARE UPDATING A LIVE MARKET MODEL.
 
-==================================================
-BESTAAND MARKTREGIME — VERPLICHT GEBRUIKEN
-==================================================
-
-Dit is het bestaande marktverhaal.
-
-Je taak:
-
-- bepaal of het regime intact blijft
-- bepaal of het regime verdiept
-- detecteer een mogelijke regime shift
-- update het verhaal
-
-HERSTART HET VERHAAL NOOIT.
+Markets exist in regimes.
+Daily movement is noise unless it changes the regime.
 
 ==================================================
-VERANDERINGEN T.O.V. VORIGE DAG
+PRIMARY MARKET REGIME (HIGHEST AUTHORITY)
 ==================================================
 
-Beschikbare datums: vandaag={deltas.get("today_date")}, vorige={deltas.get("prev_date")}
+Current detected regime:
 
-Macro score delta: {deltas.get("macro_delta")}
-Market score delta: {deltas.get("market_delta")}
-Technical score delta: {deltas.get("technical_delta")}
-Setup score delta: {deltas.get("setup_delta")}
+{json.dumps(_safe_json(regime), ensure_ascii=False)}
 
-Prijs delta: {deltas.get("price_delta")}
-24h change delta: {deltas.get("change_delta")}
+THIS IS THE STRATEGIC TRUTH.
+
+Your job:
+
+• determine if the regime persists  
+• determine if the regime strengthens  
+• detect early regime transition  
+• update positioning risk  
+
+NEVER restart the narrative.
+NEVER describe the market from scratch.
+
+Assume the reader already understands the regime.
+
+==================================================
+PREVIOUS REPORT — CONTINUITY ENGINE
+==================================================
+
+{json.dumps(_safe_json(prev_report), ensure_ascii=False)}
+
+You are continuing this document.
+
+NOT rewriting it.
+
+==================================================
+WHAT CHANGED SINCE LAST REPORT
+==================================================
+
+Dates: today={deltas.get("today_date")} vs previous={deltas.get("prev_date")}
+
+Macro delta: {deltas.get("macro_delta")}
+Market delta: {deltas.get("market_delta")}
+Technical delta: {deltas.get("technical_delta")}
+Setup delta: {deltas.get("setup_delta")}
+
+Price delta: {deltas.get("price_delta")}
+24h delta: {deltas.get("change_delta")}
 Volume delta: {deltas.get("volume_delta")}
 
+Interpret changes ONLY through the regime lens.
+
 ==================================================
-ACTUELE MARKT
+LIVE MARKET STATE
 ==================================================
 
-Prijs: {market.get("price")}
-24h verandering: {market.get("change_24h")}
+Price: {market.get("price")}
+24h change: {market.get("change_24h")}
 Volume: {market.get("volume")}
 
-==================================================
-SCORES
-==================================================
+Scores:
 
 Macro: {scores.get("macro_score")}
 Market: {scores.get("market_score")}
@@ -1023,75 +1051,71 @@ Technical: {scores.get("technical_score")}
 Setup: {scores.get("setup_score")}
 
 ==================================================
-MARKET INDICATORS (top)
+INDICATOR CLUSTERS
 ==================================================
+
+MARKET:
 {json.dumps(_safe_json(market_ind), ensure_ascii=False)}
 
-==================================================
-MACRO INDICATORS (top)
-==================================================
+MACRO:
 {json.dumps(_safe_json(macro_ind), ensure_ascii=False)}
 
-==================================================
-TECHNICAL INDICATORS (top)
-==================================================
+TECHNICAL:
 {json.dumps(_safe_json(tech_ind), ensure_ascii=False)}
 
 ==================================================
-BESTE SETUP
+POSITIONING CONTEXT
 ==================================================
+
+Best setup:
 {json.dumps(_safe_json(best_setup), ensure_ascii=False)}
 
-==================================================
-ACTIEVE STRATEGIE
-==================================================
+Active strategy:
 {json.dumps(_safe_json(active_strategy), ensure_ascii=False)}
 
-==================================================
-BOT SNAPSHOT
-==================================================
+Bot decision:
 {json.dumps(_safe_json(bot_snapshot), ensure_ascii=False)}
 
 ==================================================
-AI INSIGHTS
+AI META INTELLIGENCE
 ==================================================
+
+Insights:
 {json.dumps(_safe_json(ai_insights), ensure_ascii=False)}
 
-==================================================
-AI REFLECTIONS
-==================================================
+Reflections:
 {json.dumps(_safe_json(ai_reflections), ensure_ascii=False)}
 
 ==================================================
-VORIG RAPPORT — FUNDAMENT VAN HET VERHAAL
-==================================================
-{json.dumps(_safe_json(prev_report), ensure_ascii=False)}
-
-==================================================
-CENTRALE DENKREGEL (VERPLICHT)
+COGNITIVE OPERATING FRAMEWORK (INTERNAL)
 ==================================================
 
-Bepaal eerst intern:
+Before writing — determine internally:
 
 CURRENT_REGIME  
 REGIME_DIRECTION  
-REGIME_STRENGTH  
-RISK_ENVIRONMENT  
+REGIME_MATURITY  
+PARTICIPATION_QUALITY  
+RISK_ASYMMETRY  
 
-Gebruik dit impliciet in ALLE secties.
+Then write ALL sections from that single lens.
 
-Nooit opnieuw starten per sectie.
-Bouw voort op dezelfde hypothese.
+Every paragraph must feel like a continuation.
+
+Never reset context.
 
 ==================================================
 HARD RULES
 ==================================================
 
-- Bouw voort op de centrale markthypothese
-- Herhaal het regime niet elke sectie
-- Vermijd data-herhaling
-- Focus op implicatie en risico
-- Geen prijsniveaus behalve spot
+- Do NOT restate the regime every section
+- Do NOT summarize raw data
+- Do NOT explain indicators
+- Do NOT narrate
+- Avoid repetitive sentence openings
+- Focus on implication, positioning risk, regime health
+
+Price levels forbidden except spot.
 """
 
     # -------------------------------------------------
