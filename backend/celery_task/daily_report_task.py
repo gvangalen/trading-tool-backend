@@ -11,10 +11,15 @@ from psycopg2.extras import Json
 from backend.utils.db import get_db_connection
 from backend.ai_agents.report_ai_agent import generate_daily_report_sections
 
-# ✅ FIX: nieuwe locked PDF renderer
-from backend.utils.pdf_generator import generate_pdf_report
+# ✅ NEW — REGIME MEMORY (CRITICAL)
+from backend.ai_core.regime_memory import (
+    store_regime_memory,
+    get_regime_memory,
+)
 
+from backend.utils.pdf_generator import generate_pdf_report
 from backend.utils.email_utils import send_email_with_attachment
+
 
 # =====================================================
 # Logging
@@ -23,8 +28,10 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+
 logger = logging.getLogger(__name__)
 load_dotenv()
+
 
 # =====================================================
 # Helpers
@@ -42,10 +49,7 @@ def to_float(v):
 
 def jsonb(v, fallback=None):
     """
-    Veilige jsonb writer:
-    - dict/list -> Json
-    - string -> proberen te parsen, anders raw string
-    - None -> fallback of NULL
+    Safe jsonb writer
     """
     if v is None:
         return Json(fallback) if fallback is not None else None
@@ -81,16 +85,28 @@ def generate_daily_report(user_id: int):
     try:
         cursor = conn.cursor()
 
+        # =================================================
+        # 🧠 0️⃣ REGIME MEMORY — MUST RUN FIRST
+        # =================================================
+        regime = get_regime_memory(user_id)
+
+        if not regime:
+            logger.info("⚠️ Geen regime gevonden — initialiseren")
+            store_regime_memory(user_id)
+        else:
+            logger.info("🧠 Updating regime memory")
+            store_regime_memory(user_id)
+
         # -------------------------------------------------
         # 1️⃣ REPORT GENEREREN (AI)
         # -------------------------------------------------
         report = generate_daily_report_sections(user_id=user_id)
 
-        if not isinstance(report, dict):
+        if not report or not isinstance(report, dict):
             raise ValueError("Report agent gaf geen geldig dict terug")
 
         # -------------------------------------------------
-        # 2️⃣ NORMALISEREN (exact daily_reports schema)
+        # 2️⃣ NORMALISEREN
         # -------------------------------------------------
         executive_summary    = jsonb(report.get("executive_summary"), {})
         market_analysis      = jsonb(report.get("market_analysis"), {})
@@ -100,9 +116,8 @@ def generate_daily_report(user_id: int):
         strategy_implication = jsonb(report.get("strategy_implication"), {})
         outlook              = jsonb(report.get("outlook"), {})
 
-        # ✅ BOT DATA (was missing)
-        bot_strategy         = jsonb(report.get("bot_strategy"), {})
-        bot_snapshot         = jsonb(report.get("bot_snapshot"))
+        bot_strategy = jsonb(report.get("bot_strategy"), {})
+        bot_snapshot = jsonb(report.get("bot_snapshot"))
 
         price      = to_float(report.get("price"))
         change_24h = to_float(report.get("change_24h"))
@@ -122,7 +137,7 @@ def generate_daily_report(user_id: int):
         active_strategy = jsonb(report.get("active_strategy"))
 
         # -------------------------------------------------
-        # 3️⃣ UPSERT daily_reports (MET BOT + OUTLOOK)
+        # 3️⃣ UPSERT daily_reports
         # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
@@ -179,24 +194,24 @@ def generate_daily_report(user_id: int):
                 bot_strategy                   = EXCLUDED.bot_strategy,
                 bot_snapshot                   = EXCLUDED.bot_snapshot,
 
-                price                           = EXCLUDED.price,
-                change_24h                      = EXCLUDED.change_24h,
-                volume                          = EXCLUDED.volume,
+                price                          = EXCLUDED.price,
+                change_24h                     = EXCLUDED.change_24h,
+                volume                         = EXCLUDED.volume,
 
-                macro_score                     = EXCLUDED.macro_score,
-                technical_score                 = EXCLUDED.technical_score,
-                market_score                    = EXCLUDED.market_score,
-                setup_score                     = EXCLUDED.setup_score,
+                macro_score                    = EXCLUDED.macro_score,
+                technical_score                = EXCLUDED.technical_score,
+                market_score                   = EXCLUDED.market_score,
+                setup_score                    = EXCLUDED.setup_score,
 
-                market_indicator_highlights     = EXCLUDED.market_indicator_highlights,
-                macro_indicator_highlights      = EXCLUDED.macro_indicator_highlights,
-                technical_indicator_highlights  = EXCLUDED.technical_indicator_highlights,
+                market_indicator_highlights    = EXCLUDED.market_indicator_highlights,
+                macro_indicator_highlights     = EXCLUDED.macro_indicator_highlights,
+                technical_indicator_highlights = EXCLUDED.technical_indicator_highlights,
 
-                best_setup                      = EXCLUDED.best_setup,
-                top_setups                      = EXCLUDED.top_setups,
-                active_strategy                 = EXCLUDED.active_strategy,
+                best_setup                     = EXCLUDED.best_setup,
+                top_setups                     = EXCLUDED.top_setups,
+                active_strategy                = EXCLUDED.active_strategy,
 
-                generated_at                    = NOW();
+                generated_at                   = NOW();
         """, (
             today, user_id,
 
@@ -230,10 +245,10 @@ def generate_daily_report(user_id: int):
         ))
 
         conn.commit()
-        logger.info("💾 daily_reports opgeslagen (incl. bot + outlook)")
+        logger.info("💾 daily_reports opgeslagen")
 
         # -------------------------------------------------
-        # 4️⃣ PDF GENEREREN (exact report → pdf)
+        # 4️⃣ PDF GENEREREN
         # -------------------------------------------------
         cursor.execute("""
             SELECT *
@@ -246,7 +261,6 @@ def generate_daily_report(user_id: int):
         cols = [d[0] for d in cursor.description]
         report_row = dict(zip(cols, row))
 
-        # ✅ FIX: call nieuwe renderer
         pdf_buffer = generate_pdf_report(
             report_row,
             report_type="daily"
