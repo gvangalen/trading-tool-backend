@@ -253,8 +253,6 @@ def get_daily_deltas(user_id: int) -> Dict[str, Any]:
 # =====================================================
 # BOT DAILY SNAPSHOT (BACKEND = TRUTH)
 # =====================================================
-
-
 def get_bot_daily_snapshot(user_id: int) -> Dict[str, Any]:
     """
     Leest de botbeslissing van vandaag.
@@ -898,15 +896,11 @@ Geen opsommingen, één doorlopend stuk tekst.
 # =====================================================
 # MAIN BUILDER — REPORT AGENT 2.0 (SAFE + CONTEXT-AWARE)
 # =====================================================
+from backend.ai_core.regime_memory import get_regime_memory
+from backend.ai_core.transition_detector import compute_transition_detector
+
+
 def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
-    """
-    Report Agent 2.0
-    - Leest ALLE bestaande data
-    - Leest AI-insights & reflections
-    - Leest vorig rapport
-    - Bouwt één samenhangend dagverhaal
-    - JSON-safe (Decimal / date proof)
-    """
 
     # -------------------------------------------------
     # 1) Basis data
@@ -923,15 +917,28 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     active_strategy = get_active_strategy_snapshot(user_id)
     bot_snapshot = get_bot_daily_snapshot(user_id)
 
-    # Deltas (today vs prev)
     deltas = get_daily_deltas(user_id)
 
     # -------------------------------------------------
-    # 2) Extra context (AI + vorig rapport)
+    # 🔥 NEW — REGIME + TRANSITION
+    # -------------------------------------------------
+    regime = get_regime_memory(user_id)
+
+    transition = None
+    if regime and regime.get("signals"):
+        transition = regime["signals"].get("transition")
+
+    # fallback (should rarely happen)
+    if not transition:
+        transition = compute_transition_detector(user_id)
+
+    # -------------------------------------------------
+    # 2) Extra context
     # -------------------------------------------------
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+
             cur.execute(
                 """
                 SELECT report_date, executive_summary, market_analysis,
@@ -970,43 +977,51 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
                 (user_id,),
             )
             ai_reflections = cur.fetchall()
+
     finally:
         conn.close()
 
     # -------------------------------------------------
-    # 3) Context blob (ENIGE input voor AI)
+    # 🔥 MEGA CONTEXT — THIS IS THE BRAIN
     # -------------------------------------------------
-    regime = get_regime_memory(user_id)
-    
     context_blob = f"""
 YOU ARE NOT WRITING A DAILY REPORT.
-
 YOU ARE UPDATING A LIVE MARKET MODEL.
 
-Markets exist in regimes.
-Daily movement is noise unless it changes the regime.
+Markets move in regimes.
+Transitions matter more than daily moves.
 
 ==================================================
-PRIMARY MARKET REGIME (HIGHEST AUTHORITY)
+PRIMARY REGIME
 ==================================================
-
-Current detected regime:
 
 {json.dumps(_safe_json(regime), ensure_ascii=False)}
 
-THIS IS THE STRATEGIC TRUTH.
+Do NOT redefine this unless transition risk forces you.
 
-Your job:
+==================================================
+TRANSITION LAYER — HIGHEST SHORT TERM SIGNAL
+==================================================
 
-• determine if the regime persists  
-• determine if the regime strengthens  
-• detect early regime transition  
-• update positioning risk  
+Transition risk: {transition.get("transition_risk")}
+Primary flag: {transition.get("primary_flag")}
+Narrative: {transition.get("narrative")}
 
-NEVER restart the narrative.
-NEVER describe the market from scratch.
+Signals:
+{json.dumps(_safe_json(transition.get("signals")), ensure_ascii=False)}
 
-Assume the reader already understands the regime.
+INTERPRETATION RULES:
+
+If transition_risk >= 70:
+→ Write like late-cycle risk is building.
+
+If transition_risk >= 60:
+→ Emphasize fragility even if price is stable.
+
+If transition_risk <= 40:
+→ Treat the regime as structurally supported.
+
+Never ignore this layer.
 
 ==================================================
 PREVIOUS REPORT — CONTINUITY ENGINE
@@ -1014,15 +1029,13 @@ PREVIOUS REPORT — CONTINUITY ENGINE
 
 {json.dumps(_safe_json(prev_report), ensure_ascii=False)}
 
-You are continuing this document.
+You are CONTINUING this document.
 
 NOT rewriting it.
 
 ==================================================
-WHAT CHANGED SINCE LAST REPORT
+WHAT CHANGED
 ==================================================
-
-Dates: today={deltas.get("today_date")} vs previous={deltas.get("prev_date")}
 
 Macro delta: {deltas.get("macro_delta")}
 Market delta: {deltas.get("market_delta")}
@@ -1030,13 +1043,12 @@ Technical delta: {deltas.get("technical_delta")}
 Setup delta: {deltas.get("setup_delta")}
 
 Price delta: {deltas.get("price_delta")}
-24h delta: {deltas.get("change_delta")}
 Volume delta: {deltas.get("volume_delta")}
 
-Interpret changes ONLY through the regime lens.
+Interpret changes ONLY through the regime + transition lens.
 
 ==================================================
-LIVE MARKET STATE
+LIVE STATE
 ==================================================
 
 Price: {market.get("price")}
@@ -1077,7 +1089,7 @@ Bot decision:
 {json.dumps(_safe_json(bot_snapshot), ensure_ascii=False)}
 
 ==================================================
-AI META INTELLIGENCE
+AI META
 ==================================================
 
 Insights:
@@ -1087,84 +1099,84 @@ Reflections:
 {json.dumps(_safe_json(ai_reflections), ensure_ascii=False)}
 
 ==================================================
-COGNITIVE OPERATING FRAMEWORK (INTERNAL)
+COGNITIVE FRAMEWORK
 ==================================================
 
-Before writing — determine internally:
+Internally determine:
 
 CURRENT_REGIME  
 REGIME_DIRECTION  
 REGIME_MATURITY  
+TRANSITION_RISK  
 PARTICIPATION_QUALITY  
 RISK_ASYMMETRY  
 
-Then write ALL sections from that single lens.
+Write ALL sections from ONE hypothesis.
 
 Every paragraph must feel like a continuation.
 
-Never reset context.
+Never reset the story.
 
 ==================================================
 HARD RULES
 ==================================================
 
-- Do NOT restate the regime every section
-- Do NOT summarize raw data
-- Do NOT explain indicators
+- Do NOT summarize data
+- Do NOT repeat the regime
 - Do NOT narrate
-- Avoid repetitive sentence openings
-- Focus on implication, positioning risk, regime health
+- Avoid identical sentence openings
+- Focus on positioning risk
 
 Price levels forbidden except spot.
 """
 
     # -------------------------------------------------
-    # 4) Tekst genereren + herhaling reduceren
+    # 4) Generate
     # -------------------------------------------------
     seen_sentences: List[str] = []
 
     executive_summary = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_exec(), "Markt in afwachting."),
+        generate_text(context_blob + "\n\n" + p_exec(), "Regime intact."),
         seen_sentences,
     )
 
     market_analysis = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_market(), "Beperkte richting."),
+        generate_text(context_blob + "\n\n" + p_market(), "Market steady."),
         seen_sentences,
     )
 
     macro_context = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_macro(), "Macro gemengd."),
+        generate_text(context_blob + "\n\n" + p_macro(), "Macro unchanged."),
         seen_sentences,
     )
 
     technical_analysis = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_technical(), "Technisch voorzichtig."),
+        generate_text(context_blob + "\n\n" + p_technical(), "Technicals neutral."),
         seen_sentences,
     )
 
     setup_validation = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_setup(best_setup), "Selectieve setups."),
+        generate_text(context_blob + "\n\n" + p_setup(best_setup), "Setups selective."),
         seen_sentences,
     )
 
     strategy_implication = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_strategy(active_strategy), "Voorzichtigheid."),
+        generate_text(context_blob + "\n\n" + p_strategy(active_strategy), "Strategy stable."),
         seen_sentences,
     )
 
     bot_strategy = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_bot_strategy(bot_snapshot), "De bot bleef vandaag afwachtend."),
+        generate_text(context_blob + "\n\n" + p_bot_strategy(bot_snapshot), "Bot inactive."),
         seen_sentences,
     )
 
     outlook = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_outlook(), "Vooruitblik: wachten op bevestiging."),
+        generate_text(context_blob + "\n\n" + p_outlook(), "Await confirmation."),
         seen_sentences,
     )
 
     # -------------------------------------------------
-    # 5) RESULT (keys bewust stabiel gehouden)
+    # RESULT
     # -------------------------------------------------
     result = {
         "executive_summary": executive_summary,
@@ -1176,26 +1188,22 @@ Price levels forbidden except spot.
         "bot_strategy": bot_strategy,
         "bot_snapshot": bot_snapshot,
         "outlook": outlook,
-        # Market snapshot
         "price": market.get("price"),
         "change_24h": market.get("change_24h"),
         "volume": market.get("volume"),
-        # Scores
         "macro_score": scores.get("macro_score"),
         "technical_score": scores.get("technical_score"),
         "market_score": scores.get("market_score"),
         "setup_score": scores.get("setup_score"),
-        # Highlights
         "market_indicator_highlights": market_ind,
         "macro_indicator_highlights": macro_ind,
         "technical_indicator_highlights": tech_ind,
-        # Setup & strategy
         "best_setup": best_setup,
         "top_setups": setup_snapshot.get("top_setups", []),
         "active_strategy": active_strategy,
-        # Extra (handig voor debugging/kwaliteit, breekt niets)
         "deltas": deltas,
+        "transition": transition,   # 🔥 NEW (great for debugging & UI later)
     }
 
-    logger.info("✅ Report agent OK, return keys=%s", list(result.keys()))
+    logger.info("✅ Report agent WITH TRANSITION OK")
     return result
