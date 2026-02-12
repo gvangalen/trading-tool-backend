@@ -40,6 +40,7 @@ def _safe_json(obj: Any) -> Any:
     JSON-safe serialization
     """
     from datetime import datetime
+
     if obj is None:
         return None
     if isinstance(obj, (date, datetime)):
@@ -52,9 +53,6 @@ def _safe_json(obj: Any) -> Any:
 
 
 def _slope(values: List[Optional[float]]) -> Optional[float]:
-    """
-    Simple slope proxy: (last - first) / (n-1), ignoring None.
-    """
     clean = [v for v in values if v is not None]
     if len(clean) < 2:
         return None
@@ -71,9 +69,6 @@ def _std(values: List[Optional[float]]) -> Optional[float]:
 
 
 def _pct(a: Optional[float], b: Optional[float]) -> Optional[float]:
-    """
-    Percent change from a -> b (a as base).
-    """
     if a is None or b is None or a == 0:
         return None
     return (b - a) / a * 100.0
@@ -91,23 +86,22 @@ def _classify_strength(v: Optional[float]) -> Optional[str]:
     return "fragile"
 
 
+# =========================================================
+# DATA FETCH
+# =========================================================
+
 def fetch_recent_points(user_id: int, lookback_days: int = 14) -> List[DailyPoint]:
-    """
-    Pulls daily points for last N days (best-effort):
-    - market_data: price/change_24h/volume (last snapshot of each day)
-    - daily_scores: macro/market/technical/setup (by report_date)
-    """
     conn = get_db_connection()
     if not conn:
         return []
 
     start_date = date.today() - timedelta(days=lookback_days)
-
     points: Dict[date, DailyPoint] = {}
 
     try:
         with conn.cursor() as cur:
-            # daily_scores (by report_date)
+
+            # daily_scores
             cur.execute(
                 """
                 SELECT report_date, macro_score, market_score, technical_score, setup_score
@@ -118,6 +112,7 @@ def fetch_recent_points(user_id: int, lookback_days: int = 14) -> List[DailyPoin
                 """,
                 (user_id, start_date),
             )
+
             for r in cur.fetchall():
                 d = r[0]
                 points[d] = DailyPoint(
@@ -131,7 +126,7 @@ def fetch_recent_points(user_id: int, lookback_days: int = 14) -> List[DailyPoin
                     setup=_to_float(r[4]),
                 )
 
-            # market_data (last snapshot per day)
+            # market snapshots
             cur.execute(
                 """
                 SELECT DISTINCT ON (DATE(timestamp))
@@ -143,6 +138,7 @@ def fetch_recent_points(user_id: int, lookback_days: int = 14) -> List[DailyPoin
                 """,
                 (start_date,),
             )
+
             for r in cur.fetchall():
                 d = r[0]
                 if d not in points:
@@ -169,30 +165,25 @@ def fetch_recent_points(user_id: int, lookback_days: int = 14) -> List[DailyPoin
     return out
 
 
+# =========================================================
+# CORE DETECTOR
+# =========================================================
+
 def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[str, Any]:
-    """
-    Returns a transition snapshot:
-    {
-      "transition_risk": 0-100,
-      "primary_flag": "...",
-      "signals": {...},
-      "narrative": "Hedge-fund style one-liner",
-      "confidence": 0-1
-    }
-    """
+
     pts = fetch_recent_points(user_id=user_id, lookback_days=lookback_days)
+
     if len(pts) < 5:
         return {
             "transition_risk": 50,
+            "normalized_risk": 0.5,
             "primary_flag": "insufficient_history",
-            "signals": {"note": "Not enough multi-day history to detect transitions."},
-            "narrative": "Transition signals unavailable. Insufficient multi-day history.",
+            "signals": {"note": "Not enough multi-day history."},
+            "narrative": "Transition signals unavailable. Insufficient history.",
             "confidence": 0.25,
         }
 
-    # windows
     w5 = pts[-5:]
-    w10 = pts[-10:] if len(pts) >= 10 else pts
 
     prices_5 = [p.price for p in w5]
     vols_5 = [p.volume for p in w5]
@@ -200,87 +191,63 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
     mkt_5 = [p.market for p in w5]
     chg_5 = [p.change_24h for p in w5]
 
-    # trend proxies
     vol_slope = _slope(vols_5)
     price_slope = _slope(prices_5)
     tech_slope = _slope(tech_5)
     mkt_slope = _slope(mkt_5)
 
-    # magnitude proxies
     price_5_pct = _pct(prices_5[0], prices_5[-1]) if prices_5 else None
     vol_5_pct = _pct(vols_5[0], vols_5[-1]) if vols_5 else None
 
-    # volatility proxy: std of abs change_24h
     abs_chg = [abs(x) if x is not None else None for x in chg_5]
-    vol_of_vol = _std(abs_chg)  # lower -> compression
+    vol_of_vol = _std(abs_chg)
 
-    # risk scoring (start neutral)
     risk = 50
     flags: List[str] = []
     notes: List[str] = []
     confidence = 0.55
 
-    # =========================================================
-    # 1) Distribution: volume rising while price stalls / fades
-    # =========================================================
+    # Distribution
     if vol_slope is not None and price_slope is not None:
         if vol_slope > 0 and price_slope <= 0:
             risk += 20
             flags.append("distribution_build")
-            notes.append("Participation rising while price fails to advance.")
 
-    # also consider % changes
-    if vol_5_pct is not None and price_5_pct is not None:
+    if vol_5_pct and price_5_pct:
         if vol_5_pct > 8 and price_5_pct < 1.5:
             risk += 15
             flags.append("volume_price_divergence")
-            notes.append("Volume expansion without price follow-through.")
 
-    # =========================================================
-    # 2) Trend exhaustion: technical weakening while market stable
-    # =========================================================
-    if tech_slope is not None and mkt_slope is not None:
+    # Momentum fade
+    if tech_slope and mkt_slope is not None:
         if tech_slope < 0 and mkt_slope >= 0:
             risk += 10
             flags.append("momentum_fade")
-            notes.append("Technical impulse deteriorating under a stable tape.")
 
-    # =========================================================
-    # 3) Bull-trap risk: price up but quality down (volume down / tech down)
-    # =========================================================
-    if price_slope is not None and price_slope > 0:
-        if (vol_slope is not None and vol_slope < 0) or (tech_slope is not None and tech_slope < 0):
+    # Bull trap
+    if price_slope and price_slope > 0:
+        if (vol_slope and vol_slope < 0) or (tech_slope and tech_slope < 0):
             risk += 10
             flags.append("bull_trap_risk")
-            notes.append("Upside attempt lacks participation or momentum support.")
 
-    # =========================================================
-    # 4) Volatility compression: low vol-of-vol tends to precede expansion
-    # =========================================================
+    # Compression
     if vol_of_vol is not None:
-        if vol_of_vol < 0.8:  # heuristic; change if your data scale differs
+        if vol_of_vol < 0.8:
             risk += 8
             flags.append("volatility_compression")
-            notes.append("Compression building. Expansion risk rising.")
         elif vol_of_vol > 2.0:
             risk += 6
             flags.append("volatility_expansion")
-            notes.append("Expansion regime. Whipsaw risk elevated.")
 
-    # =========================================================
-    # 5) Risk asymmetry: scores weakening together
-    # =========================================================
-    # If market + technical both down over the window -> downside asymmetry increases
-    if mkt_slope is not None and tech_slope is not None:
+    # Risk asymmetry
+    if mkt_slope and tech_slope:
         if mkt_slope < 0 and tech_slope < 0:
             risk += 12
             flags.append("risk_asymmetry_negative")
-            notes.append("Market + technical drift negative. Downside asymmetry widening.")
 
-    # clamp
     risk = max(0, min(100, risk))
+    normalized_risk = round(risk / 100.0, 4)
 
-    # confidence tweaks
     if len(flags) == 0:
         confidence = 0.45
     elif len(flags) >= 3:
@@ -290,19 +257,15 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
 
     primary_flag = flags[0] if flags else "no_transition_signal"
 
-    # Hedge-fund narrative (short, not retail)
-    if "distribution_build" in flags or "volume_price_divergence" in flags:
-        narrative = "Distribution characteristics increasing. Upside convexity deteriorating."
-    elif "bull_trap_risk" in flags:
-        narrative = "Upside attempts lack quality. Bull-trap risk elevated."
-    elif "volatility_compression" in flags:
-        narrative = "Compression building. Break risk rising. Direction still unconfirmed."
-    elif "risk_asymmetry_negative" in flags:
-        narrative = "Downside asymmetry widening. Risk management takes priority over exposure."
-    elif "momentum_fade" in flags:
-        narrative = "Momentum fading. Regime maturity increasing."
-    else:
-        narrative = "No clear transition signature. Regime likely persistent."
+    narrative_map = {
+        "distribution_build": "Distribution characteristics increasing. Upside convexity deteriorating.",
+        "bull_trap_risk": "Upside attempts lack quality. Bull-trap risk elevated.",
+        "volatility_compression": "Compression building. Break risk rising.",
+        "risk_asymmetry_negative": "Downside asymmetry widening. Risk management prioritized.",
+        "momentum_fade": "Momentum fading. Regime maturity increasing.",
+    }
+
+    narrative = narrative_map.get(primary_flag, "No clear transition signature. Regime likely persistent.")
 
     signals = {
         "window_days": 5,
@@ -312,17 +275,36 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
         "market_slope": mkt_slope,
         "price_5d_pct": price_5_pct,
         "volume_5d_pct": vol_5_pct,
-        "volatility_proxy_std_abs_change": vol_of_vol,
+        "volatility_proxy": vol_of_vol,
         "flags": flags,
-        "notes": notes,
         "technical_strength": _classify_strength(tech_5[-1] if tech_5 else None),
         "market_strength": _classify_strength(mkt_5[-1] if mkt_5 else None),
     }
 
     return {
         "transition_risk": risk,
+        "normalized_risk": normalized_risk,  # 🔥 ENGINE INPUT
         "primary_flag": primary_flag,
         "signals": _safe_json(signals),
         "narrative": narrative,
         "confidence": round(confidence, 2),
     }
+
+
+# =========================================================
+# ENGINE HELPER (VERY IMPORTANT)
+# =========================================================
+
+def get_transition_risk_value(user_id: int) -> float:
+    """
+    Clean engine accessor.
+    Always returns a float.
+    Never crashes the bot.
+    """
+
+    try:
+        snap = compute_transition_detector(user_id)
+        return float(snap.get("normalized_risk", 0.5))
+    except Exception as e:
+        logger.warning("Transition risk fallback triggered: %s", e)
+        return 0.5
