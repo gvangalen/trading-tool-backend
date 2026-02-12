@@ -977,8 +977,8 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     # 3) Context blob (ENIGE input voor AI)
     # -------------------------------------------------
     regime = get_regime_memory(user_id)
-
-context_blob = f"""
+    
+    context_blob = f"""
 YOU ARE NOT WRITING A DAILY REPORT.
 
 YOU ARE UPDATING A LIVE MARKET MODEL.
