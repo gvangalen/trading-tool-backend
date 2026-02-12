@@ -20,29 +20,50 @@ logger.setLevel(logging.INFO)
 # REPORT AGENT ROLE
 # =====================================================
 REPORT_TASK = """
-Je bent een senior Bitcoin market analyst.
+Je bent een senior Bitcoin market strategist.
 
-Schrijf een dagelijks rapport voor een ervaren gebruiker.
+Je schrijft GEEN daily snapshot.
+Je UPDATE een bestaand marktregime.
 
-Gebruik uitsluitend aangeleverde data.
-Analyseer veranderingen t.o.v. gisteren.
-Verklaar causaliteit.
-Vermijd herhaling tussen secties.
+PRIMAIRE TAAK:
+- Detecteer het huidige marktregime
+- Bepaal of het regime intact blijft, verdiept of kantelt
+- Analyseer veranderingen binnen dat kader
+- Bouw voort op het vorige rapport
 
-Geen:
+HERSTART HET MARKTVERHAAL NOOIT.
+
+Markten bewegen in regimes — niet per dag.
+
+DENKKADER (intern toepassen, niet benoemen):
+CURRENT_REGIME
+REGIME_DIRECTION
+REGIME_STRENGTH
+RISK_ENVIRONMENT
+
+FOCUS:
+- regime continuïteit
+- structureel vs reactief
+- signaalconvergentie
+- positioneel risico
+
+Schrijf alsof een portfolio manager dit leest om exposure te bepalen.
+
+GEEN:
 - storytelling
 - educatie
+- indicator uitleg
 - opsommingen
-- labels
-- prijsniveaus (behalve actuele prijs)
+- herhaling van data
+- prijslevels (behalve spot)
 
-Schrijf compact en professioneel.
+Elke sectie moet voortbouwen op dezelfde centrale markthypothese.
+Nooit opnieuw definiëren.
 """
 
 # =====================================================
 # Helpers
 # =====================================================
-
 SYSTEM_PROMPT = build_system_prompt(
     agent="report",
     task=REPORT_TASK,
@@ -532,8 +553,6 @@ def _indicator_list(cur, sql, user_id):
 # =====================================================
 # INDICATOR HIGHLIGHTS (UNIFORM STRUCTUUR – GEEN DUPLICATEN)
 # =====================================================
-
-
 def get_market_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
@@ -612,8 +631,6 @@ def get_technical_indicator_highlights(user_id: int) -> List[dict]:
 # =====================================================
 # SETUP SNAPSHOT
 # =====================================================
-
-
 def get_setup_snapshot(user_id: int) -> Dict[str, Any]:
     conn = get_db_connection()
     try:
@@ -664,8 +681,6 @@ def get_setup_snapshot(user_id: int) -> Dict[str, Any]:
 # =====================================================
 # STRATEGY SNAPSHOT
 # =====================================================
-
-
 def get_active_strategy_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
     try:
@@ -706,8 +721,6 @@ def get_active_strategy_snapshot(user_id: int) -> Optional[Dict[str, Any]]:
 # =====================================================
 # PROMPTS (REPORT AGENT 2.0 — SAMENHANG & VERKLARING)
 # =====================================================
-
-
 def p_exec() -> str:
     return """
 Formuleer één centrale markthypothese voor vandaag.
@@ -855,8 +868,6 @@ Geen opsommingen, één doorlopend stuk tekst.
 # =====================================================
 # MAIN BUILDER — REPORT AGENT 2.0 (SAFE + CONTEXT-AWARE)
 # =====================================================
-
-
 def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     """
     Report Agent 2.0
@@ -937,63 +948,131 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     # -------------------------------------------------
     context_blob = f"""
 Je schrijft het rapport voor vandaag.
-Gebruik UITSLUITEND onderstaande data.
-Focus op veranderingen en causaliteit: geen herhaling.
 
-=== VERANDERINGEN T.O.V. VORIGE DAG ===
+⚠️ BELANGRIJK:
+Je schrijft GEEN nieuw rapport.
+Je UPDATE een bestaand marktverhaal.
+
+Gebruik uitsluitend onderstaande data.
+
+==================================================
+BESTAAND MARKTREGIME — VERPLICHT GEBRUIKEN
+==================================================
+
+Dit is het bestaande marktverhaal.
+
+Je taak:
+
+- bepaal of het regime intact blijft
+- bepaal of het regime verdiept
+- detecteer een mogelijke regime shift
+- update het verhaal
+
+HERSTART HET VERHAAL NOOIT.
+
+==================================================
+VERANDERINGEN T.O.V. VORIGE DAG
+==================================================
+
 Beschikbare datums: vandaag={deltas.get("today_date")}, vorige={deltas.get("prev_date")}
+
 Macro score delta: {deltas.get("macro_delta")}
 Market score delta: {deltas.get("market_delta")}
 Technical score delta: {deltas.get("technical_delta")}
 Setup score delta: {deltas.get("setup_delta")}
+
 Prijs delta: {deltas.get("price_delta")}
 24h change delta: {deltas.get("change_delta")}
 Volume delta: {deltas.get("volume_delta")}
 
-=== ACTUELE MARKT ===
+==================================================
+ACTUELE MARKT
+==================================================
+
 Prijs: {market.get("price")}
 24h verandering: {market.get("change_24h")}
 Volume: {market.get("volume")}
 
-=== SCORES ===
+==================================================
+SCORES
+==================================================
+
 Macro: {scores.get("macro_score")}
 Market: {scores.get("market_score")}
 Technical: {scores.get("technical_score")}
 Setup: {scores.get("setup_score")}
 
-=== MARKET INDICATORS (top) ===
+==================================================
+MARKET INDICATORS (top)
+==================================================
 {json.dumps(_safe_json(market_ind), ensure_ascii=False)}
 
-=== MACRO INDICATORS (top) ===
+==================================================
+MACRO INDICATORS (top)
+==================================================
 {json.dumps(_safe_json(macro_ind), ensure_ascii=False)}
 
-=== TECHNICAL INDICATORS (top) ===
+==================================================
+TECHNICAL INDICATORS (top)
+==================================================
 {json.dumps(_safe_json(tech_ind), ensure_ascii=False)}
 
-=== BESTE SETUP ===
+==================================================
+BESTE SETUP
+==================================================
 {json.dumps(_safe_json(best_setup), ensure_ascii=False)}
 
-=== ACTIEVE STRATEGIE ===
+==================================================
+ACTIEVE STRATEGIE
+==================================================
 {json.dumps(_safe_json(active_strategy), ensure_ascii=False)}
 
-=== BOT SNAPSHOT ===
+==================================================
+BOT SNAPSHOT
+==================================================
 {json.dumps(_safe_json(bot_snapshot), ensure_ascii=False)}
 
-=== AI INSIGHTS (context) ===
+==================================================
+AI INSIGHTS
+==================================================
 {json.dumps(_safe_json(ai_insights), ensure_ascii=False)}
 
-=== AI REFLECTIONS (context) ===
+==================================================
+AI REFLECTIONS
+==================================================
 {json.dumps(_safe_json(ai_reflections), ensure_ascii=False)}
 
-=== VORIG RAPPORT (referentie) ===
+==================================================
+VORIG RAPPORT — FUNDAMENT VAN HET VERHAAL
+==================================================
 {json.dumps(_safe_json(prev_report), ensure_ascii=False)}
 
-HARD RULES:
-- Begin elke sectie met: wat is er veranderd of wat bleef opmerkelijk gelijk
-- Verklaar waarom (causaliteit) op basis van data; geen aannames
-- Noem geen prijsniveaus/support/resistance; alleen de actuele prijs mag
-- Vermijd herhaling tussen secties; maak elke sectie uniek
-""".strip()
+==================================================
+CENTRALE DENKREGEL (VERPLICHT)
+==================================================
+
+Bepaal eerst intern:
+
+CURRENT_REGIME  
+REGIME_DIRECTION  
+REGIME_STRENGTH  
+RISK_ENVIRONMENT  
+
+Gebruik dit impliciet in ALLE secties.
+
+Nooit opnieuw starten per sectie.
+Bouw voort op dezelfde hypothese.
+
+==================================================
+HARD RULES
+==================================================
+
+- Bouw voort op de centrale markthypothese
+- Herhaal het regime niet elke sectie
+- Vermijd data-herhaling
+- Focus op implicatie en risico
+- Geen prijsniveaus behalve spot
+"""
 
     # -------------------------------------------------
     # 4) Tekst genereren + herhaling reduceren
