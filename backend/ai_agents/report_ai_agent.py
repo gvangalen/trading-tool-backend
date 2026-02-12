@@ -104,6 +104,26 @@ def _flatten_text(obj) -> List[str]:
 
     return out
 
+def get_regime_memory(user_id: int):
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+
+            cur.execute("""
+                SELECT regime_label, confidence, signals_json, narrative
+                FROM regime_memory
+                WHERE user_id = %s
+                ORDER BY date DESC
+                LIMIT 1;
+            """, (user_id,))
+
+            return cur.fetchone()
+
+    finally:
+        conn.close()
+
 
 def _safe_json(obj):
     """
