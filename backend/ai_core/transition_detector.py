@@ -2,7 +2,8 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
+from functools import lru_cache
 
 from backend.utils.db import get_db_connection
 
@@ -26,6 +27,10 @@ class DailyPoint:
     setup: Optional[float]
 
 
+# =========================================================
+# HELPERS
+# =========================================================
+
 def _to_float(v) -> Optional[float]:
     try:
         if v is None:
@@ -36,9 +41,6 @@ def _to_float(v) -> Optional[float]:
 
 
 def _safe_json(obj: Any) -> Any:
-    """
-    JSON-safe serialization
-    """
     from datetime import datetime
 
     if obj is None:
@@ -91,6 +93,7 @@ def _classify_strength(v: Optional[float]) -> Optional[str]:
 # =========================================================
 
 def fetch_recent_points(user_id: int, lookback_days: int = 14) -> List[DailyPoint]:
+
     conn = get_db_connection()
     if not conn:
         return []
@@ -141,6 +144,7 @@ def fetch_recent_points(user_id: int, lookback_days: int = 14) -> List[DailyPoin
 
             for r in cur.fetchall():
                 d = r[0]
+
                 if d not in points:
                     points[d] = DailyPoint(
                         d=d,
@@ -162,6 +166,7 @@ def fetch_recent_points(user_id: int, lookback_days: int = 14) -> List[DailyPoin
 
     out = list(points.values())
     out.sort(key=lambda x: x.d)
+
     return out
 
 
@@ -204,33 +209,46 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
 
     risk = 50
     flags: List[str] = []
-    notes: List[str] = []
     confidence = 0.55
 
+    # =====================================================
     # Distribution
+    # =====================================================
+
     if vol_slope is not None and price_slope is not None:
         if vol_slope > 0 and price_slope <= 0:
             risk += 20
             flags.append("distribution_build")
 
-    if vol_5_pct and price_5_pct:
+    if vol_5_pct is not None and price_5_pct is not None:
         if vol_5_pct > 8 and price_5_pct < 1.5:
             risk += 15
             flags.append("volume_price_divergence")
 
+    # =====================================================
     # Momentum fade
-    if tech_slope and mkt_slope is not None:
+    # =====================================================
+
+    if tech_slope is not None and mkt_slope is not None:
         if tech_slope < 0 and mkt_slope >= 0:
             risk += 10
             flags.append("momentum_fade")
 
+    # =====================================================
     # Bull trap
-    if price_slope and price_slope > 0:
-        if (vol_slope and vol_slope < 0) or (tech_slope and tech_slope < 0):
+    # =====================================================
+
+    if price_slope is not None and price_slope > 0:
+        if (vol_slope is not None and vol_slope < 0) or (
+            tech_slope is not None and tech_slope < 0
+        ):
             risk += 10
             flags.append("bull_trap_risk")
 
-    # Compression
+    # =====================================================
+    # Compression / Expansion
+    # =====================================================
+
     if vol_of_vol is not None:
         if vol_of_vol < 0.8:
             risk += 8
@@ -239,15 +257,20 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
             risk += 6
             flags.append("volatility_expansion")
 
+    # =====================================================
     # Risk asymmetry
-    if mkt_slope and tech_slope:
+    # =====================================================
+
+    if mkt_slope is not None and tech_slope is not None:
         if mkt_slope < 0 and tech_slope < 0:
             risk += 12
             flags.append("risk_asymmetry_negative")
 
+    # clamp
     risk = max(0, min(100, risk))
     normalized_risk = round(risk / 100.0, 4)
 
+    # confidence
     if len(flags) == 0:
         confidence = 0.45
     elif len(flags) >= 3:
@@ -265,7 +288,10 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
         "momentum_fade": "Momentum fading. Regime maturity increasing.",
     }
 
-    narrative = narrative_map.get(primary_flag, "No clear transition signature. Regime likely persistent.")
+    narrative = narrative_map.get(
+        primary_flag,
+        "No clear transition signature. Regime likely persistent.",
+    )
 
     signals = {
         "window_days": 5,
@@ -283,7 +309,7 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
 
     return {
         "transition_risk": risk,
-        "normalized_risk": normalized_risk,  # 🔥 ENGINE INPUT
+        "normalized_risk": normalized_risk,
         "primary_flag": primary_flag,
         "signals": _safe_json(signals),
         "narrative": narrative,
@@ -292,19 +318,23 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
 
 
 # =========================================================
-# ENGINE HELPER (VERY IMPORTANT)
+# ENGINE HELPER (CACHED — HUGE PERFORMANCE WIN)
 # =========================================================
 
+@lru_cache(maxsize=32)
 def get_transition_risk_value(user_id: int) -> float:
     """
     Clean engine accessor.
-    Always returns a float.
+    Cached → voorkomt multiple DB hits per run.
+
+    Always returns float.
     Never crashes the bot.
     """
 
     try:
         snap = compute_transition_detector(user_id)
         return float(snap.get("normalized_risk", 0.5))
+
     except Exception as e:
         logger.warning("Transition risk fallback triggered: %s", e)
         return 0.5
