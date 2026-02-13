@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 from psycopg2.extras import Json
 
 from backend.utils.db import get_db_connection
-from backend.ai_core.transition_detector import compute_transition_detector
+from backend.engine.transition_detector import compute_transition_detector
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
