@@ -1,7 +1,7 @@
 import os
 import json
 import logging
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from celery import shared_task
@@ -11,14 +11,15 @@ from psycopg2.extras import Json
 from backend.utils.db import get_db_connection
 from backend.ai_agents.report_ai_agent import generate_daily_report_sections
 
-# ✅ NEW — REGIME MEMORY (CRITICAL)
+# ✅ REGIME MEMORY
 from backend.ai_core.regime_memory import (
     store_regime_memory,
     get_regime_memory,
 )
 
-from backend.utils.pdf_generator import generate_pdf_report
-from backend.utils.email_utils import send_email_with_attachment
+# ✅ NEW — SNAPSHOT + PLAYWRIGHT
+from backend.utils.report_snapshot import create_report_snapshot
+from backend.celery_tasks.celery_task_generate_pdf import generate_pdf_from_snapshot
 
 
 # =====================================================
@@ -48,9 +49,6 @@ def to_float(v):
 
 
 def jsonb(v, fallback=None):
-    """
-    Safe jsonb writer
-    """
     if v is None:
         return Json(fallback) if fallback is not None else None
 
@@ -86,7 +84,7 @@ def generate_daily_report(user_id: int):
         cursor = conn.cursor()
 
         # =================================================
-        # 🧠 0️⃣ REGIME MEMORY — MUST RUN FIRST
+        # 🧠 REGIME MEMORY — MUST RUN FIRST
         # =================================================
         regime = get_regime_memory(user_id)
 
@@ -98,15 +96,21 @@ def generate_daily_report(user_id: int):
             store_regime_memory(user_id)
 
         # -------------------------------------------------
-        # 1️⃣ REPORT GENEREREN (AI)
+        # 1️⃣ GENERATE REPORT (AI)
         # -------------------------------------------------
         report = generate_daily_report_sections(user_id=user_id)
 
         if not report or not isinstance(report, dict):
             raise ValueError("Report agent gaf geen geldig dict terug")
 
+        # ⭐ META toevoegen (extreem belangrijk voor audits later)
+        report["meta"] = {
+            "version": "daily_v1",
+            "generated_at": datetime.utcnow().isoformat(),
+        }
+
         # -------------------------------------------------
-        # 2️⃣ NORMALISEREN
+        # 2️⃣ NORMALIZE
         # -------------------------------------------------
         executive_summary    = jsonb(report.get("executive_summary"), {})
         market_analysis      = jsonb(report.get("market_analysis"), {})
@@ -247,46 +251,29 @@ def generate_daily_report(user_id: int):
         conn.commit()
         logger.info("💾 daily_reports opgeslagen")
 
-        # -------------------------------------------------
-        # 4️⃣ PDF GENEREREN
-        # -------------------------------------------------
-        cursor.execute("""
-            SELECT *
-            FROM daily_reports
-            WHERE report_date = %s AND user_id = %s
-            LIMIT 1;
-        """, (today, user_id))
-
-        row = cursor.fetchone()
-        cols = [d[0] for d in cursor.description]
-        report_row = dict(zip(cols, row))
-
-        pdf_buffer = generate_pdf_report(
-            report_row,
-            report_type="daily"
+        # =================================================
+        # ⭐ 4️⃣ CREATE SNAPSHOT (NEW FLOW)
+        # =================================================
+        snapshot_id, token = create_report_snapshot(
+            user_id=user_id,
+            report_type="daily",
+            report_id=0,  # optional — kan je later koppelen
+            report_json=report,  # 🔥 PURE AI STATE
         )
 
-        if not pdf_buffer:
-            raise RuntimeError("PDF generatie mislukt")
+        logger.info(f"📸 Snapshot created | id={snapshot_id}")
 
-        pdf_dir = os.path.join("static", "pdf", "daily")
-        os.makedirs(pdf_dir, exist_ok=True)
-        pdf_path = os.path.join(pdf_dir, f"daily_{today}_u{user_id}.pdf")
+        # =================================================
+        # ⭐ 5️⃣ ASYNC PLAYWRIGHT PDF
+        # =================================================
+        frontend_url = os.getenv("FRONTEND_URL")
 
-        with open(pdf_path, "wb") as f:
-            f.write(pdf_buffer.getvalue())
+        generate_pdf_from_snapshot.delay(
+            snapshot_id=snapshot_id,
+            frontend_url=frontend_url,
+        )
 
-        logger.info(f"🖨️ PDF opgeslagen: {pdf_path}")
-
-        # -------------------------------------------------
-        # 5️⃣ EMAIL (optioneel)
-        # -------------------------------------------------
-        try:
-            subject = f"📈 BTC Daily Report – {today}"
-            body = "Je dagelijkse Bitcoin rapport is beschikbaar."
-            send_email_with_attachment(subject, body, pdf_path)
-        except Exception:
-            logger.warning("⚠️ Email verzenden mislukt", exc_info=True)
+        logger.info("🖨️ PDF job queued")
 
     except Exception:
         logger.error("❌ Fout in daily_report_task", exc_info=True)
