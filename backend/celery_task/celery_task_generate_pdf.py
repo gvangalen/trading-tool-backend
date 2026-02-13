@@ -16,11 +16,11 @@ logger.setLevel(logging.INFO)
 # CONFIG
 # =========================================================
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://your-domain.com")
+FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 PDF_DIR = os.getenv(
     "PDF_OUTPUT_DIR",
-    "/var/reports",   # <-- production path (bijv mounted volume / S3 sync)
+    "/var/reports",
 )
 
 
@@ -33,12 +33,6 @@ def _ensure_pdf_dir():
 
 
 def _build_print_url(token: str) -> str:
-    """
-    MUST match your Next route:
-
-    app/(print)/daily-report/page.tsx
-    """
-
     return f"{FRONTEND_URL}/daily-report?token={token}"
 
 
@@ -81,21 +75,14 @@ def _update_snapshot_status(
 @shared_task(
     bind=True,
     autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_kwargs={"max_retries": 3},
+    retry_backoff=10,   # exponential
+    retry_kwargs={"max_retries": 4},
+    acks_late=True,     # critical → avoids lost jobs
 )
 def generate_report_pdf(self, snapshot_id: int):
-    """
-    Generates a PDF from the Playwright print route.
 
-    Flow:
-
-    DB -> token
-       -> open Playwright
-       -> wait for print marker
-       -> save PDF
-       -> update DB
-    """
+    if not FRONTEND_URL:
+        raise RuntimeError("FRONTEND_URL not configured")
 
     conn = get_db_connection()
     if not conn:
@@ -126,13 +113,13 @@ def generate_report_pdf(self, snapshot_id: int):
 
         token = row[0]
 
-        logger.info("📄 Generating PDF for snapshot %s", snapshot_id)
+        logger.info("📄 Generating PDF | snapshot=%s", snapshot_id)
 
         _update_snapshot_status(conn, snapshot_id, status="generating")
         conn.commit()
 
         # =====================================================
-        # Prepare path
+        # File path
         # =====================================================
 
         _ensure_pdf_dir()
@@ -143,54 +130,53 @@ def generate_report_pdf(self, snapshot_id: int):
         url = _build_print_url(token)
 
         # =====================================================
-        # PLAYWRIGHT
+        # PLAYWRIGHT (SAFE MODE)
         # =====================================================
 
         with sync_playwright() as p:
 
             browser = p.chromium.launch(
                 headless=True,
-                args=["--no-sandbox"],
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--single-process",
+                ],
             )
 
-            context = browser.new_context()
+            try:
 
-            page = context.new_page()
+                context = browser.new_context()
 
-            logger.info("➡️ Opening print URL: %s", url)
+                page = context.new_page()
 
-            page.goto(
-                url,
-                wait_until="networkidle",
-                timeout=60_000,
-            )
+                logger.info("➡️ Opening print URL: %s", url)
 
-            # 🔥 WAIT FOR PRINT READY MARKER
-            page.wait_for_selector(
-                "[data-print-ready='true']",
-                timeout=60_000,
-            )
+                page.goto(
+                    url,
+                    wait_until="networkidle",
+                    timeout=90_000,
+                )
 
-            # give charts/fonts a breath
-            page.wait_for_timeout(800)
+                # 🔥 WAIT FOR PRINT MARKER
+                page.wait_for_selector(
+                    "[data-print-ready='true']",
+                    timeout=90_000,
+                )
 
-            # =====================================================
-            # EXPORT PDF
-            # =====================================================
+                # fonts/charts buffer
+                page.wait_for_timeout(1200)
 
-            page.pdf(
-                path=filepath,
-                format="A4",
-                print_background=True,
-                margin={
-                    "top": "10mm",
-                    "bottom": "10mm",
-                    "left": "10mm",
-                    "right": "10mm",
-                },
-            )
+                page.pdf(
+                    path=filepath,
+                    format="A4",
+                    print_background=True,
+                    prefer_css_page_size=True,
+                )
 
-            browser.close()
+            finally:
+                browser.close()
 
         # =====================================================
         # Stats
@@ -199,7 +185,7 @@ def generate_report_pdf(self, snapshot_id: int):
         file_size = os.path.getsize(filepath)
         generation_ms = int((time.time() - start_time) * 1000)
 
-        pdf_url = f"/reports/{filename}"  # adjust if using CDN/S3
+        pdf_url = f"/reports/{filename}"
 
         _update_snapshot_status(
             conn,
@@ -213,7 +199,7 @@ def generate_report_pdf(self, snapshot_id: int):
         conn.commit()
 
         logger.info(
-            "✅ PDF generated | snapshot=%s | size=%.2f KB | time=%sms",
+            "✅ PDF generated | snapshot=%s | %.1fKB | %sms",
             snapshot_id,
             file_size / 1024,
             generation_ms,
