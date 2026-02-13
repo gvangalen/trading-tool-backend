@@ -87,6 +87,11 @@ def calculate_market_pressure(
 
     for key, weight in weights.items():
 
+        try:
+            weight = float(weight)
+        except Exception:
+            continue
+
         normalized = _normalize_score(scores.get(key))
 
         weighted_sum += normalized * weight
@@ -103,19 +108,14 @@ def calculate_market_pressure(
 
     transition_risk = get_transition_risk_value(user_id)
 
-    """
-    transition_risk:
+    if transition_risk is None:
+        transition_risk = 0.5
 
-    0.0 → stable regime
-    0.5 → neutral
-    1.0 → regime instability
-    """
+    transition_risk = _clamp(float(transition_risk))
 
     stability = 1.0 - transition_risk
 
-    # Institutional trick:
     # instability should hit harder than stability boosts
-
     if transition_risk > 0.7:
         penalty = transition_risk * 0.55
     elif transition_risk > 0.5:
@@ -148,7 +148,7 @@ def calculate_market_pressure(
 
 def get_market_pressure(
     user_id: int,
-    scores:s: Dict[str, float],
+    scores: Dict[str, float],
 ) -> float:
     """
     Bot-safe accessor.
