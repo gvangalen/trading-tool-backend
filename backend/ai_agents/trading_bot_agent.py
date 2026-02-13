@@ -818,12 +818,22 @@ def run_trading_bot_agent(
         results = []
 
         for bot in bots:
-            snapshot = _get_active_strategy_snapshot(conn, user_id, bot["strategy_id"], report_date)
+            snapshot = _get_active_strategy_snapshot(
+                conn, user_id, bot["strategy_id"], report_date
+            )
 
-            # 1) setup_match (UI contract)
-            setup_match = _build_setup_match(bot=bot, scores=scores, snapshot=snapshot)
+            # -------------------------------------------------
+            # 1) Setup match (UI contract)
+            # -------------------------------------------------
+            setup_match = _build_setup_match(
+                bot=bot,
+                scores=scores,
+                snapshot=snapshot,
+            )
 
-            # 2) HARD GUARD: no snapshot => never trade (same behavior as before)
+            # -------------------------------------------------
+            # 2) HARD GUARD: no snapshot => never trade
+            # -------------------------------------------------
             if snapshot is None:
                 decision = {
                     "symbol": bot["symbol"],
@@ -834,8 +844,11 @@ def run_trading_bot_agent(
                     "amount_eur": 0.0,
                     "setup_match": setup_match,
                 }
+
             else:
-                # 3) Build setup payload from strategies table
+                # -------------------------------------------------
+                # 3) Build setup payload for engine
+                # -------------------------------------------------
                 setup_payload = _get_strategy_setup_payload(
                     conn,
                     user_id=user_id,
@@ -845,7 +858,9 @@ def run_trading_bot_agent(
                     symbol=bot.get("symbol"),
                 )
 
+                # -------------------------------------------------
                 # 4) ENGINE DECISION (single source of truth)
+                # -------------------------------------------------
                 brain = run_bot_brain(
                     user_id=user_id,
                     setup=setup_payload,
@@ -860,7 +875,24 @@ def run_trading_bot_agent(
                 action = "buy" if brain.get("action") == "buy" else "hold"
                 amount = float(brain.get("amount_eur") or 0.0)
 
-                # respect bot min/max budget clamps (same as before)
+                # -------------------------------------------------
+                # Engine confidence → label
+                # -------------------------------------------------
+                engine_conf = brain.get("confidence")
+
+                if isinstance(engine_conf, (int, float)):
+                    if engine_conf >= 0.7:
+                        confidence_label = "high"
+                    elif engine_conf >= 0.4:
+                        confidence_label = "medium"
+                    else:
+                        confidence_label = "low"
+                else:
+                    confidence_label = "low"
+
+                # -------------------------------------------------
+                # Respect bot min/max budget clamps
+                # -------------------------------------------------
                 if action == "buy":
                     min_eur = float(bot["budget"].get("min_order_eur") or 0)
                     max_eur = float(bot["budget"].get("max_order_eur") or 0)
@@ -873,40 +905,56 @@ def run_trading_bot_agent(
                 decision = {
                     "symbol": bot["symbol"],
                     "action": action,
-                    "confidence": _confidence_from_score(_clamp_score(scores.get("market", 10), default=10)),
+                    "confidence": confidence_label,
                     "score": _clamp_score(scores.get("market", 10), default=10),
                     "reasons": [brain.get("reason", "engine_decision")],
                     "amount_eur": round(amount, 2),
                     "setup_match": setup_match,
                 }
 
-                # never buy with 0
+                # -------------------------------------------------
+                # Hard safety guard
+                # -------------------------------------------------
                 if decision["action"] == "buy" and decision["amount_eur"] <= 0:
                     decision["action"] = "hold"
                     decision["amount_eur"] = 0.0
 
+            # -------------------------------------------------
             # 5) Budget check
-            today_spent = get_today_spent_eur(conn, user_id, bot["bot_id"], report_date)
+            # -------------------------------------------------
+            today_spent = get_today_spent_eur(
+                conn, user_id, bot["bot_id"], report_date
+            )
+
             ok, reason = check_bot_budget(
                 bot_config=bot,
                 today_spent_eur=today_spent,
                 proposed_amount_eur=float(decision.get("amount_eur") or 0.0),
             )
+
             if not ok:
-                logger.info("Bot %s blocked by budget rule: %s", bot["bot_id"], reason)
+                logger.info(
+                    "Bot %s blocked by budget rule: %s",
+                    bot["bot_id"],
+                    reason,
+                )
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
                 decision.setdefault("reasons", [])
                 decision["reasons"].append(f"budget_blocked:{reason}")
 
+            # -------------------------------------------------
             # 6) Order proposal
+            # -------------------------------------------------
             order_proposal = build_order_proposal(
                 conn=conn,
                 bot=bot,
                 decision=decision,
                 today_spent_eur=today_spent,
-                total_balance_eur=abs(get_bot_balance(conn, user_id, bot["bot_id"])),
+                total_balance_eur=abs(
+                    get_bot_balance(conn, user_id, bot["bot_id"])
+                ),
             )
 
             if decision.get("action") == "buy" and not order_proposal:
@@ -915,7 +963,9 @@ def run_trading_bot_agent(
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
 
+            # -------------------------------------------------
             # 7) Persist decision
+            # -------------------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -928,6 +978,7 @@ def run_trading_bot_agent(
             )
 
             executed = False
+
             if order_proposal:
                 _persist_bot_order(
                     conn=conn,
@@ -960,7 +1011,13 @@ def run_trading_bot_agent(
             )
 
         conn.commit()
-        return {"ok": True, "date": str(report_date), "bots": len(results), "decisions": results}
+
+        return {
+            "ok": True,
+            "date": str(report_date),
+            "bots": len(results),
+            "decisions": results,
+        }
 
     except Exception:
         conn.rollback()
