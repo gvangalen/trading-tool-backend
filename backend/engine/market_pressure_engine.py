@@ -2,13 +2,14 @@ import logging
 from typing import Dict, Optional
 
 from backend.engine.transition_detector import get_transition_risk_value
+from backend.ai_core.regime_memory import get_regime_memory  # 🔥 NEW
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
 # =========================================================
-# CONFIG (institutional defaults)
+# CONFIG
 # =========================================================
 
 DEFAULT_WEIGHTS = {
@@ -21,6 +22,16 @@ DEFAULT_WEIGHTS = {
 BASELINE_PRESSURE = 0.5
 
 
+# 🔥 REGIME MODIFIERS (institutional behavior)
+REGIME_PRESSURE_MAP = {
+    "risk_off": 0.65,
+    "distribution": 0.70,
+    "range": 0.85,
+    "accumulation": 1.05,
+    "risk_on": 1.15,
+}
+
+
 # =========================================================
 # HELPERS
 # =========================================================
@@ -30,10 +41,6 @@ def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 
 def _normalize_score(score: Optional[float]) -> float:
-    """
-    Converts 0–100 score → 0–1
-    Fail-safe → neutral
-    """
     try:
         if score is None:
             return BASELINE_PRESSURE
@@ -49,6 +56,28 @@ def _normalize_score(score: Optional[float]) -> float:
         return BASELINE_PRESSURE
 
 
+def _get_regime_modifier(user_id: int) -> float:
+    """
+    Pull regime from memory.
+
+    NEVER crashes the engine.
+    """
+
+    try:
+        regime = get_regime_memory(user_id)
+
+        if not regime:
+            return 1.0
+
+        label = (regime.get("label") or "").lower()
+
+        return REGIME_PRESSURE_MAP.get(label, 1.0)
+
+    except Exception as e:
+        logger.warning("Regime modifier fallback: %s", e)
+        return 1.0
+
+
 # =========================================================
 # CORE ENGINE
 # =========================================================
@@ -59,21 +88,6 @@ def calculate_market_pressure(
     *,
     weights: Dict[str, float] = DEFAULT_WEIGHTS,
 ) -> float:
-    """
-    Institutional risk synthesizer.
-
-    Combines:
-
-    ✔ multi-factor scores
-    ✔ transition risk
-    ✔ regime stability proxy
-
-    Returns:
-
-        0.0 → extreme defensive
-        0.5 → neutral
-        1.0 → aggressive risk-on
-    """
 
     if not scores:
         return BASELINE_PRESSURE
@@ -97,13 +111,14 @@ def calculate_market_pressure(
         weighted_sum += normalized * weight
         weight_total += weight
 
-    if weight_total == 0:
-        base_pressure = BASELINE_PRESSURE
-    else:
-        base_pressure = weighted_sum / weight_total
+    base_pressure = (
+        weighted_sum / weight_total
+        if weight_total > 0
+        else BASELINE_PRESSURE
+    )
 
     # -----------------------------------------------------
-    # Transition overlay (VERY important)
+    # Transition overlay
     # -----------------------------------------------------
 
     transition_risk = get_transition_risk_value(user_id)
@@ -115,7 +130,6 @@ def calculate_market_pressure(
 
     stability = 1.0 - transition_risk
 
-    # instability should hit harder than stability boosts
     if transition_risk > 0.7:
         penalty = transition_risk * 0.55
     elif transition_risk > 0.5:
@@ -127,14 +141,22 @@ def calculate_market_pressure(
     pressure -= penalty
 
     # -----------------------------------------------------
+    # 🔥 REGIME MODIFIER (NEW — BIG UPGRADE)
+    # -----------------------------------------------------
+
+    regime_modifier = _get_regime_modifier(user_id)
+
+    pressure *= regime_modifier
+
+    # -----------------------------------------------------
     # Regime acceleration boost
     # -----------------------------------------------------
 
     if base_pressure > 0.7 and transition_risk < 0.3:
-        pressure += 0.08  # allow aggressiveness in clean regimes
+        pressure += 0.08
 
     # -----------------------------------------------------
-    # Clamp (BOT SAFETY)
+    # Clamp
     # -----------------------------------------------------
 
     pressure = _clamp(pressure)
@@ -143,19 +165,13 @@ def calculate_market_pressure(
 
 
 # =========================================================
-# ENGINE HELPER (BOT SAFE)
+# ENGINE HELPER
 # =========================================================
 
 def get_market_pressure(
     user_id: int,
     scores: Dict[str, float],
 ) -> float:
-    """
-    Bot-safe accessor.
-
-    NEVER crashes.
-    ALWAYS returns float.
-    """
 
     try:
         return calculate_market_pressure(
