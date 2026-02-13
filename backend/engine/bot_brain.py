@@ -1,13 +1,9 @@
-# backend/engine/bot_brain.py
-
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import date
 from typing import Any, Dict, Optional
 
-# Engines
 from backend.engine.transition_detector import (
     compute_transition_detector,
     get_transition_risk_value,
@@ -18,7 +14,6 @@ from backend.engine.exposure_engine import (
     apply_exposure_to_amount,
 )
 from backend.engine.decision_engine import decide_amount, DecisionEngineError
-
 from backend.ai_core.regime_memory import get_latest_regime_memory
 
 logger = logging.getLogger(__name__)
@@ -34,6 +29,8 @@ DEFAULT_ACTION_RULES = {
     "max_transition_risk_to_buy": 0.60,
     "min_market_pressure_to_buy": 0.52,
 }
+
+EXPOSURE_CAP = 2.0
 
 
 # =========================================================
@@ -53,6 +50,22 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(x, hi))
 
 
+# ⭐ NEW — prevents schema drift between agents
+def _normalize_scores(scores: Dict[str, float]) -> Dict[str, float]:
+    """
+    Accepts BOTH formats:
+
+    macro OR macro_score
+    """
+
+    return {
+        "macro_score": scores.get("macro_score", scores.get("macro", 10)),
+        "technical_score": scores.get("technical_score", scores.get("technical", 10)),
+        "market_score": scores.get("market_score", scores.get("market", 10)),
+        "setup_score": scores.get("setup_score", scores.get("setup", 10)),
+    }
+
+
 # =========================================================
 # Core brain
 # =========================================================
@@ -67,6 +80,9 @@ def run_bot_brain(
 
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
 
+    # ⭐ normalize once
+    scores = _normalize_scores(scores)
+
     # -------------------------------------------------
     # 1) Regime Memory
     # -------------------------------------------------
@@ -78,7 +94,7 @@ def run_bot_brain(
         logger.warning("Regime memory unavailable: %s", e)
 
     # -------------------------------------------------
-    # 2) Transition Risk (0..1)
+    # 2) Transition Risk
     # -------------------------------------------------
 
     try:
@@ -91,7 +107,7 @@ def run_bot_brain(
         transition_snapshot = None
 
     # -------------------------------------------------
-    # 3) Market Pressure (0..1)
+    # 3) Market Pressure
     # -------------------------------------------------
 
     try:
@@ -119,8 +135,15 @@ def run_bot_brain(
         exposure_pack.get("multiplier"), 1.0
     ) or 1.0
 
+    # ⭐ institutional safety cap
+    exposure_multiplier = _clamp(
+        exposure_multiplier,
+        0.0,
+        EXPOSURE_CAP,
+    )
+
     # -------------------------------------------------
-    # 5) Base Amount (DecisionEngine)
+    # 5) Base Amount
     # -------------------------------------------------
 
     try:
@@ -144,29 +167,30 @@ def run_bot_brain(
     )
 
     # -------------------------------------------------
-    # 7) Action Logic
+    # 7) Action Logic (deterministic)
     # -------------------------------------------------
 
-    market_score = _safe_float(scores.get("market_score"), None)
+    market_score = _safe_float(scores.get("market_score"), 10)
 
     action = "hold"
     reason_parts = []
 
     if base_amount <= 0 or final_amount <= 0:
-        action = "hold"
         reason_parts.append("No executable size.")
         reason_parts.append(base_reason)
 
+    elif transition_risk > rules["max_transition_risk_to_buy"]:
+        reason_parts.append("Transition risk too high.")
+
+    elif market_pressure < rules["min_market_pressure_to_buy"]:
+        reason_parts.append("Market pressure too low.")
+
+    elif market_score < rules["min_market_score_to_buy"]:
+        reason_parts.append("Market score below threshold.")
+
     else:
-        if transition_risk > rules["max_transition_risk_to_buy"]:
-            reason_parts.append("Transition risk too high.")
-        elif market_pressure < rules["min_market_pressure_to_buy"]:
-            reason_parts.append("Market pressure too low.")
-        elif market_score is not None and market_score < rules["min_market_score_to_buy"]:
-            reason_parts.append("Market score below threshold.")
-        else:
-            action = "buy"
-            reason_parts.append("All allocator conditions satisfied.")
+        action = "buy"
+        reason_parts.append("All allocator conditions satisfied.")
 
     # -------------------------------------------------
     # Confidence
