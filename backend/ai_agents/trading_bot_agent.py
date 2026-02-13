@@ -6,6 +6,9 @@ from typing import Any, Dict, List, Optional
 
 from backend.utils.db import get_db_connection
 
+# ✅ Engine brain (single source of truth)
+from backend.engine.bot_brain import run_bot_brain
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -31,6 +34,7 @@ def _table_exists(conn, table: str) -> bool:
         )
         return cur.fetchone() is not None
 
+
 def _clamp_score(v: Any, *, default: float = 10.0, lo: float = 10.0, hi: float = 100.0) -> float:
     """
     Scores mogen NOOIT 0 zijn.
@@ -40,7 +44,7 @@ def _clamp_score(v: Any, *, default: float = 10.0, lo: float = 10.0, hi: float =
     """
     try:
         x = float(v)
-        if x != x:  # NaN check
+        if x != x:  # NaN
             x = default
     except Exception:
         x = default
@@ -60,33 +64,15 @@ def _confidence_from_score(score: float) -> str:
         return "medium"
     return "low"
 
-def _empty_decision(
-    *,
-    bot: Dict[str, Any],
-    scores: Dict[str, float],
-    report_date: date,
-    warning: str = "fallback_decision",
-) -> Dict[str, Any]:
-    """
-    Fail-safe decision object.
-    -> UI-contract blijft altijd intact
-    """
 
-    setup_match = _build_setup_match(bot=bot, scores=scores, snapshot=None)
+def _normalize_action(v: str) -> str:
+    v = (v or "").lower().strip()
+    return v if v in ACTIONS else "hold"
 
-    return {
-        "bot_id": bot["bot_id"],
-        "decision_id": None,
-        "symbol": bot.get("symbol", DEFAULT_SYMBOL),
-        "action": "observe",
-        "confidence": "low",
-        "amount_eur": 0.0,        # ✅ expliciet
-        "reasons": [f"{warning} ({report_date})"],
-        "setup_match": setup_match,
-        "order": None,
-        "status": "planned",
-        "executed_by": None,
-    }
+
+def _normalize_confidence(v: str) -> str:
+    v = (v or "").lower().strip()
+    return v if v in CONFIDENCE_LEVELS else "low"
 
 
 def _safe_json(v, fallback):
@@ -100,53 +86,41 @@ def _safe_json(v, fallback):
         return fallback
 
 
-def _normalize_action(v: str) -> str:
-    v = (v or "").lower().strip()
-    return v if v in ACTIONS else "hold"
-
-
-def _normalize_confidence(v: str) -> str:
-    v = (v or "").lower().strip()
-    return v if v in CONFIDENCE_LEVELS else "low"
-
-
 # =====================================================
-# 🔧 Strategy trade amount
+# ✅ Strategy setup payload (from DB) — single truth for bot_brain
 # =====================================================
-def _get_strategy_trade_amount_eur(
+def _get_strategy_setup_payload(
     conn,
     *,
     user_id: int,
     strategy_id: int,
-    confidence_score: Optional[float] = None,
-) -> float:
+    setup_id: Optional[int] = None,
+    setup_name: Optional[str] = None,
+    symbol: Optional[str] = None,
+) -> Dict[str, Any]:
     """
-    Single source of truth voor trade sizing.
-
-    Nieuwe architectuur:
-    - base_amount = fundamentele sizing
-    - execution_mode:
-        fixed   -> altijd base_amount
-        custom  -> decision_curve gebruiken
-        none    -> geen trade
-
-    FAIL-SAFE:
-    Bot mag NOOIT crashen.
+    Builds the 'setup' dict for run_bot_brain() from strategies table.
+    Expected by bot_brain/decision_engine:
+      - base_amount
+      - execution_mode
+      - decision_curve (optional)
     """
 
     if not _table_exists(conn, "strategies"):
-        return 0.0
+        return {
+            "id": setup_id,
+            "name": setup_name or "Strategy",
+            "symbol": (symbol or DEFAULT_SYMBOL).upper(),
+            "base_amount": 0.0,
+            "execution_mode": "none",
+        }
 
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT
-                base_amount,
-                execution_mode,
-                decision_curve
+            SELECT base_amount, execution_mode, decision_curve
             FROM strategies
-            WHERE id = %s
-              AND user_id = %s
+            WHERE id=%s AND user_id=%s
             LIMIT 1
             """,
             (strategy_id, user_id),
@@ -154,156 +128,37 @@ def _get_strategy_trade_amount_eur(
         row = cur.fetchone()
 
     if not row:
-        return 0.0
+        return {
+            "id": setup_id,
+            "name": setup_name or "Strategy",
+            "symbol": (symbol or DEFAULT_SYMBOL).upper(),
+            "base_amount": 0.0,
+            "execution_mode": "none",
+        }
 
     base_amount, execution_mode, decision_curve = row
 
-    if base_amount is None:
-        return 0.0
-
     try:
-        base_amount = float(base_amount)
+        base_amount = float(base_amount or 0.0)
     except Exception:
-        logger.warning("Invalid base_amount for strategy %s", strategy_id)
-        return 0.0
+        base_amount = 0.0
 
     execution_mode = (execution_mode or "fixed").lower().strip()
+    curve = _safe_json(decision_curve, {}) if decision_curve is not None else {}
 
-    # =====================================================
-    # FIXED MODE
-    # =====================================================
-    if execution_mode == "fixed":
-        return base_amount if base_amount > 0 else 0.0
+    payload = {
+        "id": setup_id,
+        "name": setup_name or "Strategy",
+        "symbol": (symbol or DEFAULT_SYMBOL).upper(),
+        "base_amount": base_amount,
+        "execution_mode": execution_mode,
+    }
 
-    # =====================================================
-    # NONE → nooit traden
-    # =====================================================
-    if execution_mode == "none":
-        return 0.0
-
-    # =====================================================
-    # CUSTOM CURVE
-    # =====================================================
+    # only include curve when custom
     if execution_mode == "custom":
+        payload["decision_curve"] = curve or {}
 
-        curve = _safe_json(decision_curve, {})
-
-        if not curve:
-            return base_amount
-
-        if confidence_score is None:
-            return base_amount
-
-        try:
-            confidence_score = float(confidence_score)
-        except Exception:
-            return base_amount
-
-        # voorbeeld curve:
-        # {
-        #   "low": 0.5,
-        #   "medium": 1.0,
-        #   "high": 1.5
-        # }
-
-        if confidence_score >= 75:
-            multiplier = curve.get("high", 1.0)
-        elif confidence_score >= 50:
-            multiplier = curve.get("medium", 1.0)
-        else:
-            multiplier = curve.get("low", 1.0)
-
-        try:
-            multiplier = float(multiplier)
-        except Exception:
-            multiplier = 1.0
-
-        amount = base_amount * multiplier
-
-        return round(amount, 2) if amount > 0 else 0.0
-
-    # =====================================================
-    # UNKNOWN MODE → FAIL SAFE
-    # =====================================================
-    logger.warning(
-        "Unknown execution_mode '%s' for strategy %s",
-        execution_mode,
-        strategy_id,
-    )
-
-    return base_amount if base_amount > 0 else 0.0
-
-def _persist_bot_order(
-    *,
-    conn,
-    user_id: int,
-    bot_id: int,
-    decision_id: int,
-    order: dict,
-) -> int:
-    """
-    Persist PLANNED bot order + bot_execution placeholder.
-    bot_executions is SINGLE SOURCE OF TRUTH voor UI.
-    """
-
-    with conn.cursor() as cur:
-        # 1️⃣ bot_orders
-        cur.execute(
-            """
-            INSERT INTO bot_orders (
-                user_id,
-                bot_id,
-                decision_id,
-                symbol,
-                side,
-                order_type,
-                quote_amount_eur,
-                estimated_price_eur,
-                estimated_qty,
-                status,
-                created_at,
-                updated_at
-            )
-            VALUES (
-                %s,%s,%s,
-                %s,%s,
-                'market',
-                %s,%s,%s,
-                'ready',
-                NOW(), NOW()
-            )
-            RETURNING id
-            """,
-            (
-                user_id,
-                bot_id,
-                decision_id,
-                order["symbol"],
-                order["side"],
-                order["quote_amount_eur"],
-                order["estimated_price"],
-                order["estimated_qty"],
-            ),
-        )
-
-        bot_order_id = cur.fetchone()[0]
-
-        # 2️⃣ bot_executions (PENDING = voorstel)
-        cur.execute(
-            """
-            INSERT INTO bot_executions (
-                user_id,
-                bot_order_id,
-                status,
-                created_at,
-                updated_at
-            )
-            VALUES (%s, %s, 'pending', NOW(), NOW())
-            """,
-            (user_id, bot_order_id),
-        )
-
-        return int(bot_order_id)
+    return payload
 
 
 # =====================================================
@@ -312,32 +167,21 @@ def _persist_bot_order(
 def _get_risk_thresholds(risk_profile: str) -> dict:
     """
     Defines decision thresholds per risk profile.
+    (UI + legacy behavior: still used for setup_match text)
     """
     profile = (risk_profile or "balanced").lower()
 
     if profile == "conservative":
-        return {
-            "buy": 75,
-            "hold": 55,
-            "min_confidence": "high",
-        }
+        return {"buy": 75, "hold": 55, "min_confidence": "high"}
 
     if profile == "aggressive":
-        return {
-            "buy": 35,
-            "hold": 20,
-            "min_confidence": "medium",
-        }
+        return {"buy": 35, "hold": 20, "min_confidence": "medium"}
 
-    # default: balanced
-    return {
-        "buy": 55,
-        "hold": 40,
-        "min_confidence": "medium",
-    }
+    return {"buy": 55, "hold": 40, "min_confidence": "medium"}
+
 
 # =====================================================
-# 📦 Build setup match
+# 📦 Build setup match (UI CONTRACT)
 # =====================================================
 def _build_setup_match(
     *,
@@ -353,9 +197,6 @@ def _build_setup_match(
     - frontend mag NIETS interpreteren
     """
 
-    # -----------------------------
-    # Scores (altijd geldig)
-    # -----------------------------
     macro = _clamp_score(scores.get("macro", 10), default=10)
     technical = _clamp_score(scores.get("technical", 10), default=10)
     market = _clamp_score(scores.get("market", 10), default=10)
@@ -364,31 +205,19 @@ def _build_setup_match(
     combined_score = round((macro + technical + market + setup) / 4, 1)
     combined_score = _clamp_score(combined_score, default=10)
 
-    # -----------------------------
-    # Risk thresholds
-    # -----------------------------
     thresholds = _get_risk_thresholds(bot.get("risk_profile", "balanced"))
     buy_th = float(thresholds["buy"])
     hold_th = float(thresholds["hold"])
 
-    # -----------------------------
-    # Snapshot context
-    # -----------------------------
     has_snapshot = snapshot is not None
     strategy_confidence = _clamp_score(
         snapshot.get("confidence", 0) if snapshot else 0,
         default=10,
     )
 
-    # -----------------------------
-    # Match logic
-    # -----------------------------
     match_buy = has_snapshot and combined_score >= buy_th and strategy_confidence >= buy_th
     match_hold = has_snapshot and combined_score >= hold_th
 
-    # -----------------------------
-    # STATUS + UI COPY (⭐ ENIGE WAARHEID)
-    # -----------------------------
     if not has_snapshot:
         status = "no_snapshot"
         summary = "Geen actueel strategy-plan beschikbaar voor vandaag."
@@ -425,45 +254,22 @@ def _build_setup_match(
         )
         reason = "below_hold_threshold"
 
-    # -----------------------------
-    # FINAL UI OBJECT
-    # -----------------------------
     return {
-        # Identiteit
         "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
         "symbol": bot.get("symbol", DEFAULT_SYMBOL),
         "timeframe": bot.get("timeframe") or "—",
-
-        # Scores
         "score": combined_score,
         "confidence": _confidence_from_score(combined_score),
-
-        "components": {
-            "macro": macro,
-            "technical": technical,
-            "market": market,
-            "setup": setup,
-        },
-
-        # Thresholds (UI mag deze alleen tonen)
-        "thresholds": {
-            "buy": buy_th,
-            "hold": hold_th,
-        },
-
-        # Strategy context
+        "components": {"macro": macro, "technical": technical, "market": market, "setup": setup},
+        "thresholds": {"buy": buy_th, "hold": hold_th},
         "strategy_confidence": strategy_confidence,
         "has_snapshot": has_snapshot,
-
-        # Match flags (optioneel voor UI badges)
         "match_buy": bool(match_buy),
         "match_hold": bool(match_hold),
-
-        # ⭐ UI-CONTRACT
-        "status": status,      # match_buy | no_match | no_snapshot
-        "summary": summary,    # headline (kaarttitel)
-        "detail": detail,      # toelichting onder de kaart
-        "reason": reason,      # technisch / debug / logging
+        "status": status,
+        "summary": summary,
+        "detail": detail,
+        "reason": reason,
     }
 
 
@@ -511,7 +317,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
             bot_id,
             bot_name,
             mode,
-            risk_profile,        # ✅ FIX
+            risk_profile,
             strategy_id,
             budget_total_eur,
             budget_daily_limit_eur,
@@ -545,6 +351,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
 
     return bots
 
+
 # =====================================================
 # 📦 Bot Proposal (MARKET_DATA FIXED)
 # =====================================================
@@ -561,7 +368,6 @@ def build_order_proposal(
     Returns None if no order should be proposed.
     """
 
-    # Alleen BUY voorstellen
     if decision.get("action") != "buy":
         return None
 
@@ -571,9 +377,6 @@ def build_order_proposal(
 
     symbol = decision.get("symbol", DEFAULT_SYMBOL)
 
-    # -------------------------------------------------
-    # 📈 Laatste marktprijs ophalen (CORRECT SCHEMA)
-    # -------------------------------------------------
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -589,21 +392,13 @@ def build_order_proposal(
         row = cur.fetchone()
 
     if not row or row[0] is None:
-        logger.warning(f"⚠️ Geen marktprijs gevonden voor {symbol}")
+        logger.warning("⚠️ Geen marktprijs gevonden voor %s", symbol)
         return None
 
     price_eur = float(row[0])
-
-    # -------------------------------------------------
-    # 📐 Geschatte hoeveelheid
-    # -------------------------------------------------
     estimated_qty = round(amount_eur / price_eur, 8)
 
-    # -------------------------------------------------
-    # 💰 Budget impact simulatie
-    # -------------------------------------------------
     budget = bot.get("budget", {})
-
     daily_limit = float(budget.get("daily_limit_eur") or 0)
     total_budget = float(budget.get("total_eur") or 0)
 
@@ -619,9 +414,6 @@ def build_order_proposal(
         else None
     )
 
-    # -------------------------------------------------
-    # 📦 Proposal object (frontend truth)
-    # -------------------------------------------------
     return {
         "symbol": symbol,
         "side": "buy",
@@ -629,12 +421,10 @@ def build_order_proposal(
         "estimated_price": round(price_eur, 2),
         "estimated_qty": estimated_qty,
         "status": "ready",
-        "budget_after": {
-            "daily_remaining": daily_remaining,
-            "total_remaining": total_remaining,
-        },
+        "budget_after": {"daily_remaining": daily_remaining, "total_remaining": total_remaining},
     }
-    
+
+
 # =====================================================
 # 📊 Daily scores (single source of truth)
 # =====================================================
@@ -677,10 +467,6 @@ def _get_active_strategy_snapshot(
     strategy_id: int,
     report_date: date,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Snapshot = alleen "wat is vandaag de actuele strategy context".
-    NIET sizing. Sizing komt uit strategies.data.
-    """
     if not _table_exists(conn, "active_strategy_snapshot"):
         return None
 
@@ -715,6 +501,7 @@ def _get_active_strategy_snapshot(
         "reason": reason,
     }
 
+
 # =====================================================
 # 📸 BOT BUDGET
 # =====================================================
@@ -726,7 +513,6 @@ def check_bot_budget(
 ):
     budget = bot_config.get("budget") or {}
 
-    total_eur = float(budget.get("total_eur") or 0)
     daily_limit_eur = float(budget.get("daily_limit_eur") or 0)
     min_order_eur = float(budget.get("min_order_eur") or 0)
     max_order_eur = float(budget.get("max_order_eur") or 0)
@@ -755,11 +541,6 @@ def get_today_spent_eur(
     bot_id: int,
     report_date: date,
 ) -> float:
-    """
-    Total EUR spent TODAY by this bot.
-    ❗ Alleen ECHTE uitgevoerde trades (execute).
-    Reserve entries tellen NIET mee.
-    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -774,6 +555,7 @@ def get_today_spent_eur(
             (user_id, bot_id, report_date),
         )
         return float(cur.fetchone()[0] or 0.0)
+
 
 # =====================================================
 # 📸 BOT RECORD LEDGER
@@ -792,9 +574,6 @@ def record_bot_ledger_entry(
     note: Optional[str] = None,
     meta: Optional[dict] = None,
 ):
-    """
-    Single source of truth for all bot balance changes
-    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -827,13 +606,11 @@ def record_bot_ledger_entry(
             ),
         )
 
+
 # =====================================================
 # 📸 BOT BALANCE
 # =====================================================
 def get_bot_balance(conn, user_id: int, bot_id: int) -> float:
-    """
-    Net EUR balance delta for this bot (ledger-based)
-    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -848,88 +625,75 @@ def get_bot_balance(conn, user_id: int, bot_id: int) -> float:
 
 
 # =====================================================
-# 🧠 Decision logic (strategy-driven)
+# Persist bot order
 # =====================================================
-def _decide(
-    bot: Dict[str, Any],
-    snapshot: Optional[Dict[str, Any]],
-    scores: Dict[str, float],
-) -> Dict[str, Any]:
-    symbol = bot["symbol"]
-    risk_profile = bot.get("risk_profile", "balanced")
-    thresholds = _get_risk_thresholds(risk_profile)
+def _persist_bot_order(
+    *,
+    conn,
+    user_id: int,
+    bot_id: int,
+    decision_id: int,
+    order: dict,
+) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO bot_orders (
+                user_id,
+                bot_id,
+                decision_id,
+                symbol,
+                side,
+                order_type,
+                quote_amount_eur,
+                estimated_price_eur,
+                estimated_qty,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                %s,%s,%s,
+                %s,%s,
+                'market',
+                %s,%s,%s,
+                'ready',
+                NOW(), NOW()
+            )
+            RETURNING id
+            """,
+            (
+                user_id,
+                bot_id,
+                decision_id,
+                order["symbol"],
+                order["side"],
+                order["quote_amount_eur"],
+                order["estimated_price"],
+                order["estimated_qty"],
+            ),
+        )
+        bot_order_id = cur.fetchone()[0]
 
-    # -------------------------------------------------
-    # Scores (NOOIT 0, NOOIT None)
-    # -------------------------------------------------
-    macro = _clamp_score(scores.get("macro", 10), default=10)
-    technical = _clamp_score(scores.get("technical", 10), default=10)
-    market = _clamp_score(scores.get("market", 10), default=10)
-    setup = _clamp_score(scores.get("setup", 10), default=10)
+        cur.execute(
+            """
+            INSERT INTO bot_executions (
+                user_id,
+                bot_order_id,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (%s, %s, 'pending', NOW(), NOW())
+            """,
+            (user_id, bot_order_id),
+        )
 
-    combined_score = round((macro + technical + market + setup) / 4, 1)
-    combined_score = _clamp_score(combined_score, default=10)
-
-    strategy_confidence = _clamp_score(
-        snapshot.get("confidence", 0) if snapshot else 0,
-        default=10,
-    )
-
-    # -------------------------------------------------
-    # Explainable reasons (debug + UI)
-    # -------------------------------------------------
-    reasons = [
-        f"Macro score: {macro}",
-        f"Technical score: {technical}",
-        f"Market score: {market}",
-        f"Setup score: {setup}",
-        f"Combined score: {combined_score}",
-        f"Strategy confidence: {strategy_confidence}",
-        f"Risk profile: {risk_profile}",
-        f"Thresholds → buy ≥ {thresholds['buy']} | hold ≥ {thresholds['hold']}",
-    ]
-
-    # -------------------------------------------------
-    # Geen snapshot = nooit traden
-    # -------------------------------------------------
-    if not snapshot:
-        return {
-            "symbol": symbol,
-            "action": "observe",
-            "confidence": "low",
-            "score": combined_score,
-            "reasons": reasons[:6],
-        }
-
-    # -------------------------------------------------
-    # Decision logic
-    # -------------------------------------------------
-    if (
-        combined_score >= thresholds["buy"]
-        and strategy_confidence >= thresholds["buy"]
-    ):
-        action = "buy"
-        confidence = "high" if risk_profile != "aggressive" else "medium"
-
-    elif combined_score >= thresholds["hold"]:
-        action = "hold"
-        confidence = thresholds["min_confidence"]
-
-    else:
-        action = "observe"
-        confidence = "low"
-
-    return {
-        "symbol": symbol,
-        "action": action,
-        "confidence": confidence,
-        "score": combined_score,
-        "reasons": reasons[:6],
-    }
+        return int(bot_order_id)
 
 
 # =====================================================
-# 🧠 Decision and order
+# Persist decision
 # =====================================================
 def _persist_decision_and_order(
     *,
@@ -942,16 +706,6 @@ def _persist_decision_and_order(
     decision: Dict[str, Any],
     scores: Dict[str, float],
 ) -> int:
-    """
-    Persist bot decision for today.
-
-    BELANGRIJK:
-    - Eén decision per bot per dag (UPSERT)
-    - 'Nieuwe analyse' reset ALTIJD de decision state
-    - status -> planned
-    - executed_by / executed_at -> NULL
-    """
-
     action = _normalize_action(decision.get("action"))
     confidence = _normalize_confidence(decision.get("confidence"))
     symbol = decision.get("symbol", DEFAULT_SYMBOL)
@@ -1009,12 +763,9 @@ def _persist_decision_and_order(
                 amount_eur   = EXCLUDED.amount_eur,
                 scores_json  = EXCLUDED.scores_json,
                 reason_json  = EXCLUDED.reason_json,
-
-                -- 🔑 DE FIX
                 status       = 'planned',
                 executed_by = NULL,
                 executed_at = NULL,
-
                 updated_at   = NOW()
             RETURNING id
             """,
@@ -1037,12 +788,11 @@ def _persist_decision_and_order(
         if not row:
             raise RuntimeError("Failed to upsert bot_decisions")
 
-        decision_id = int(row[0])
+        return int(row[0])
 
-    return decision_id
-    
+
 # =====================================================
-# 🚀 PUBLIC ENTRYPOINT (PER BOT ONDERSTEUND)
+# 🚀 PUBLIC ENTRYPOINT (KEEP NAME!)
 # =====================================================
 def run_trading_bot_agent(
     user_id: int,
@@ -1068,89 +818,89 @@ def run_trading_bot_agent(
         results = []
 
         for bot in bots:
-            snapshot = _get_active_strategy_snapshot(
-                conn, user_id, bot["strategy_id"], report_date
-            )
+            snapshot = _get_active_strategy_snapshot(conn, user_id, bot["strategy_id"], report_date)
 
-            # -------------------------------------------------
-            # 1️⃣ Setup match (ALTIJD)
-            # -------------------------------------------------
-            setup_match = _build_setup_match(
-                bot=bot,
-                scores=scores,
-                snapshot=snapshot,
-            )
+            # 1) setup_match (UI contract)
+            setup_match = _build_setup_match(bot=bot, scores=scores, snapshot=snapshot)
 
-            # -------------------------------------------------
-            # 2️⃣ Decision
-            # -------------------------------------------------
-            decision = _decide(bot, snapshot, scores)
-
-            # -------------------------------------------------
-            # 3️⃣ Trade sizing (🔥 UPDATED)
-            # -------------------------------------------------
-            try:
-                strategy_amount = _get_strategy_trade_amount_eur(
+            # 2) HARD GUARD: no snapshot => never trade (same behavior as before)
+            if snapshot is None:
+                decision = {
+                    "symbol": bot["symbol"],
+                    "action": "observe",
+                    "confidence": "low",
+                    "score": _clamp_score(scores.get("market", 10), default=10),
+                    "reasons": ["no_active_strategy_snapshot"],
+                    "amount_eur": 0.0,
+                    "setup_match": setup_match,
+                }
+            else:
+                # 3) Build setup payload from strategies table
+                setup_payload = _get_strategy_setup_payload(
                     conn,
                     user_id=user_id,
                     strategy_id=bot["strategy_id"],
-                    confidence_score=decision.get("score"),  # 🔥 KEY UPDATE
+                    setup_id=bot.get("setup_id"),
+                    setup_name=bot.get("strategy_type"),
+                    symbol=bot.get("symbol"),
                 )
-            except Exception:
-                logger.exception("Sizing failure for strategy %s", bot["strategy_id"])
-                strategy_amount = 0.0
 
-            amount = 0.0
+                # 4) ENGINE DECISION (single source of truth)
+                brain = run_bot_brain(
+                    user_id=user_id,
+                    setup=setup_payload,
+                    scores={
+                        "macro_score": scores.get("macro"),
+                        "technical_score": scores.get("technical"),
+                        "market_score": scores.get("market"),
+                        "setup_score": scores.get("setup"),
+                    },
+                )
 
-            if decision["action"] == "buy":
-                amount = float(strategy_amount or 0.0)
+                action = "buy" if brain.get("action") == "buy" else "hold"
+                amount = float(brain.get("amount_eur") or 0.0)
 
-                min_eur = float(bot["budget"].get("min_order_eur") or 0)
-                max_eur = float(bot["budget"].get("max_order_eur") or 0)
+                # respect bot min/max budget clamps (same as before)
+                if action == "buy":
+                    min_eur = float(bot["budget"].get("min_order_eur") or 0)
+                    max_eur = float(bot["budget"].get("max_order_eur") or 0)
 
-                if min_eur > 0:
-                    amount = max(amount, min_eur)
+                    if min_eur > 0:
+                        amount = max(amount, min_eur)
+                    if max_eur > 0:
+                        amount = min(amount, max_eur)
 
-                if max_eur > 0:
-                    amount = min(amount, max_eur)
+                decision = {
+                    "symbol": bot["symbol"],
+                    "action": action,
+                    "confidence": _confidence_from_score(_clamp_score(scores.get("market", 10), default=10)),
+                    "score": _clamp_score(scores.get("market", 10), default=10),
+                    "reasons": [brain.get("reason", "engine_decision")],
+                    "amount_eur": round(amount, 2),
+                    "setup_match": setup_match,
+                }
 
-            decision["amount_eur"] = round(amount, 2)
-            decision["setup_match"] = setup_match
+                # never buy with 0
+                if decision["action"] == "buy" and decision["amount_eur"] <= 0:
+                    decision["action"] = "hold"
+                    decision["amount_eur"] = 0.0
 
-            # -------------------------------------------------
-            # ❌ NO BUY WITH €0
-            # -------------------------------------------------
-            if decision["action"] == "buy" and decision["amount_eur"] <= 0:
-                decision["action"] = "observe"
-                decision["confidence"] = "low"
-                decision["amount_eur"] = 0.0
-
-            # -------------------------------------------------
-            # 4️⃣ Budget check
-            # -------------------------------------------------
-            today_spent = get_today_spent_eur(
-                conn, user_id, bot["bot_id"], report_date
-            )
-
+            # 5) Budget check
+            today_spent = get_today_spent_eur(conn, user_id, bot["bot_id"], report_date)
             ok, reason = check_bot_budget(
                 bot_config=bot,
                 today_spent_eur=today_spent,
-                proposed_amount_eur=decision["amount_eur"],
+                proposed_amount_eur=float(decision.get("amount_eur") or 0.0),
             )
-
             if not ok:
-                logger.info(
-                    "Bot %s blocked by budget rule: %s",
-                    bot["bot_id"],
-                    reason,
-                )
+                logger.info("Bot %s blocked by budget rule: %s", bot["bot_id"], reason)
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
+                decision.setdefault("reasons", [])
+                decision["reasons"].append(f"budget_blocked:{reason}")
 
-            # -------------------------------------------------
-            # 5️⃣ Order proposal
-            # -------------------------------------------------
+            # 6) Order proposal
             order_proposal = build_order_proposal(
                 conn=conn,
                 bot=bot,
@@ -1159,15 +909,13 @@ def run_trading_bot_agent(
                 total_balance_eur=abs(get_bot_balance(conn, user_id, bot["bot_id"])),
             )
 
-            if decision["action"] == "buy" and not order_proposal:
+            if decision.get("action") == "buy" and not order_proposal:
                 logger.warning("Order proposal failed → switching to observe")
                 decision["action"] = "observe"
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
 
-            # -------------------------------------------------
-            # 6️⃣ Persist decision
-            # -------------------------------------------------
+            # 7) Persist decision
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -1179,14 +927,9 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            order_id = None
             executed = False
-
             if order_proposal:
-                # -------------------------------------------------
-                # 7️⃣ Persist order
-                # -------------------------------------------------
-                order_id = _persist_bot_order(
+                _persist_bot_order(
                     conn=conn,
                     user_id=user_id,
                     bot_id=bot["bot_id"],
@@ -1194,7 +937,6 @@ def run_trading_bot_agent(
                     order=order_proposal,
                 )
 
-                # 🔥 AUTO MODE
                 if bot["mode"] == "auto":
                     _auto_execute_decision(
                         conn=conn,
@@ -1209,22 +951,16 @@ def run_trading_bot_agent(
                 {
                     "bot_id": bot["bot_id"],
                     "decision_id": decision_id,
-                    "action": decision["action"],
-                    "confidence": decision["confidence"],
-                    "amount_eur": decision["amount_eur"],
+                    "action": decision.get("action"),
+                    "confidence": decision.get("confidence"),
+                    "amount_eur": float(decision.get("amount_eur") or 0.0),
                     "order": order_proposal,
                     "status": "executed" if executed else "planned",
                 }
             )
 
         conn.commit()
-
-        return {
-            "ok": True,
-            "date": str(report_date),
-            "bots": len(results),
-            "decisions": results,
-        }
+        return {"ok": True, "date": str(report_date), "bots": len(results), "decisions": results}
 
     except Exception:
         conn.rollback()
@@ -1233,6 +969,7 @@ def run_trading_bot_agent(
 
     finally:
         conn.close()
+
 
 # =====================================================
 # 🚀 Bot execute decision functie
@@ -1245,13 +982,6 @@ def _auto_execute_decision(
     decision_id: int,
     order: dict,
 ):
-    """
-    Auto execute:
-    - reserve is al geboekt
-    - execute = qty only
-    - bot_executions wordt UPDATE → filled
-    """
-
     symbol = order.get("symbol", DEFAULT_SYMBOL)
     qty = float(order.get("estimated_qty") or 0.0)
     price = float(order.get("estimated_price") or 0.0)
@@ -1260,7 +990,6 @@ def _auto_execute_decision(
         raise RuntimeError("Invalid execution parameters")
 
     with conn.cursor() as cur:
-        # 1️⃣ Decision → executed
         cur.execute(
             """
             UPDATE bot_decisions
@@ -1273,7 +1002,6 @@ def _auto_execute_decision(
             (decision_id, user_id, bot_id),
         )
 
-        # 2️⃣ Order → filled
         cur.execute(
             """
             UPDATE bot_orders
@@ -1288,7 +1016,6 @@ def _auto_execute_decision(
         )
         bot_order_id = cur.fetchone()[0]
 
-        # 3️⃣ Ledger EXECUTE (qty only)
         record_bot_ledger_entry(
             conn=conn,
             user_id=user_id,
@@ -1302,7 +1029,6 @@ def _auto_execute_decision(
             note="Auto execution",
         )
 
-        # 4️⃣ bot_executions → FILLED
         cur.execute(
             """
             UPDATE bot_executions
@@ -1314,7 +1040,8 @@ def _auto_execute_decision(
             """,
             (qty, price, bot_order_id),
         )
-        
+
+
 # =====================================================
 # 🚀 Manual execute decision functie
 # =====================================================
@@ -1325,13 +1052,7 @@ def execute_manual_decision(
     bot_id: int,
     decision_id: int,
 ):
-    """
-    Manual execution.
-    UI verwacht bot_executions record.
-    """
-
     with conn.cursor() as cur:
-        # 1️⃣ Haal order
         cur.execute(
             """
             SELECT o.id, o.symbol, o.estimated_qty, o.estimated_price_eur
@@ -1351,7 +1072,6 @@ def execute_manual_decision(
     price = float(price)
 
     with conn.cursor() as cur:
-        # 2️⃣ Decision → executed
         cur.execute(
             """
             UPDATE bot_decisions
@@ -1364,7 +1084,6 @@ def execute_manual_decision(
             (decision_id,),
         )
 
-        # 3️⃣ Order → filled
         cur.execute(
             """
             UPDATE bot_orders
@@ -1377,7 +1096,6 @@ def execute_manual_decision(
             (price, qty, bot_order_id),
         )
 
-        # 4️⃣ Ledger EXECUTE
         record_bot_ledger_entry(
             conn=conn,
             user_id=user_id,
@@ -1391,7 +1109,6 @@ def execute_manual_decision(
             note="Manual execution",
         )
 
-        # 5️⃣ bot_executions → FILLED
         cur.execute(
             """
             UPDATE bot_executions
