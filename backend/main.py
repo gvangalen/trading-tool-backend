@@ -113,12 +113,6 @@ safe_include("backend.api.report_api", "report_api")
 safe_include("backend.api.report_public_api", "report_public_api")
 
 # ==================================================================
-# 🗂 Legacy routes
-# ==================================================================
-#safe_include("backend.routes.trades_routes", "trades_routes")
-#safe_include("backend.routes.report_routes", "report_routes")
-
-# ==================================================================
 # 👨‍⚕️ Health check
 # ==================================================================
 @app.get("/api/health")
