@@ -7,10 +7,34 @@ class RegimeWeightEngineError(Exception):
 
 
 # =====================================================
-# Default regime map (kan je later DB-driven maken)
+# Regime aliases (🔥 voorkomt silent mismatches)
 # =====================================================
+
+REGIME_ALIASES = {
+    "risk-off": "risk_off",
+    "risk off": "risk_off",
+    "bear": "risk_off",
+
+    "risk-on": "risk_on",
+    "risk on": "risk_on",
+    "bull": "risk_on",
+
+    "sideways": "range",
+    "chop": "range",
+
+    "distribution_phase": "distribution",
+    "early_distribution": "distribution",
+
+    "accumulation_phase": "accumulation",
+}
+
+
+# =====================================================
+# Default regime map
+# =====================================================
+
 DEFAULT_REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
-    # Risk-off: minder gewicht op risk/momentum, meer op safety/structure
+
     "risk_off": {
         "market_score": 0.8,
         "technical_score": 1.2,
@@ -18,7 +42,7 @@ DEFAULT_REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
         "sentiment_score": 0.7,
         "volatility_score": 1.2,
     },
-    # Risk-on: momentum/market mag zwaarder
+
     "risk_on": {
         "market_score": 1.3,
         "technical_score": 1.1,
@@ -26,7 +50,7 @@ DEFAULT_REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
         "sentiment_score": 1.2,
         "volatility_score": 0.8,
     },
-    # Range / chop: techniek zwaarder, momentum minder
+
     "range": {
         "market_score": 0.9,
         "technical_score": 1.3,
@@ -34,7 +58,7 @@ DEFAULT_REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
         "sentiment_score": 0.9,
         "volatility_score": 1.1,
     },
-    # Distribution: reduce risk-taking signals, macro/structure zwaarder
+
     "distribution": {
         "market_score": 0.8,
         "technical_score": 1.2,
@@ -42,7 +66,7 @@ DEFAULT_REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
         "sentiment_score": 0.8,
         "volatility_score": 1.15,
     },
-    # Accumulation: market+technical zwaarder, macro neutraal
+
     "accumulation": {
         "market_score": 1.15,
         "technical_score": 1.2,
@@ -50,7 +74,7 @@ DEFAULT_REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
         "sentiment_score": 0.95,
         "volatility_score": 1.0,
     },
-    # Unknown / default
+
     "neutral": {},
 }
 
@@ -58,8 +82,15 @@ DEFAULT_REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
 # =====================================================
 # Helpers
 # =====================================================
+
 def _normalize_key(k: Optional[str]) -> str:
-    return (k or "").strip().lower().replace(" ", "_")
+    if not k:
+        return "neutral"
+
+    key = k.strip().lower().replace(" ", "_")
+
+    # 🔥 alias mapping
+    return REGIME_ALIASES.get(key, key)
 
 
 def _safe_float(x, fallback: float = 1.0) -> float:
@@ -75,6 +106,7 @@ def _safe_float(x, fallback: float = 1.0) -> float:
 # =====================================================
 # Main API
 # =====================================================
+
 def apply_regime_weights(
     curves: List[Dict],
     regime_label: str,
@@ -83,24 +115,6 @@ def apply_regime_weights(
     min_weight: float = 0.25,
     max_weight: float = 2.5,
 ) -> List[Dict]:
-    """
-    Past regime-gewichten toe op je curve rows.
-
-    Input contract (curves):
-    [
-      {"curve": {... "input": "market_score" ...}, "weight": 1.0},
-      {"curve": {... "input": "macro_score" ...}, "weight": 1.0},
-    ]
-
-    Output:
-    - Zelfde structuur terug
-    - weight wordt aangepast: weight * regime_multiplier
-    - Clamp: min_weight..max_weight
-
-    Fail-soft:
-    - Onbekend regime -> curves ongewijzigd
-    - Missing input key -> unchanged row
-    """
 
     if not isinstance(curves, list) or not curves:
         return curves or []
@@ -114,14 +128,13 @@ def apply_regime_weights(
     if not multipliers:
         return curves
 
-    # Deepcopy zodat caller nooit side-effects krijgt
     adjusted = copy.deepcopy(curves)
 
     for row in adjusted:
+
         curve = row.get("curve") or {}
         input_key = _normalize_key(curve.get("input"))
 
-        # skip if no input
         if not input_key:
             continue
 
