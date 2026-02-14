@@ -4,15 +4,11 @@ import logging
 from datetime import datetime, timedelta
 
 from backend.utils.db import get_db_connection
-from backend.celery_tasks.celery_task_generate_pdf import generate_report_pdf
+from backend.celery_task.celery_task_generate_pdf import generate_report_pdf
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
-# =========================================================
-# SNAPSHOT CREATOR
-# =========================================================
 
 def create_report_snapshot(
     user_id: int,
@@ -22,14 +18,6 @@ def create_report_snapshot(
 ):
     """
     Creates a snapshot AND triggers PDF generation.
-
-    Guarantees:
-
-    ✔ token security
-    ✔ DB safety
-    ✔ Celery trigger
-    ✔ rollback on failure
-    ✔ no silent crashes
     """
 
     conn = get_db_connection()
@@ -40,13 +28,7 @@ def create_report_snapshot(
     valid_until = datetime.utcnow() + timedelta(days=7)
 
     try:
-
         with conn.cursor() as cur:
-
-            # -------------------------------------------------
-            # Optional: prevent duplicate snapshots
-            # (VERY recommended)
-            # -------------------------------------------------
 
             cur.execute(
                 """
@@ -64,17 +46,8 @@ def create_report_snapshot(
 
             if existing:
                 snapshot_id = existing[0]
-
-                logger.info(
-                    "Snapshot already exists → reusing id=%s",
-                    snapshot_id,
-                )
-
+                logger.info("Snapshot exists → reuse id=%s", snapshot_id)
                 return snapshot_id, None
-
-            # -------------------------------------------------
-            # Insert snapshot
-            # -------------------------------------------------
 
             cur.execute(
                 """
@@ -105,23 +78,16 @@ def create_report_snapshot(
 
         conn.commit()
 
-        # -------------------------------------------------
-        # Trigger PDF generation (async)
-        # -------------------------------------------------
-
+        # 🚀 trigger PDF worker
         generate_report_pdf.delay(snapshot_id)
 
-        logger.info(
-            "📄 Snapshot created → id=%s | PDF task queued",
-            snapshot_id,
-        )
+        logger.info("📄 Snapshot created → id=%s | PDF queued", snapshot_id)
 
         return snapshot_id, token
 
     except Exception:
-
         conn.rollback()
-        logger.exception("❌ Failed to create report snapshot")
+        logger.exception("❌ Snapshot creation failed")
         raise
 
     finally:
