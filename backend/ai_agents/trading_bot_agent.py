@@ -858,7 +858,7 @@ def run_trading_bot_agent(
                     symbol=bot.get("symbol"),
                 )
 
-                # -------------------------------------------------
+                               # -------------------------------------------------
                 # 4) ENGINE DECISION (single source of truth)
                 # -------------------------------------------------
                 brain = run_bot_brain(
@@ -872,11 +872,17 @@ def run_trading_bot_agent(
                     },
                 )
 
-                action = "buy" if brain.get("action") == "buy" else "hold"
+                # -------------------------------------------------
+                # Engine action (BUY / SELL / HOLD / OBSERVE)
+                # -------------------------------------------------
+                engine_action = (brain.get("action") or "hold").lower()
+                if engine_action not in ACTIONS:
+                    engine_action = "hold"
+
                 amount = float(brain.get("amount_eur") or 0.0)
 
                 # -------------------------------------------------
-                # Engine confidence → label
+                # Engine confidence
                 # -------------------------------------------------
                 engine_conf = brain.get("confidence")
 
@@ -888,144 +894,58 @@ def run_trading_bot_agent(
                     else:
                         confidence_label = "low"
                 else:
-                    confidence_label = "low"
+                    confidence_label = _normalize_confidence(
+                        brain.get("confidence_label")
+                    )
 
                 # -------------------------------------------------
-                # Respect bot min/max budget clamps
+                # Engine context (for UI & analytics)
                 # -------------------------------------------------
-                if action == "buy":
+                engine_reason = brain.get("reason") or "engine_decision"
+                engine_regime = brain.get("regime")
+                engine_risk_state = brain.get("risk_state")
+                engine_pressure = brain.get("market_pressure")
+                engine_transition = brain.get("transition_risk")
+
+                # -------------------------------------------------
+                # Respect bot min/max budget clamps (BUY only)
+                # -------------------------------------------------
+                if engine_action == "buy":
                     min_eur = float(bot["budget"].get("min_order_eur") or 0)
                     max_eur = float(bot["budget"].get("max_order_eur") or 0)
 
                     if min_eur > 0:
                         amount = max(amount, min_eur)
+
                     if max_eur > 0:
                         amount = min(amount, max_eur)
 
+                # -------------------------------------------------
+                # Build decision object
+                # -------------------------------------------------
                 decision = {
                     "symbol": bot["symbol"],
-                    "action": action,
+                    "action": engine_action,
                     "confidence": confidence_label,
                     "score": _clamp_score(scores.get("market", 10), default=10),
-                    "reasons": [brain.get("reason", "engine_decision")],
                     "amount_eur": round(amount, 2),
                     "setup_match": setup_match,
+
+                    # 🧠 engine intelligence
+                    "reasons": [engine_reason],
+                    "regime": engine_regime,
+                    "risk_state": engine_risk_state,
+                    "market_pressure": engine_pressure,
+                    "transition_risk": engine_transition,
                 }
 
                 # -------------------------------------------------
-                # Hard safety guard
+                # Hard safety guard (never buy zero)
                 # -------------------------------------------------
                 if decision["action"] == "buy" and decision["amount_eur"] <= 0:
                     decision["action"] = "hold"
+                    decision["confidence"] = "low"
                     decision["amount_eur"] = 0.0
-
-            # -------------------------------------------------
-            # 5) Budget check
-            # -------------------------------------------------
-            today_spent = get_today_spent_eur(
-                conn, user_id, bot["bot_id"], report_date
-            )
-
-            ok, reason = check_bot_budget(
-                bot_config=bot,
-                today_spent_eur=today_spent,
-                proposed_amount_eur=float(decision.get("amount_eur") or 0.0),
-            )
-
-            if not ok:
-                logger.info(
-                    "Bot %s blocked by budget rule: %s",
-                    bot["bot_id"],
-                    reason,
-                )
-                decision["action"] = "observe"
-                decision["confidence"] = "low"
-                decision["amount_eur"] = 0.0
-                decision.setdefault("reasons", [])
-                decision["reasons"].append(f"budget_blocked:{reason}")
-
-            # -------------------------------------------------
-            # 6) Order proposal
-            # -------------------------------------------------
-            order_proposal = build_order_proposal(
-                conn=conn,
-                bot=bot,
-                decision=decision,
-                today_spent_eur=today_spent,
-                total_balance_eur=abs(
-                    get_bot_balance(conn, user_id, bot["bot_id"])
-                ),
-            )
-
-            if decision.get("action") == "buy" and not order_proposal:
-                logger.warning("Order proposal failed → switching to observe")
-                decision["action"] = "observe"
-                decision["confidence"] = "low"
-                decision["amount_eur"] = 0.0
-
-            # -------------------------------------------------
-            # 7) Persist decision
-            # -------------------------------------------------
-            decision_id = _persist_decision_and_order(
-                conn=conn,
-                user_id=user_id,
-                bot_id=bot["bot_id"],
-                strategy_id=bot["strategy_id"],
-                setup_id=bot["setup_id"],
-                report_date=report_date,
-                decision=decision,
-                scores=scores,
-            )
-
-            executed = False
-
-            if order_proposal:
-                _persist_bot_order(
-                    conn=conn,
-                    user_id=user_id,
-                    bot_id=bot["bot_id"],
-                    decision_id=decision_id,
-                    order=order_proposal,
-                )
-
-                if bot["mode"] == "auto":
-                    _auto_execute_decision(
-                        conn=conn,
-                        user_id=user_id,
-                        bot_id=bot["bot_id"],
-                        decision_id=decision_id,
-                        order=order_proposal,
-                    )
-                    executed = True
-
-            results.append(
-                {
-                    "bot_id": bot["bot_id"],
-                    "decision_id": decision_id,
-                    "action": decision.get("action"),
-                    "confidence": decision.get("confidence"),
-                    "amount_eur": float(decision.get("amount_eur") or 0.0),
-                    "order": order_proposal,
-                    "status": "executed" if executed else "planned",
-                }
-            )
-
-        conn.commit()
-
-        return {
-            "ok": True,
-            "date": str(report_date),
-            "bots": len(results),
-            "decisions": results,
-        }
-
-    except Exception:
-        conn.rollback()
-        logger.exception("❌ trading_bot_agent crash")
-        return {"ok": False, "error": "agent_crash"}
-
-    finally:
-        conn.close()
 
 
 # =====================================================
