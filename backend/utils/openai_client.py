@@ -41,17 +41,12 @@ JSON_MAX_TOKENS = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "600"))
 TIMEOUT = int(os.getenv("OPENAI_TIMEOUT", "45"))
 
 # ============================================================
-# 🧰 ROBUST JSON SANITIZER
+# 🧰 ROBUST JSON SANITIZER (failsafe)
 # ============================================================
 def sanitize_json_output(raw_text: str) -> dict:
     """
-    Probeert AI output te converteren naar valide JSON.
-    Vangt:
-    - markdown fences
-    - tekst voor/na JSON
-    - python booleans
-    - multi-line JSON
-    - reasoning output
+    Probeeert AI output te converteren naar valide JSON.
+    Alleen gebruikt als fallback.
     """
 
     if not raw_text:
@@ -73,7 +68,6 @@ def sanitize_json_output(raw_text: str) -> dict:
     if match:
         candidate = match.group()
 
-        # fix common AI issues
         candidate = candidate.replace("\n", " ")
         candidate = candidate.replace("True", "true")
         candidate = candidate.replace("False", "false")
@@ -88,29 +82,40 @@ def sanitize_json_output(raw_text: str) -> dict:
     return {}
 
 # ============================================================
-# 🧠 GPT JSON Helper
+# 🧠 STRICT JSON (SCHEMA ENFORCED)  ⭐⭐⭐
 # ============================================================
-def ask_gpt(
+def ask_gpt_json(
     prompt: str,
     system_role: str,
+    schema: dict,
     retries: int = 3,
     delay: float = 2.0,
 ) -> dict:
+    """
+    GARANDEERT geldig JSON volgens schema.
+    Gebruik voor:
+    ✔ master agent
+    ✔ scoring
+    ✔ trading decisions
+    ✔ alles wat dashboard breekt als fout
+    """
 
     for attempt in range(1, retries + 1):
         try:
-            logger.info(f"🧠 [AI JSON Attempt {attempt}] Prompt-lengte={len(prompt)}")
+            logger.info(f"🧠 [AI JSON SCHEMA Attempt {attempt}]")
 
             response = client.responses.create(
                 model=model,
-
-                # 🔥 FORCE JSON OUTPUT
-                response_format={"type": "json_object"},
-
                 temperature=JSON_TEMP,
                 top_p=0.8,
                 max_output_tokens=JSON_MAX_TOKENS,
                 timeout=TIMEOUT,
+
+                # ⭐ JSON STRUCTUUR AFDWINGEN
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": schema,
+                },
 
                 input=[
                     {"role": "system", "content": system_role},
@@ -119,22 +124,63 @@ def ask_gpt(
             )
 
             content = response.output_text.strip()
+            parsed = json.loads(content)
 
-            parsed = sanitize_json_output(content)
-
-            if not parsed:
-                logger.warning("⚠️ JSON leeg → retry mogelijk")
-
-            logger.info("✅ [AI JSON OK]")
+            logger.info("✅ JSON schema output OK")
             return parsed
 
         except Exception as e:
-            logger.warning(f"⚠️ AI JSON fout (attempt {attempt}): {e}")
-
+            logger.warning(f"⚠️ JSON schema fout attempt {attempt}: {e}")
             if attempt < retries:
                 time.sleep(delay * attempt)
 
-    logger.error("❌ Alle AI JSON pogingen mislukt.")
+    logger.error("❌ JSON schema mislukt.")
+    return {}
+
+# ============================================================
+# 🧠 LEGACY JSON (backwards compatible)
+# ============================================================
+def ask_gpt(
+    prompt: str,
+    system_role: str,
+    retries: int = 3,
+    delay: float = 2.0,
+) -> dict:
+    """
+    Voor agents waar structuur minder kritisch is.
+    """
+
+    for attempt in range(1, retries + 1):
+        try:
+            logger.info(f"🧠 [AI JSON Attempt {attempt}]")
+
+            response = client.responses.create(
+                model=model,
+                temperature=JSON_TEMP,
+                top_p=0.8,
+                max_output_tokens=JSON_MAX_TOKENS,
+                timeout=TIMEOUT,
+                response_format={"type": "json_object"},
+
+                input=[
+                    {"role": "system", "content": system_role},
+                    {"role": "user", "content": prompt},
+                ],
+            )
+
+            content = response.output_text.strip()
+            parsed = sanitize_json_output(content)
+
+            if parsed:
+                logger.info("✅ JSON parsed")
+                return parsed
+
+        except Exception as e:
+            logger.warning(f"⚠️ JSON fout attempt {attempt}: {e}")
+            if attempt < retries:
+                time.sleep(delay * attempt)
+
+    logger.error("❌ JSON parsing mislukt.")
     return {}
 
 # ============================================================
@@ -146,19 +192,20 @@ def ask_gpt_text(
     retries: int = 3,
     delay: float = 2.0,
 ) -> str:
+    """
+    Voor rapporten, uitleg, analyses.
+    """
 
     for attempt in range(1, retries + 1):
         try:
-            logger.info(f"🧠 [AI Text Attempt {attempt}] Prompt-lengte={len(prompt)}")
+            logger.info(f"🧠 [AI Text Attempt {attempt}]")
 
             response = client.responses.create(
                 model=model,
-
                 temperature=TEXT_TEMP,
                 top_p=0.9,
                 max_output_tokens=TEXT_MAX_TOKENS,
                 timeout=TIMEOUT,
-
                 input=[
                     {"role": "system", "content": system_role},
                     {"role": "user", "content": prompt},
@@ -167,14 +214,14 @@ def ask_gpt_text(
 
             content = response.output_text.strip()
 
-            logger.info("📝 [AI Text OK]")
-            return content
+            if content:
+                logger.info("📝 Text OK")
+                return content
 
         except Exception as e:
-            logger.warning(f"⚠️ AI Text fout (attempt {attempt}): {e}")
-
+            logger.warning(f"⚠️ Text fout attempt {attempt}: {e}")
             if attempt < retries:
                 time.sleep(delay * attempt)
 
-    logger.error("❌ Alle AI tekstpogingen mislukt.")
+    logger.error("❌ AI tekst mislukt.")
     return "AI-error: geen geldig antwoord."
