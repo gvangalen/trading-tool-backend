@@ -204,7 +204,7 @@ try:
     import backend.celery_task.setup_task
     import backend.celery_task.strategy_task
     import backend.celery_task.trading_bot_task
-    import backend.celery_task.regime_task   # ⭐ NIEUW
+    import backend.celery_task.regime_memory_task   # ⭐ NIEUW
 
     import backend.celery_task.daily_report_task
     import backend.celery_task.weekly_report_task
