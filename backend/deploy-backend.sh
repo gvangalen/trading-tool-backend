@@ -4,7 +4,7 @@ set -e
 echo "🚀 Starting backend deploy..."
 
 # =====================================================
-# PATH FIX (Node / Python / NVM)
+# PATH FIX
 # =====================================================
 export PATH="$HOME/.local/bin:$PATH"
 export NVM_DIR="$HOME/.nvm"
@@ -15,7 +15,7 @@ export PATH="$NVM_DIR/versions/node/$(nvm current)/bin:$PATH"
 # DIRECTORIES
 # =====================================================
 BACKEND_DIR="$HOME/trading-tool-backend"
-ENV_FILE="$BACKEND_DIR/.env"
+ENV_FILE="$HOME/.secrets/trading.env"   # ✅ buiten repo
 LOG_DIR="/var/log/pm2"
 
 mkdir -p "$LOG_DIR"
@@ -24,11 +24,12 @@ mkdir -p "$LOG_DIR"
 # VERIFY ENV
 # =====================================================
 if [ ! -f "$ENV_FILE" ]; then
-  echo "❌ .env niet gevonden: $ENV_FILE"
+  echo "❌ ENV FILE NOT FOUND: $ENV_FILE"
   exit 1
 fi
 
-echo "✅ .env gevonden"
+echo "✅ Using ENV file:"
+echo "➡ $ENV_FILE"
 
 # =====================================================
 # CLEAN CACHE
@@ -37,7 +38,7 @@ echo "🧹 Cleaning __pycache__..."
 find "$BACKEND_DIR" -type d -name '__pycache__' -exec rm -rf {} +
 
 # =====================================================
-# PULL LATEST CODE
+# UPDATE CODE
 # =====================================================
 echo "📥 Updating code..."
 cd "$BACKEND_DIR"
@@ -51,17 +52,16 @@ echo "📦 Installing Python dependencies..."
 pip install --user -r backend/requirements.txt
 
 # =====================================================
-# STOP PM2 COMPLETELY (CRITICAL)
+# STOP PM2 COMPLETELY
 # =====================================================
-echo "🛑 Stopping old processes & clearing PM2 cache..."
+echo "🛑 Stopping PM2..."
 pm2 delete all || true
 pm2 kill || true
 rm -f ~/.pm2/dump.pm2 || true
-
 sleep 2
 
 # =====================================================
-# LOAD ENV INTO CURRENT SHELL
+# LOAD ENV
 # =====================================================
 echo "🔐 Loading environment variables..."
 set -o allexport
@@ -83,7 +83,7 @@ echo "✅ Environment loaded"
 echo "➡ FRONTEND_URL=$FRONTEND_URL"
 
 # =====================================================
-# START FASTAPI BACKEND
+# START FASTAPI
 # =====================================================
 echo "🚀 Starting FastAPI backend..."
 
