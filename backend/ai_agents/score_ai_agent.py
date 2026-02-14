@@ -274,22 +274,51 @@ Antwoord ALLEEN met geldige JSON in dit format:
 
 
 # ============================================================
+# ✅ Helpers: numeric parsing voor AI output
+# ============================================================
+def to_float_or_none(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, str):
+        s = v.strip()
+        if s == "" or s.lower() in {"none", "null", "nan"}:
+            return None
+        # "59,00" → "59.00"
+        s = s.replace(",", ".")
+        try:
+            return float(s)
+        except Exception:
+            return None
+    return None
+
+
+# ============================================================
 # 💾 4. Opslaan → ai_category_insights (categorie: 'master')
 # ============================================================
 def store_master_result(conn, result: dict, user_id: int):
-    # 🔒 Sanity defaults
-    master_score = result.get("master_score")
-    alignment_score = result.get("alignment_score")
+    # 🔒 Coerce numbers (AI geeft vaak strings)
+    master_score = to_float_or_none(result.get("master_score"))
+    alignment_score = to_float_or_none(result.get("alignment_score"))
 
-    if not isinstance(master_score, (int, float)):
-        master_score = None
-    else:
-        master_score = max(0, min(100, master_score))
+    # ✅ Fallback: soms gebruikt AI per ongeluk avg_score i.p.v. master_score
+    if master_score is None:
+        master_score = to_float_or_none(result.get("avg_score"))
 
-    if not isinstance(alignment_score, (int, float)):
-        alignment_score = None
-    else:
-        alignment_score = max(0, min(100, alignment_score))
+    # ✅ Default (nooit NULL opslaan als je dashboard altijd iets wil tonen)
+    # Kies hier 50 of None. Ik raad 50 aan voor UX.
+    if master_score is None:
+        master_score = 50.0
+
+    if alignment_score is None:
+        alignment_score = 0.0
+
+    # Clamp 0–100
+    master_score = max(0.0, min(100.0, float(master_score)))
+    alignment_score = max(0.0, min(100.0, float(alignment_score)))
 
     meta = {
         "weights": result.get("weights"),
@@ -318,13 +347,15 @@ def store_master_result(conn, result: dict, user_id: int):
             (
                 user_id,
                 master_score,
-                result.get("master_trend", ""),
-                result.get("master_bias", ""),
-                result.get("master_risk", ""),
-                result.get("summary", ""),
+                result.get("master_trend", "") or "",
+                result.get("master_bias", "") or "",
+                result.get("master_risk", "") or "",
+                result.get("summary", "") or "",
                 json.dumps(meta, ensure_ascii=False),
             ),
         )
+
+    logger.info(f"💾 Master stored | user_id={user_id} | avg_score={master_score} | alignment={alignment_score}")
 
 
 # ============================================================
