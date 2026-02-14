@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import time
+import re
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -28,40 +29,63 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# 🔥 SPLIT DEFAULTS (ZEER BELANGRIJK)
+# ============================================================
+# 🔥 AI DEFAULTS
+# ============================================================
 TEXT_TEMP = float(os.getenv("OPENAI_TEXT_TEMP", "0.4"))
 JSON_TEMP = float(os.getenv("OPENAI_JSON_TEMP", "0.2"))
 
 TEXT_MAX_TOKENS = int(os.getenv("OPENAI_TEXT_MAX_TOKENS", "900"))
-JSON_MAX_TOKENS = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "500"))
+JSON_MAX_TOKENS = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "600"))
+
+TIMEOUT = int(os.getenv("OPENAI_TIMEOUT", "45"))
 
 # ============================================================
-# 🧰 JSON Sanitize Helper
+# 🧰 ROBUST JSON SANITIZER
 # ============================================================
 def sanitize_json_output(raw_text: str) -> dict:
+    """
+    Probeert AI output te converteren naar valide JSON.
+    Vangt:
+    - markdown fences
+    - tekst voor/na JSON
+    - python booleans
+    - multi-line JSON
+    - reasoning output
+    """
+
     if not raw_text:
         return {}
 
-    cleaned = raw_text.strip()
+    text = raw_text.strip()
 
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`").replace("json", "").strip()
+    # remove markdown fences
+    text = re.sub(r"```json|```", "", text, flags=re.IGNORECASE).strip()
 
+    # try direct parse
     try:
-        return json.loads(cleaned)
+        return json.loads(text)
     except Exception:
         pass
 
-    start, end = cleaned.find("{"), cleaned.rfind("}")
-    if start != -1 and end != -1:
+    # extract first JSON object
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        candidate = match.group()
+
+        # fix common AI issues
+        candidate = candidate.replace("\n", " ")
+        candidate = candidate.replace("True", "true")
+        candidate = candidate.replace("False", "false")
+
         try:
-            return json.loads(cleaned[start:end + 1])
+            return json.loads(candidate)
         except Exception:
             pass
 
     logger.warning("⚠️ AI-output kon niet als JSON worden gelezen.")
-    return {"raw_text": raw_text[:400]}
-
+    logger.warning(f"RAW OUTPUT:\n{text[:800]}")
+    return {}
 
 # ============================================================
 # 🧠 GPT JSON Helper
@@ -80,11 +104,13 @@ def ask_gpt(
             response = client.responses.create(
                 model=model,
 
-                # 🔥 JSON = LOW CREATIVITY
+                # 🔥 FORCE JSON OUTPUT
+                response_format={"type": "json_object"},
+
                 temperature=JSON_TEMP,
                 top_p=0.8,
                 max_output_tokens=JSON_MAX_TOKENS,
-                timeout=45,
+                timeout=TIMEOUT,
 
                 input=[
                     {"role": "system", "content": system_role},
@@ -93,7 +119,11 @@ def ask_gpt(
             )
 
             content = response.output_text.strip()
+
             parsed = sanitize_json_output(content)
+
+            if not parsed:
+                logger.warning("⚠️ JSON leeg → retry mogelijk")
 
             logger.info("✅ [AI JSON OK]")
             return parsed
@@ -105,8 +135,7 @@ def ask_gpt(
                 time.sleep(delay * attempt)
 
     logger.error("❌ Alle AI JSON pogingen mislukt.")
-    return {"error": "AI JSON mislukt"}
-
+    return {}
 
 # ============================================================
 # 🧠 GPT TEXT Helper
@@ -125,11 +154,10 @@ def ask_gpt_text(
             response = client.responses.create(
                 model=model,
 
-                # 🔥 TEXT = institutional writing
                 temperature=TEXT_TEMP,
                 top_p=0.9,
                 max_output_tokens=TEXT_MAX_TOKENS,
-                timeout=45,
+                timeout=TIMEOUT,
 
                 input=[
                     {"role": "system", "content": system_role},
