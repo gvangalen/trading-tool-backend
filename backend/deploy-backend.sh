@@ -51,32 +51,39 @@ echo "📦 Installing Python dependencies..."
 pip install --user -r backend/requirements.txt
 
 # =====================================================
-# STOP PM2 COMPLETELY (IMPORTANT)
+# STOP PM2 COMPLETELY (CRITICAL)
 # =====================================================
-echo "🛑 Stopping old processes..."
+echo "🛑 Stopping old processes & clearing PM2 cache..."
 pm2 delete all || true
 pm2 kill || true
+rm -f ~/.pm2/dump.pm2 || true
 
 sleep 2
 
 # =====================================================
-# LOAD ENV FOR THIS SESSION ONLY
-# (backend will also load via load_dotenv())
+# LOAD ENV INTO CURRENT SHELL
 # =====================================================
+echo "🔐 Loading environment variables..."
 set -o allexport
 source "$ENV_FILE"
 set +o allexport
 
-# sanity check
+# sanity checks
 if [ -z "$OPENAI_API_KEY" ]; then
   echo "❌ OPENAI_API_KEY ontbreekt"
   exit 1
 fi
 
+if [ -z "$FRONTEND_URL" ]; then
+  echo "❌ FRONTEND_URL ontbreekt"
+  exit 1
+fi
+
 echo "✅ Environment loaded"
+echo "➡ FRONTEND_URL=$FRONTEND_URL"
 
 # =====================================================
-# START BACKEND
+# START FASTAPI BACKEND
 # =====================================================
 echo "🚀 Starting FastAPI backend..."
 
