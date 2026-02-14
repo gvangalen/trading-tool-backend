@@ -897,8 +897,7 @@ Geen opsommingen, één doorlopend stuk tekst.
 # MAIN BUILDER — REPORT AGENT 2.0 (SAFE + CONTEXT-AWARE)
 # =====================================================
 from backend.ai_core.regime_memory import get_regime_memory
-from backend.ai_core.transition_detector import compute_transition_detector
-
+from backend.engine.transition_detector import compute_transition_detector
 
 def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
 
