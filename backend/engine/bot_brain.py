@@ -19,7 +19,6 @@ from backend.ai_core.regime_memory import get_regime_memory
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
 # =========================================================
 # Config
 # =========================================================
@@ -31,7 +30,6 @@ DEFAULT_ACTION_RULES = {
 }
 
 EXPOSURE_CAP = 2.0
-
 
 # =========================================================
 # Helpers
@@ -50,20 +48,33 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(x, hi))
 
 
-# ⭐ voorkomt schema drift tussen agents
 def _normalize_scores(scores: Dict[str, float]) -> Dict[str, float]:
-    """
-    Accepts BOTH formats:
-
-    macro OR macro_score
-    """
-
+    """Accepts BOTH formats: macro OR macro_score"""
     return {
         "macro_score": scores.get("macro_score", scores.get("macro", 10)),
         "technical_score": scores.get("technical_score", scores.get("technical", 10)),
         "market_score": scores.get("market_score", scores.get("market", 10)),
         "setup_score": scores.get("setup_score", scores.get("setup", 10)),
     }
+
+
+def _classify_risk_state(transition_risk: float, pressure: float) -> str:
+    """
+    Institutional risk regime classifier
+    """
+    if transition_risk > 0.75:
+        return "unstable"
+
+    if transition_risk > 0.6:
+        return "transition"
+
+    if pressure < 0.4:
+        return "defensive"
+
+    if pressure > 0.7 and transition_risk < 0.3:
+        return "risk_on"
+
+    return "neutral"
 
 
 # =========================================================
@@ -80,21 +91,26 @@ def run_bot_brain(
 
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
 
-    # normalize scores
     scores = _normalize_scores(scores)
 
     # -------------------------------------------------
-    # 1) Regime Memory
+    # 1️⃣ Regime Memory
     # -------------------------------------------------
 
     regime_memory = None
+    regime_label = None
+    regime_confidence = None
+
     try:
         regime_memory = get_regime_memory(user_id)
+        if isinstance(regime_memory, dict):
+            regime_label = regime_memory.get("regime_label")
+            regime_confidence = regime_memory.get("confidence")
     except Exception as e:
         logger.warning("Regime memory unavailable: %s", e)
 
     # -------------------------------------------------
-    # 2) Transition Risk
+    # 2️⃣ Transition Risk
     # -------------------------------------------------
 
     try:
@@ -107,7 +123,7 @@ def run_bot_brain(
         transition_snapshot = None
 
     # -------------------------------------------------
-    # 3) Market Pressure
+    # 3️⃣ Market Pressure
     # -------------------------------------------------
 
     try:
@@ -123,7 +139,7 @@ def run_bot_brain(
         market_pressure = 0.5
 
     # -------------------------------------------------
-    # 4) Exposure Multiplier
+    # 4️⃣ Exposure Multiplier
     # -------------------------------------------------
 
     exposure_pack = compute_exposure_multiplier(
@@ -135,7 +151,6 @@ def run_bot_brain(
         exposure_pack.get("multiplier"), 1.0
     ) or 1.0
 
-    # institutional safety cap
     exposure_multiplier = _clamp(
         exposure_multiplier,
         0.0,
@@ -143,7 +158,7 @@ def run_bot_brain(
     )
 
     # -------------------------------------------------
-    # 5) Base Amount
+    # 5️⃣ Base Amount (Decision Engine)
     # -------------------------------------------------
 
     try:
@@ -158,7 +173,7 @@ def run_bot_brain(
         base_reason = f"DecisionEngine fallback: {e}"
 
     # -------------------------------------------------
-    # 6) Apply Exposure
+    # 6️⃣ Apply Exposure
     # -------------------------------------------------
 
     final_amount = apply_exposure_to_amount(
@@ -167,7 +182,16 @@ def run_bot_brain(
     )
 
     # -------------------------------------------------
-    # 7) Action Logic (deterministic)
+    # 7️⃣ Risk State Classification
+    # -------------------------------------------------
+
+    risk_state = _classify_risk_state(
+        transition_risk,
+        market_pressure,
+    )
+
+    # -------------------------------------------------
+    # 8️⃣ Action Logic
     # -------------------------------------------------
 
     market_score = _safe_float(scores.get("market_score"), 10)
@@ -193,17 +217,16 @@ def run_bot_brain(
         reason_parts.append("All allocator conditions satisfied.")
 
     # -------------------------------------------------
-    # Confidence
+    # 9️⃣ Confidence
     # -------------------------------------------------
 
     confidence_components = []
 
-    if isinstance(regime_memory, dict):
-        rconf = _safe_float(regime_memory.get("confidence"), None)
-        if rconf is not None:
-            if rconf > 1:
-                rconf = rconf / 100.0
-            confidence_components.append(_clamp(rconf, 0.0, 1.0))
+    if isinstance(regime_confidence, (int, float)):
+        rc = regime_confidence
+        if rc > 1:
+            rc = rc / 100.0
+        confidence_components.append(_clamp(rc, 0.0, 1.0))
 
     confidence_components.append(1.0 - transition_risk)
     confidence_components.append(market_pressure)
@@ -215,17 +238,29 @@ def run_bot_brain(
             3,
         )
 
+    # -------------------------------------------------
+    # ✅ FINAL OUTPUT
+    # -------------------------------------------------
+
     return {
         "date": date.today().isoformat(),
+
         "action": action,
         "amount_eur": round(float(final_amount), 2),
         "confidence": confidence,
+
         "reason": " ".join(reason_parts),
+
+        # 🧠 intelligence layer (USED BY AGENTS & UI)
+        "regime": regime_label,
+        "risk_state": risk_state,
+        "market_pressure": market_pressure,
+        "transition_risk": transition_risk,
+
+        # 🧪 debug (safe to log / inspect)
         "debug": {
             "scores": scores,
-            "transition_risk": transition_risk,
             "transition_snapshot": transition_snapshot,
-            "market_pressure": market_pressure,
             "regime_memory": regime_memory,
             "exposure": exposure_pack,
             "base_amount": base_amount,
