@@ -4,8 +4,7 @@ import logging
 from pathlib import Path
 
 from celery import shared_task
-from playwright.sync_api import sync_playwright
-
+from playwright.sync_api import sync_playwright, TimeoutError
 from backend.utils.db import get_db_connection
 
 logger = logging.getLogger(__name__)
@@ -16,11 +15,7 @@ logger.setLevel(logging.INFO)
 # =========================================================
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
-
-PDF_DIR = os.getenv(
-    "PDF_OUTPUT_DIR",
-    "/var/reports",
-)
+PDF_DIR = os.getenv("PDF_OUTPUT_DIR", "/var/reports")
 
 PRINT_TIMEOUT = 90_000  # ms
 
@@ -33,23 +28,11 @@ def _ensure_pdf_dir():
 
 
 def _build_print_url(token: str) -> str:
-    """
-    🔥 BELANGRIJK:
-    Playwright moet de PRINT route openen,
-    niet de dashboard route.
-    """
     return f"{FRONTEND_URL}/print/daily?token={token}"
 
 
-def _update_snapshot_status(
-    conn,
-    snapshot_id: int,
-    *,
-    status: str,
-    pdf_url: str | None = None,
-    file_size: int | None = None,
-    generation_ms: int | None = None,
-):
+def _update_snapshot_status(conn, snapshot_id, *, status,
+                            pdf_url=None, file_size=None, generation_ms=None):
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -62,28 +45,15 @@ def _update_snapshot_status(
                 generation_ms = COALESCE(%s, generation_ms)
             WHERE id = %s
             """,
-            (
-                status,
-                status == "ready",
-                pdf_url,
-                file_size,
-                generation_ms,
-                snapshot_id,
-            ),
+            (status, status == "ready", pdf_url, file_size, generation_ms, snapshot_id),
         )
 
-
 # =========================================================
-# 🎯 MAIN TASK
+# MAIN TASK
 # =========================================================
 
-@shared_task(
-    bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=10,
-    retry_kwargs={"max_retries": 4},
-    acks_late=True,
-)
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=10,
+             retry_kwargs={"max_retries": 4}, acks_late=True)
 def generate_report_pdf(self, snapshot_id: int):
 
     if not FRONTEND_URL:
@@ -98,17 +68,10 @@ def generate_report_pdf(self, snapshot_id: int):
     start_time = time.time()
 
     try:
-        # =====================================================
         # Load snapshot
-        # =====================================================
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT token
-                FROM report_snapshots
-                WHERE id = %s
-                LIMIT 1
-                """,
+                "SELECT token FROM report_snapshots WHERE id=%s LIMIT 1",
                 (snapshot_id,),
             )
             row = cur.fetchone()
@@ -117,29 +80,23 @@ def generate_report_pdf(self, snapshot_id: int):
             raise RuntimeError(f"Snapshot {snapshot_id} not found")
 
         token = row[0]
-
         logger.info("📄 Generating PDF | snapshot=%s", snapshot_id)
 
         _update_snapshot_status(conn, snapshot_id, status="generating")
         conn.commit()
 
-        # =====================================================
-        # File path
-        # =====================================================
         _ensure_pdf_dir()
-
         filename = f"report_{snapshot_id}.pdf"
         filepath = os.path.join(PDF_DIR, filename)
 
         url = _build_print_url(token)
-
         logger.info("➡️ Opening print URL: %s", url)
 
         # =====================================================
         # PLAYWRIGHT
         # =====================================================
-        with sync_playwright() as p:
 
+        with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
                 args=[
@@ -150,7 +107,11 @@ def generate_report_pdf(self, snapshot_id: int):
             )
 
             try:
-                context = browser.new_context()
+                context = browser.new_context(
+                    viewport={"width": 1280, "height": 900},
+                    device_scale_factor=2,
+                )
+
                 page = context.new_page()
 
                 page.goto(
@@ -159,14 +120,14 @@ def generate_report_pdf(self, snapshot_id: int):
                     timeout=PRINT_TIMEOUT,
                 )
 
-                # 🔥 wacht op print-ready marker
-                logger.info("⏳ Waiting for print-ready marker...")
+                logger.info("⏳ Waiting for print-ready marker…")
+
                 page.wait_for_selector(
                     "[data-print-ready='true']",
                     timeout=PRINT_TIMEOUT,
                 )
 
-                # extra stabilisatie (fonts/charts)
+                # stabilisatie
                 page.wait_for_timeout(800)
 
                 page.pdf(
@@ -176,15 +137,20 @@ def generate_report_pdf(self, snapshot_id: int):
                     prefer_css_page_size=True,
                 )
 
+            except TimeoutError:
+                logger.error("❌ PRINT MARKER NOT FOUND")
+                logger.error("Current URL: %s", page.url)
+                raise
+
             finally:
                 browser.close()
 
         # =====================================================
         # Stats
         # =====================================================
+
         file_size = os.path.getsize(filepath)
         generation_ms = int((time.time() - start_time) * 1000)
-
         pdf_url = f"/reports/{filename}"
 
         _update_snapshot_status(
@@ -205,14 +171,10 @@ def generate_report_pdf(self, snapshot_id: int):
             generation_ms,
         )
 
-        return {
-            "snapshot_id": snapshot_id,
-            "pdf_url": pdf_url,
-        }
+        return {"snapshot_id": snapshot_id, "pdf_url": pdf_url}
 
     except Exception as e:
         conn.rollback()
-
         logger.exception("❌ PDF generation failed")
 
         _update_snapshot_status(conn, snapshot_id, status="failed")
