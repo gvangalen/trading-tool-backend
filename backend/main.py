@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 # ------------------------------------------------------------
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path, override=True)
+print("ENV FRONTEND_URL =", os.getenv("FRONTEND_URL"))
+print("ENV DB_HOST =", os.getenv("DB_HOST"))
 
 # ------------------------------------------------------------
 # 📌 Root path toevoegen
