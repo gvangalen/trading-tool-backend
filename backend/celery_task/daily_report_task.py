@@ -1,4 +1,3 @@
-import os
 import json
 import logging
 from datetime import date, datetime
@@ -11,17 +10,14 @@ from psycopg2.extras import Json
 from backend.utils.db import get_db_connection
 from backend.ai_agents.report_ai_agent import generate_daily_report_sections
 
-# ✅ REGIME MEMORY
+# 🧠 Regime memory
 from backend.ai_core.regime_memory import (
     store_regime_memory,
     get_regime_memory,
 )
 
-# ✅ SNAPSHOT SERVICE (FIXED PATH)
+# 📸 Snapshot service
 from backend.services.report_snapshot_service import create_report_snapshot
-
-# ✅ PDF TASK (FIXED PATH)
-from backend.celery_task.celery_task_generate_pdf import generate_report_pdf
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +31,7 @@ load_dotenv()
 # =====================================================
 # Helpers
 # =====================================================
+
 def to_float(v):
     if v is None:
         return None
@@ -62,6 +59,7 @@ def jsonb(v, fallback=None):
 # =====================================================
 # 🧾 DAILY REPORT TASK
 # =====================================================
+
 @shared_task(name="backend.celery_task.daily_report_task.generate_daily_report")
 def generate_daily_report(user_id: int):
 
@@ -79,10 +77,12 @@ def generate_daily_report(user_id: int):
         cursor = conn.cursor()
 
         # 🧠 REGIME MEMORY
-        regime = get_regime_memory(user_id)
+        get_regime_memory(user_id)
         store_regime_memory(user_id)
 
+        # -------------------------------------------------
         # 1️⃣ GENERATE REPORT
+        # -------------------------------------------------
         report = generate_daily_report_sections(user_id=user_id)
 
         if not isinstance(report, dict):
@@ -121,6 +121,9 @@ def generate_daily_report(user_id: int):
         top_setups      = jsonb(report.get("top_setups"), [])
         active_strategy = jsonb(report.get("active_strategy"))
 
+        # -------------------------------------------------
+        # 2️⃣ UPSERT REPORT
+        # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
                 report_date, user_id,
@@ -180,7 +183,9 @@ def generate_daily_report(user_id: int):
         conn.commit()
         logger.info("💾 daily_reports opgeslagen")
 
-        # 📸 SNAPSHOT
+        # -------------------------------------------------
+        # 3️⃣ CREATE SNAPSHOT
+        # -------------------------------------------------
         snapshot_id, token = create_report_snapshot(
             user_id=user_id,
             report_type="daily",
@@ -190,13 +195,8 @@ def generate_daily_report(user_id: int):
 
         logger.info(f"📸 Snapshot created | id={snapshot_id}")
 
-        # 🖨️ PDF JOB
-        generate_report_pdf.delay(
-            snapshot_id=snapshot_id,
-            frontend_url=os.getenv("FRONTEND_URL"),
-        )
-
-        logger.info("🖨️ PDF job queued")
+        # ⚠️ GEEN PDF CALL HIER!
+        # snapshot service triggert Celery al.
 
     except Exception:
         logger.exception("❌ Fout in daily_report_task")
