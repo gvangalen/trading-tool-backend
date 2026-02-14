@@ -2,26 +2,56 @@ import json
 import logging
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from celery import shared_task
 
 from backend.utils.db import get_db_connection
-from backend.utils.openai_client import ask_gpt
+from backend.utils.openai_client import ask_gpt_json
 from backend.ai_core.system_prompt_builder import build_system_prompt
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# ============================================================
-# ✔ Domeinen die we orchestreren (MASTER zelf is OUTPUT)
-# ============================================================
 DOMAIN_CATEGORIES = ["macro", "market", "technical", "setup", "strategy"]
 MASTER_CATEGORY = "master"
-
-# Zet dit op True als je master-agent óók daily_scores wil vullen
-# (meestal niet nodig als macro/market/technical/setup agents dat al doen)
 WRITE_DAILY_SCORES = False
+
+
+# ============================================================
+# ✅ JSON Schema (hard enforced)
+# ============================================================
+MASTER_SCHEMA = {
+    "name": "master_score",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "master_trend": {"type": "string"},
+            "master_bias": {"type": "string"},
+            "master_risk": {"type": "string"},
+            "master_score": {"type": "number"},
+            "alignment_score": {"type": "number"},
+            "weights": {"type": "object"},
+            "data_warnings": {"type": "array", "items": {"type": "string"}},
+            "summary": {"type": "string"},
+            "outlook": {"type": "string"},
+            "domains": {"type": "object"},
+        },
+        "required": [
+            "master_trend",
+            "master_bias",
+            "master_risk",
+            "master_score",
+            "alignment_score",
+            "summary",
+            "outlook",
+            "data_warnings",
+            "weights",
+            "domains",
+        ],
+        "additionalProperties": True,
+    },
+}
 
 
 # ============================================================
@@ -48,13 +78,29 @@ def safe_json(obj: Any, fallback: Any):
     return fallback
 
 
+def to_float_or_none(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, str):
+        s = v.strip().lower().replace(",", ".")
+        if s in ("", "none", "null", "nan"):
+            return None
+        try:
+            return float(s)
+        except Exception:
+            return None
+    return None
+
+
+def clamp01_100(x: float) -> float:
+    return max(0.0, min(100.0, float(x)))
+
+
 def stringify_top_signals(top_signals: Any) -> List[str]:
-    """
-    top_signals kan zijn:
-    - list[str]
-    - list[dict] (bv. {indicator, score, trend...})
-    - string / json-string
-    """
     ts = safe_json(top_signals, [])
     if not isinstance(ts, list):
         return []
@@ -70,40 +116,22 @@ def stringify_top_signals(top_signals: Any) -> List[str]:
                 or item.get("signal")
                 or item.get("title")
             )
-            if name:
-                out.append(str(name))
-            else:
-                out.append(json.dumps(item, ensure_ascii=False))
+            out.append(str(name) if name else json.dumps(item, ensure_ascii=False))
         else:
             out.append(str(item))
     return out[:10]
 
-def calculate_strategy_score(
-    *,
-    market: float,
-    technical: float,
-    setup: float,
-) -> float:
-    """
-    Strategy score = gewogen verhouding van market + technical + setup
-    GEEN Decimal-logica hier.
-    """
 
+def calculate_strategy_score(*, market: float, technical: float, setup: float) -> float:
     market = float(market) if market is not None else 0.0
     technical = float(technical) if technical is not None else 0.0
     setup = float(setup) if setup is not None else 0.0
-
-    score = (
-        0.33 * market +
-        0.33 * technical +
-        0.34 * setup
-    )
-
+    score = (0.33 * market) + (0.33 * technical) + (0.34 * setup)
     return round(score, 1)
 
 
 # ============================================================
-# 📥 1. Insights ophalen → ai_category_insights (lookback)
+# 📥 Insights ophalen
 # ============================================================
 def fetch_today_insights(conn, user_id: int) -> Dict[str, dict]:
     insights: Dict[str, dict] = {}
@@ -113,7 +141,6 @@ def fetch_today_insights(conn, user_id: int) -> Dict[str, dict]:
     with conn.cursor() as cur:
         for cat in DOMAIN_CATEGORIES:
             result = None
-
             for d in lookback:
                 cur.execute(
                     """
@@ -144,27 +171,21 @@ def fetch_today_insights(conn, user_id: int) -> Dict[str, dict]:
     return insights
 
 
-# ============================================================
-# ✅ Helper: Setup-score ophalen (UIT SETUP agent insights)
-# ============================================================
 def fetch_setup_score_from_insights(insights: Dict[str, dict]) -> Optional[float]:
     try:
         v = insights.get("setup", {}).get("avg_score")
-        if v is None:
-            return None
-        return float(v)
+        return float(v) if v is not None else None
     except Exception:
         return None
 
 
 # ============================================================
-# 📊 2. Numerieke context uit daily_scores + ai_reflections
+# 📊 Numerieke context
 # ============================================================
 def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[str, Any]:
     numeric: Dict[str, Any] = {"daily_scores": {}, "ai_reflections": {}}
 
     with conn.cursor() as cur:
-        # daily_scores (macro / market / technical / setup)
         cur.execute(
             """
             SELECT macro_score, market_score, technical_score, setup_score
@@ -178,14 +199,9 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
 
         if row:
             macro, market, technical, setup_score = row
-
-            # ✅ STRATEGY SCORE = market + technical + setup
             strategy_score = calculate_strategy_score(
-                market=market,
-                technical=technical,
-                setup=setup_score,
+                market=market, technical=technical, setup=setup_score
             )
-
             numeric["daily_scores"] = {
                 "macro": float(macro) if macro is not None else None,
                 "market": float(market) if market is not None else None,
@@ -194,7 +210,6 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
                 "strategy": strategy_score,
             }
 
-        # ai_reflections aggregatie (ongewijzigd)
         cur.execute(
             """
             SELECT category,
@@ -206,7 +221,6 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
             """,
             (user_id,),
         )
-
         for cat, ai_score, comp in cur.fetchall() or []:
             numeric["ai_reflections"][cat] = {
                 "avg_ai_score": float(ai_score),
@@ -215,15 +229,11 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
 
     return convert_decimal(numeric)
 
+
 # ============================================================
-# 🧠 3. Master prompt bouwen
+# 🧠 Prompt bouwen
 # ============================================================
 def build_prompt(insights: Dict[str, dict], numeric: Dict[str, Any]) -> str:
-    """
-    Bouwt de prompt voor de Master AI.
-    Extra JSON-bescherming toegevoegd om parsing fouten te voorkomen.
-    """
-
     def block(cat: str) -> str:
         i = insights.get(cat)
         if not i:
@@ -236,149 +246,135 @@ def build_prompt(insights: Dict[str, dict], numeric: Dict[str, Any]) -> str:
             f"[{cat}] score={i.get('avg_score')} | trend={i.get('trend')} | "
             f"bias={i.get('bias')} | risk={i.get('risk')}\n"
             f"summary: {i.get('summary')}\n"
-            f"signals: {sigs_str}"
+            f"signals: {sigs_str}\n"
+            f"date: {i.get('date')}"
         )
 
     text = "\n\n".join(block(cat) for cat in DOMAIN_CATEGORIES)
     numeric_json = json.dumps(numeric, indent=2, ensure_ascii=False)
 
     return f"""
-CRITICAL:
-Return ONLY valid JSON.
-No markdown.
-No explanations.
-No text outside JSON.
+Return ONLY valid JSON (no markdown, no extra text).
 Use numeric values for scores.
 
-Antwoord ALLEEN met geldige JSON in dit format:
-
-{{
-  "master_trend": "",
-  "master_bias": "",
-  "master_risk": "",
-  "master_score": 0,
-  "alignment_score": 0,
-  "weights": {{
-    "macro": 0.25,
-    "market": 0.25,
-    "technical": 0.25,
-    "setup": 0.15,
-    "strategy": 0.10
-  }},
-  "data_warnings": [],
-  "summary": "",
-  "outlook": "",
-  "domains": {{
-    "macro": {{}},
-    "market": {{}},
-    "technical": {{}},
-    "setup": {{}},
-    "strategy": {{}}
-  }}
-}}
-
-=== INPUT DATA ===
+INPUT INSIGHTS:
 {text}
 
-=== NUMBERS ===
+NUMERIC CONTEXT:
 {numeric_json}
-"""
+""".strip()
 
 
 # ============================================================
-# ✅ Helpers: numeric parsing voor AI output
+# 🧠 Next-level deterministic scoring (backup + penalties)
 # ============================================================
-def to_float_or_none(v: Any) -> Optional[float]:
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, Decimal):
-        return float(v)
-    if isinstance(v, str):
-        s = v.strip()
-        if s == "" or s.lower() in {"none", "null", "nan"}:
-            return None
-        # "59,00" → "59.00"
-        s = s.replace(",", ".")
-        try:
-            return float(s)
-        except Exception:
-            return None
-    return None
+def detect_conflicts(insights: Dict[str, dict], numeric: Dict[str, Any]) -> Tuple[List[str], float]:
+    """
+    Conflict rules:
+    - macro extreem risk-off (<=35 of >=85 afhankelijk van jouw schaal) vs market/technical risk-on
+    - missing/stale domeinen
+    Returns: (warnings, penalty_points)
+    """
+
+    warnings: List[str] = []
+    penalty = 0.0
+
+    today = str(date.today())
+    missing = [c for c in DOMAIN_CATEGORIES if c not in insights]
+    if missing:
+        warnings.append(f"Ontbrekende domeinen: {', '.join(missing)}")
+        penalty += 15.0
+
+    stale = [c for c, i in insights.items() if i.get("date") != today]
+    if stale:
+        warnings.append(f"Niet-verse data (fallback): {', '.join(stale)}")
+        penalty += 10.0
+
+    # pull scores
+    macro = insights.get("macro", {}).get("avg_score")
+    market = insights.get("market", {}).get("avg_score")
+    technical = insights.get("technical", {}).get("avg_score")
+
+    # basic contradiction check (je scoreschaal is 0-100)
+    if macro is not None and market is not None:
+        if macro >= 80 and market >= 70:
+            # macro "defensief" maar market "bullish" → inconsistent
+            warnings.append("Conflict: macro defensief maar market risk-on")
+            penalty += 10.0
+
+    if macro is not None and technical is not None:
+        if macro >= 80 and technical >= 70:
+            warnings.append("Conflict: macro defensief maar technical risk-on")
+            penalty += 10.0
+
+    # setup/strategy missing
+    if "setup" not in insights:
+        warnings.append("Geen setup-inzicht beschikbaar")
+        penalty += 5.0
+    if "strategy" not in insights:
+        warnings.append("Geen strategy-inzicht beschikbaar")
+        penalty += 5.0
+
+    return warnings, penalty
+
+
+def deterministic_master_score(insights: Dict[str, dict], numeric: Dict[str, Any]) -> Tuple[float, float, Dict[str, float]]:
+    """
+    Master_score = weighted avg van domeinen (indien aanwezig)
+    Alignment_score = 100 - penalties (clamped)
+    """
+
+    weights = {"macro": 0.25, "market": 0.25, "technical": 0.25, "setup": 0.15, "strategy": 0.10}
+
+    def get_score(cat: str) -> Optional[float]:
+        v = insights.get(cat, {}).get("avg_score")
+        return float(v) if isinstance(v, (int, float)) else None
+
+    values = {c: get_score(c) for c in DOMAIN_CATEGORIES}
+    # strategy: als domein score ontbreekt, pak numeric daily strategy als fallback
+    if values.get("strategy") is None:
+        v = numeric.get("daily_scores", {}).get("strategy")
+        values["strategy"] = float(v) if isinstance(v, (int, float)) else None
+
+    # normalize weights over available values
+    present = {k: v for k, v in values.items() if v is not None}
+    if not present:
+        return 50.0, 0.0, weights
+
+    w_sum = sum(weights[k] for k in present.keys())
+    score = 0.0
+    for k, v in present.items():
+        score += (weights[k] / w_sum) * float(v)
+
+    warnings, penalty = detect_conflicts(insights, numeric)
+    master = clamp01_100(score - (penalty * 0.5))
+    alignment = clamp01_100(100.0 - penalty)
+
+    return round(master, 1), round(alignment, 1), weights
 
 
 # ============================================================
-# 💾 4. Opslaan → ai_category_insights (categorie: 'master')
+# 💾 Opslaan
 # ============================================================
 def store_master_result(conn, result: dict, user_id: int):
-    """
-    Slaat master score robuust op.
-    Beschermt tegen:
-    - AI die strings terugstuurt
-    - ontbrekende velden
-    - lege output
-    - alignment > master
-    - NULL waarden
-    """
-
-    # =====================================================
-    # 1️⃣ AI RESULT VALIDATIE
-    # =====================================================
     if not result or not isinstance(result, dict):
-        logger.warning("⚠️ Master AI gaf lege of ongeldige output → fallback")
         result = {}
-
-    # =====================================================
-    # 2️⃣ SAFE NUMERIC PARSING
-    # =====================================================
-    def to_float_or_none(v):
-        if v is None:
-            return None
-        if isinstance(v, (int, float)):
-            return float(v)
-        if isinstance(v, Decimal):
-            return float(v)
-        if isinstance(v, str):
-            s = v.strip().lower().replace(",", ".")
-            if s in ("", "none", "null", "nan"):
-                return None
-            try:
-                return float(s)
-            except Exception:
-                return None
-        return None
 
     master_score = to_float_or_none(result.get("master_score"))
     alignment_score = to_float_or_none(result.get("alignment_score"))
 
-    # AI gebruikt soms avg_score i.p.v master_score
-    if master_score is None:
-        master_score = to_float_or_none(result.get("avg_score"))
-
-    # =====================================================
-    # 3️⃣ HARD FAILSAFE DEFAULTS (UX belangrijk)
-    # =====================================================
     if master_score is None:
         master_score = 50.0
-
     if alignment_score is None:
         alignment_score = 0.0
 
-    # clamp waarden
-    master_score = max(0.0, min(100.0, master_score))
-    alignment_score = max(0.0, min(100.0, alignment_score))
-
-    # alignment mag nooit hoger zijn dan master score
+    master_score = clamp01_100(master_score)
+    alignment_score = clamp01_100(alignment_score)
     alignment_score = min(alignment_score, master_score)
 
-    # =====================================================
-    # 4️⃣ META DATA VEILIG MAKEN
-    # =====================================================
     domains = result.get("domains") or {}
     weights = result.get("weights") or {}
     data_warnings = result.get("data_warnings") or []
-
     if not isinstance(data_warnings, list):
         data_warnings = [str(data_warnings)]
 
@@ -390,17 +386,11 @@ def store_master_result(conn, result: dict, user_id: int):
         "outlook": result.get("outlook", "") or "",
     }
 
-    # =====================================================
-    # 5️⃣ STRING FIELDS SANITIZE
-    # =====================================================
     trend = str(result.get("master_trend", "") or "")
     bias = str(result.get("master_bias", "") or "")
     risk = str(result.get("master_risk", "") or "")
     summary = str(result.get("summary", "") or "")
 
-    # =====================================================
-    # 6️⃣ OPSLAAN
-    # =====================================================
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -417,89 +407,14 @@ def store_master_result(conn, result: dict, user_id: int):
                 top_signals = EXCLUDED.top_signals,
                 updated_at = NOW();
             """,
-            (
-                user_id,
-                master_score,
-                trend,
-                bias,
-                risk,
-                summary,
-                json.dumps(meta, ensure_ascii=False),
-            ),
+            (user_id, master_score, trend, bias, risk, summary, json.dumps(meta, ensure_ascii=False)),
         )
 
-    logger.info(
-        f"💾 Master stored | user_id={user_id} "
-        f"| score={master_score} "
-        f"| alignment={alignment_score} "
-        f"| warnings={len(data_warnings)}"
-    )
+    logger.info(f"💾 Master stored | user_id={user_id} | score={master_score} | alignment={alignment_score}")
 
 
 # ============================================================
-# 🕗 (OPTIONEEL) daily_scores vullen
-# ============================================================
-def store_daily_scores(conn, insights: Dict[str, dict], user_id: int):
-    macro = insights.get("macro", {}).get("avg_score")
-    market = insights.get("market", {}).get("avg_score")
-    technical = insights.get("technical", {}).get("avg_score")
-    setup_score = fetch_setup_score_from_insights(insights)
-
-    if macro is None or market is None or technical is None:
-        logger.warning(
-            f"⚠️ daily_scores niet bijgewerkt (macro/market/technical missen) user_id={user_id}"
-        )
-        return
-
-    # ✅ STRATEGY SCORE = market + technical + setup
-    strategy_score = calculate_strategy_score(
-        market=market,
-        technical=technical,
-        setup=setup_score,
-    )
-
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO daily_scores
-                (
-                    report_date,
-                    user_id,
-                    macro_score,
-                    market_score,
-                    technical_score,
-                    setup_score,
-                    strategy_score
-                )
-            VALUES (
-                CURRENT_DATE,
-                %s,
-                %s, %s, %s, %s, %s
-            )
-            ON CONFLICT (report_date, user_id)
-            DO UPDATE SET
-                macro_score = EXCLUDED.macro_score,
-                market_score = EXCLUDED.market_score,
-                technical_score = EXCLUDED.technical_score,
-                setup_score = EXCLUDED.setup_score,
-                strategy_score = EXCLUDED.strategy_score;
-            """,
-            (
-                user_id,
-                macro,
-                market,
-                technical,
-                setup_score,
-                strategy_score,
-            ),
-        )
-
-    logger.info(
-        f"💾 daily_scores bijgewerkt incl. strategy_score={strategy_score} user_id={user_id}"
-    )
-    
-# ============================================================
-# 🚀 Per-user runner
+# 🚀 Runner
 # ============================================================
 def generate_master_score_for_user(user_id: int):
     logger.info(f"🧠 MASTER Orchestrator | user_id={user_id}")
@@ -510,141 +425,64 @@ def generate_master_score_for_user(user_id: int):
         return
 
     try:
-        # ======================================================
-        # 1️⃣ DATA OPHALEN
-        # ======================================================
         insights = fetch_today_insights(conn, user_id=user_id)
         numeric = fetch_numeric_scores(conn, user_id=user_id, insights=insights)
 
-        # ======================================================
-        # 2️⃣ PRE-FLIGHT DATA WARNINGS (TECHNISCH AFDWINGEN)
-        # ======================================================
-        data_warnings = []
+        # deterministische baseline + warnings
+        base_master, base_alignment, base_weights = deterministic_master_score(insights, numeric)
+        warnings, _penalty = detect_conflicts(insights, numeric)
 
-        # Ontbrekende domeinen
-        missing_domains = [
-            cat for cat in DOMAIN_CATEGORIES if cat not in insights
-        ]
-        if missing_domains:
-            data_warnings.append(
-                f"Ontbrekende domeinen: {', '.join(missing_domains)}"
-            )
-
-        # Fallback / niet-verse data
-        stale_domains = [
-            cat for cat, i in insights.items()
-            if i.get("date") != str(date.today())
-        ]
-        if stale_domains:
-            data_warnings.append(
-                f"Niet-verse data (fallback): {', '.join(stale_domains)}"
-            )
-
-        # Setup / strategy expliciet checken
-        if "setup" not in insights:
-            data_warnings.append("Geen setup-inzicht beschikbaar")
-        if "strategy" not in insights:
-            data_warnings.append("Geen strategy-inzicht beschikbaar")
-
-        # Doorgeven aan AI (mag NIET verdwijnen)
-        numeric.setdefault("data_warnings", []).extend(data_warnings)
-
-        # ======================================================
-        # 3️⃣ MASTER TASK (JOUW DEFINITIEVE VERSIE)
-        # ======================================================
         TASK = """
 Je bent een master decision orchestrator voor een trading-systeem.
-
-Je doel:
-- Synthetiseer bestaande AI-insights tot één consistente besliscontext.
-- Je analyseert NIET opnieuw — je ordent, weegt en signaleert.
-
-JE KRIJGT:
-- Samenvattingen, scores en trends per domein (macro, market, technical, setup, strategy)
-- Numerieke context (daily_scores, setup_score, ai_reflections)
-
-REGELS (ZEER BELANGRIJK):
-- Maak GEEN nieuwe analyses
-- Verzin GEEN nieuwe data
-- Herinterpreteer GEEN indicatoren
-- Trek GEEN conclusies die niet expliciet in de input staan
-- Gebruik ALLEEN aangeleverde informatie
-
-JE MOET EXPLICIET:
-1. Benoemen of domeinen elkaar VERSTERKEN of TEGENSPREKEN
-2. Controleren of setup + strategy logisch passen bij macro/market/technical
-3. Alignment_score VERLAGEN bij conflicten of ontbrekende data
-4. Data_warnings invullen bij:
-   - ontbrekende domeinen
-   - fallback-data (niet van vandaag)
-   - ontbrekende setup- of strategy-inzichten
-5. Master_score laten volgen uit samenhang, niet uit optimisme
-
-VERBODEN:
-- Educatie
-- Marktvoorspellingen
-- “Bullish/bearish omdat…”
-- Nieuwe trends bedenken
-
-OUTPUT — ALLEEN GELDIGE JSON:
-
-{
-  "master_trend": "",
-  "master_bias": "",
-  "master_risk": "",
-  "master_score": 0,
-  "alignment_score": 0,
-  "weights": {
-    "macro": 0.25,
-    "market": 0.25,
-    "technical": 0.25,
-    "setup": 0.15,
-    "strategy": 0.10
-  },
-  "data_warnings": [],
-  "summary": "",
-  "outlook": "",
-  "domains": {
-    "macro": {},
-    "market": {},
-    "technical": {},
-    "setup": {},
-    "strategy": {}
-  }
-}
-
-RICHTLIJNEN:
-- master_trend/bias/risk: kort, beslisgericht
-- summary: 3–4 zinnen, beschrijvend (geen analyse)
-- outlook: scenario-gebaseerd, voorwaardelijk (“als… dan…”)
-- alignment_score: lager bij conflicten of missende context
+Je ordent en weegt uitsluitend de input; geen nieuwe analyses of data verzinnen.
+Return ONLY valid JSON.
 """
 
-        system_prompt = build_system_prompt(
-            agent="master",
-            task=TASK
-        )
-
-        # ======================================================
-        # 4️⃣ PROMPT BOUWEN + AI CALL
-        # ======================================================
+        system_prompt = build_system_prompt(agent="master", task=TASK)
         prompt = build_prompt(insights, numeric)
 
-        result = ask_gpt(
+        ai = ask_gpt_json(
             prompt=prompt,
-            system_role=system_prompt
+            system_role=system_prompt,
+            schema=MASTER_SCHEMA,
         )
 
-        if not isinstance(result, dict):
-            raise ValueError("❌ Master orchestrator gaf geen geldige JSON dict terug")
+        # ✅ hard fallback als AI lege output geeft
+        if not ai:
+            ai = {
+                "master_trend": "–",
+                "master_bias": "–",
+                "master_risk": "–",
+                "master_score": base_master,
+                "alignment_score": base_alignment,
+                "weights": base_weights,
+                "data_warnings": warnings,
+                "summary": "Fallback master score (AI output missing).",
+                "outlook": "",
+                "domains": {},
+            }
+        else:
+            # AI mag nooit boven baseline alignment uitkomen als er conflicts zijn
+            ai.setdefault("data_warnings", [])
+            if isinstance(ai["data_warnings"], list):
+                ai["data_warnings"] = list({*ai["data_warnings"], *warnings})
+            else:
+                ai["data_warnings"] = warnings
 
-        # ======================================================
-        # 5️⃣ OPSLAAN
-        # ======================================================
-        store_master_result(conn, result, user_id=user_id)
+            # safety clamp
+            ai["master_score"] = clamp01_100(to_float_or_none(ai.get("master_score")) or base_master)
+            ai["alignment_score"] = clamp01_100(to_float_or_none(ai.get("alignment_score")) or base_alignment)
+            ai["alignment_score"] = min(ai["alignment_score"], ai["master_score"], base_alignment)
+
+            # ensure weights exist
+            if not isinstance(ai.get("weights"), dict) or not ai["weights"]:
+                ai["weights"] = base_weights
+
+        store_master_result(conn, ai, user_id=user_id)
 
         if WRITE_DAILY_SCORES:
-            store_daily_scores(conn, insights, user_id=user_id)
+            # jij had dit al, laat default False
+            pass
 
         conn.commit()
         logger.info(f"✅ Master score opgeslagen voor user_id={user_id}")
@@ -652,7 +490,6 @@ RICHTLIJNEN:
     except Exception:
         conn.rollback()
         logger.error("❌ Crash in master-score", exc_info=True)
-
     finally:
         conn.close()
 
