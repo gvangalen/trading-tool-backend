@@ -11,7 +11,6 @@ from backend.utils.db import get_db_connection
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
 # =========================================================
 # CONFIG
 # =========================================================
@@ -23,6 +22,7 @@ PDF_DIR = os.getenv(
     "/var/reports",
 )
 
+PRINT_TIMEOUT = 90_000  # ms
 
 # =========================================================
 # Helpers
@@ -33,7 +33,12 @@ def _ensure_pdf_dir():
 
 
 def _build_print_url(token: str) -> str:
-    return f"{FRONTEND_URL}/daily-report?token={token}"
+    """
+    🔥 BELANGRIJK:
+    Playwright moet de PRINT route openen,
+    niet de dashboard route.
+    """
+    return f"{FRONTEND_URL}/print/daily?token={token}"
 
 
 def _update_snapshot_status(
@@ -75,14 +80,16 @@ def _update_snapshot_status(
 @shared_task(
     bind=True,
     autoretry_for=(Exception,),
-    retry_backoff=10,   # exponential
+    retry_backoff=10,
     retry_kwargs={"max_retries": 4},
-    acks_late=True,     # critical → avoids lost jobs
+    acks_late=True,
 )
 def generate_report_pdf(self, snapshot_id: int):
 
     if not FRONTEND_URL:
         raise RuntimeError("FRONTEND_URL not configured")
+
+    logger.info("🌐 FRONTEND_URL = %s", FRONTEND_URL)
 
     conn = get_db_connection()
     if not conn:
@@ -91,11 +98,9 @@ def generate_report_pdf(self, snapshot_id: int):
     start_time = time.time()
 
     try:
-
         # =====================================================
         # Load snapshot
         # =====================================================
-
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -121,7 +126,6 @@ def generate_report_pdf(self, snapshot_id: int):
         # =====================================================
         # File path
         # =====================================================
-
         _ensure_pdf_dir()
 
         filename = f"report_{snapshot_id}.pdf"
@@ -129,10 +133,11 @@ def generate_report_pdf(self, snapshot_id: int):
 
         url = _build_print_url(token)
 
-        # =====================================================
-        # PLAYWRIGHT (SAFE MODE)
-        # =====================================================
+        logger.info("➡️ Opening print URL: %s", url)
 
+        # =====================================================
+        # PLAYWRIGHT
+        # =====================================================
         with sync_playwright() as p:
 
             browser = p.chromium.launch(
@@ -141,32 +146,28 @@ def generate_report_pdf(self, snapshot_id: int):
                     "--no-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
-                    "--single-process",
                 ],
             )
 
             try:
-
                 context = browser.new_context()
-
                 page = context.new_page()
-
-                logger.info("➡️ Opening print URL: %s", url)
 
                 page.goto(
                     url,
-                    wait_until="networkidle",
-                    timeout=90_000,
+                    wait_until="domcontentloaded",
+                    timeout=PRINT_TIMEOUT,
                 )
 
-                # 🔥 WAIT FOR PRINT MARKER
+                # 🔥 wacht op print-ready marker
+                logger.info("⏳ Waiting for print-ready marker...")
                 page.wait_for_selector(
                     "[data-print-ready='true']",
-                    timeout=90_000,
+                    timeout=PRINT_TIMEOUT,
                 )
 
-                # fonts/charts buffer
-                page.wait_for_timeout(1200)
+                # extra stabilisatie (fonts/charts)
+                page.wait_for_timeout(800)
 
                 page.pdf(
                     path=filepath,
@@ -181,7 +182,6 @@ def generate_report_pdf(self, snapshot_id: int):
         # =====================================================
         # Stats
         # =====================================================
-
         file_size = os.path.getsize(filepath)
         generation_ms = int((time.time() - start_time) * 1000)
 
@@ -211,7 +211,6 @@ def generate_report_pdf(self, snapshot_id: int):
         }
 
     except Exception as e:
-
         conn.rollback()
 
         logger.exception("❌ PDF generation failed")
