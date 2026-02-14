@@ -3,7 +3,7 @@ import json
 import logging
 import time
 import re
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -43,66 +43,48 @@ JSON_MAX_TOKENS = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "700"))
 TIMEOUT = int(os.getenv("OPENAI_TIMEOUT", "45"))
 
 # ============================================================
-# 🧰 Robust JSON sanitize (fallback only)
+# 🧰 Robust JSON sanitize (failsafe)
 # ============================================================
 def sanitize_json_output(raw_text: str) -> dict:
-    """
-    Fallback parser. Normaal heb je dit bijna nooit nodig als schema enforced is,
-    maar het voorkomt dat je ooit crasht.
-    """
     if not raw_text:
         return {}
 
     text = raw_text.strip()
 
-    # remove markdown fences
     text = re.sub(r"```json|```", "", text, flags=re.IGNORECASE).strip()
 
-    # direct parse
     try:
         return json.loads(text)
     except Exception:
         pass
 
-    # extract first {...}
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:
         candidate = match.group()
-
-        # common fixes
         candidate = candidate.replace("True", "true").replace("False", "false")
         candidate = candidate.replace("\n", " ")
-
         try:
             return json.loads(candidate)
         except Exception:
             pass
 
-    logger.warning("⚠️ AI-output kon niet als JSON worden gelezen (fallback sanitize faalde).")
-    logger.warning(f"RAW OUTPUT:\n{text[:800]}")
+    logger.warning("⚠️ JSON parse fallback mislukt.")
+    logger.warning(text[:500])
     return {}
 
 # ============================================================
-# ✅ Schema-enforced JSON call (DEFINITIEF)
+# ✅ GPT JSON CALL (STABLE & SDK SAFE)
 # ============================================================
 def ask_gpt_json(
     prompt: str,
     system_role: str,
-    schema: Dict[str, Any],
     retries: int = 3,
     delay: float = 2.0,
 ) -> Dict[str, Any]:
-    """
-    HARD JSON: schema enforced via Responses API.
-    - Geen markdown
-    - Geen extra tekst
-    - Altijd geldig JSON object (als model het kan)
-    - Fallback sanitize als laatste redmiddel
-    """
 
     for attempt in range(1, retries + 1):
         try:
-            logger.info(f"🧠 [AI JSON Attempt {attempt}] Prompt-lengte={len(prompt)}")
+            logger.info(f"🧠 JSON Attempt {attempt}")
 
             response = client.responses.create(
                 model=model,
@@ -110,49 +92,43 @@ def ask_gpt_json(
                 top_p=0.8,
                 max_output_tokens=JSON_MAX_TOKENS,
                 timeout=TIMEOUT,
-                # ✅ schema enforced output (Responses API)
-                text_format={
-                    "type": "json_schema",
-                    "name": schema.get("name", "json_output"),
-                    "schema": schema.get("schema", {}),
-                    "strict": True,
-                },
+
+                # ✅ SDK-safe JSON mode
+                response_format={"type": "json_object"},
+
                 input=[
                     {"role": "system", "content": system_role},
                     {"role": "user", "content": prompt},
                 ],
             )
 
-            # Responses geeft plain output_text terug
             content = (response.output_text or "").strip()
 
-            # 1) Try strict JSON loads first (zou moeten slagen)
             try:
                 parsed = json.loads(content)
                 if isinstance(parsed, dict):
-                    logger.info("✅ [AI JSON OK | strict]")
+                    logger.info("✅ JSON OK")
                     return parsed
             except Exception:
                 pass
 
-            # 2) Fallback sanitizer (laatste redmiddel)
             parsed = sanitize_json_output(content)
-            if isinstance(parsed, dict) and parsed:
-                logger.info("✅ [AI JSON OK | sanitized fallback]")
+            if parsed:
+                logger.info("✅ JSON OK (sanitized)")
                 return parsed
 
-            logger.warning("⚠️ JSON leeg/ongeldig → retry mogelijk")
+            logger.warning("⚠️ JSON leeg → retry")
 
         except Exception as e:
-            logger.warning(f"⚠️ AI JSON fout (attempt {attempt}): {e}", exc_info=True)
+            logger.warning(f"⚠️ JSON fout: {e}", exc_info=True)
             if attempt < retries:
                 time.sleep(delay * attempt)
 
-    logger.error("❌ Alle AI JSON pogingen mislukt.")
+    logger.error("❌ JSON call mislukt")
     return {}
 
 # ============================================================
-# 🧠 GPT TEXT Helper
+# 🧠 GPT TEXT CALL
 # ============================================================
 def ask_gpt_text(
     prompt: str,
@@ -163,7 +139,7 @@ def ask_gpt_text(
 
     for attempt in range(1, retries + 1):
         try:
-            logger.info(f"🧠 [AI Text Attempt {attempt}] Prompt-lengte={len(prompt)}")
+            logger.info(f"🧠 Text Attempt {attempt}")
 
             response = client.responses.create(
                 model=model,
@@ -178,13 +154,13 @@ def ask_gpt_text(
             )
 
             content = (response.output_text or "").strip()
-            logger.info("📝 [AI Text OK]")
+            logger.info("📝 Text OK")
             return content
 
         except Exception as e:
-            logger.warning(f"⚠️ AI Text fout (attempt {attempt}): {e}", exc_info=True)
+            logger.warning(f"⚠️ Text fout: {e}", exc_info=True)
             if attempt < retries:
                 time.sleep(delay * attempt)
 
-    logger.error("❌ Alle AI tekstpogingen mislukt.")
-    return "AI-error: geen geldig antwoord."
+    logger.error("❌ Text call mislukt")
+    return "AI-error"
