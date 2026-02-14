@@ -102,32 +102,39 @@ def _is_number(x: Any) -> bool:
 
 def _validate_schema_minimal(data: Dict[str, Any], schema: Optional[Dict[str, Any]]) -> bool:
     """
-    Minimal validation:
+    Relaxed validation:
     - required keys aanwezig
-    - numeric fields zijn numeric (als schema dat aangeeft)
+    - numeric velden mogen ook numeric strings zijn
     """
     if not schema:
         return True
 
-    # accept both {"name":..., "schema":{...}} or raw schema
     s = schema.get("schema") if isinstance(schema, dict) and "schema" in schema else schema
     if not isinstance(s, dict):
         return True
 
     required = s.get("required", [])
-    if isinstance(required, list):
-        for k in required:
-            if k not in data:
-                return False
+    for k in required:
+        if k not in data:
+            return False
 
     props = s.get("properties", {})
-    if isinstance(props, dict):
-        for k, spec in props.items():
-            if k not in data:
+
+    for k, spec in props.items():
+        if k not in data:
+            continue
+
+        if isinstance(spec, dict) and spec.get("type") == "number":
+            v = data.get(k)
+
+            # allow numbers AND numeric strings
+            if isinstance(v, (int, float)):
                 continue
-            if isinstance(spec, dict) and spec.get("type") == "number":
-                if not _is_number(data.get(k)):
-                    # allow numeric strings? -> not here; keep strict.
+            if isinstance(v, str):
+                try:
+                    float(v.replace(",", "."))
+                    continue
+                except:
                     return False
 
     return True
