@@ -21,8 +21,7 @@ from backend.ai_core.regime_memory import (
 from backend.services.report_snapshot_service import create_report_snapshot
 
 # ✅ PDF TASK (FIXED PATH)
-from backend.celery_task.celery_task_generate_pdf import generate_pdf_from_snapshot
-
+from backend.celery_task.celery_task_generate_pdf import generate_report_pdf
 
 logging.basicConfig(
     level=logging.INFO,
@@ -192,7 +191,7 @@ def generate_daily_report(user_id: int):
         logger.info(f"📸 Snapshot created | id={snapshot_id}")
 
         # 🖨️ PDF JOB
-        generate_pdf_from_snapshot.delay(
+        generate_report_pdf.delay(
             snapshot_id=snapshot_id,
             frontend_url=os.getenv("FRONTEND_URL"),
         )
