@@ -443,8 +443,7 @@ Return ONLY valid JSON.
 
         ai = ask_gpt_json(
             prompt=prompt,
-            system_role=system_prompt,
-            schema=MASTER_SCHEMA,
+            system_role=system_prompt
         )
 
         # ✅ hard fallback als AI lege output geeft
