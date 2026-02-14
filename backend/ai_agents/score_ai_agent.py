@@ -219,6 +219,11 @@ def fetch_numeric_scores(conn, user_id: int, insights: Dict[str, dict]) -> Dict[
 # 🧠 3. Master prompt bouwen
 # ============================================================
 def build_prompt(insights: Dict[str, dict], numeric: Dict[str, Any]) -> str:
+    """
+    Bouwt de prompt voor de Master AI.
+    Extra JSON-bescherming toegevoegd om parsing fouten te voorkomen.
+    """
+
     def block(cat: str) -> str:
         i = insights.get(cat)
         if not i:
@@ -238,6 +243,13 @@ def build_prompt(insights: Dict[str, dict], numeric: Dict[str, Any]) -> str:
     numeric_json = json.dumps(numeric, indent=2, ensure_ascii=False)
 
     return f"""
+CRITICAL:
+Return ONLY valid JSON.
+No markdown.
+No explanations.
+No text outside JSON.
+Use numeric values for scores.
+
 Antwoord ALLEEN met geldige JSON in dit format:
 
 {{
