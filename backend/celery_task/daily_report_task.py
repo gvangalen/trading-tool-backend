@@ -17,14 +17,13 @@ from backend.ai_core.regime_memory import (
     get_regime_memory,
 )
 
-# ✅ NEW — SNAPSHOT + PLAYWRIGHT
-from backend.utils.report_snapshot import create_report_snapshot
-from backend.celery_tasks.celery_task_generate_pdf import generate_pdf_from_snapshot
+# ✅ SNAPSHOT SERVICE (FIXED PATH)
+from backend.services.report_snapshot_service import create_report_snapshot
+
+# ✅ PDF TASK (FIXED PATH)
+from backend.celery_task.celery_task_generate_pdf import generate_pdf_from_snapshot
 
 
-# =====================================================
-# Logging
-# =====================================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -51,16 +50,13 @@ def to_float(v):
 def jsonb(v, fallback=None):
     if v is None:
         return Json(fallback) if fallback is not None else None
-
     if isinstance(v, (dict, list)):
         return Json(v)
-
     if isinstance(v, str):
         try:
             return Json(json.loads(v))
         except Exception:
             return Json(v)
-
     return Json(v)
 
 
@@ -83,35 +79,21 @@ def generate_daily_report(user_id: int):
     try:
         cursor = conn.cursor()
 
-        # =================================================
-        # 🧠 REGIME MEMORY — MUST RUN FIRST
-        # =================================================
+        # 🧠 REGIME MEMORY
         regime = get_regime_memory(user_id)
+        store_regime_memory(user_id)
 
-        if not regime:
-            logger.info("⚠️ Geen regime gevonden — initialiseren")
-            store_regime_memory(user_id)
-        else:
-            logger.info("🧠 Updating regime memory")
-            store_regime_memory(user_id)
-
-        # -------------------------------------------------
-        # 1️⃣ GENERATE REPORT (AI)
-        # -------------------------------------------------
+        # 1️⃣ GENERATE REPORT
         report = generate_daily_report_sections(user_id=user_id)
 
-        if not report or not isinstance(report, dict):
+        if not isinstance(report, dict):
             raise ValueError("Report agent gaf geen geldig dict terug")
 
-        # ⭐ META toevoegen (extreem belangrijk voor audits later)
         report["meta"] = {
             "version": "daily_v1",
             "generated_at": datetime.utcnow().isoformat(),
         }
 
-        # -------------------------------------------------
-        # 2️⃣ NORMALIZE
-        # -------------------------------------------------
         executive_summary    = jsonb(report.get("executive_summary"), {})
         market_analysis      = jsonb(report.get("market_analysis"), {})
         macro_context        = jsonb(report.get("macro_context"), {})
@@ -140,143 +122,85 @@ def generate_daily_report(user_id: int):
         top_setups      = jsonb(report.get("top_setups"), [])
         active_strategy = jsonb(report.get("active_strategy"))
 
-        # -------------------------------------------------
-        # 3️⃣ UPSERT daily_reports
-        # -------------------------------------------------
         cursor.execute("""
             INSERT INTO daily_reports (
-                report_date,
-                user_id,
-
-                executive_summary,
-                market_analysis,
-                macro_context,
-                technical_analysis,
-                setup_validation,
-                strategy_implication,
-                outlook,
-
-                bot_strategy,
-                bot_snapshot,
-
-                price,
-                change_24h,
-                volume,
-
-                macro_score,
-                technical_score,
-                market_score,
-                setup_score,
-
-                market_indicator_highlights,
-                macro_indicator_highlights,
-                technical_indicator_highlights,
-
-                best_setup,
-                top_setups,
-                active_strategy
+                report_date, user_id,
+                executive_summary, market_analysis, macro_context,
+                technical_analysis, setup_validation, strategy_implication, outlook,
+                bot_strategy, bot_snapshot,
+                price, change_24h, volume,
+                macro_score, technical_score, market_score, setup_score,
+                market_indicator_highlights, macro_indicator_highlights, technical_indicator_highlights,
+                best_setup, top_setups, active_strategy
             )
             VALUES (
-                %s, %s,
-                %s, %s, %s, %s, %s, %s, %s,
-                %s, %s,
-                %s, %s, %s,
-                %s, %s, %s, %s,
-                %s, %s, %s,
-                %s, %s, %s
+                %s,%s,
+                %s,%s,%s,%s,%s,%s,%s,
+                %s,%s,
+                %s,%s,%s,
+                %s,%s,%s,%s,
+                %s,%s,%s,
+                %s,%s,%s
             )
             ON CONFLICT (user_id, report_date)
             DO UPDATE SET
-                executive_summary              = EXCLUDED.executive_summary,
-                market_analysis                = EXCLUDED.market_analysis,
-                macro_context                  = EXCLUDED.macro_context,
-                technical_analysis             = EXCLUDED.technical_analysis,
-                setup_validation               = EXCLUDED.setup_validation,
-                strategy_implication           = EXCLUDED.strategy_implication,
-                outlook                        = EXCLUDED.outlook,
-
-                bot_strategy                   = EXCLUDED.bot_strategy,
-                bot_snapshot                   = EXCLUDED.bot_snapshot,
-
-                price                          = EXCLUDED.price,
-                change_24h                     = EXCLUDED.change_24h,
-                volume                         = EXCLUDED.volume,
-
-                macro_score                    = EXCLUDED.macro_score,
-                technical_score                = EXCLUDED.technical_score,
-                market_score                   = EXCLUDED.market_score,
-                setup_score                    = EXCLUDED.setup_score,
-
-                market_indicator_highlights    = EXCLUDED.market_indicator_highlights,
-                macro_indicator_highlights     = EXCLUDED.macro_indicator_highlights,
+                executive_summary = EXCLUDED.executive_summary,
+                market_analysis = EXCLUDED.market_analysis,
+                macro_context = EXCLUDED.macro_context,
+                technical_analysis = EXCLUDED.technical_analysis,
+                setup_validation = EXCLUDED.setup_validation,
+                strategy_implication = EXCLUDED.strategy_implication,
+                outlook = EXCLUDED.outlook,
+                bot_strategy = EXCLUDED.bot_strategy,
+                bot_snapshot = EXCLUDED.bot_snapshot,
+                price = EXCLUDED.price,
+                change_24h = EXCLUDED.change_24h,
+                volume = EXCLUDED.volume,
+                macro_score = EXCLUDED.macro_score,
+                technical_score = EXCLUDED.technical_score,
+                market_score = EXCLUDED.market_score,
+                setup_score = EXCLUDED.setup_score,
+                market_indicator_highlights = EXCLUDED.market_indicator_highlights,
+                macro_indicator_highlights = EXCLUDED.macro_indicator_highlights,
                 technical_indicator_highlights = EXCLUDED.technical_indicator_highlights,
-
-                best_setup                     = EXCLUDED.best_setup,
-                top_setups                     = EXCLUDED.top_setups,
-                active_strategy                = EXCLUDED.active_strategy,
-
-                generated_at                   = NOW();
+                best_setup = EXCLUDED.best_setup,
+                top_setups = EXCLUDED.top_setups,
+                active_strategy = EXCLUDED.active_strategy,
+                generated_at = NOW();
         """, (
             today, user_id,
-
-            executive_summary,
-            market_analysis,
-            macro_context,
-            technical_analysis,
-            setup_validation,
-            strategy_implication,
-            outlook,
-
-            bot_strategy,
-            bot_snapshot,
-
-            price,
-            change_24h,
-            volume,
-
-            macro_score,
-            technical_score,
-            market_score,
-            setup_score,
-
-            market_indicators,
-            macro_indicators,
-            technical_indicators,
-
-            best_setup,
-            top_setups,
-            active_strategy,
+            executive_summary, market_analysis, macro_context,
+            technical_analysis, setup_validation, strategy_implication, outlook,
+            bot_strategy, bot_snapshot,
+            price, change_24h, volume,
+            macro_score, technical_score, market_score, setup_score,
+            market_indicators, macro_indicators, technical_indicators,
+            best_setup, top_setups, active_strategy
         ))
 
         conn.commit()
         logger.info("💾 daily_reports opgeslagen")
 
-        # =================================================
-        # ⭐ 4️⃣ CREATE SNAPSHOT (NEW FLOW)
-        # =================================================
+        # 📸 SNAPSHOT
         snapshot_id, token = create_report_snapshot(
             user_id=user_id,
             report_type="daily",
-            report_id=0,  # optional — kan je later koppelen
-            report_json=report,  # 🔥 PURE AI STATE
+            report_id=0,
+            report_json=report,
         )
 
         logger.info(f"📸 Snapshot created | id={snapshot_id}")
 
-        # =================================================
-        # ⭐ 5️⃣ ASYNC PLAYWRIGHT PDF
-        # =================================================
-        frontend_url = os.getenv("FRONTEND_URL")
-
+        # 🖨️ PDF JOB
         generate_pdf_from_snapshot.delay(
             snapshot_id=snapshot_id,
-            frontend_url=frontend_url,
+            frontend_url=os.getenv("FRONTEND_URL"),
         )
 
         logger.info("🖨️ PDF job queued")
 
     except Exception:
-        logger.error("❌ Fout in daily_report_task", exc_info=True)
+        logger.exception("❌ Fout in daily_report_task")
         conn.rollback()
 
     finally:
