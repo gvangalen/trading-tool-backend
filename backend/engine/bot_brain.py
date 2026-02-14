@@ -14,7 +14,7 @@ from backend.engine.exposure_engine import (
     apply_exposure_to_amount,
 )
 from backend.engine.decision_engine import decide_amount, DecisionEngineError
-from backend.ai_core.regime_memory import get_latest_regime_memory
+from backend.ai_core.regime_memory import get_regime_memory
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -50,7 +50,7 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(x, hi))
 
 
-# ⭐ NEW — prevents schema drift between agents
+# ⭐ voorkomt schema drift tussen agents
 def _normalize_scores(scores: Dict[str, float]) -> Dict[str, float]:
     """
     Accepts BOTH formats:
@@ -80,7 +80,7 @@ def run_bot_brain(
 
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
 
-    # ⭐ normalize once
+    # normalize scores
     scores = _normalize_scores(scores)
 
     # -------------------------------------------------
@@ -89,7 +89,7 @@ def run_bot_brain(
 
     regime_memory = None
     try:
-        regime_memory = get_latest_regime_memory(user_id)
+        regime_memory = get_regime_memory(user_id)
     except Exception as e:
         logger.warning("Regime memory unavailable: %s", e)
 
@@ -135,7 +135,7 @@ def run_bot_brain(
         exposure_pack.get("multiplier"), 1.0
     ) or 1.0
 
-    # ⭐ institutional safety cap
+    # institutional safety cap
     exposure_multiplier = _clamp(
         exposure_multiplier,
         0.0,
