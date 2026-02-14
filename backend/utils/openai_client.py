@@ -39,8 +39,8 @@ if not logger.handlers:
 TEXT_TEMP = float(os.getenv("OPENAI_TEXT_TEMP", "0.4"))
 JSON_TEMP = float(os.getenv("OPENAI_JSON_TEMP", "0.2"))
 
-TEXT_MAX_TOKENS = int(os.getenv("OPENAI_TEXT_MAX_TOKENS", "900"))
-JSON_MAX_TOKENS = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "700"))
+TEXT_MAX_TOKENS = int(os.getenv("OPENAI_TEXT_MAX_TOKENS", "1500"))
+JSON_MAX_TOKENS = int(os.getenv("OPENAI_JSON_MAX_TOKENS", "1400"))
 
 TIMEOUT = int(os.getenv("OPENAI_TIMEOUT", "45"))
 
