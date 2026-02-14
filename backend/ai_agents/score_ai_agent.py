@@ -300,34 +300,95 @@ def to_float_or_none(v: Any) -> Optional[float]:
 # 💾 4. Opslaan → ai_category_insights (categorie: 'master')
 # ============================================================
 def store_master_result(conn, result: dict, user_id: int):
-    # 🔒 Coerce numbers (AI geeft vaak strings)
+    """
+    Slaat master score robuust op.
+    Beschermt tegen:
+    - AI die strings terugstuurt
+    - ontbrekende velden
+    - lege output
+    - alignment > master
+    - NULL waarden
+    """
+
+    # =====================================================
+    # 1️⃣ AI RESULT VALIDATIE
+    # =====================================================
+    if not result or not isinstance(result, dict):
+        logger.warning("⚠️ Master AI gaf lege of ongeldige output → fallback")
+        result = {}
+
+    # =====================================================
+    # 2️⃣ SAFE NUMERIC PARSING
+    # =====================================================
+    def to_float_or_none(v):
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, Decimal):
+            return float(v)
+        if isinstance(v, str):
+            s = v.strip().lower().replace(",", ".")
+            if s in ("", "none", "null", "nan"):
+                return None
+            try:
+                return float(s)
+            except Exception:
+                return None
+        return None
+
     master_score = to_float_or_none(result.get("master_score"))
     alignment_score = to_float_or_none(result.get("alignment_score"))
 
-    # ✅ Fallback: soms gebruikt AI per ongeluk avg_score i.p.v. master_score
+    # AI gebruikt soms avg_score i.p.v master_score
     if master_score is None:
         master_score = to_float_or_none(result.get("avg_score"))
 
-    # ✅ Default (nooit NULL opslaan als je dashboard altijd iets wil tonen)
-    # Kies hier 50 of None. Ik raad 50 aan voor UX.
+    # =====================================================
+    # 3️⃣ HARD FAILSAFE DEFAULTS (UX belangrijk)
+    # =====================================================
     if master_score is None:
         master_score = 50.0
 
     if alignment_score is None:
         alignment_score = 0.0
 
-    # Clamp 0–100
-    master_score = max(0.0, min(100.0, float(master_score)))
-    alignment_score = max(0.0, min(100.0, float(alignment_score)))
+    # clamp waarden
+    master_score = max(0.0, min(100.0, master_score))
+    alignment_score = max(0.0, min(100.0, alignment_score))
+
+    # alignment mag nooit hoger zijn dan master score
+    alignment_score = min(alignment_score, master_score)
+
+    # =====================================================
+    # 4️⃣ META DATA VEILIG MAKEN
+    # =====================================================
+    domains = result.get("domains") or {}
+    weights = result.get("weights") or {}
+    data_warnings = result.get("data_warnings") or []
+
+    if not isinstance(data_warnings, list):
+        data_warnings = [str(data_warnings)]
 
     meta = {
-        "weights": result.get("weights"),
+        "weights": weights,
         "alignment_score": alignment_score,
-        "data_warnings": result.get("data_warnings", []),
-        "domains": result.get("domains", {}),
-        "outlook": result.get("outlook", ""),
+        "data_warnings": data_warnings,
+        "domains": domains,
+        "outlook": result.get("outlook", "") or "",
     }
 
+    # =====================================================
+    # 5️⃣ STRING FIELDS SANITIZE
+    # =====================================================
+    trend = str(result.get("master_trend", "") or "")
+    bias = str(result.get("master_bias", "") or "")
+    risk = str(result.get("master_risk", "") or "")
+    summary = str(result.get("summary", "") or "")
+
+    # =====================================================
+    # 6️⃣ OPSLAAN
+    # =====================================================
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -347,15 +408,20 @@ def store_master_result(conn, result: dict, user_id: int):
             (
                 user_id,
                 master_score,
-                result.get("master_trend", "") or "",
-                result.get("master_bias", "") or "",
-                result.get("master_risk", "") or "",
-                result.get("summary", "") or "",
+                trend,
+                bias,
+                risk,
+                summary,
                 json.dumps(meta, ensure_ascii=False),
             ),
         )
 
-    logger.info(f"💾 Master stored | user_id={user_id} | avg_score={master_score} | alignment={alignment_score}")
+    logger.info(
+        f"💾 Master stored | user_id={user_id} "
+        f"| score={master_score} "
+        f"| alignment={alignment_score} "
+        f"| warnings={len(data_warnings)}"
+    )
 
 
 # ============================================================
