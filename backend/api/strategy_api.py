@@ -28,37 +28,53 @@ def format_strategy_row(row: dict):
         "setup_id": row.get("setup_id"),
         "strategy_type": row.get("strategy_type"),
 
-        # Execution (NIEUW 2.0)
+        # ======================================================
+        # Execution (position sizing logic)
+        # ======================================================
         "execution_mode": row.get("execution_mode"),
         "base_amount": row.get("base_amount"),
         "frequency": row.get("frequency"),
         "decision_curve": row.get("decision_curve"),
 
-        # Core (uit data)
+        # ⭐ NIEUW — curve metadata
+        "decision_curve_name": data.get("decision_curve_name"),
+        "decision_curve_id": data.get("decision_curve_id"),
+
+        # ======================================================
+        # Core info
+        # ======================================================
         "symbol": data.get("symbol"),
         "timeframe": data.get("timeframe"),
 
+        # ======================================================
         # Trading levels
+        # ======================================================
         "entry": row.get("entry") or data.get("entry"),
         "target": row.get("target") or data.get("target"),
+        "targets": data.get("targets"),
         "stop_loss": row.get("stop_loss") or data.get("stop_loss"),
 
-        # Uitleg
+        # ======================================================
+        # Explanation
+        # ======================================================
         "explanation": row.get("explanation") or data.get("explanation"),
         "ai_explanation": data.get("ai_explanation"),
 
+        # ======================================================
         # Meta
+        # ======================================================
         "risk_profile": row.get("risk_profile") or data.get("risk_profile"),
         "tags": data.get("tags", []),
         "favorite": data.get("favorite", False),
 
+        # ======================================================
         # Timestamps
+        # ======================================================
         "created_at": (
             row.get("created_at").isoformat()
             if row.get("created_at") else None
         ),
     }
-
 
 # ==========================================================
 # 1️⃣ CREATE STRATEGY
