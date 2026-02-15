@@ -79,9 +79,6 @@ async def save_strategy(
     if execution_mode not in ["none", "fixed", "custom"]:
         raise HTTPException(400, "Ongeldige execution_mode")
 
-    # ----------------------------
-    # Validaties
-    # ----------------------------
     if not data.get("setup_id"):
         raise HTTPException(400, "setup_id is verplicht")
 
@@ -98,7 +95,10 @@ async def save_strategy(
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            # Ownership setup check
+
+            # --------------------------------------------------
+            # VERIFY OWNERSHIP
+            # --------------------------------------------------
             cur.execute(
                 "SELECT id FROM setups WHERE id=%s AND user_id=%s",
                 (data["setup_id"], user_id)
@@ -106,7 +106,9 @@ async def save_strategy(
             if not cur.fetchone():
                 raise HTTPException(403, "Setup niet van gebruiker")
 
-            # Uniek per setup + type
+            # --------------------------------------------------
+            # UNIQUE STRATEGY CHECK
+            # --------------------------------------------------
             cur.execute("""
                 SELECT id FROM strategies
                 WHERE setup_id=%s AND strategy_type=%s AND user_id=%s
@@ -114,6 +116,47 @@ async def save_strategy(
             if cur.fetchone():
                 raise HTTPException(409, "Strategie bestaat al")
 
+            # --------------------------------------------------
+            # 🔥 SAVE CUSTOM CURVE (NEW)
+            # --------------------------------------------------
+            curve_id = None
+
+            if execution_mode == "custom":
+                curve = data.get("decision_curve")
+
+                curve_name = data.get("decision_curve_name")
+                if not curve_name:
+                    ts = datetime.utcnow().strftime("%Y%m%d-%H%M")
+                    curve_name = f"Custom Curve {ts}"
+
+                cur.execute("""
+                    INSERT INTO indicator_curves (
+                        user_id,
+                        domain,
+                        indicator,
+                        curve,
+                        name,
+                        is_active,
+                        is_preset,
+                        created_at
+                    )
+                    VALUES (%s,'execution','position_size',%s,%s,true,false,NOW())
+                    RETURNING id
+                """, (
+                    user_id,
+                    json.dumps(curve),
+                    curve_name
+                ))
+
+                curve_id = cur.fetchone()[0]
+
+                # store reference
+                data["decision_curve_id"] = curve_id
+                data["decision_curve_name"] = curve_name
+
+            # --------------------------------------------------
+            # INSERT STRATEGY
+            # --------------------------------------------------
             cur.execute("""
                 INSERT INTO strategies (
                     setup_id,
@@ -159,12 +202,16 @@ async def save_strategy(
             conn.commit()
 
         mark_step_completed(conn, user_id, "strategy")
-        return {"id": strategy_id, "message": "✅ Strategie opgeslagen"}
+
+        return {
+            "id": strategy_id,
+            "curve_id": curve_id,
+            "message": "✅ Strategie opgeslagen"
+        }
 
     finally:
         conn.close()
-
-
+        
 # ==========================================================
 # 2️⃣ QUERY STRATEGIES (cards)
 # ==========================================================
