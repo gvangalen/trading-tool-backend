@@ -497,9 +497,35 @@ async def export_strategies(current_user: dict = Depends(get_current_user)):
     finally:
         conn.close()
 
+# ==========================================================
+# 11 Get Curvers 
+# ==========================================================
+@router.get("/curves/execution")
+async def get_execution_curves(
+    current_user: dict = Depends(get_current_user)
+):
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, name, curve
+                FROM indicator_curves
+                WHERE user_id=%s
+                  AND domain='execution'
+                  AND is_active=true
+                ORDER BY created_at DESC
+            """, (current_user["id"],))
+
+            rows = cur.fetchall()
+
+        return rows
+
+    finally:
+        conn.close()
+
 
 # ==========================================================
-# 1️⃣1️⃣ ACTIVE STRATEGY FOR TODAY
+# 12 ACTIVE STRATEGY FOR TODAY
 # ==========================================================
 @router.get("/strategies/active-today")
 async def get_active_strategy_today(
