@@ -24,8 +24,19 @@ def format_strategy_row(row: dict):
     data = row.get("data") or {}
 
     return {
+        # ======================================================
+        # Identity
+        # ======================================================
         "id": row.get("id"),
         "setup_id": row.get("setup_id"),
+
+        # ⭐ STRATEGY NAME (NEW)
+        # priority:
+        # 1. column "name"
+        # 2. data.name
+        # 3. None
+        "name": row.get("name") or data.get("name"),
+
         "strategy_type": row.get("strategy_type"),
 
         # ======================================================
@@ -36,7 +47,7 @@ def format_strategy_row(row: dict):
         "frequency": row.get("frequency"),
         "decision_curve": row.get("decision_curve"),
 
-        # ⭐ NIEUW — curve metadata
+        # ⭐ curve metadata
         "decision_curve_name": data.get("decision_curve_name"),
         "decision_curve_id": data.get("decision_curve_id"),
 
@@ -75,7 +86,7 @@ def format_strategy_row(row: dict):
             if row.get("created_at") else None
         ),
     }
-
+    
 # ==========================================================
 # 1️⃣ CREATE STRATEGY
 # ==========================================================
@@ -133,7 +144,18 @@ async def save_strategy(
                 raise HTTPException(409, "Strategie bestaat al")
 
             # --------------------------------------------------
-            # 🔥 SAVE CUSTOM CURVE (NEW)
+            # ⭐ STRATEGY NAME (NEW)
+            # --------------------------------------------------
+            strategy_name = data.get("name")
+
+            if not strategy_name:
+                # fallback naam
+                symbol = data.get("symbol", "")
+                tf = data.get("timeframe", "")
+                strategy_name = f"{strategy_type.upper()} {symbol} {tf}".strip()
+
+            # --------------------------------------------------
+            # 🔥 SAVE CUSTOM CURVE (optional)
             # --------------------------------------------------
             curve_id = None
 
@@ -166,7 +188,6 @@ async def save_strategy(
 
                 curve_id = cur.fetchone()[0]
 
-                # store reference
                 data["decision_curve_id"] = curve_id
                 data["decision_curve_name"] = curve_name
 
@@ -176,6 +197,7 @@ async def save_strategy(
             cur.execute("""
                 INSERT INTO strategies (
                     setup_id,
+                    name,
                     strategy_type,
                     execution_mode,
                     base_amount,
@@ -200,6 +222,7 @@ async def save_strategy(
                 RETURNING id
             """, (
                 data["setup_id"],
+                strategy_name,  # ⭐ opgeslagen naam
                 strategy_type,
                 execution_mode,
                 data.get("base_amount"),
@@ -221,6 +244,7 @@ async def save_strategy(
 
         return {
             "id": strategy_id,
+            "name": strategy_name,
             "curve_id": curve_id,
             "message": "✅ Strategie opgeslagen"
         }
