@@ -123,9 +123,7 @@ async def save_strategy(
     try:
         with conn.cursor() as cur:
 
-            # --------------------------------------------------
-            # VERIFY OWNERSHIP
-            # --------------------------------------------------
+            # verify setup ownership
             cur.execute(
                 "SELECT id FROM setups WHERE id=%s AND user_id=%s",
                 (data["setup_id"], user_id)
@@ -133,9 +131,7 @@ async def save_strategy(
             if not cur.fetchone():
                 raise HTTPException(403, "Setup niet van gebruiker")
 
-            # --------------------------------------------------
-            # UNIQUE STRATEGY CHECK
-            # --------------------------------------------------
+            # voorkom duplicaat
             cur.execute("""
                 SELECT id FROM strategies
                 WHERE setup_id=%s AND strategy_type=%s AND user_id=%s
@@ -143,57 +139,36 @@ async def save_strategy(
             if cur.fetchone():
                 raise HTTPException(409, "Strategie bestaat al")
 
-            # --------------------------------------------------
-            # ⭐ STRATEGY NAME (NEW)
-            # --------------------------------------------------
+            # ⭐ STRATEGY NAME
             strategy_name = data.get("name")
-
             if not strategy_name:
-                # fallback naam
                 symbol = data.get("symbol", "")
                 tf = data.get("timeframe", "")
                 strategy_name = f"{strategy_type.upper()} {symbol} {tf}".strip()
 
-            # --------------------------------------------------
-            # 🔥 SAVE CUSTOM CURVE (optional)
-            # --------------------------------------------------
+            # ⭐ optional curve save
             curve_id = None
-
             if execution_mode == "custom":
-                curve = data.get("decision_curve")
-
-                curve_name = data.get("decision_curve_name")
-                if not curve_name:
-                    ts = datetime.utcnow().strftime("%Y%m%d-%H%M")
-                    curve_name = f"Custom Curve {ts}"
+                curve_name = data.get("decision_curve_name") or f"Custom Curve {datetime.utcnow():%Y%m%d-%H%M}"
 
                 cur.execute("""
                     INSERT INTO indicator_curves (
-                        user_id,
-                        domain,
-                        indicator,
-                        curve,
-                        name,
-                        is_active,
-                        is_preset,
-                        created_at
+                        user_id, domain, indicator, curve, name,
+                        is_active, is_preset, created_at
                     )
                     VALUES (%s,'execution','position_size',%s,%s,true,false,NOW())
                     RETURNING id
                 """, (
                     user_id,
-                    json.dumps(curve),
+                    json.dumps(data["decision_curve"]),
                     curve_name
                 ))
 
                 curve_id = cur.fetchone()[0]
-
                 data["decision_curve_id"] = curve_id
                 data["decision_curve_name"] = curve_name
 
-            # --------------------------------------------------
             # INSERT STRATEGY
-            # --------------------------------------------------
             cur.execute("""
                 INSERT INTO strategies (
                     setup_id,
@@ -222,7 +197,7 @@ async def save_strategy(
                 RETURNING id
             """, (
                 data["setup_id"],
-                strategy_name,  # ⭐ opgeslagen naam
+                strategy_name,
                 strategy_type,
                 execution_mode,
                 data.get("base_amount"),
@@ -321,8 +296,19 @@ async def update_strategy(
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+
+            # check ownership
+            cur.execute(
+                "SELECT id FROM strategies WHERE id=%s AND user_id=%s",
+                (strategy_id, current_user["id"])
+            )
+            if not cur.fetchone():
+                raise HTTPException(404, "Strategie niet gevonden")
+
+            # ⭐ naam aanpassen
             cur.execute("""
                 UPDATE strategies SET
+                    name=%s,
                     execution_mode=%s,
                     base_amount=%s,
                     decision_curve=%s,
@@ -332,6 +318,7 @@ async def update_strategy(
                     risk_profile=%s
                 WHERE id=%s AND user_id=%s
             """, (
+                data.get("name"),
                 data.get("execution_mode"),
                 data.get("base_amount"),
                 json.dumps(data.get("decision_curve")) if data.get("decision_curve") else None,
@@ -342,9 +329,6 @@ async def update_strategy(
                 strategy_id,
                 current_user["id"]
             ))
-
-            if cur.rowcount == 0:
-                raise HTTPException(404, "Strategie niet gevonden")
 
             conn.commit()
 
