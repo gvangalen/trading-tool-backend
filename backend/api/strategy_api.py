@@ -120,6 +120,7 @@ async def save_strategy(
             raise HTTPException(400, "entry en stop_loss zijn verplicht")
 
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
 
@@ -140,11 +141,12 @@ async def save_strategy(
                 SELECT id FROM strategies
                 WHERE setup_id=%s AND strategy_type=%s AND user_id=%s
             """, (data["setup_id"], strategy_type, user_id))
+
             if cur.fetchone():
                 raise HTTPException(409, "Strategie bestaat al")
 
             # --------------------------------------------------
-            # ⭐ STRATEGY NAME
+            # ⭐ STRATEGY NAME (REQUIRED)
             # --------------------------------------------------
             strategy_name = (data.get("name") or "").strip()
 
@@ -159,13 +161,21 @@ async def save_strategy(
             curve_id = None
 
             if execution_mode == "custom":
-                curve_name = data.get("decision_curve_name") or \
-                             f"Custom Curve {datetime.utcnow():%Y%m%d-%H%M}"
+                curve_name = (
+                    data.get("decision_curve_name")
+                    or f"Custom Curve {datetime.utcnow():%Y%m%d-%H%M}"
+                )
 
                 cur.execute("""
                     INSERT INTO indicator_curves (
-                        user_id, domain, indicator, curve, name,
-                        is_active, is_preset, created_at
+                        user_id,
+                        domain,
+                        indicator,
+                        curve,
+                        name,
+                        is_active,
+                        is_preset,
+                        created_at
                     )
                     VALUES (%s,'execution','position_size',%s,%s,true,false,NOW())
                     RETURNING id
@@ -180,7 +190,7 @@ async def save_strategy(
                 data["decision_curve_name"] = curve_name
 
             # --------------------------------------------------
-            # INSERT STRATEGY  ✅ FIXED PLACEHOLDERS
+            # INSERT STRATEGY ✅ FINAL SAFE VERSION
             # --------------------------------------------------
             cur.execute("""
                 INSERT INTO strategies (
@@ -190,6 +200,7 @@ async def save_strategy(
                     execution_mode,
                     base_amount,
                     decision_curve,
+                    decision_curve_id,
                     frequency,
                     entry,
                     target,
@@ -201,9 +212,10 @@ async def save_strategy(
                     user_id
                 )
                 VALUES (
-                    %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s,
-                    %s, %s, %s,
+                    %s,%s,%s,%s,%s,
+                    %s,%s,%s,
+                    %s,%s,%s,
+                    %s,%s,%s,
                     NOW(),
                     %s
                 )
@@ -215,6 +227,7 @@ async def save_strategy(
                 execution_mode,
                 data.get("base_amount"),
                 json.dumps(data.get("decision_curve")) if data.get("decision_curve") else None,
+                curve_id,
                 data.get("frequency"),
                 str(data.get("entry")) if data.get("entry") else None,
                 data.get("target"),
