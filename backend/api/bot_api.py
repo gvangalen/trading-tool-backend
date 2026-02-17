@@ -251,18 +251,16 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         }
 
         # =====================================================
-        # ACTIEVE BOTS + BUDGET INFO
+        # ACTIEVE BOTS
         # =====================================================
         cur.execute(
             """
             SELECT
               b.id,
               b.name,
-              COALESCE(st.symbol, 'BTC'),
-              COALESCE(st.timeframe, '—'),
-              s.strategy_type,
-              COALESCE(b.budget_daily_limit_eur,0),
-              COALESCE(b.budget_max_order_eur,0)
+              COALESCE(st.symbol, 'BTC')  AS symbol,
+              COALESCE(st.timeframe, '—') AS timeframe,
+              s.strategy_type
             FROM bot_configs b
             LEFT JOIN strategies s ON s.id = b.strategy_id
             LEFT JOIN setups st ON st.id = s.setup_id
@@ -272,7 +270,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             """,
             (user_id,),
         )
-
         bot_rows = cur.fetchall()
 
         if not bot_rows:
@@ -284,17 +281,16 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "executions": [],
             }
 
-        bots_by_id = {}
-        for r in bot_rows:
-            bots_by_id[int(r[0])] = {
+        bots_by_id = {
+            int(r[0]): {
                 "bot_id": int(r[0]),
                 "bot_name": r[1],
                 "symbol": r[2],
                 "timeframe": r[3],
                 "strategy_type": r[4],
-                "max_daily": float(r[5] or 0),
-                "max_risk": float(r[6] or 0),
             }
+            for r in bot_rows
+        }
 
         # =====================================================
         # DECISIONS VAN VANDAAG
@@ -308,6 +304,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
               id,
               bot_id,
               symbol,
+              decision_ts,
               action,
               confidence,
               scores_json,
@@ -330,6 +327,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 decision_id,
                 bot_id,
                 symbol,
+                decision_ts,
                 action,
                 confidence,
                 scores_json,
@@ -348,6 +346,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             scores_payload = _safe_json(scores_json, {})
             reasons_payload = _safe_json(reason_json, [])
 
+            # 🔒 HARD DEFAULT — setup_match bestaat ALTIJD
             setup_match = scores_payload.get("setup_match") or {
                 "status": "no_snapshot",
                 "summary": "Geen strategie context",
@@ -356,34 +355,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "confidence": "low",
             }
 
-            # =============================
-            # ENGINE CONTEXT
-            # =============================
-            transition_risk = float(scores_payload.get("transition_risk", 0))
-            market_pressure = float(scores_payload.get("market_pressure", 0))
-            regime = scores_payload.get("regime")
-            risk_state = scores_payload.get("risk_state")
-
-            # market health label
-            if market_pressure > 70:
-                market_health = "risk_off"
-            elif market_pressure > 40:
-                market_health = "neutral"
-            else:
-                market_health = "risk_on"
-
-            # warnings
-            warnings = []
-
-            if transition_risk > 70:
-                warnings.append("Market transition risk elevated")
-
-            if market_pressure > 75:
-                warnings.append("Extreme market pressure")
-
-            if setup_match.get("status") == "no_snapshot":
-                warnings.append("No active strategy snapshot")
-
             decisions_by_bot[bot_id] = {
                 "id": decision_id,
                 "bot_id": bot_id,
@@ -391,31 +362,32 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "symbol": symbol,
                 "action": action,
                 "confidence": confidence,
+
+                # 기존: volledige payload blijft beschikbaar
                 "scores": scores_payload or daily_scores,
                 "reasons": reasons_payload if isinstance(reasons_payload, list) else [str(reasons_payload)],
+
                 "setup_id": setup_id,
                 "strategy_id": strategy_id,
                 "status": status,
                 "created_at": created_at,
                 "updated_at": updated_at,
 
-                # UI contract
+                # ✅ contract: setup_match top-level
                 "setup_match": setup_match,
 
-                # market intelligence
-                "market_health": market_health,
-                "market_pressure": market_pressure,
-                "transition_risk": transition_risk,
-                "regime": regime,
-                "risk_state": risk_state,
+                # ✅ NEW: top-level fields for UI components
+                "market_health": scores_payload.get("market_health"),
+                "market_pressure": scores_payload.get("market_pressure"),
+                "transition_risk": scores_payload.get("transition_risk"),
+                "exposure_multiplier": scores_payload.get("exposure_multiplier"),
 
-                # guardrails
-                "max_risk_per_trade": bots_by_id[bot_id]["max_risk"],
-                "max_daily_allocation": bots_by_id[bot_id]["max_daily"],
-                "warnings": warnings,
+                "max_risk_per_trade": scores_payload.get("max_risk_per_trade"),
+                "max_daily_allocation": scores_payload.get("max_daily_allocation"),
+                "warnings": scores_payload.get("warnings") or [],
 
-                # future sizing engine
-                "exposure_multiplier": 1,
+                "regime": scores_payload.get("regime"),
+                "risk_state": scores_payload.get("risk_state"),
             }
 
             decision_ids.append(decision_id)
@@ -429,7 +401,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             return await get_bot_today(current_user)
 
         # =====================================================
-        # ORDERS
+        # ORDERS (informatief)
         # =====================================================
         orders = []
         if decision_ids and _table_exists(conn, "bot_orders"):
@@ -453,7 +425,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 })
 
         # =====================================================
-        # EXECUTIONS
+        # ✅ EXECUTIONS — CORRECTE BRON
         # =====================================================
         executions = []
         if decision_ids and _table_exists(conn, "bot_executions"):
@@ -479,18 +451,30 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 (user_id, decision_ids),
             )
 
-            for row in cur.fetchall():
+            for (
+                exec_id,
+                bot_id,
+                decision_id,
+                symbol,
+                side,
+                qty,
+                price,
+                amount_eur,
+                status,
+                created_at,
+            ) in cur.fetchall():
+
                 executions.append({
-                    "id": row[0],
-                    "bot_id": row[1],
-                    "decision_id": row[2],
-                    "symbol": row[3],
-                    "side": row[4],
-                    "qty": float(row[5] or 0),
-                    "price": float(row[6]) if row[6] is not None else None,
-                    "amount_eur": float(row[7]) if row[7] is not None else None,
-                    "executed_at": row[9],
-                    "mode": "auto" if row[8] == "filled" else "manual",
+                    "id": exec_id,
+                    "bot_id": bot_id,
+                    "decision_id": decision_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": float(qty or 0),
+                    "price": float(price) if price is not None else None,
+                    "amount_eur": float(amount_eur) if amount_eur is not None else None,
+                    "executed_at": created_at,
+                    "mode": "auto" if status == "filled" else "manual",
                 })
 
         return {
