@@ -721,15 +721,34 @@ def _persist_decision_and_order(
     if not isinstance(reasons, list):
         reasons = [str(reasons)]
 
+    # NEW: guardrails + market intelligence + ui contract
     setup_match = decision.get("setup_match") or {}
 
     scores_payload = {
+        # existing scores (stable)
         "macro": _clamp_score(scores.get("macro", 10)),
         "technical": _clamp_score(scores.get("technical", 10)),
         "market": _clamp_score(scores.get("market", 10)),
         "setup": _clamp_score(scores.get("setup", 10)),
         "combined": _clamp_score(decision.get("score", 10)),
         "setup_match": setup_match,
+
+        # ✅ NEW: market conditions for UI (MarketConditionsInline)
+        "market_health": float(decision.get("market_health") or 50),
+        "market_pressure": float(decision.get("market_pressure") or 50),
+        "transition_risk": float(decision.get("transition_risk") or 50),
+
+        # ✅ NEW: sizing / exposure (UI + analytics)
+        "exposure_multiplier": float(decision.get("exposure_multiplier") or 1.0),
+
+        # ✅ NEW: guardrails panel fields
+        "max_risk_per_trade": decision.get("max_risk_per_trade"),
+        "max_daily_allocation": decision.get("max_daily_allocation"),
+        "warnings": decision.get("warnings") if isinstance(decision.get("warnings"), list) else [],
+
+        # ✅ NEW: extra regime context
+        "regime": decision.get("regime"),
+        "risk_state": decision.get("risk_state"),
     }
 
     with conn.cursor() as cur:
@@ -801,7 +820,6 @@ def _persist_decision_and_order(
 
         return decision_id
 
-
 # =====================================================
 # 🚀 PUBLIC ENTRYPOINT (KEEP NAME!)
 # =====================================================
@@ -844,7 +862,24 @@ def run_trading_bot_agent(
             )
 
             # -------------------------------------------------
-            # 2️⃣ HARD GUARD → no snapshot = nooit traden
+            # 2️⃣ Base market condition fields (always)
+            # -------------------------------------------------
+            # simple composite health (0..100-ish, but we clamp later in persistence)
+            market_health = round(
+                float(scores.get("macro", 10)) * 0.4
+                + float(scores.get("technical", 10)) * 0.3
+                + float(scores.get("market", 10)) * 0.3,
+                1
+            )
+
+            # guardrails from bot budget (UI wants these fields)
+            max_risk_per_trade = float(bot.get("budget", {}).get("max_order_eur") or 0) or None
+            max_daily_allocation = float(bot.get("budget", {}).get("daily_limit_eur") or 0) or None
+
+            warnings: List[str] = []
+
+            # -------------------------------------------------
+            # 3️⃣ HARD GUARD → no snapshot = nooit traden
             # -------------------------------------------------
             if snapshot is None:
 
@@ -856,11 +891,23 @@ def run_trading_bot_agent(
                     "amount_eur": 0.0,
                     "setup_match": setup_match,
                     "reasons": ["no_active_strategy_snapshot"],
+
+                    # NEW UI fields (still present)
+                    "market_health": market_health,
+                    "market_pressure": 50,
+                    "transition_risk": 50,
+                    "exposure_multiplier": 1.0,
+
+                    "max_risk_per_trade": max_risk_per_trade,
+                    "max_daily_allocation": max_daily_allocation,
+                    "warnings": warnings,
+                    "regime": None,
+                    "risk_state": None,
                 }
 
             else:
                 # -------------------------------------------------
-                # 3️⃣ Setup payload voor engine
+                # 4️⃣ Setup payload voor engine
                 # -------------------------------------------------
                 setup_payload = _get_strategy_setup_payload(
                     conn,
@@ -872,7 +919,7 @@ def run_trading_bot_agent(
                 )
 
                 # -------------------------------------------------
-                # 4️⃣ ENGINE BRAIN (single source of truth)
+                # 5️⃣ ENGINE BRAIN (single source of truth)
                 # -------------------------------------------------
                 brain = run_bot_brain(
                     user_id=user_id,
@@ -891,15 +938,10 @@ def run_trading_bot_agent(
 
                 amount = float(brain.get("amount_eur") or 0.0)
 
-                # -------------------------------------------------
-                # confidence mapping
-                # -------------------------------------------------
+                # confidence mapping (robust)
                 engine_conf = brain.get("confidence")
-
-                # ✅ robuuste confidence mapping
                 if isinstance(engine_conf, str):
                     confidence_label = _normalize_confidence(engine_conf)
-
                 elif isinstance(engine_conf, (int, float)):
                     if engine_conf >= 0.7:
                         confidence_label = "high"
@@ -910,25 +952,33 @@ def run_trading_bot_agent(
                 else:
                     confidence_label = "low"
 
-                # -------------------------------------------------
-                # engine context (UI & analytics)
-                # -------------------------------------------------
+                # engine context
                 engine_reason = brain.get("reason") or "engine_decision"
                 engine_regime = brain.get("regime")
                 engine_risk_state = brain.get("risk_state")
-                engine_pressure = brain.get("market_pressure")
-                engine_transition = brain.get("transition_risk")
 
-                # -------------------------------------------------
+                engine_pressure = float(brain.get("market_pressure") or 50)
+                engine_transition = float(brain.get("transition_risk") or 50)
+
+                # NEW: exposure multiplier (position sizing)
+                exposure_multiplier = float(
+                    brain.get("size_multiplier")
+                    or brain.get("exposure_multiplier")
+                    or 1.0
+                )
+                # clamp safety
+                if exposure_multiplier < 0.25:
+                    exposure_multiplier = 0.25
+                if exposure_multiplier > 2.0:
+                    exposure_multiplier = 2.0
+
                 # respect bot order limits (BUY only)
-                # -------------------------------------------------
                 if engine_action == "buy":
                     min_eur = float(bot["budget"].get("min_order_eur") or 0)
                     max_eur = float(bot["budget"].get("max_order_eur") or 0)
 
                     if min_eur > 0:
                         amount = max(amount, min_eur)
-
                     if max_eur > 0:
                         amount = min(amount, max_eur)
 
@@ -940,12 +990,21 @@ def run_trading_bot_agent(
                     "amount_eur": round(amount, 2),
                     "setup_match": setup_match,
 
-                    # 🧠 engine intelligence
+                    # engine intelligence
                     "reasons": [engine_reason],
                     "regime": engine_regime,
                     "risk_state": engine_risk_state,
+
+                    # market conditions (UI)
+                    "market_health": market_health,
                     "market_pressure": engine_pressure,
                     "transition_risk": engine_transition,
+                    "exposure_multiplier": exposure_multiplier,
+
+                    # guardrails
+                    "max_risk_per_trade": max_risk_per_trade,
+                    "max_daily_allocation": max_daily_allocation,
+                    "warnings": warnings,
                 }
 
                 # safety guard → nooit 0 buy
@@ -954,9 +1013,10 @@ def run_trading_bot_agent(
                     decision["action"] = "hold"
                     decision["confidence"] = "low"
                     decision["amount_eur"] = 0.0
+                    decision.setdefault("warnings", []).append("blocked_zero_amount_buy")
 
             # -------------------------------------------------
-            # 5️⃣ Budget check
+            # 6️⃣ Budget check
             # -------------------------------------------------
             today_spent = get_today_spent_eur(
                 conn, user_id, bot["bot_id"], report_date
@@ -973,9 +1033,10 @@ def run_trading_bot_agent(
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
                 decision.setdefault("reasons", []).append(f"budget_blocked:{reason}")
+                decision.setdefault("warnings", []).append(f"budget_blocked:{reason}")
 
             # -------------------------------------------------
-            # 6️⃣ Order proposal
+            # 7️⃣ Order proposal
             # -------------------------------------------------
             order_proposal = build_order_proposal(
                 conn=conn,
@@ -992,9 +1053,10 @@ def run_trading_bot_agent(
                 decision["confidence"] = "low"
                 decision["amount_eur"] = 0.0
                 decision.setdefault("reasons", []).append("order_proposal_failed")
+                decision.setdefault("warnings", []).append("order_proposal_failed")
 
             # -------------------------------------------------
-            # 7️⃣ Persist decision
+            # 8️⃣ Persist decision (now includes market + guardrails in scores_json)
             # -------------------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
