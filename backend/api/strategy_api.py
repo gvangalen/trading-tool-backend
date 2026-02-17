@@ -123,7 +123,9 @@ async def save_strategy(
     try:
         with conn.cursor() as cur:
 
-            # verify setup ownership
+            # --------------------------------------------------
+            # VERIFY OWNERSHIP
+            # --------------------------------------------------
             cur.execute(
                 "SELECT id FROM setups WHERE id=%s AND user_id=%s",
                 (data["setup_id"], user_id)
@@ -131,7 +133,9 @@ async def save_strategy(
             if not cur.fetchone():
                 raise HTTPException(403, "Setup niet van gebruiker")
 
-            # voorkom duplicaat
+            # --------------------------------------------------
+            # PREVENT DUPLICATE
+            # --------------------------------------------------
             cur.execute("""
                 SELECT id FROM strategies
                 WHERE setup_id=%s AND strategy_type=%s AND user_id=%s
@@ -139,17 +143,24 @@ async def save_strategy(
             if cur.fetchone():
                 raise HTTPException(409, "Strategie bestaat al")
 
+            # --------------------------------------------------
             # ⭐ STRATEGY NAME
-            strategy_name = data.get("name")
+            # --------------------------------------------------
+            strategy_name = (data.get("name") or "").strip()
+
             if not strategy_name:
                 symbol = data.get("symbol", "")
                 tf = data.get("timeframe", "")
                 strategy_name = f"{strategy_type.upper()} {symbol} {tf}".strip()
 
-            # ⭐ optional curve save
+            # --------------------------------------------------
+            # ⭐ SAVE CUSTOM CURVE (OPTIONAL)
+            # --------------------------------------------------
             curve_id = None
+
             if execution_mode == "custom":
-                curve_name = data.get("decision_curve_name") or f"Custom Curve {datetime.utcnow():%Y%m%d-%H%M}"
+                curve_name = data.get("decision_curve_name") or \
+                             f"Custom Curve {datetime.utcnow():%Y%m%d-%H%M}"
 
                 cur.execute("""
                     INSERT INTO indicator_curves (
@@ -168,7 +179,9 @@ async def save_strategy(
                 data["decision_curve_id"] = curve_id
                 data["decision_curve_name"] = curve_name
 
-            # INSERT STRATEGY
+            # --------------------------------------------------
+            # INSERT STRATEGY  ✅ FIXED PLACEHOLDERS
+            # --------------------------------------------------
             cur.execute("""
                 INSERT INTO strategies (
                     setup_id,
@@ -188,11 +201,11 @@ async def save_strategy(
                     user_id
                 )
                 VALUES (
-                    %s,%s,%s,%s,%s,%s,
-                    %s,%s,%s,
-                    %s,%s,
-                    %s::jsonb,
-                    NOW(),%s
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s,
+                    NOW(),
+                    %s
                 )
                 RETURNING id
             """, (
