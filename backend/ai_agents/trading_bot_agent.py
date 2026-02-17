@@ -706,10 +706,15 @@ def _persist_decision_and_order(
     decision: Dict[str, Any],
     scores: Dict[str, float],
 ) -> int:
-    action = _normalize_action(decision.get("action"))
-    confidence = _normalize_confidence(decision.get("confidence"))
-    symbol = decision.get("symbol", DEFAULT_SYMBOL)
 
+    action = _normalize_action(decision.get("action"))
+
+    # ✅ confidence mag nooit None zijn
+    confidence = _normalize_confidence(
+        decision.get("confidence") or "low"
+    )
+
+    symbol = decision.get("symbol", DEFAULT_SYMBOL)
     amount_eur = float(decision.get("amount_eur") or 0.0)
 
     reasons = decision.get("reasons", [])
@@ -756,17 +761,17 @@ def _persist_decision_and_order(
                 'planned',
                 NOW(), NOW()
             )
-            ON CONFLICT (user_id, bot_id, decision_date)
+            ON CONFLICT ON CONSTRAINT ux_bot_decisions_user_bot_date
             DO UPDATE SET
-                action       = EXCLUDED.action,
-                confidence   = EXCLUDED.confidence,
-                amount_eur   = EXCLUDED.amount_eur,
-                scores_json  = EXCLUDED.scores_json,
-                reason_json  = EXCLUDED.reason_json,
-                status       = 'planned',
-                executed_by = NULL,
-                executed_at = NULL,
-                updated_at   = NOW()
+                action        = EXCLUDED.action,
+                confidence    = EXCLUDED.confidence,
+                amount_eur    = EXCLUDED.amount_eur,
+                scores_json   = EXCLUDED.scores_json,
+                reason_json   = EXCLUDED.reason_json,
+                status        = 'planned',
+                executed_by   = NULL,
+                executed_at   = NULL,
+                updated_at    = NOW()
             RETURNING id
             """,
             (
@@ -788,7 +793,13 @@ def _persist_decision_and_order(
         if not row:
             raise RuntimeError("Failed to upsert bot_decisions")
 
-        return int(row[0])
+        decision_id = int(row[0])
+
+        logger.info(
+            f"🧠 Decision stored | bot={bot_id} | action={action} | amount={amount_eur}"
+        )
+
+        return decision_id
 
 
 # =====================================================
@@ -885,7 +896,11 @@ def run_trading_bot_agent(
                 # -------------------------------------------------
                 engine_conf = brain.get("confidence")
 
-                if isinstance(engine_conf, (int, float)):
+                # ✅ robuuste confidence mapping
+                if isinstance(engine_conf, str):
+                    confidence_label = _normalize_confidence(engine_conf)
+
+                elif isinstance(engine_conf, (int, float)):
                     if engine_conf >= 0.7:
                         confidence_label = "high"
                     elif engine_conf >= 0.4:
@@ -935,6 +950,7 @@ def run_trading_bot_agent(
 
                 # safety guard → nooit 0 buy
                 if decision["action"] == "buy" and decision["amount_eur"] <= 0:
+                    logger.warning("BUY with zero amount prevented → switching to HOLD")
                     decision["action"] = "hold"
                     decision["confidence"] = "low"
                     decision["amount_eur"] = 0.0
@@ -1086,6 +1102,7 @@ def _auto_execute_decision(
         )
         bot_order_id = cur.fetchone()[0]
 
+        # ✅ ledger entry met prijsinfo (future analytics)
         record_bot_ledger_entry(
             conn=conn,
             user_id=user_id,
@@ -1097,6 +1114,10 @@ def _auto_execute_decision(
             decision_id=decision_id,
             order_id=bot_order_id,
             note="Auto execution",
+            meta={
+                "price": price,
+                "notional_eur": round(qty * price, 2),
+            },
         )
 
         cur.execute(
@@ -1110,6 +1131,8 @@ def _auto_execute_decision(
             """,
             (qty, price, bot_order_id),
         )
+
+    logger.info(f"⚡ Auto executed | bot={bot_id} | qty={qty} | price={price}")
 
 
 # =====================================================
