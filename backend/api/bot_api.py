@@ -1418,3 +1418,30 @@ async def get_bot_trades(
         raise HTTPException(status_code=500, detail="Bot trades ophalen mislukt")
     finally:
         conn.close()
+
+
+# =====================================
+# 📊 BOT Trade Plan
+# =====================================
+@router.get("/trade-plan/{decision_id}")
+async def get_trade_plan(decision_id: int, user=Depends(get_user)):
+    with get_db_connection() as conn:
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT entry_plan, stop_loss, targets, risk_json
+            FROM bot_trade_plans
+            WHERE decision_id=%s
+              AND user_id=%s
+        """, (decision_id, user.id))
+
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        return {
+            "entry_plan": row[0],
+            "stop_loss": row[1],
+            "targets": row[2],
+            "risk": row[3],
+        }
