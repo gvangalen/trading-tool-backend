@@ -1419,29 +1419,53 @@ async def get_bot_trades(
     finally:
         conn.close()
 
-
 # =====================================
 # 📊 BOT Trade Plan
 # =====================================
-@router.get("/trade-plan/{decision_id}")
-async def get_trade_plan(decision_id: int, user=Depends(get_user)):
-    with get_db_connection() as conn:
-        cur = conn.cursor()
+@router.get("/bot/trade-plan/{decision_id}")
+async def get_trade_plan(
+    decision_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["id"]
 
-        cur.execute("""
-            SELECT entry_plan, stop_loss, targets, risk_json
-            FROM bot_trade_plans
-            WHERE decision_id=%s
-              AND user_id=%s
-        """, (decision_id, user.id))
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
-        row = cur.fetchone()
-        if not row:
-            return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT entry_plan, stop_loss, targets, risk_json
+                FROM bot_trade_plans
+                WHERE decision_id=%s
+                  AND user_id=%s
+                """,
+                (decision_id, user_id),
+            )
 
-        return {
-            "entry_plan": row[0],
-            "stop_loss": row[1],
-            "targets": row[2],
-            "risk": row[3],
-        }
+            row = cur.fetchone()
+
+            if not row:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Trade plan niet gevonden",
+                )
+
+            entry_plan, stop_loss, targets, risk_json = row
+
+            return {
+                "entry_plan": entry_plan or [],
+                "stop_loss": stop_loss or {},
+                "targets": targets or [],
+                "risk": risk_json or {},
+            }
+
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("❌ trade-plan fetch error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Trade plan ophalen mislukt")
+    finally:
+        conn.close()
