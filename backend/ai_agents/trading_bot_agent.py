@@ -693,6 +693,65 @@ def _persist_bot_order(
 
 
 # =====================================================
+# Persist trade plan
+# =====================================================
+def _persist_trade_plan(
+    *,
+    conn,
+    decision_id: int,
+    symbol: str,
+    plan: Dict[str, Any],
+):
+    """
+    Stores trade structure linked to a decision.
+    Safe to call only when plan exists.
+    """
+
+    if not plan:
+        return
+
+    entries = plan.get("entry") or []
+    targets = plan.get("targets") or []
+    stop = plan.get("stop")
+
+    if not isinstance(entries, list):
+        entries = [entries]
+
+    if not isinstance(targets, list):
+        targets = [targets]
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO bot_trade_plans (
+                decision_id,
+                symbol,
+                entry_prices,
+                stop_price,
+                target_prices,
+                risk_reward_ratio,
+                created_at
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,NOW())
+            ON CONFLICT (decision_id)
+            DO UPDATE SET
+                entry_prices = EXCLUDED.entry_prices,
+                stop_price   = EXCLUDED.stop_price,
+                target_prices= EXCLUDED.target_prices,
+                risk_reward_ratio = EXCLUDED.risk_reward_ratio
+            """,
+            (
+                decision_id,
+                symbol,
+                json.dumps(entries),
+                stop,
+                json.dumps(targets),
+                plan.get("rr"),
+            ),
+        )
+
+
+# =====================================================
 # Persist decision
 # =====================================================
 def _persist_decision_and_order(
@@ -708,11 +767,7 @@ def _persist_decision_and_order(
 ) -> int:
 
     action = _normalize_action(decision.get("action"))
-
-    # confidence mag nooit None zijn
-    confidence = _normalize_confidence(
-        decision.get("confidence") or "low"
-    )
+    confidence = _normalize_confidence(decision.get("confidence") or "low")
 
     symbol = decision.get("symbol", DEFAULT_SYMBOL)
     amount_eur = float(decision.get("amount_eur") or 0.0)
@@ -721,11 +776,12 @@ def _persist_decision_and_order(
     if not isinstance(reasons, list):
         reasons = [str(reasons)]
 
-    # UI contract
     setup_match = decision.get("setup_match") or {}
 
+    # ============================================
+    # 📊 SCORE PAYLOAD (UI + analytics)
+    # ============================================
     scores_payload = {
-        # core scores
         "macro": _clamp_score(scores.get("macro", 10)),
         "technical": _clamp_score(scores.get("technical", 10)),
         "market": _clamp_score(scores.get("market", 10)),
@@ -814,14 +870,41 @@ def _persist_decision_and_order(
 
         decision_id = int(row[0])
 
-        logger.info(
-            "🧠 Decision stored | bot=%s | action=%s | amount=%s",
-            bot_id,
-            action,
-            amount_eur,
+    # ============================================
+    # 🧱 TRADE PLAN STORAGE (NEW)
+    # ============================================
+
+    trade_plan = decision.get("trade_plan")
+
+    # fallback → snapshot based plan
+    if not trade_plan:
+        snapshot_entry = decision.get("entry")
+        snapshot_targets = decision.get("targets")
+        snapshot_stop = decision.get("stop_loss")
+
+        if snapshot_entry or snapshot_targets or snapshot_stop:
+            trade_plan = {
+                "entry": snapshot_entry,
+                "targets": snapshot_targets,
+                "stop": snapshot_stop,
+            }
+
+    if trade_plan:
+        _persist_trade_plan(
+            conn=conn,
+            decision_id=decision_id,
+            symbol=symbol,
+            plan=trade_plan,
         )
 
-        return decision_id
+    logger.info(
+        "🧠 Decision stored | bot=%s | action=%s | amount=%s",
+        bot_id,
+        action,
+        amount_eur,
+    )
+
+    return decision_id
 
 # =====================================================
 # 🚀 PUBLIC ENTRYPOINT (KEEP NAME!)
