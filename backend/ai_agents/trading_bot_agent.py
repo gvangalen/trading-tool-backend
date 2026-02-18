@@ -698,57 +698,65 @@ def _persist_bot_order(
 def _persist_trade_plan(
     *,
     conn,
+    user_id: int,
+    bot_id: int,
     decision_id: int,
     symbol: str,
-    plan: Dict[str, Any],
+    side: str,
+    plan: dict,
 ):
     """
-    Stores trade structure linked to a decision.
-    Safe to call only when plan exists.
+    Store structured trade plan for execution & UI.
+    Matches bot_trade_plans table.
     """
 
     if not plan:
         return
 
-    entries = plan.get("entry") or []
+    symbol = (symbol or "BTC").upper()
+    side = (side or "buy").lower()
+
+    entry_plan = plan.get("entry_plan") or []
+    stop_loss = plan.get("stop_loss") or None
     targets = plan.get("targets") or []
-    stop = plan.get("stop")
-
-    if not isinstance(entries, list):
-        entries = [entries]
-
-    if not isinstance(targets, list):
-        targets = [targets]
+    risk = plan.get("risk") or {}
 
     with conn.cursor() as cur:
-        cur.execute(
-            """
+        cur.execute("""
             INSERT INTO bot_trade_plans (
+                user_id,
+                bot_id,
                 decision_id,
                 symbol,
-                entry_prices,
-                stop_price,
-                target_prices,
-                risk_reward_ratio,
-                created_at
+                side,
+                entry_plan,
+                stop_loss,
+                targets,
+                risk_json,
+                status,
+                created_at,
+                updated_at
             )
-            VALUES (%s,%s,%s,%s,%s,%s,NOW())
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'planned',NOW(),NOW())
             ON CONFLICT (decision_id)
             DO UPDATE SET
-                entry_prices = EXCLUDED.entry_prices,
-                stop_price   = EXCLUDED.stop_price,
-                target_prices= EXCLUDED.target_prices,
-                risk_reward_ratio = EXCLUDED.risk_reward_ratio
-            """,
-            (
-                decision_id,
-                symbol,
-                json.dumps(entries),
-                stop,
-                json.dumps(targets),
-                plan.get("rr"),
-            ),
-        )
+                entry_plan = EXCLUDED.entry_plan,
+                stop_loss  = EXCLUDED.stop_loss,
+                targets    = EXCLUDED.targets,
+                risk_json  = EXCLUDED.risk_json,
+                status     = 'planned',
+                updated_at = NOW()
+        """, (
+            user_id,
+            bot_id,
+            decision_id,
+            symbol,
+            side,
+            json.dumps(entry_plan),
+            json.dumps(stop_loss),
+            json.dumps(targets),
+            json.dumps(risk),
+        ))
 
 
 # =====================================================
