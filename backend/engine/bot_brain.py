@@ -59,21 +59,14 @@ def _normalize_scores(scores: Dict[str, float]) -> Dict[str, float]:
 
 
 def _classify_risk_state(transition_risk: float, pressure: float) -> str:
-    """
-    Institutional risk regime classifier
-    """
     if transition_risk > 0.75:
         return "unstable"
-
     if transition_risk > 0.6:
         return "transition"
-
     if pressure < 0.4:
         return "defensive"
-
     if pressure > 0.7 and transition_risk < 0.3:
         return "risk_on"
-
     return "neutral"
 
 
@@ -90,13 +83,11 @@ def run_bot_brain(
 ) -> Dict[str, Any]:
 
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
-
     scores = _normalize_scores(scores)
 
     # -------------------------------------------------
     # 1️⃣ Regime Memory
     # -------------------------------------------------
-
     regime_memory = None
     regime_label = None
     regime_confidence = None
@@ -112,7 +103,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 2️⃣ Transition Risk
     # -------------------------------------------------
-
     try:
         transition_risk = float(get_transition_risk_value(user_id))
         transition_risk = _clamp(transition_risk, 0.0, 1.0)
@@ -125,7 +115,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 3️⃣ Market Pressure
     # -------------------------------------------------
-
     try:
         market_pressure = float(
             get_market_pressure(
@@ -139,9 +128,44 @@ def run_bot_brain(
         market_pressure = 0.5
 
     # -------------------------------------------------
-    # 4️⃣ Exposure Multiplier
+    # 🆕 4️⃣ Volatility Regime
     # -------------------------------------------------
+    if transition_risk > 0.7:
+        volatility_state = "expanding"
+    elif market_pressure < 0.35:
+        volatility_state = "compressed"
+    else:
+        volatility_state = "normal"
 
+    # -------------------------------------------------
+    # 🆕 5️⃣ Trend Strength
+    # -------------------------------------------------
+    trend_strength = (
+        scores["technical_score"] * 0.6 +
+        scores["market_score"] * 0.4
+    ) / 100
+
+    # -------------------------------------------------
+    # 🆕 6️⃣ Market Structure Bias
+    # -------------------------------------------------
+    if trend_strength > 0.65:
+        structure_bias = "trend"
+    elif trend_strength < 0.35:
+        structure_bias = "range"
+    else:
+        structure_bias = "neutral"
+
+    # -------------------------------------------------
+    # 🆕 7️⃣ Risk Environment
+    # -------------------------------------------------
+    risk_environment = (
+        (1 - transition_risk) * 0.5 +
+        market_pressure * 0.5
+    )
+
+    # -------------------------------------------------
+    # 8️⃣ Exposure Multiplier
+    # -------------------------------------------------
     exposure_pack = compute_exposure_multiplier(
         regime_memory=regime_memory,
         transition_risk=transition_risk,
@@ -158,9 +182,8 @@ def run_bot_brain(
     )
 
     # -------------------------------------------------
-    # 5️⃣ Base Amount (Decision Engine)
+    # 9️⃣ Base Amount
     # -------------------------------------------------
-
     try:
         base_amount = float(decide_amount(setup=setup, scores=scores))
         base_amount = max(0.0, base_amount)
@@ -173,29 +196,25 @@ def run_bot_brain(
         base_reason = f"DecisionEngine fallback: {e}"
 
     # -------------------------------------------------
-    # 6️⃣ Apply Exposure
+    # 🔟 Apply Exposure
     # -------------------------------------------------
-
     final_amount = apply_exposure_to_amount(
         base_amount,
         exposure_multiplier,
     )
 
     # -------------------------------------------------
-    # 7️⃣ Risk State Classification
+    # 11️⃣ Risk State
     # -------------------------------------------------
-
     risk_state = _classify_risk_state(
         transition_risk,
         market_pressure,
     )
 
     # -------------------------------------------------
-    # 8️⃣ Action Logic
+    # 12️⃣ Action Logic
     # -------------------------------------------------
-
     market_score = _safe_float(scores.get("market_score"), 10)
-
     action = "hold"
     reason_parts = []
 
@@ -217,9 +236,8 @@ def run_bot_brain(
         reason_parts.append("All allocator conditions satisfied.")
 
     # -------------------------------------------------
-    # 9️⃣ Confidence
+    # 13️⃣ Confidence
     # -------------------------------------------------
-
     confidence_components = []
 
     if isinstance(regime_confidence, (int, float)):
@@ -239,25 +257,50 @@ def run_bot_brain(
         )
 
     # -------------------------------------------------
-    # ✅ FINAL OUTPUT
+    # 🆕 14️⃣ Trade Quality Score
     # -------------------------------------------------
+    trade_quality = round(
+        (
+            risk_environment * 0.4 +
+            trend_strength * 0.3 +
+            (scores["setup_score"] / 100) * 0.3
+        ) * 100,
+        1,
+    )
 
+    # -------------------------------------------------
+    # FINAL OUTPUT
+    # -------------------------------------------------
     return {
         "date": date.today().isoformat(),
-
         "action": action,
         "amount_eur": round(float(final_amount), 2),
         "confidence": confidence,
-
         "reason": " ".join(reason_parts),
 
-        # 🧠 intelligence layer (USED BY AGENTS & UI)
+        # regime intelligence
         "regime": regime_label,
         "risk_state": risk_state,
+
+        # market state
         "market_pressure": market_pressure,
         "transition_risk": transition_risk,
+        "volatility_state": volatility_state,
 
-        # 🧪 debug (safe to log / inspect)
+        # structure & trend
+        "trend_strength": trend_strength,
+        "structure_bias": structure_bias,
+
+        # risk environment
+        "risk_environment": risk_environment,
+
+        # sizing
+        "exposure_multiplier": exposure_multiplier,
+
+        # trade scoring
+        "trade_quality": trade_quality,
+
+        # debug safe
         "debug": {
             "scores": scores,
             "transition_snapshot": transition_snapshot,
