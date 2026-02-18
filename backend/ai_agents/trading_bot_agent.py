@@ -833,6 +833,7 @@ def _persist_decision_and_order(
 
     setup_match = decision.get("setup_match") or {}
 
+    # 📊 SCORE PAYLOAD
     scores_payload = {
         "macro": _clamp_score(scores.get("macro", 10)),
         "technical": _clamp_score(scores.get("technical", 10)),
@@ -903,15 +904,20 @@ def _persist_decision_and_order(
                 action,
                 confidence,
                 amount_eur,
-                json.dumps(scores_payload),
+                json.dumps(scores_payload, default=float),
                 json.dumps(reasons),
             ),
         )
 
-        decision_id = cur.fetchone()[0]
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("Failed to persist bot decision")
 
-    # 🧱 Save trade plan
-    if decision.get("trade_plan"):
+        decision_id = int(row[0])
+
+    # 🧱 Save trade plan (alleen als geldig)
+    plan = decision.get("trade_plan")
+    if plan and plan.get("entry_plan"):
         _persist_trade_plan(
             conn=conn,
             user_id=user_id,
@@ -919,7 +925,7 @@ def _persist_decision_and_order(
             decision_id=decision_id,
             symbol=symbol,
             side=action,
-            plan=decision["trade_plan"],
+            plan=plan,
         )
 
     return decision_id
