@@ -691,6 +691,55 @@ def _persist_bot_order(
 
         return int(bot_order_id)
 
+# =====================================================
+# 🧱 Build Trade Plan from snapshot + brain
+# =====================================================
+def _build_trade_plan(
+    *,
+    symbol: str,
+    action: str,
+    snapshot: Optional[Dict[str, Any]],
+    brain: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Creates structured execution plan.
+
+    Used for:
+    - TradePlanCard UI
+    - paper trading
+    - TP hit detection
+    - pyramiding engine
+    - exchange execution
+    """
+
+    if not snapshot:
+        return None
+
+    entry = snapshot.get("entry")
+    stop = snapshot.get("stop_loss")
+    targets = snapshot.get("targets") or []
+
+    if not entry and not targets:
+        return None
+
+    rr = None
+    if brain:
+        rr = brain.get("rr_ratio") or brain.get("rr")
+
+    return {
+        "symbol": symbol,
+        "side": action,
+        "entry_plan": [{"type": "limit", "price": entry}] if entry else [],
+        "stop_loss": {"price": stop} if stop else None,
+        "targets": [
+            {"label": f"TP{i+1}", "price": t}
+            for i, t in enumerate(targets)
+        ],
+        "risk": {
+            "rr": rr,
+        },
+    }
+
 
 # =====================================================
 # Persist trade plan
@@ -707,7 +756,6 @@ def _persist_trade_plan(
 ):
     """
     Store structured trade plan for execution & UI.
-    Matches bot_trade_plans table.
     """
 
     if not plan:
@@ -717,7 +765,7 @@ def _persist_trade_plan(
     side = (side or "buy").lower()
 
     entry_plan = plan.get("entry_plan") or []
-    stop_loss = plan.get("stop_loss") or None
+    stop_loss = plan.get("stop_loss")
     targets = plan.get("targets") or []
     risk = plan.get("risk") or {}
 
@@ -758,7 +806,6 @@ def _persist_trade_plan(
             json.dumps(risk),
         ))
 
-
 # =====================================================
 # Persist decision
 # =====================================================
@@ -786,9 +833,6 @@ def _persist_decision_and_order(
 
     setup_match = decision.get("setup_match") or {}
 
-    # ============================================
-    # 📊 SCORE PAYLOAD (UI + analytics)
-    # ============================================
     scores_payload = {
         "macro": _clamp_score(scores.get("macro", 10)),
         "technical": _clamp_score(scores.get("technical", 10)),
@@ -796,21 +840,13 @@ def _persist_decision_and_order(
         "setup": _clamp_score(scores.get("setup", 10)),
         "combined": _clamp_score(decision.get("score", 10)),
         "setup_match": setup_match,
-
-        # market intelligence
         "market_health": float(decision.get("market_health") or 50),
         "market_pressure": float(decision.get("market_pressure") or 50),
         "transition_risk": float(decision.get("transition_risk") or 50),
-
-        # exposure / sizing
         "exposure_multiplier": float(decision.get("exposure_multiplier") or 1.0),
-
-        # guardrails
         "max_risk_per_trade": decision.get("max_risk_per_trade"),
         "max_daily_allocation": decision.get("max_daily_allocation"),
         "warnings": decision.get("warnings") if isinstance(decision.get("warnings"), list) else [],
-
-        # regime context
         "regime": decision.get("regime"),
         "risk_state": decision.get("risk_state"),
     }
@@ -872,45 +908,19 @@ def _persist_decision_and_order(
             ),
         )
 
-        row = cur.fetchone()
-        if not row:
-            raise RuntimeError("Failed to upsert bot_decisions")
+        decision_id = cur.fetchone()[0]
 
-        decision_id = int(row[0])
-
-    # ============================================
-    # 🧱 TRADE PLAN STORAGE (NEW)
-    # ============================================
-
-    trade_plan = decision.get("trade_plan")
-
-    # fallback → snapshot based plan
-    if not trade_plan:
-        snapshot_entry = decision.get("entry")
-        snapshot_targets = decision.get("targets")
-        snapshot_stop = decision.get("stop_loss")
-
-        if snapshot_entry or snapshot_targets or snapshot_stop:
-            trade_plan = {
-                "entry": snapshot_entry,
-                "targets": snapshot_targets,
-                "stop": snapshot_stop,
-            }
-
-    if trade_plan:
+    # 🧱 Save trade plan
+    if decision.get("trade_plan"):
         _persist_trade_plan(
             conn=conn,
+            user_id=user_id,
+            bot_id=bot_id,
             decision_id=decision_id,
             symbol=symbol,
-            plan=trade_plan,
+            side=action,
+            plan=decision["trade_plan"],
         )
-
-    logger.info(
-        "🧠 Decision stored | bot=%s | action=%s | amount=%s",
-        bot_id,
-        action,
-        amount_eur,
-    )
 
     return decision_id
 
@@ -958,7 +968,6 @@ def run_trading_bot_agent(
             # -------------------------------------------------
             # 2️⃣ Base market condition fields (always)
             # -------------------------------------------------
-            # simple composite health (0..100-ish, but we clamp later in persistence)
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
                 + float(scores.get("technical", 10)) * 0.3
@@ -966,10 +975,8 @@ def run_trading_bot_agent(
                 1
             )
 
-            # guardrails from bot budget (UI wants these fields)
             max_risk_per_trade = float(bot.get("budget", {}).get("max_order_eur") or 0) or None
             max_daily_allocation = float(bot.get("budget", {}).get("daily_limit_eur") or 0) or None
-
             warnings: List[str] = []
 
             # -------------------------------------------------
@@ -986,7 +993,6 @@ def run_trading_bot_agent(
                     "setup_match": setup_match,
                     "reasons": ["no_active_strategy_snapshot"],
 
-                    # NEW UI fields (still present)
                     "market_health": market_health,
                     "market_pressure": 50,
                     "transition_risk": 50,
@@ -997,6 +1003,9 @@ def run_trading_bot_agent(
                     "warnings": warnings,
                     "regime": None,
                     "risk_state": None,
+
+                    # ✅ NEW: trade plan always explicit
+                    "trade_plan": None,
                 }
 
             else:
@@ -1032,7 +1041,6 @@ def run_trading_bot_agent(
 
                 amount = float(brain.get("amount_eur") or 0.0)
 
-                # confidence mapping (robust)
                 engine_conf = brain.get("confidence")
                 if isinstance(engine_conf, str):
                     confidence_label = _normalize_confidence(engine_conf)
@@ -1046,7 +1054,6 @@ def run_trading_bot_agent(
                 else:
                     confidence_label = "low"
 
-                # engine context
                 engine_reason = brain.get("reason") or "engine_decision"
                 engine_regime = brain.get("regime")
                 engine_risk_state = brain.get("risk_state")
@@ -1054,13 +1061,11 @@ def run_trading_bot_agent(
                 engine_pressure = float(brain.get("market_pressure") or 50)
                 engine_transition = float(brain.get("transition_risk") or 50)
 
-                # NEW: exposure multiplier (position sizing)
                 exposure_multiplier = float(
                     brain.get("size_multiplier")
                     or brain.get("exposure_multiplier")
                     or 1.0
                 )
-                # clamp safety
                 if exposure_multiplier < 0.25:
                     exposure_multiplier = 0.25
                 if exposure_multiplier > 2.0:
@@ -1076,6 +1081,48 @@ def run_trading_bot_agent(
                     if max_eur > 0:
                         amount = min(amount, max_eur)
 
+                # -------------------------------------------------
+                # ✅ NEW: BUILD TRADE PLAN (snapshot → UI/DB)
+                # -------------------------------------------------
+                trade_plan = None
+                try:
+                    entry = snapshot.get("entry")
+                    stop = snapshot.get("stop_loss")
+                    targets = snapshot.get("targets")
+
+                    # normalize targets
+                    if isinstance(targets, str):
+                        try:
+                            targets = json.loads(targets)
+                        except Exception:
+                            targets = []
+                    if targets is None:
+                        targets = []
+                    if not isinstance(targets, list):
+                        targets = [targets]
+
+                    if entry is not None and stop is not None:
+                        # engine adjustment example
+                        try:
+                            if (brain.get("regime") or "").lower() == "risk_off":
+                                stop = float(stop) * 0.99
+                        except Exception:
+                            pass
+
+                        trade_plan = {
+                            "symbol": bot["symbol"],
+                            "side": engine_action,
+                            "entry_plan": [{"type": "limit", "price": entry}],
+                            "stop_loss": {"price": stop},
+                            "targets": [{"label": f"TP{i+1}", "price": t} for i, t in enumerate(targets)],
+                            "risk": {
+                                "rr": brain.get("rr_ratio"),
+                                "regime": brain.get("regime"),
+                            },
+                        }
+                except Exception:
+                    trade_plan = None
+
                 decision = {
                     "symbol": bot["symbol"],
                     "action": engine_action,
@@ -1084,21 +1131,21 @@ def run_trading_bot_agent(
                     "amount_eur": round(amount, 2),
                     "setup_match": setup_match,
 
-                    # engine intelligence
                     "reasons": [engine_reason],
                     "regime": engine_regime,
                     "risk_state": engine_risk_state,
 
-                    # market conditions (UI)
                     "market_health": market_health,
                     "market_pressure": engine_pressure,
                     "transition_risk": engine_transition,
                     "exposure_multiplier": exposure_multiplier,
 
-                    # guardrails
                     "max_risk_per_trade": max_risk_per_trade,
                     "max_daily_allocation": max_daily_allocation,
                     "warnings": warnings,
+
+                    # ✅ NEW
+                    "trade_plan": trade_plan,
                 }
 
                 # safety guard → nooit 0 buy
@@ -1108,6 +1155,10 @@ def run_trading_bot_agent(
                     decision["confidence"] = "low"
                     decision["amount_eur"] = 0.0
                     decision.setdefault("warnings", []).append("blocked_zero_amount_buy")
+
+                    # als hold → trade_plan mag blijven (voor UI), maar side klopt dan niet
+                    if decision.get("trade_plan"):
+                        decision["trade_plan"]["side"] = "hold"
 
             # -------------------------------------------------
             # 6️⃣ Budget check
@@ -1129,6 +1180,10 @@ def run_trading_bot_agent(
                 decision.setdefault("reasons", []).append(f"budget_blocked:{reason}")
                 decision.setdefault("warnings", []).append(f"budget_blocked:{reason}")
 
+                # ✅ als observe: trade_plan side ook consistent maken / of None
+                if decision.get("trade_plan"):
+                    decision["trade_plan"]["side"] = "observe"
+
             # -------------------------------------------------
             # 7️⃣ Order proposal
             # -------------------------------------------------
@@ -1149,8 +1204,11 @@ def run_trading_bot_agent(
                 decision.setdefault("reasons", []).append("order_proposal_failed")
                 decision.setdefault("warnings", []).append("order_proposal_failed")
 
+                if decision.get("trade_plan"):
+                    decision["trade_plan"]["side"] = "observe"
+
             # -------------------------------------------------
-            # 8️⃣ Persist decision (now includes market + guardrails in scores_json)
+            # 8️⃣ Persist decision (includes trade_plan via _persist_decision_and_order)
             # -------------------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
