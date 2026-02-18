@@ -709,7 +709,7 @@ def _persist_decision_and_order(
 
     action = _normalize_action(decision.get("action"))
 
-    # ✅ confidence mag nooit None zijn
+    # confidence mag nooit None zijn
     confidence = _normalize_confidence(
         decision.get("confidence") or "low"
     )
@@ -721,11 +721,11 @@ def _persist_decision_and_order(
     if not isinstance(reasons, list):
         reasons = [str(reasons)]
 
-    # NEW: guardrails + market intelligence + ui contract
+    # UI contract
     setup_match = decision.get("setup_match") or {}
 
     scores_payload = {
-        # existing scores (stable)
+        # core scores
         "macro": _clamp_score(scores.get("macro", 10)),
         "technical": _clamp_score(scores.get("technical", 10)),
         "market": _clamp_score(scores.get("market", 10)),
@@ -733,20 +733,20 @@ def _persist_decision_and_order(
         "combined": _clamp_score(decision.get("score", 10)),
         "setup_match": setup_match,
 
-        # ✅ NEW: market conditions for UI (MarketConditionsInline)
+        # market intelligence
         "market_health": float(decision.get("market_health") or 50),
         "market_pressure": float(decision.get("market_pressure") or 50),
         "transition_risk": float(decision.get("transition_risk") or 50),
 
-        # ✅ NEW: sizing / exposure (UI + analytics)
+        # exposure / sizing
         "exposure_multiplier": float(decision.get("exposure_multiplier") or 1.0),
 
-        # ✅ NEW: guardrails panel fields
+        # guardrails
         "max_risk_per_trade": decision.get("max_risk_per_trade"),
         "max_daily_allocation": decision.get("max_daily_allocation"),
         "warnings": decision.get("warnings") if isinstance(decision.get("warnings"), list) else [],
 
-        # ✅ NEW: extra regime context
+        # regime context
         "regime": decision.get("regime"),
         "risk_state": decision.get("risk_state"),
     }
@@ -780,7 +780,7 @@ def _persist_decision_and_order(
                 'planned',
                 NOW(), NOW()
             )
-            ON CONFLICT ON CONSTRAINT ux_bot_decisions_user_bot_date
+            ON CONFLICT (user_id, bot_id, decision_date)
             DO UPDATE SET
                 action        = EXCLUDED.action,
                 confidence    = EXCLUDED.confidence,
@@ -815,7 +815,10 @@ def _persist_decision_and_order(
         decision_id = int(row[0])
 
         logger.info(
-            f"🧠 Decision stored | bot={bot_id} | action={action} | amount={amount_eur}"
+            "🧠 Decision stored | bot=%s | action=%s | amount=%s",
+            bot_id,
+            action,
+            amount_eur,
         )
 
         return decision_id
