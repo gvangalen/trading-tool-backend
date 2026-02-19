@@ -49,7 +49,6 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 
 def _normalize_scores(scores: Dict[str, float]) -> Dict[str, float]:
-    """Accepts BOTH formats: macro OR macro_score"""
     return {
         "macro_score": scores.get("macro_score", scores.get("macro", 10)),
         "technical_score": scores.get("technical_score", scores.get("technical", 10)),
@@ -88,6 +87,7 @@ def run_bot_brain(
     # -------------------------------------------------
     # 1️⃣ Regime Memory
     # -------------------------------------------------
+
     regime_memory = None
     regime_label = None
     regime_confidence = None
@@ -103,24 +103,23 @@ def run_bot_brain(
     # -------------------------------------------------
     # 2️⃣ Transition Risk
     # -------------------------------------------------
+
     try:
         transition_risk = float(get_transition_risk_value(user_id))
         transition_risk = _clamp(transition_risk, 0.0, 1.0)
         transition_snapshot = compute_transition_detector(user_id)
     except Exception as e:
-        logger.warning("Transition detector fallback: %s", e)
+        logger.warning("Transition detector fallback: watch mode", e)
         transition_risk = 0.5
         transition_snapshot = None
 
     # -------------------------------------------------
     # 3️⃣ Market Pressure
     # -------------------------------------------------
+
     try:
         market_pressure = float(
-            get_market_pressure(
-                user_id=user_id,
-                scores=scores,
-            )
+            get_market_pressure(user_id=user_id, scores=scores)
         )
         market_pressure = _clamp(market_pressure, 0.0, 1.0)
     except Exception as e:
@@ -128,8 +127,9 @@ def run_bot_brain(
         market_pressure = 0.5
 
     # -------------------------------------------------
-    # 🆕 4️⃣ Volatility Regime
+    # 4️⃣ Volatility Regime
     # -------------------------------------------------
+
     if transition_risk > 0.7:
         volatility_state = "expanding"
     elif market_pressure < 0.35:
@@ -138,16 +138,18 @@ def run_bot_brain(
         volatility_state = "normal"
 
     # -------------------------------------------------
-    # 🆕 5️⃣ Trend Strength
+    # 5️⃣ Trend Strength
     # -------------------------------------------------
+
     trend_strength = (
         scores["technical_score"] * 0.6 +
         scores["market_score"] * 0.4
     ) / 100
 
     # -------------------------------------------------
-    # 🆕 6️⃣ Market Structure Bias
+    # 6️⃣ Structure Bias
     # -------------------------------------------------
+
     if trend_strength > 0.65:
         structure_bias = "trend"
     elif trend_strength < 0.35:
@@ -156,8 +158,9 @@ def run_bot_brain(
         structure_bias = "neutral"
 
     # -------------------------------------------------
-    # 🆕 7️⃣ Risk Environment
+    # 7️⃣ Risk Environment
     # -------------------------------------------------
+
     risk_environment = (
         (1 - transition_risk) * 0.5 +
         market_pressure * 0.5
@@ -166,17 +169,14 @@ def run_bot_brain(
     # -------------------------------------------------
     # 8️⃣ Exposure Multiplier
     # -------------------------------------------------
+
     exposure_pack = compute_exposure_multiplier(
         regime_memory=regime_memory,
         transition_risk=transition_risk,
     )
 
-    exposure_multiplier = _safe_float(
-        exposure_pack.get("multiplier"), 1.0
-    ) or 1.0
-
     exposure_multiplier = _clamp(
-        exposure_multiplier,
+        _safe_float(exposure_pack.get("multiplier"), 1.0) or 1.0,
         0.0,
         EXPOSURE_CAP,
     )
@@ -184,13 +184,11 @@ def run_bot_brain(
     # -------------------------------------------------
     # 9️⃣ Base Amount
     # -------------------------------------------------
+
     try:
         base_amount = float(decide_amount(setup=setup, scores=scores))
         base_amount = max(0.0, base_amount)
         base_reason = "Base amount via DecisionEngine."
-    except DecisionEngineError as e:
-        base_amount = 0.0
-        base_reason = f"DecisionEngineError: {e}"
     except Exception as e:
         base_amount = 0.0
         base_reason = f"DecisionEngine fallback: {e}"
@@ -198,22 +196,19 @@ def run_bot_brain(
     # -------------------------------------------------
     # 🔟 Apply Exposure
     # -------------------------------------------------
-    final_amount = apply_exposure_to_amount(
-        base_amount,
-        exposure_multiplier,
-    )
+
+    final_amount = apply_exposure_to_amount(base_amount, exposure_multiplier)
 
     # -------------------------------------------------
     # 11️⃣ Risk State
     # -------------------------------------------------
-    risk_state = _classify_risk_state(
-        transition_risk,
-        market_pressure,
-    )
+
+    risk_state = _classify_risk_state(transition_risk, market_pressure)
 
     # -------------------------------------------------
     # 12️⃣ Action Logic
     # -------------------------------------------------
+
     market_score = _safe_float(scores.get("market_score"), 10)
     action = "hold"
     reason_parts = []
@@ -236,8 +231,42 @@ def run_bot_brain(
         reason_parts.append("All allocator conditions satisfied.")
 
     # -------------------------------------------------
-    # 13️⃣ Confidence
+    # 🆕 13️⃣ WATCH LEVELS (KEY UPDATE)
     # -------------------------------------------------
+
+    watch_levels = None
+
+    try:
+        entry = (
+            setup.get("entry_price")
+            or setup.get("entry")
+            or setup.get("trigger_price")
+        )
+
+        if entry:
+            entry = float(entry)
+
+            watch_levels = {
+                "pullback_zone": round(entry * 0.96, 2),
+                "breakout_trigger": round(entry * 1.03, 2),
+            }
+    except Exception:
+        watch_levels = None
+
+    # monitoring active when bot is waiting
+    monitoring = action == "hold"
+
+    # alerts active when market is tradable but waiting for trigger
+    alerts_active = (
+        monitoring
+        and transition_risk < 0.75
+        and market_pressure > 0.35
+    )
+
+    # -------------------------------------------------
+    # 14️⃣ Confidence
+    # -------------------------------------------------
+
     confidence_components = []
 
     if isinstance(regime_confidence, (int, float)):
@@ -249,16 +278,12 @@ def run_bot_brain(
     confidence_components.append(1.0 - transition_risk)
     confidence_components.append(market_pressure)
 
-    confidence = None
-    if confidence_components:
-        confidence = round(
-            sum(confidence_components) / len(confidence_components),
-            3,
-        )
+    confidence = round(sum(confidence_components) / len(confidence_components), 3)
 
     # -------------------------------------------------
-    # 🆕 14️⃣ Trade Quality Score
+    # 15️⃣ Trade Quality
     # -------------------------------------------------
+
     trade_quality = round(
         (
             risk_environment * 0.4 +
@@ -271,14 +296,16 @@ def run_bot_brain(
     # -------------------------------------------------
     # FINAL OUTPUT
     # -------------------------------------------------
+
     return {
         "date": date.today().isoformat(),
+
         "action": action,
         "amount_eur": round(float(final_amount), 2),
         "confidence": confidence,
         "reason": " ".join(reason_parts),
 
-        # regime intelligence
+        # regime
         "regime": regime_label,
         "risk_state": risk_state,
 
@@ -287,20 +314,25 @@ def run_bot_brain(
         "transition_risk": transition_risk,
         "volatility_state": volatility_state,
 
-        # structure & trend
+        # structure
         "trend_strength": trend_strength,
         "structure_bias": structure_bias,
 
-        # risk environment
+        # environment
         "risk_environment": risk_environment,
 
         # sizing
         "exposure_multiplier": exposure_multiplier,
 
-        # trade scoring
+        # scoring
         "trade_quality": trade_quality,
 
-        # debug safe
+        # 🆕 WATCH MODE INTELLIGENCE
+        "watch_levels": watch_levels,
+        "monitoring": monitoring,
+        "alerts_active": alerts_active,
+
+        # debug
         "debug": {
             "scores": scores,
             "transition_snapshot": transition_snapshot,
