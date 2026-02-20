@@ -18,38 +18,50 @@ MARKET_INDICATOR_MAP = {
 
 def interpret_market_indicator(indicator: str, value: float, user_id: int):
     """
-    Interpreteert market indicator via centrale scoring engine.
+    Interpreteert market indicator via centrale DB scoreregels.
+    Crasht nooit.
     """
 
     try:
-        # 🔹 normalize naam
-        normalized = MARKET_INDICATOR_MAP.get(indicator, indicator)
-        normalized = normalize_indicator_name(normalized)
+        if value is None:
+            return _fallback("Geen waarde beschikbaar")
 
-        result = get_score_rule_from_db("market", normalized, value)
+        # 🔹 veilig normaliseren
+        indicator = (indicator or "").strip().lower()
 
-        if not result:
-            # extreme fallback (zou niet moeten gebeuren)
-            return {
-                "score": 10,
-                "trend": "neutral",
-                "interpretation": "Geen scoreregel beschikbaar",
-                "action": "Geen actie",
-            }
+        mapped = MARKET_INDICATOR_MAP.get(indicator, indicator)
+        normalized = normalize_indicator_name(mapped)
+
+        logger.debug(f"Market interpret → {indicator} → {normalized} = {value}")
+
+        rule = get_score_rule_from_db("market", normalized, value)
+
+        if not rule:
+            logger.warning(
+                f"⚠️ Geen rule match → {normalized} value={value}"
+            )
+            return _fallback("Geen scoreregel beschikbaar")
 
         return {
-            "score": result.get("score", 10),
-            "trend": result.get("trend") or "neutral",
-            "interpretation": result.get("interpretation")
+            "score": rule.get("score", 10),
+            "trend": rule.get("trend") or "neutral",
+            "interpretation": rule.get("interpretation")
                 or "Geen interpretatie beschikbaar",
-            "action": result.get("action") or "Geen actie",
+            "action": rule.get("action") or "Geen actie",
         }
 
-    except Exception as e:
+    except Exception:
         logger.error("❌ interpret_market_indicator fout", exc_info=True)
-        return {
-            "score": 10,
-            "trend": "neutral",
-            "interpretation": "Interpretatie fout",
-            "action": "Controleer logs",
-        }
+        return _fallback("Interpretatiefout")
+
+
+# =========================================================
+# fallback helper
+# =========================================================
+def _fallback(reason: str):
+    return {
+        "score": 10,
+        "trend": "neutral",
+        "interpretation": reason,
+        "action": "Geen actie",
+    }
