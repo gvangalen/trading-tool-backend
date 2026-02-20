@@ -420,27 +420,36 @@ def generate_text(prompt: str, fallback: str) -> str:
     - AI-call
     - opschonen output
     - JSON-defensieve parsing
-    GEEN deduplicatie (doen we hogerop)
+    - fail-safe fallback (voorkomt report crash)
     """
 
-    # 🔥 PRO safeguard — voorkomt silent context explosions
+    # 🔥 voorkomt context explosions in logs
     if len(prompt) > 12000:
         logger.warning("⚠️ Large AI prompt detected (%s chars)", len(prompt))
 
-    raw = ask_gpt_text(prompt, system_role=SYSTEM_PROMPT)
+    try:
+        # ✅ FIX: keyword-only arguments gebruiken
+        raw = ask_gpt_text(
+            prompt=prompt,
+            system_role=SYSTEM_PROMPT,
+        )
+    except Exception as e:
+        logger.exception("❌ AI call failed")
+        return fallback
 
+    # lege response → fallback
     if not raw:
         logger.warning("⚠️ AI gaf lege response — fallback gebruikt.")
         return fallback
 
-    # 1️⃣ Strip code fences / markdown
+    # 1️⃣ Strip markdown/code fences
     text = raw.replace("```json", "").replace("```", "").strip()
 
-    # 2️⃣ Normale tekst → direct terug
+    # 2️⃣ gewone tekst → direct terug
     if not text.lstrip().startswith("{"):
         return text if len(text) > 5 else fallback
 
-    # 3️⃣ Defensieve JSON-parse (voor wanneer model zich niet aan instructies houdt)
+    # 3️⃣ JSON parsing defensief
     try:
         parsed = json.loads(text)
         parts = _flatten_text(parsed)
@@ -513,8 +522,6 @@ def reduce_repetition(text: str, seen: List[str]) -> str:
 # =====================================================
 # SCORES & MARKET
 # =====================================================
-
-
 def get_daily_scores(user_id: int) -> Dict[str, Any]:
     conn = get_db_connection()
     try:
@@ -606,6 +613,9 @@ def get_market_indicator_highlights(user_id: int) -> List[dict]:
         conn.close()
 
 
+# =====================================================
+# Macro indicator highlights
+# =====================================================
 def get_macro_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
@@ -631,6 +641,9 @@ def get_macro_indicator_highlights(user_id: int) -> List[dict]:
         conn.close()
 
 
+# =====================================================
+# Technical indicator highlights
+# =====================================================
 def get_technical_indicator_highlights(user_id: int) -> List[dict]:
     conn = get_db_connection()
     try:
