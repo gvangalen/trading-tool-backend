@@ -905,6 +905,96 @@ Verplicht:
 Geen opsommingen, één doorlopend stuk tekst.
 """.strip()
 
+def build_compact_context(
+    regime,
+    transition,
+    prev_report,
+    deltas,
+    market,
+    scores,
+    market_ind,
+    macro_ind,
+    tech_ind,
+    best_setup,
+    active_strategy,
+    bot_snapshot,
+    ai_insights,
+    ai_reflections,
+) -> str:
+    """
+    Compacte context builder.
+
+    Vermindert tokens drastisch terwijl:
+    - regime context behouden blijft
+    - transition risk prioriteit houdt
+    - causale signalen behouden blijven
+    - positionering context intact blijft
+    """
+
+    def short_indicators(lst, max_items=3):
+        if not lst:
+            return []
+        output = []
+        for i in lst[:max_items]:
+            output.append({
+                "name": i.get("indicator") or i.get("name"),
+                "score": i.get("score"),
+            })
+        return output
+
+    context = {
+        "regime": {
+            "label": regime.get("label") if regime else None,
+            "confidence": regime.get("confidence") if regime else None,
+        },
+
+        "transition": {
+            "risk": transition.get("transition_risk"),
+            "flag": transition.get("primary_flag"),
+            "narrative": transition.get("narrative"),
+        },
+
+        "deltas": {
+            "macro": deltas.get("macro_delta"),
+            "market": deltas.get("market_delta"),
+            "technical": deltas.get("technical_delta"),
+            "price": deltas.get("price_delta"),
+            "volume": deltas.get("volume_delta"),
+        },
+
+        "market": {
+            "price": market.get("price"),
+            "change": market.get("change_24h"),
+            "volume": market.get("volume"),
+        },
+
+        "scores": {
+            "macro": scores.get("macro_score"),
+            "technical": scores.get("technical_score"),
+            "market": scores.get("market_score"),
+            "setup": scores.get("setup_score"),
+        },
+
+        "indicators": {
+            "market": short_indicators(market_ind),
+            "macro": short_indicators(macro_ind),
+            "technical": short_indicators(tech_ind),
+        },
+
+        "positioning": {
+            "best_setup": best_setup.get("name") if best_setup else None,
+            "strategy": active_strategy.get("setup_name") if active_strategy else None,
+            "bot_action": bot_snapshot.get("action"),
+        },
+
+        "memory": {
+            "prev_summary": prev_report[1] if prev_report else None
+        }
+    }
+
+    return json.dumps(context, ensure_ascii=False)
+
+
 
 # =====================================================
 # MAIN BUILDER — REPORT AGENT 2.0 (SAFE + CONTEXT-AWARE)
@@ -932,7 +1022,7 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     deltas = get_daily_deltas(user_id)
 
     # -------------------------------------------------
-    # 🔥 NEW — REGIME + TRANSITION
+    # REGIME & TRANSITION
     # -------------------------------------------------
     regime = get_regime_memory(user_id)
 
@@ -940,12 +1030,11 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
     if regime and regime.get("signals"):
         transition = regime["signals"].get("transition")
 
-    # fallback (should rarely happen)
     if not transition:
         transition = compute_transition_detector(user_id)
 
     # -------------------------------------------------
-    # 2) Extra context
+    # Extra context uit DB
     # -------------------------------------------------
     conn = get_db_connection()
     try:
@@ -953,9 +1042,7 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
 
             cur.execute(
                 """
-                SELECT report_date, executive_summary, market_analysis,
-                       macro_context, technical_analysis,
-                       setup_validation, strategy_implication, outlook
+                SELECT report_date, executive_summary
                 FROM daily_reports
                 WHERE user_id = %s
                   AND report_date < CURRENT_DATE
@@ -994,196 +1081,69 @@ def generate_daily_report_sections(user_id: int) -> Dict[str, Any]:
         conn.close()
 
     # -------------------------------------------------
-    # 🔥 MEGA CONTEXT — THIS IS THE BRAIN
+    # COMPACT CONTEXT (🔥 NIEUW)
     # -------------------------------------------------
-    context_blob = f"""
-YOU ARE NOT WRITING A DAILY REPORT.
-YOU ARE UPDATING A LIVE MARKET MODEL.
+    context_blob = build_compact_context(
+        regime,
+        transition,
+        prev_report,
+        deltas,
+        market,
+        scores,
+        market_ind,
+        macro_ind,
+        tech_ind,
+        best_setup,
+        active_strategy,
+        bot_snapshot,
+        ai_insights,
+        ai_reflections,
+    )
 
-Markets move in regimes.
-Transitions matter more than daily moves.
-
-==================================================
-PRIMARY REGIME
-==================================================
-
-{json.dumps(_safe_json(regime), ensure_ascii=False)}
-
-Do NOT redefine this unless transition risk forces you.
-
-==================================================
-TRANSITION LAYER — HIGHEST SHORT TERM SIGNAL
-==================================================
-
-Transition risk: {transition.get("transition_risk")}
-Primary flag: {transition.get("primary_flag")}
-Narrative: {transition.get("narrative")}
-
-Signals:
-{json.dumps(_safe_json(transition.get("signals")), ensure_ascii=False)}
-
-INTERPRETATION RULES:
-
-If transition_risk >= 70:
-→ Write like late-cycle risk is building.
-
-If transition_risk >= 60:
-→ Emphasize fragility even if price is stable.
-
-If transition_risk <= 40:
-→ Treat the regime as structurally supported.
-
-Never ignore this layer.
-
-==================================================
-PREVIOUS REPORT — CONTINUITY ENGINE
-==================================================
-
-{json.dumps(_safe_json(prev_report), ensure_ascii=False)}
-
-You are CONTINUING this document.
-
-NOT rewriting it.
-
-==================================================
-WHAT CHANGED
-==================================================
-
-Macro delta: {deltas.get("macro_delta")}
-Market delta: {deltas.get("market_delta")}
-Technical delta: {deltas.get("technical_delta")}
-Setup delta: {deltas.get("setup_delta")}
-
-Price delta: {deltas.get("price_delta")}
-Volume delta: {deltas.get("volume_delta")}
-
-Interpret changes ONLY through the regime + transition lens.
-
-==================================================
-LIVE STATE
-==================================================
-
-Price: {market.get("price")}
-24h change: {market.get("change_24h")}
-Volume: {market.get("volume")}
-
-Scores:
-
-Macro: {scores.get("macro_score")}
-Market: {scores.get("market_score")}
-Technical: {scores.get("technical_score")}
-Setup: {scores.get("setup_score")}
-
-==================================================
-INDICATOR CLUSTERS
-==================================================
-
-MARKET:
-{json.dumps(_safe_json(market_ind), ensure_ascii=False)}
-
-MACRO:
-{json.dumps(_safe_json(macro_ind), ensure_ascii=False)}
-
-TECHNICAL:
-{json.dumps(_safe_json(tech_ind), ensure_ascii=False)}
-
-==================================================
-POSITIONING CONTEXT
-==================================================
-
-Best setup:
-{json.dumps(_safe_json(best_setup), ensure_ascii=False)}
-
-Active strategy:
-{json.dumps(_safe_json(active_strategy), ensure_ascii=False)}
-
-Bot decision:
-{json.dumps(_safe_json(bot_snapshot), ensure_ascii=False)}
-
-==================================================
-AI META
-==================================================
-
-Insights:
-{json.dumps(_safe_json(ai_insights), ensure_ascii=False)}
-
-Reflections:
-{json.dumps(_safe_json(ai_reflections), ensure_ascii=False)}
-
-==================================================
-COGNITIVE FRAMEWORK
-==================================================
-
-Internally determine:
-
-CURRENT_REGIME  
-REGIME_DIRECTION  
-REGIME_MATURITY  
-TRANSITION_RISK  
-PARTICIPATION_QUALITY  
-RISK_ASYMMETRY  
-
-Write ALL sections from ONE hypothesis.
-
-Every paragraph must feel like a continuation.
-
-Never reset the story.
-
-==================================================
-HARD RULES
-==================================================
-
-- Do NOT summarize data
-- Do NOT repeat the regime
-- Do NOT narrate
-- Avoid identical sentence openings
-- Focus on positioning risk
-
-Price levels forbidden except spot.
-"""
+    base_context = "CONTEXT:\n" + context_blob + "\n\n"
 
     # -------------------------------------------------
-    # 4) Generate
+    # Generate sections
     # -------------------------------------------------
     seen_sentences: List[str] = []
 
     executive_summary = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_exec(), "Regime intact."),
+        generate_text(base_context + p_exec(), "Regime intact."),
         seen_sentences,
     )
 
     market_analysis = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_market(), "Market steady."),
+        generate_text(base_context + p_market(), "Market steady."),
         seen_sentences,
     )
 
     macro_context = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_macro(), "Macro unchanged."),
+        generate_text(base_context + p_macro(), "Macro unchanged."),
         seen_sentences,
     )
 
     technical_analysis = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_technical(), "Technicals neutral."),
+        generate_text(base_context + p_technical(), "Technicals neutral."),
         seen_sentences,
     )
 
     setup_validation = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_setup(best_setup), "Setups selective."),
+        generate_text(base_context + p_setup(best_setup), "Setups selective."),
         seen_sentences,
     )
 
     strategy_implication = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_strategy(active_strategy), "Strategy stable."),
+        generate_text(base_context + p_strategy(active_strategy), "Strategy stable."),
         seen_sentences,
     )
 
     bot_strategy = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_bot_strategy(bot_snapshot), "Bot inactive."),
+        generate_text(base_context + p_bot_strategy(bot_snapshot), "Bot inactive."),
         seen_sentences,
     )
 
     outlook = reduce_repetition(
-        generate_text(context_blob + "\n\n" + p_outlook(), "Await confirmation."),
+        generate_text(base_context + p_outlook(), "Await confirmation."),
         seen_sentences,
     )
 
@@ -1214,8 +1174,8 @@ Price levels forbidden except spot.
         "top_setups": setup_snapshot.get("top_setups", []),
         "active_strategy": active_strategy,
         "deltas": deltas,
-        "transition": transition,   # 🔥 NEW (great for debugging & UI later)
+        "transition": transition,
     }
 
-    logger.info("✅ Report agent WITH TRANSITION OK")
+    logger.info("✅ Report agent (compact context) OK")
     return result
