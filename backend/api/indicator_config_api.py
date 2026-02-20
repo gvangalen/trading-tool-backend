@@ -191,4 +191,86 @@ def save_custom_rules(
                     f"""
                     INSERT INTO {table}
                     (indicator, range_min, range_max, score, trend, interpretation, action, score_mode, is_active, weight)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,'custom',true,%
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,'custom',true,%s)
+                    """,
+                    (
+                        indicator,
+                        r.get("range_min", 0),
+                        r.get("range_max", 100),
+                        r.get("score", 50),
+                        r.get("trend"),
+                        r.get("interpretation"),
+                        r.get("action"),
+                        weight,
+                    ),
+                )
+
+            # 3) zet mode/weight ook op alle rows (handig voor read)
+            cur.execute(
+                f"""
+                UPDATE {table}
+                SET score_mode='custom',
+                    weight=%s
+                WHERE indicator=%s
+                """,
+                (weight, indicator),
+            )
+
+        conn.commit()
+        return {"ok": True, "indicator": indicator, "saved": True}
+
+    except Exception:
+        conn.rollback()
+        logger.exception("❌ save_custom_rules error")
+        raise HTTPException(status_code=500, detail="Custom rules opslaan mislukt")
+    finally:
+        conn.close()
+
+
+# =========================================================
+# ✅ 4) RESET naar standard (verwijder custom rows + active standard)
+# =========================================================
+@router.post("/indicator_config/reset")
+def reset_indicator_rules(
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    category = payload.get("category")
+    indicator = payload.get("indicator")
+
+    if not category or not indicator:
+        raise HTTPException(status_code=400, detail="category en indicator verplicht")
+
+    table = _get_table(category)
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
+
+    try:
+        with conn.cursor() as cur:
+            # verwijder custom rows
+            cur.execute(
+                f"DELETE FROM {table} WHERE indicator=%s AND score_mode='custom'",
+                (indicator,),
+            )
+            # active alles weer + standaard mode
+            cur.execute(
+                f"""
+                UPDATE {table}
+                SET is_active=true,
+                    score_mode='standard'
+                WHERE indicator=%s
+                """,
+                (indicator,),
+            )
+
+        conn.commit()
+        return {"ok": True, "indicator": indicator, "reset": True}
+
+    except Exception:
+        conn.rollback()
+        logger.exception("❌ reset_indicator_rules error")
+        raise HTTPException(status_code=500, detail="Reset mislukt")
+    finally:
+        conn.close()
