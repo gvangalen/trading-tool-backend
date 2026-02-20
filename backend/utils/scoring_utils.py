@@ -42,22 +42,12 @@ def normalize_indicator_name(name: str) -> str:
 # =========================================================
 # 🔢 SCORE ENGINE (UNIFORM VOOR ALLES)
 # =========================================================
-def generate_scores_db(
-    category: str,
-    user_id: int
-) -> Dict[str, Any]:
+def generate_scores_db(category: str, user_id: int) -> Dict[str, Any]:
     """
     Universele score-engine voor:
     - macro
     - technical
     - market
-
-    Ondersteunt:
-    ✔ standard scoring
-    ✔ contrarian scoring
-    ✔ custom scoring
-    ✔ weighted scoring
-    ✔ active/inactive rules
     """
 
     table_map = {
@@ -76,7 +66,6 @@ def generate_scores_db(
         return {"scores": {}, "total_score": 10, "top_contributors": []}
 
     try:
-        # 🔹 laatste waarde per indicator
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT DISTINCT ON ({name_col}) {name_col}, value
@@ -88,8 +77,7 @@ def generate_scores_db(
 
         data = {
             normalize_indicator_name(r[0]): float(r[1])
-            for r in rows
-            if r[1] is not None
+            for r in rows if r[1] is not None
         }
 
         if not data:
@@ -125,7 +113,6 @@ def generate_scores_db(
 
         avg_score = round(weighted_total / total_weight) if total_weight else 10
 
-        # 🔥 Top contributors (hoogste impact)
         top_contributors: List[str] = [
             name for name, _ in sorted(
                 scores.items(),
@@ -150,10 +137,7 @@ def generate_scores_db(
 # =========================================================
 # 🔗 DASHBOARD: DAILY COMBINED SCORES
 # =========================================================
-def get_scores_for_symbol(
-    user_id: int,
-    include_metadata: bool = False
-) -> Dict[str, Any]:
+def get_scores_for_symbol(user_id: int, include_metadata: bool = False) -> Dict[str, Any]:
 
     conn = get_db_connection()
     if not conn:
@@ -202,5 +186,40 @@ def get_scores_for_symbol(
             "setup_score": row[9],
         }
 
+    finally:
+        conn.close()
+
+# =========================================================
+# 🔁 BACKWARD COMPATIBILITY (CRUCIAAL VOOR CELERY)
+# =========================================================
+def get_score_rule_from_db(category: str, indicator: str, value):
+    """
+    ⚠️ BELANGRIJK:
+    Oude modules verwachten deze functie.
+    Deze wrapper gebruikt nu de nieuwe scoring engine.
+    """
+
+    conn = get_db_connection()
+    if not conn:
+        return None
+
+    try:
+        result = score_indicator(
+            conn=conn,
+            category=category,
+            indicator=normalize_indicator_name(indicator),
+            value=value,
+        )
+
+        return {
+            "score": result.get("score"),
+            "trend": result.get("trend"),
+            "interpretation": result.get("interpretation"),
+            "action": result.get("action"),
+        }
+
+    except Exception:
+        logger.exception("❌ get_score_rule_from_db wrapper error")
+        return None
     finally:
         conn.close()
