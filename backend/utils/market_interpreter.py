@@ -1,6 +1,8 @@
 import logging
-from backend.utils.db import get_db_connection
-from backend.utils.scoring_utils import get_score_rule_from_db, normalize_indicator_name
+from backend.utils.scoring_utils import (
+    get_score_rule_from_db,
+    normalize_indicator_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,27 +17,39 @@ MARKET_INDICATOR_MAP = {
 
 
 def interpret_market_indicator(indicator: str, value: float, user_id: int):
+    """
+    Interpreteert market indicator via centrale scoring engine.
+    """
+
     try:
+        # 🔹 normalize naam
         normalized = MARKET_INDICATOR_MAP.get(indicator, indicator)
         normalized = normalize_indicator_name(normalized)
 
-        rule = get_score_rule_from_db("market", normalized, value)
+        result = get_score_rule_from_db("market", normalized, value)
 
-        if not rule:
+        if not result:
+            # extreme fallback (zou niet moeten gebeuren)
             return {
-                "score": 50,
+                "score": 10,
                 "trend": "neutral",
-                "interpretation": "Geen scoreregel gevonden",
-                "action": "–",
+                "interpretation": "Geen scoreregel beschikbaar",
+                "action": "Geen actie",
             }
 
         return {
-            "score": rule["score"],
-            "trend": rule["trend"],
-            "interpretation": rule["interpretation"],
-            "action": rule["action"],
+            "score": result.get("score", 10),
+            "trend": result.get("trend") or "neutral",
+            "interpretation": result.get("interpretation")
+                or "Geen interpretatie beschikbaar",
+            "action": result.get("action") or "Geen actie",
         }
 
     except Exception as e:
-        logger.error(f"❌ interpret_market_indicator fout: {e}", exc_info=True)
-        return None
+        logger.error("❌ interpret_market_indicator fout", exc_info=True)
+        return {
+            "score": 10,
+            "trend": "neutral",
+            "interpretation": "Interpretatie fout",
+            "action": "Controleer logs",
+        }
