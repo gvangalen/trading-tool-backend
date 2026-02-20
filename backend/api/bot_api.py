@@ -807,6 +807,138 @@ async def mark_bot_executed(
     finally:
         conn.close()
 
+
+# =====================================
+# 🟡 MANUAL ORDER (paper trade / discretionary)
+# =====================================
+@router.post("/orders/manual")
+async def create_manual_order(
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Handmatige trade invoeren.
+
+    ✔ maakt bot_order
+    ✔ maakt execution
+    ✔ update bot_ledger
+    ✔ portfolio wordt automatisch correct
+    ✔ werkt voor paper trading
+    ✔ future exchange ready
+    """
+
+    user_id = current_user["id"]
+    body = await request.json()
+
+    bot_id = body.get("bot_id")
+    symbol = body.get("symbol", "BTC")
+    side = body.get("side")              # buy / sell
+    quantity = body.get("quantity")
+    price = body.get("price")
+
+    if not bot_id or side not in ("buy", "sell") or not quantity or not price:
+        raise HTTPException(
+            status_code=400,
+            detail="bot_id, side, quantity en price zijn verplicht",
+        )
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
+
+    try:
+        with conn.cursor() as cur:
+
+            # =====================================
+            # 1️⃣ ORDER OPSLAAN
+            # =====================================
+            cur.execute(
+                """
+                INSERT INTO bot_orders (
+                    user_id,
+                    bot_id,
+                    decision_id,
+                    symbol,
+                    side,
+                    order_type,
+                    quantity,
+                    limit_price,
+                    status,
+                    source,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s,%s,NULL,%s,%s,'market',%s,%s,'filled','manual',NOW(),NOW())
+                RETURNING id
+                """,
+                (user_id, bot_id, symbol, side, quantity, price),
+            )
+            order_id = cur.fetchone()[0]
+
+            # =====================================
+            # 2️⃣ EXECUTION RECORD
+            # =====================================
+            cur.execute(
+                """
+                INSERT INTO bot_executions (
+                    user_id,
+                    bot_order_id,
+                    filled_qty,
+                    avg_fill_price,
+                    status,
+                    created_at
+                )
+                VALUES (%s,%s,%s,%s,'filled',NOW())
+                """,
+                (user_id, order_id, quantity, price),
+            )
+
+            # =====================================
+            # 3️⃣ LEDGER UPDATE
+            # =====================================
+            quantity = float(quantity)
+            price = float(price)
+
+            if side == "buy":
+                cash_delta = -quantity * price
+                qty_delta = quantity
+            else:
+                cash_delta = quantity * price
+                qty_delta = -quantity
+
+            cur.execute(
+                """
+                INSERT INTO bot_ledger (
+                    user_id,
+                    bot_id,
+                    order_id,
+                    entry_type,
+                    cash_delta_eur,
+                    qty_delta,
+                    ts
+                )
+                VALUES (%s,%s,%s,'execute',%s,%s,NOW())
+                """,
+                (user_id, bot_id, order_id, cash_delta, qty_delta),
+            )
+
+        conn.commit()
+
+        return {
+            "ok": True,
+            "order_id": order_id,
+            "mode": "manual",
+        }
+
+    except Exception as e:
+        conn.rollback()
+        logger.error("❌ manual order failed", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        conn.close()
+
+
 # =====================================
 # ⏭️ ADD BOT 
 # =====================================
