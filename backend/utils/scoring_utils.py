@@ -1,7 +1,8 @@
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 
 from backend.utils.db import get_db_connection
+from backend.utils.scoring_engine import score_indicator
 
 # =========================================================
 # ⚙️ Logging
@@ -39,65 +40,6 @@ def normalize_indicator_name(name: str) -> str:
     return NAME_ALIASES.get(normalized, normalized)
 
 # =========================================================
-# 🎯 Score-regel ophalen (DB-driven)
-# =========================================================
-def get_score_rule_from_db(
-    category: str,
-    indicator_name: str,
-    value: float
-) -> Optional[dict]:
-
-    table_map = {
-        "technical": "technical_indicator_rules",
-        "macro": "macro_indicator_rules",
-        "market": "market_indicator_rules",
-    }
-
-    table = table_map.get(category)
-    if not table:
-        logger.error(f"❌ Onbekende category: {category}")
-        return None
-
-    conn = get_db_connection()
-    if not conn:
-        logger.error("❌ Geen DB-verbinding")
-        return None
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute(f"""
-                SELECT range_min, range_max, score, trend, interpretation, action
-                FROM {table}
-                WHERE LOWER(
-                    REPLACE(
-                        REPLACE(
-                            REPLACE(indicator, ' ', '_'),
-                        '-', '_'),
-                    '&', 'and')
-                ) = LOWER(%s)
-                ORDER BY range_min ASC
-            """, (indicator_name,))
-            rules = cur.fetchall()
-
-        for r in rules:
-            if r[0] <= value <= r[1]:
-                return {
-                    "score": int(r[2]),
-                    "trend": r[3],
-                    "interpretation": r[4],
-                    "action": r[5],
-                }
-
-        return None
-
-    except Exception:
-        logger.exception(f"❌ Fout bij scoreregels ({indicator_name})")
-        return None
-
-    finally:
-        conn.close()
-
-# =========================================================
 # 🔢 SCORE ENGINE (UNIFORM VOOR ALLES)
 # =========================================================
 def generate_scores_db(
@@ -105,14 +47,17 @@ def generate_scores_db(
     user_id: int
 ) -> Dict[str, Any]:
     """
-    Uniforme score-engine voor:
+    Universele score-engine voor:
     - macro
     - technical
     - market
 
-    ✔ Zelf data ophalen
-    ✔ Zelf regels toepassen
-    ✔ Zelf top contributors bepalen
+    Ondersteunt:
+    ✔ standard scoring
+    ✔ contrarian scoring
+    ✔ custom scoring
+    ✔ weighted scoring
+    ✔ active/inactive rules
     """
 
     table_map = {
@@ -131,6 +76,7 @@ def generate_scores_db(
         return {"scores": {}, "total_score": 10, "top_contributors": []}
 
     try:
+        # 🔹 laatste waarde per indicator
         with conn.cursor() as cur:
             cur.execute(f"""
                 SELECT DISTINCT ON ({name_col}) {name_col}, value
@@ -146,48 +92,60 @@ def generate_scores_db(
             if r[1] is not None
         }
 
-    finally:
-        conn.close()
+        if not data:
+            logger.warning(f"⚠️ Geen data voor {category} (user_id={user_id})")
+            return {"scores": {}, "total_score": 10, "top_contributors": []}
 
-    if not data:
-        logger.warning(f"⚠️ Geen data voor {category} (user_id={user_id})")
-        return {"scores": {}, "total_score": 10, "top_contributors": []}
+        scores: Dict[str, Any] = {}
+        weighted_total = 0.0
+        total_weight = 0.0
 
-    scores: Dict[str, Any] = {}
-    total_score = 0
+        for indicator, value in data.items():
+            scored = score_indicator(
+                conn=conn,
+                category=category,
+                indicator=indicator,
+                value=value,
+            )
 
-    for indicator, value in data.items():
-        rule = get_score_rule_from_db(category, indicator, value)
-        if not rule:
-            continue
+            weight = float(scored.get("weight", 1))
 
-        scores[indicator] = {
-            "value": value,
-            "score": rule["score"],
-            "trend": rule["trend"],
-            "interpretation": rule["interpretation"],
-            "action": rule["action"],
+            scores[indicator] = {
+                "value": value,
+                "score": scored["score"],
+                "trend": scored["trend"],
+                "interpretation": scored["interpretation"],
+                "action": scored["action"],
+                "weight": weight,
+                "mode": scored["score_mode"],
+            }
+
+            weighted_total += scored["score"] * weight
+            total_weight += weight
+
+        avg_score = round(weighted_total / total_weight) if total_weight else 10
+
+        # 🔥 Top contributors (hoogste impact)
+        top_contributors: List[str] = [
+            name for name, _ in sorted(
+                scores.items(),
+                key=lambda x: x[1]["score"] * x[1]["weight"],
+                reverse=True
+            )
+        ][:3]
+
+        return {
+            "scores": scores,
+            "total_score": avg_score,
+            "top_contributors": top_contributors,
         }
 
-        total_score += rule["score"]
+    except Exception:
+        logger.exception(f"❌ Score generatie fout ({category})")
+        return {"scores": {}, "total_score": 10, "top_contributors": []}
 
-    count = len(scores)
-    avg_score = round(total_score / count) if count else 10
-
-    # 🔥 DIT WAS DE MISSENDE STAP (ook voor market)
-    top_contributors: List[str] = [
-        k for k, _ in sorted(
-            scores.items(),
-            key=lambda x: x[1]["score"],
-            reverse=True
-        )
-    ][:3]
-
-    return {
-        "scores": scores,
-        "total_score": avg_score,
-        "top_contributors": top_contributors,
-    }
+    finally:
+        conn.close()
 
 # =========================================================
 # 🔗 DASHBOARD: DAILY COMBINED SCORES
