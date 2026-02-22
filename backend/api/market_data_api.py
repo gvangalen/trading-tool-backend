@@ -9,12 +9,16 @@ import httpx
 from backend.utils.db import get_db_connection
 from backend.utils.scoring_utils import (
     get_scores_for_symbol,
-    get_score_rule_from_db,   # 🔥 gebruikt voor market-indicator scoring
 )
 from backend.utils.auth_utils import get_current_user
 
 # ⭐ Onboarding helper importeren
-from backend.api.onboarding_api import mark_step_completed  
+from backend.api.onboarding_api import mark_step_completed
+
+# ✅ centrale scoring + normalisatie
+from backend.utils.scoring_engine import score_indicator
+from backend.utils.scoring_utils import normalize_indicator_name
+
 
 # =========================================================
 # ⚙️ Router setup
@@ -159,19 +163,21 @@ def add_user_market_indicator(
             raise HTTPException(400, "❌ 'value' moet numeriek zijn.")
 
         # =====================================================
-        # 🧮 SCORE LOGICA
+        # 🧮 SCORE LOGICA (✅ via centrale scoring_engine)
         # =====================================================
-        rule = get_score_rule_from_db("market", indicator, value)
-        if rule:
-            score = rule.get("score")
-            trend = rule.get("trend")
-            interpretation = rule.get("interpretation")
-            action = rule.get("action")
-        else:
-            score = None
-            trend = None
-            interpretation = "Geen scoreregel gevonden voor deze waarde."
-            action = None
+        normalized = normalize_indicator_name(indicator)
+
+        scored = score_indicator(
+            conn=conn,
+            category="market",
+            indicator=normalized,
+            value=value,
+        )
+
+        score = scored.get("score", 10)
+        trend = scored.get("trend") or "neutral"
+        interpretation = scored.get("interpretation") or "Geen interpretatie beschikbaar"
+        action = scored.get("action") or "Geen actie"
 
         # =====================================================
         # 💾 OPSLAAN
@@ -209,6 +215,7 @@ def add_user_market_indicator(
         raise HTTPException(500, "Fout bij opslaan market-indicator.")
     finally:
         conn.close()
+
 
 # =========================================================
 # GET /market_data/indicators — alle user-indicatoren (history)
@@ -261,6 +268,7 @@ def list_user_market_indicators(
         raise HTTPException(500, "Fout bij ophalen market-indicatoren.")
     finally:
         conn.close()
+
 
 # =========================================================
 # DELETE /market_data/indicator/{indicator_name}
@@ -355,6 +363,7 @@ def get_market_day_data(current_user: dict = Depends(get_current_user)):
 
     finally:
         conn.close()
+
 
 # =========================================================
 # 📌 GET /market/indicator_names — lijst beschikbare indicators
@@ -611,11 +620,10 @@ async def fetch_interpreted_data(current_user: dict = Depends(get_current_user))
             "price": float(price),
             "change_24h": float(change),
             "volume": float(volume),
-            "score": scores.get("market_score", 0),
+            # ✅ no 0 scores
+            "score": scores.get("market_score", 10) or 10,
             "top_contributors": scores.get("market_top_contributors", []),
-            "interpretation": scores.get(
-                "market_interpretation", "Geen interpretatie"
-            ),
+            "interpretation": scores.get("market_interpretation", "Geen interpretatie"),
             "action": "Market-score is globaal, advies is informatief.",
         }
 
@@ -706,9 +714,6 @@ async def get_market_forward_returns():
         raise HTTPException(500, "Fout bij ophalen forward returns.")
 
 
-# =========================================================
-# GET /market_data/forward/week (globaal)
-# =========================================================
 @router.get("/market_data/forward/week")
 def get_week_returns():
     try:
@@ -736,9 +741,6 @@ def get_week_returns():
         raise HTTPException(500, "Fout bij ophalen week returns.")
 
 
-# =========================================================
-# GET /market_data/forward/maand (globaal)
-# =========================================================
 @router.get("/market_data/forward/maand")
 def get_month_returns():
     try:
@@ -766,9 +768,6 @@ def get_month_returns():
         raise HTTPException(500, "Fout bij ophalen maand returns.")
 
 
-# =========================================================
-# GET /market_data/forward/kwartaal (globaal)
-# =========================================================
 @router.get("/market_data/forward/kwartaal")
 def get_quarter_returns():
     try:
@@ -796,9 +795,6 @@ def get_quarter_returns():
         raise HTTPException(500, "Fout bij ophalen kwartaal returns.")
 
 
-# =========================================================
-# GET /market_data/forward/jaar (globaal)
-# =========================================================
 @router.get("/market_data/forward/jaar")
 def get_year_returns():
     try:
@@ -826,9 +822,6 @@ def get_year_returns():
         raise HTTPException(500, "Fout bij ophalen jaar returns.")
 
 
-# =========================================================
-# POST /market_data/7d/save (globaal)
-# =========================================================
 @router.post("/market_data/7d/save")
 async def save_market_data_7d(data: list[dict]):
     if not data:
@@ -865,9 +858,6 @@ async def save_market_data_7d(data: list[dict]):
         raise HTTPException(500, "Fout bij opslaan 7d data.")
 
 
-# =========================================================
-# POST /market_data/forward/save (globaal)
-# =========================================================
 @router.post("/market_data/forward/save")
 async def save_forward_returns(data: list[dict]):
     if not data:
