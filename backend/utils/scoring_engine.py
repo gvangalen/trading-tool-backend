@@ -1,7 +1,7 @@
 # backend/utils/scoring_engine.py
 import logging
 from dataclasses import dataclass
-from datetime import datetime, date
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.utils.db import get_db_connection
@@ -9,11 +9,24 @@ from backend.utils.db import get_db_connection
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+# ============================================================
+# Fixed buckets (UX/engine contract)
+# ============================================================
+FIXED_BUCKETS: List[Tuple[float, float]] = [
+    (0.0, 20.0),
+    (20.0, 40.0),
+    (40.0, 60.0),
+    (60.0, 80.0),
+    (80.0, 100.0),
+]
+
+# Default “standard” scores per bucket (kan je later aanpassen)
+DEFAULT_BUCKET_SCORES: List[int] = [10, 25, 50, 75, 100]
+
 
 # ============================================================
 # Types
 # ============================================================
-
 @dataclass
 class RuleRow:
     id: int
@@ -32,7 +45,6 @@ class RuleRow:
 # ============================================================
 # Helpers
 # ============================================================
-
 def _to_float(v: Any) -> Optional[float]:
     if v is None:
         return None
@@ -54,7 +66,12 @@ def _to_int(v: Any) -> Optional[int]:
             return None
 
 
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, v))
+
+
 def _clamp_score(v: int) -> int:
+    # jij wil geen 0 — minimaal 10
     if v < 10:
         return 10
     if v > 100:
@@ -85,25 +102,113 @@ def _table_names(category: str) -> Tuple[str, str]:
     c = category.strip().lower()
     if c not in ("macro", "market", "technical"):
         raise ValueError("category must be: macro | market | technical")
-
     return (f"{c}_indicator_rules", f"{c}_indicator_scores")
 
 
-def _score_mode_constraint(category: str) -> Tuple[str, ...]:
-    # Jij hebt constraints op macro/technical. market heeft (nog) geen check constraint in je output,
-    # maar we ondersteunen dezelfde 3 modes sowieso.
-    return ("standard", "contrarian", "custom")
+# ============================================================
+# Bucket enforcement (server-side contract)
+# ============================================================
+def _bucket_key(rmin: float, rmax: float) -> Tuple[float, float]:
+    # normalize to float with 1 decimal to avoid 19.999999 issues
+    return (round(float(rmin), 4), round(float(rmax), 4))
+
+
+def _force_fixed_buckets(
+    indicator: str,
+    rules: List[RuleRow],
+) -> List[RuleRow]:
+    """
+    Zorgt dat rules altijd EXACT 5 buckets zijn:
+      0–20 / 20–40 / 40–60 / 60–80 / 80–100
+
+    Strategie:
+    - we proberen per bucket de "beste" bestaande rule te pakken (eerste match)
+    - duplicates negeren
+    - ontbrekende buckets vullen met fallback defaults
+    """
+    if not rules:
+        return _fallback_fixed_rules(indicator)
+
+    # map bestaande rules per bucket (alleen als bucket exact matcht)
+    by_bucket: Dict[Tuple[float, float], RuleRow] = {}
+    for r in rules:
+        k = _bucket_key(r.range_min, r.range_max)
+        if k in by_bucket:
+            continue
+        by_bucket[k] = r
+
+    out: List[RuleRow] = []
+    for i, (bmin, bmax) in enumerate(FIXED_BUCKETS):
+        k = _bucket_key(bmin, bmax)
+
+        if k in by_bucket:
+            r = by_bucket[k]
+            out.append(
+                RuleRow(
+                    id=int(r.id),
+                    indicator=r.indicator,
+                    range_min=bmin,
+                    range_max=bmax,
+                    score=int(r.score),
+                    trend=r.trend,
+                    interpretation=r.interpretation,
+                    action=r.action,
+                    score_mode=str(r.score_mode or "standard"),
+                    is_active=bool(r.is_active),
+                    weight=float(r.weight if r.weight is not None else 1.0),
+                )
+            )
+        else:
+            # bucket ontbreekt → fallback invullen
+            out.append(
+                RuleRow(
+                    id=-1,
+                    indicator=indicator,
+                    range_min=bmin,
+                    range_max=bmax,
+                    score=DEFAULT_BUCKET_SCORES[i],
+                    trend=None,
+                    interpretation="Fallback bucket rule (auto).",
+                    action="Geen actie.",
+                    score_mode="standard",
+                    is_active=True,
+                    weight=1.0,
+                )
+            )
+
+    return out
+
+
+def _fallback_fixed_rules(indicator: str) -> List[RuleRow]:
+    out: List[RuleRow] = []
+    for i, (bmin, bmax) in enumerate(FIXED_BUCKETS):
+        out.append(
+            RuleRow(
+                id=-1,
+                indicator=indicator,
+                range_min=bmin,
+                range_max=bmax,
+                score=DEFAULT_BUCKET_SCORES[i],
+                trend=None,
+                interpretation="Fallback bucket rule (auto).",
+                action="Geen actie.",
+                score_mode="standard",
+                is_active=True,
+                weight=1.0,
+            )
+        )
+    return out
 
 
 # ============================================================
 # DB: Rules
 # ============================================================
-
 def fetch_rules_for_indicator(
     conn,
     category: str,
     indicator: str,
     only_active: bool = True,
+    enforce_fixed_buckets: bool = True,
 ) -> List[RuleRow]:
     rules_table, _ = _table_names(category)
     indicator = (indicator or "").strip()
@@ -158,9 +263,9 @@ def fetch_rules_for_indicator(
 
         rows = cur.fetchall()
 
-    out: List[RuleRow] = []
+    rules: List[RuleRow] = []
     for r in rows:
-        out.append(
+        rules.append(
             RuleRow(
                 id=int(r[0]),
                 indicator=str(r[1]),
@@ -176,7 +281,10 @@ def fetch_rules_for_indicator(
             )
         )
 
-    return out
+    if enforce_fixed_buckets:
+        return _force_fixed_buckets(indicator, rules)
+
+    return rules
 
 
 def pick_rule_for_value(
@@ -188,14 +296,12 @@ def pick_rule_for_value(
       range_min <= value < range_max
     Laatste bucket: inclusive max.
     """
-
     if value is None or not rules:
         return None
 
     last_index = len(rules) - 1
 
     for idx, rule in enumerate(rules):
-
         # Laatste bucket → max inclusief
         if idx == last_index:
             if rule.range_min <= value <= rule.range_max:
@@ -206,10 +312,10 @@ def pick_rule_for_value(
 
     return None
 
+
 # ============================================================
 # Scoring (single indicator)
 # ============================================================
-
 def score_indicator(
     conn,
     category: str,
@@ -217,21 +323,23 @@ def score_indicator(
     value: Any,
 ) -> Dict[str, Any]:
     """
-    Return payload:
-    {
-      indicator, value,
-      base_score, score, score_mode, weight,
-      trend, interpretation, action,
-      matched_rule_id
-    }
+    Engine contract:
+    - value hoort NORMALIZED 0–100 te zijn.
+    - wij clampen voor safety (zodat raw-values niet alles breken).
     """
-    v = _to_float(value)
+    v_raw = _to_float(value)
+    v = None if v_raw is None else _clamp(v_raw, 0.0, 100.0)
 
-    rules = fetch_rules_for_indicator(conn, category=category, indicator=indicator, only_active=True)
+    rules = fetch_rules_for_indicator(
+        conn,
+        category=category,
+        indicator=indicator,
+        only_active=True,
+        enforce_fixed_buckets=True,
+    )
     rule = pick_rule_for_value(rules, v)
 
     if not rule:
-        # fallback: neutraal-minimum (jij wilde geen 0)
         return {
             "indicator": indicator,
             "value": v,
@@ -248,7 +356,6 @@ def score_indicator(
     base_score = _clamp_score(int(rule.score))
     final_score = _apply_score_mode(base_score, rule.score_mode)
 
-    # weight clamp (safety)
     w = float(rule.weight if rule.weight is not None else 1.0)
     if w <= 0:
         w = 1.0
@@ -270,7 +377,6 @@ def score_indicator(
 # ============================================================
 # Scoring (category: many indicators)
 # ============================================================
-
 def score_category(
     conn,
     user_id: int,
@@ -279,19 +385,6 @@ def score_category(
     persist: bool = True,
     ts: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """
-    indicator_values: {"RSI": 47.2, "MA200": 1, ...}
-
-    Return:
-    {
-      "category": "technical",
-      "timestamp": "...",
-      "items": [ {indicator score payload...}, ... ],
-      "weighted_score": 62,
-      "raw_avg_score": 58,
-      "total_weight": 7.5
-    }
-    """
     if ts is None:
         ts = datetime.utcnow()
 
@@ -322,7 +415,6 @@ def score_category(
     raw_avg = (raw_sum / count) if count > 0 else 10.0
     weighted_avg = (weighted_sum / total_weight) if total_weight > 0 else 10.0
 
-    # scores als int (dashboard meters)
     raw_avg_i = _clamp_score(int(round(raw_avg)))
     weighted_avg_i = _clamp_score(int(round(weighted_avg)))
 
@@ -348,7 +440,6 @@ def score_category(
 # ============================================================
 # Persist to *_indicator_scores
 # ============================================================
-
 def persist_indicator_scores(
     conn,
     user_id: int,
@@ -356,11 +447,6 @@ def persist_indicator_scores(
     items: List[Dict[str, Any]],
     ts: Optional[datetime] = None,
 ) -> None:
-    """
-    Slaat per indicator 1 row per dag op (UNIQUE user_id, indicator, score_date)
-    Werkt met jouw schema:
-      indicator, value, score, trend, interpretation, action, timestamp, user_id
-    """
     if ts is None:
         ts = datetime.utcnow()
 
@@ -378,7 +464,6 @@ def persist_indicator_scores(
             interpretation = it.get("interpretation")
             action = it.get("action")
 
-            # safety
             score = _clamp_score(int(score or 10))
 
             cur.execute(
@@ -419,7 +504,6 @@ def persist_indicator_scores(
 # ============================================================
 # Convenience: run scoring with its own DB connection
 # ============================================================
-
 def run_category_scoring(
     user_id: int,
     category: str,
