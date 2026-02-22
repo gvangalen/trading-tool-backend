@@ -14,7 +14,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =========================================================
-# 🧩 Naam-aliases (ALLE CATEGORIEËN)
+# 🧩 Naam-aliases
 # =========================================================
 NAME_ALIASES = {
     "fear_and_greed_index": "fear_greed_index",
@@ -25,9 +25,6 @@ NAME_ALIASES = {
     "sp_500": "sp500",
 }
 
-# =========================================================
-# 🧠 Normalisatie
-# =========================================================
 def normalize_indicator_name(name: str) -> str:
     normalized = (
         name.lower()
@@ -39,8 +36,9 @@ def normalize_indicator_name(name: str) -> str:
     )
     return NAME_ALIASES.get(normalized, normalized)
 
+
 # =========================================================
-# 🔢 SCORE ENGINE (UNIFORM VOOR ALLES)
+# 🔢 SCORE ENGINE (USER-AWARE)
 # =========================================================
 def generate_scores_db(category: str, user_id: int) -> Dict[str, Any]:
     """
@@ -48,6 +46,8 @@ def generate_scores_db(category: str, user_id: int) -> Dict[str, Any]:
     - macro
     - technical
     - market
+
+    ✅ User-based rules supported
     """
 
     table_map = {
@@ -89,11 +89,14 @@ def generate_scores_db(category: str, user_id: int) -> Dict[str, Any]:
         total_weight = 0.0
 
         for indicator, value in data.items():
+
+            # ✅ CRUCIAAL: user_id meegeven
             scored = score_indicator(
                 conn=conn,
                 category=category,
                 indicator=indicator,
                 value=value,
+                user_id=user_id,   # ← NIEUW
             )
 
             weight = float(scored.get("weight", 1))
@@ -133,6 +136,7 @@ def generate_scores_db(category: str, user_id: int) -> Dict[str, Any]:
 
     finally:
         conn.close()
+
 
 # =========================================================
 # 🔗 DASHBOARD: DAILY COMBINED SCORES
@@ -189,14 +193,14 @@ def get_scores_for_symbol(user_id: int, include_metadata: bool = False) -> Dict[
     finally:
         conn.close()
 
+
 # =========================================================
-# 🔁 BACKWARD COMPATIBILITY (CRUCIAAL VOOR CELERY)
+# 🔁 BACKWARD COMPATIBILITY (CELERY SAFE)
 # =========================================================
-def get_score_rule_from_db(category: str, indicator: str, value):
+def get_score_rule_from_db(category: str, indicator: str, value, user_id: int):
     """
-    ⚠️ BELANGRIJK:
     Oude modules verwachten deze functie.
-    Deze wrapper gebruikt nu de nieuwe scoring engine.
+    Nu user-aware.
     """
 
     conn = get_db_connection()
@@ -209,6 +213,7 @@ def get_score_rule_from_db(category: str, indicator: str, value):
             category=category,
             indicator=normalize_indicator_name(indicator),
             value=value,
+            user_id=user_id,   # ✅ ook hier user-id meegeven
         )
 
         return {
