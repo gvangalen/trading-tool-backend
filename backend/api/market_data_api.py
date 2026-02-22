@@ -163,7 +163,7 @@ def add_user_market_indicator(
             raise HTTPException(400, "❌ 'value' moet numeriek zijn.")
 
         # =====================================================
-        # 🧮 SCORE LOGICA (✅ via centrale scoring_engine)
+        # 🧮 SCORE LOGICA (USER-AWARE FIX)
         # =====================================================
         normalized = normalize_indicator_name(indicator)
 
@@ -172,6 +172,7 @@ def add_user_market_indicator(
             category="market",
             indicator=normalized,
             value=value,
+            user_id=user_id,  # ✅ CRUCIALE FIX
         )
 
         score = scored.get("score", 10)
@@ -372,22 +373,19 @@ def get_market_day_data(current_user: dict = Depends(get_current_user)):
 @router.get("/market/indicator_names")
 def get_market_indicator_names():
     """
-    Geeft alle MARKET-indicators terug die:
-    - in de tabel 'indicators' staan (category = 'market')
-    - én een entry hebben in 'market_indicator_rules' (scoreregels)
+    Geeft alle MARKET-indicators terug uit de indicators tabel.
+    Geen JOIN met rules, want rules kunnen template (user_id NULL)
+    of user-specific zijn.
     """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT i.name, i.display_name
-            FROM indicators i
-            JOIN market_indicator_rules r
-                ON r.indicator = i.name
-            WHERE i.category = 'market'
-            GROUP BY i.name, i.display_name
-            ORDER BY i.display_name ASC;
+            SELECT name, display_name
+            FROM indicators
+            WHERE category = 'market'
+            ORDER BY display_name ASC;
         """
         )
         rows = cur.fetchall()
@@ -395,8 +393,8 @@ def get_market_indicator_names():
 
         return [
             {
-                "name": r[0],  # bv. 'btc_change_24h'
-                "display_name": r[1],  # bv. 'BTC Change 24h'
+                "name": r[0],
+                "display_name": r[1],
             }
             for r in rows
         ]
@@ -405,30 +403,53 @@ def get_market_indicator_names():
         logger.error(f"❌ [indicator_names] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
 # =========================================================
 # 📌 GET /market/indicator_rules/{name}
 # (globale scoreregels)
 # =========================================================
 @router.get("/market/indicator_rules/{name}")
-def get_market_indicator_rules(name: str):
+def get_market_indicator_rules(
+    name: str,
+    current_user: dict = Depends(get_current_user),
+):
     """
-    Haalt alle scoreregels op voor één market-indicator
-    vanuit 'market_indicator_rules'.
+    Haalt scoreregels op voor één market-indicator.
+    Eerst user-specifieke regels,
+    anders fallback naar template regels (user_id IS NULL).
     """
+    user_id = current_user["id"]
+
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+
+        # 1️⃣ Probeer user-specific rules
         cur.execute(
             """
             SELECT range_min, range_max, score, trend, interpretation, action
             FROM market_indicator_rules
             WHERE indicator = %s
+              AND user_id = %s
             ORDER BY range_min ASC;
-        """,
-            (name,),
+            """,
+            (name, user_id),
         )
         rows = cur.fetchall()
+
+        # 2️⃣ Fallback naar template rules
+        if not rows:
+            cur.execute(
+                """
+                SELECT range_min, range_max, score, trend, interpretation, action
+                FROM market_indicator_rules
+                WHERE indicator = %s
+                  AND user_id IS NULL
+                ORDER BY range_min ASC;
+                """,
+                (name,),
+            )
+            rows = cur.fetchall()
+
         conn.close()
 
         return [
@@ -446,7 +467,6 @@ def get_market_indicator_rules(name: str):
     except Exception as e:
         logger.error(f"❌ [indicator_rules] {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 # =========================================================
 # GET /market_data/list — ruwe BTC data (GLOBAAL)
