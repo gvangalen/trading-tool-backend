@@ -36,10 +36,6 @@ def calculate_rsi(closes, period=14):
 # 🌐 Technische indicator waarde ophalen (RAW ONLY)
 # =========================================================
 async def fetch_technical_value(name: str, source: str = None, link: str = None):
-    """
-    Async fetch voor technische indicatoren.
-    Geeft ALLEEN raw values terug.
-    """
 
     try:
         if not link:
@@ -53,9 +49,7 @@ async def fetch_technical_value(name: str, source: str = None, link: str = None)
 
         lname = name.lower()
 
-        # -------------------------------------------------
-        # 📊 Binance candles parsing
-        # -------------------------------------------------
+        # Binance candles
         if "binance" in link.lower() and isinstance(data, list):
             try:
                 closes = [float(k[4]) for k in data if len(k) > 4]
@@ -66,28 +60,22 @@ async def fetch_technical_value(name: str, source: str = None, link: str = None)
             if not closes:
                 return None
 
-            # RSI (0–100 al correct)
             if "rsi" in lname:
                 value = calculate_rsi(closes)
                 return {"value": value}
 
-            # MA200 ratio (bijv 1.08 of 0.95)
             if "ma200" in lname or "ma_200" in lname:
                 if len(closes) >= 200:
                     ma = sum(closes[-200:]) / 200
                     return {"value": closes[-1] / ma}
 
-            # Volume strength (absolute volume)
             if "volume" in lname:
                 return {"value": sum(volumes[-10:])}
 
-            # Last close
             if lname == "close":
                 return {"value": closes[-1]}
 
-        # -------------------------------------------------
-        # 🧩 JSON fallback parsing
-        # -------------------------------------------------
+        # JSON fallback
         if isinstance(data, dict):
             for key in ("value", "close", "price", "last"):
                 if key in data:
@@ -111,9 +99,6 @@ async def fetch_technical_value(name: str, source: str = None, link: str = None)
 # 🔹 Technische normalisatie naar 0–100
 # =========================================================
 def normalize_technical_value(indicator: str, value: float) -> float:
-    """
-    Zet raw technische waarde om naar genormaliseerde 0–100 schaal.
-    """
 
     try:
         if value is None:
@@ -122,26 +107,21 @@ def normalize_technical_value(indicator: str, value: float) -> float:
         value = float(value)
         indicator = indicator.lower()
 
-        # RSI is al 0–100
         if "rsi" in indicator:
             return max(0, min(100, value))
 
-        # MA200 ratio (1.0 = neutraal)
         if "ma200" in indicator or "ma_200" in indicator:
             deviation = abs(value - 1)
-            cap = 0.2  # 20% boven MA = extreem
+            cap = 0.2
             return min(100, (deviation / cap) * 100)
 
-        # Volume strength (absolute → schaal)
         if "volume" in indicator:
-            cap = 1_000_000_000  # schaal afhankelijk van je timeframe
+            cap = 1_000_000_000
             return min(100, (value / cap) * 100)
 
-        # Price (optioneel deviation-based)
         if "close" in indicator or "price" in indicator:
             return max(0, min(100, value))
 
-        # Fallback
         return max(0, min(100, value))
 
     except Exception:
@@ -150,18 +130,13 @@ def normalize_technical_value(indicator: str, value: float) -> float:
 
 
 # =========================================================
-# 🧠 Interpretatie via DB scoreregels (met normalisatie)
+# 🧠 Interpretatie via DB scoreregels (USER-AWARE)
 # =========================================================
 def interpret_technical_indicator_db(indicator: str, value: float, user_id: int):
-    """
-    Flow:
-    raw_value → normalized_value (0–100) → DB rules → score
-    """
 
     try:
         normalized_name = normalize_indicator_name(indicator)
 
-        # 🔥 eerst normaliseren
         normalized_value = normalize_technical_value(
             normalized_name,
             value,
@@ -171,6 +146,7 @@ def interpret_technical_indicator_db(indicator: str, value: float, user_id: int)
             "technical",
             normalized_name,
             normalized_value,
+            user_id=user_id,   # ✅ FIX
         )
 
         if not result:
