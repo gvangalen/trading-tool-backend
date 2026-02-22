@@ -13,45 +13,30 @@ ALT_FNG = "https://api.alternative.me/fng/?limit=1"
 
 
 # ============================================================
-# 🌐 Macro waarde ophalen
+# 🌐 Macro waarde ophalen (RAW ONLY)
 # ============================================================
 def fetch_macro_value(name: str, source: str = None, link: str = None):
     """
     Haalt macro waarde op.
     Crasht nooit.
+    Geeft ALTIJD raw value terug.
     """
 
     normalized = normalize_indicator_name(name)
     logger.info(f"🌐 Fetch macro '{normalized}'")
 
-    # ------------------------------------------------------------
     # 🟦 DXY
-    # ------------------------------------------------------------
     if normalized == "dxy":
         try:
             r = requests.get(YAHOO_DXY, timeout=10)
             r.raise_for_status()
             data = r.json()
-
             value = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
             return {"value": float(value)}
-
-        except Exception as e:
-            logger.warning(f"DXY Yahoo failed → fallback FNG: {e}")
-
-        # fallback → fear & greed
-        try:
-            r = requests.get(ALT_FNG, timeout=10)
-            r.raise_for_status()
-            fg = r.json()
-            value = float(fg["data"][0]["value"])
-            return {"value": value}
         except Exception:
             return {"value": None}
 
-    # ------------------------------------------------------------
     # 🟩 Fear & Greed
-    # ------------------------------------------------------------
     if "alternative" in (source or "").lower():
         try:
             r = requests.get(ALT_FNG, timeout=10)
@@ -61,9 +46,7 @@ def fetch_macro_value(name: str, source: str = None, link: str = None):
         except Exception:
             return {"value": None}
 
-    # ------------------------------------------------------------
     # 🟧 BTC Dominance
-    # ------------------------------------------------------------
     if normalized in ("btc_dominance", "bitcoin_dominance"):
         try:
             r = requests.get("https://api.coingecko.com/api/v3/global", timeout=10)
@@ -73,9 +56,7 @@ def fetch_macro_value(name: str, source: str = None, link: str = None):
         except Exception:
             return {"value": None}
 
-    # ------------------------------------------------------------
-    # 🟨 Yahoo based indicators
-    # ------------------------------------------------------------
+    # 🟨 Yahoo generic
     if source and "yahoo" in source.lower() and link:
         try:
             r = requests.get(link, timeout=10)
@@ -86,9 +67,7 @@ def fetch_macro_value(name: str, source: str = None, link: str = None):
         except Exception:
             return {"value": None}
 
-    # ------------------------------------------------------------
-    # 🟪 FRED data
-    # ------------------------------------------------------------
+    # 🟪 FRED
     if source and "fred" in source.lower() and link:
         try:
             r = requests.get(link, timeout=10)
@@ -101,33 +80,73 @@ def fetch_macro_value(name: str, source: str = None, link: str = None):
             pass
         return {"value": None}
 
-    # ------------------------------------------------------------
-    # 🟫 Generic JSON API
-    # ------------------------------------------------------------
+    # 🟫 Generic
     if link:
         try:
             r = requests.get(link, timeout=10)
             r.raise_for_status()
             data = r.json()
-
             for key in ("value", "price", "index"):
                 if key in data:
                     return {"value": float(data[key])}
-
-        except Exception as e:
-            logger.warning(f"Generic macro fetch fail '{normalized}': {e}")
+        except Exception:
+            pass
 
     return {"value": None}
 
 
 # ============================================================
-# 🧠 Macro interpretatie via DB rules
+# 🔹 Macro normalisatie naar 0–100
+# ============================================================
+def normalize_macro_value(indicator: str, value: float) -> float:
+    """
+    Zet macro raw value om naar genormaliseerde 0–100 schaal.
+    """
+
+    try:
+        if value is None:
+            return 0
+
+        value = float(value)
+
+        # Fear & Greed is al 0–100
+        if indicator in ("fear_greed", "fear_and_greed"):
+            return max(0, min(100, value))
+
+        # BTC dominance 0–100%
+        if indicator in ("btc_dominance", "bitcoin_dominance"):
+            return max(0, min(100, value))
+
+        # DXY → schaal rond 80–120
+        if indicator == "dxy":
+            low = 80
+            high = 120
+            normalized = ((value - low) / (high - low)) * 100
+            return max(0, min(100, normalized))
+
+        # Fallback → clamp
+        return max(0, min(100, value))
+
+    except Exception:
+        logger.error("Macro normalisatie fout", exc_info=True)
+        return 0
+
+
+# ============================================================
+# 🧠 Macro interpretatie via DB rules (met normalisatie)
 # ============================================================
 def interpret_macro_indicator(name: str, value: float, user_id: int):
     try:
-        normalized = normalize_indicator_name(name)
+        normalized_name = normalize_indicator_name(name)
 
-        rule = get_score_rule_from_db("macro", normalized, value)
+        # 🔥 eerst normaliseren
+        normalized_value = normalize_macro_value(normalized_name, value)
+
+        rule = get_score_rule_from_db(
+            "macro",
+            normalized_name,
+            normalized_value,
+        )
 
         if not rule:
             return {
@@ -138,13 +157,13 @@ def interpret_macro_indicator(name: str, value: float, user_id: int):
             }
 
         return {
-            "score": rule.get("score", 10),
+            "score": max(0, min(100, rule.get("score", 10))),
             "trend": rule.get("trend"),
             "interpretation": rule.get("interpretation"),
             "action": rule.get("action"),
         }
 
-    except Exception as e:
+    except Exception:
         logger.error("interpret_macro_indicator error", exc_info=True)
         return {
             "score": 10,
