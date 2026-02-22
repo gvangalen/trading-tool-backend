@@ -102,7 +102,7 @@ async def add_technical_indicator(
     if not name_raw:
         raise HTTPException(400, "❌ 'indicator' is verplicht.")
 
-    # 🔤 Normaliseren (consistent met rules in DB)
+    # 🔤 Normaliseren
     name = normalize_indicator_name(name_raw)
 
     conn = get_db_connection()
@@ -150,7 +150,7 @@ async def add_technical_indicator(
         source, link = cfg
 
         # ======================================================
-        # 2️⃣ Interpreter aanroepen (async)
+        # 2️⃣ Interpreter aanroepen
         # ======================================================
         from backend.utils.technical_interpreter import fetch_technical_value
 
@@ -169,7 +169,7 @@ async def add_technical_indicator(
         value = float(result["value"] if isinstance(result, dict) else result)
 
         # ======================================================
-        # 3️⃣ Score bepalen via centrale scoring_engine (✅)
+        # 3️⃣ USER-AWARE SCORING FIX
         # ======================================================
         normalized = normalize_indicator_name(name)
 
@@ -178,15 +178,15 @@ async def add_technical_indicator(
             category="technical",
             indicator=normalized,
             value=value,
+            user_id=user_id,  # ✅ CRUCIALE FIX
         )
 
         score = scored.get("score", 10)
-        # jouw UI gebruikt 'advies' als trendlabel
         advies = scored.get("trend") or "neutral"
         uitleg = scored.get("interpretation") or "Geen interpretatie beschikbaar"
 
         # ======================================================
-        # 4️⃣ Opslaan in DB
+        # 4️⃣ Opslaan
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -209,7 +209,7 @@ async def add_technical_indicator(
         conn.commit()
 
         # ======================================================
-        # 5️⃣ Onboarding stap afronden (ALLEEN BIJ SUCCESS)
+        # 5️⃣ Onboarding afronden
         # ======================================================
         mark_step_completed(conn, user_id, "technical")
 
@@ -234,7 +234,6 @@ async def add_technical_indicator(
 
     finally:
         conn.close()
-
 
 # ===============================================================
 # 📅 DAY — fallback + user filtering (GEEN onboarding)
@@ -476,18 +475,40 @@ async def get_all_indicators():
 # SCORING RULES OPHALEN
 # ===============================================================
 @router.get("/technical_indicator_rules/{indicator_name}")
-async def get_rules_for_indicator(indicator_name: str):
+async def get_rules_for_indicator(
+    indicator_name: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Haalt technische scoreregels op.
+    Eerst user-specific rules,
+    anders fallback naar template rules (user_id IS NULL).
+    """
+    user_id = current_user["id"]
     conn, cur = get_db_cursor()
 
     try:
+        # 1️⃣ User rules eerst
         cur.execute("""
             SELECT id, indicator, range_min, range_max, score, trend, interpretation, action
             FROM technical_indicator_rules
             WHERE LOWER(indicator)=LOWER(%s)
+              AND user_id = %s
             ORDER BY range_min ASC;
-        """, (indicator_name,))
+        """, (indicator_name, user_id))
 
         rows = safe_fetchall(cur)
+
+        # 2️⃣ Fallback naar template
+        if not rows:
+            cur.execute("""
+                SELECT id, indicator, range_min, range_max, score, trend, interpretation, action
+                FROM technical_indicator_rules
+                WHERE LOWER(indicator)=LOWER(%s)
+                  AND user_id IS NULL
+                ORDER BY range_min ASC;
+            """, (indicator_name,))
+            rows = safe_fetchall(cur)
 
         return [
             {
