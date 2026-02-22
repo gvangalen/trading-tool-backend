@@ -9,7 +9,7 @@ from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
 
 # ⭐ Onboarding helper importeren
-from backend.api.onboarding_api import mark_step_completed  
+from backend.api.onboarding_api import mark_step_completed
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -17,7 +17,9 @@ router = APIRouter()
 dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 load_dotenv(dotenv_path=dotenv_path)
 
-logger.info("🚀 macro_data_api.py geladen – user_id-systeem; onboarding alleen bij POST /macro_data.")
+logger.info(
+    "🚀 macro_data_api.py geladen – user_id-systeem; onboarding alleen bij POST /macro_data."
+)
 
 
 # =====================================
@@ -37,7 +39,7 @@ def get_db_cursor():
 @router.post("/macro_data")
 async def add_macro_indicator(
     request: Request,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user),
 ):
     """
     ➕ Voeg macro-data toe voor deze gebruiker.
@@ -74,26 +76,29 @@ async def add_macro_indicator(
             if cur.fetchone():
                 raise HTTPException(
                     status_code=409,
-                    detail=f"Indicator '{name}' is al toegevoegd voor deze gebruiker."
+                    detail=f"Indicator '{name}' is al toegevoegd voor deze gebruiker.",
                 )
 
         # --------------------------------------------------
         # Indicator config ophalen
         # --------------------------------------------------
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT source, link
                 FROM indicators
                 WHERE LOWER(name) = LOWER(%s)
                   AND category = 'macro'
                   AND active = TRUE;
-            """, (name,))
+                """,
+                (name,),
+            )
             indicator_info = cur.fetchone()
 
         if not indicator_info:
             raise HTTPException(
                 status_code=404,
-                detail=f"Indicator '{name}' bestaat niet of is inactief."
+                detail=f"Indicator '{name}' bestaat niet of is inactief.",
             )
 
         source, link = indicator_info
@@ -110,7 +115,7 @@ async def add_macro_indicator(
             if not result:
                 raise HTTPException(
                     status_code=500,
-                    detail=f"❌ Geen waarde ontvangen voor '{name}'"
+                    detail=f"❌ Geen waarde ontvangen voor '{name}'",
                 )
 
             if isinstance(result, dict):
@@ -123,59 +128,54 @@ async def add_macro_indicator(
                 else:
                     raise HTTPException(
                         status_code=500,
-                        detail=f"❌ Kan waarde niet parsen: {result}"
+                        detail=f"❌ Kan waarde niet parsen: {result}",
                     )
             else:
                 value = float(result)
 
         # --------------------------------------------------
-        # Scoring
+        # Scoring (✅ via centrale scoring_engine)
         # --------------------------------------------------
-        from backend.utils.scoring_utils import (
-            generate_scores_db,
-            normalize_indicator_name,
-        )
+        from backend.utils.scoring_utils import normalize_indicator_name
+        from backend.utils.scoring_engine import score_indicator
 
         normalized = normalize_indicator_name(name)
 
-        score_info = generate_scores_db(
-            "macro",
-            {normalized: value},
-            user_id=user_id
+        scored = score_indicator(
+            conn=conn,
+            category="macro",
+            indicator=normalized,
+            value=value,
         )
 
-        rule = score_info["scores"].get(normalized)
-        if not rule:
-            raise HTTPException(
-                status_code=500,
-                detail=f"❌ Geen scoreregels gevonden voor '{name}'"
-            )
-
-        score = rule["score"]
-        trend = rule["trend"]
-        interpretation = rule["interpretation"]
-        action = rule["action"]
+        score = scored.get("score", 10)
+        trend = scored.get("trend") or "neutral"
+        interpretation = scored.get("interpretation") or "Geen interpretatie beschikbaar"
+        action = scored.get("action") or "Geen actie"
 
         # --------------------------------------------------
         # Opslaan
         # --------------------------------------------------
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO macro_data (
                     name, value, trend, interpretation, action,
                     score, timestamp, user_id
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                name,
-                value,
-                trend,
-                interpretation,
-                action,
-                score,
-                datetime.utcnow(),
-                user_id
-            ))
+                """,
+                (
+                    name,
+                    value,
+                    trend,
+                    interpretation,
+                    action,
+                    score,
+                    datetime.utcnow(),
+                    user_id,
+                ),
+            )
             conn.commit()
 
         # --------------------------------------------------
@@ -189,7 +189,7 @@ async def add_macro_indicator(
             "score": score,
             "trend": trend,
             "interpretation": interpretation,
-            "action": action
+            "action": action,
         }
 
     except HTTPException:
@@ -199,12 +199,13 @@ async def add_macro_indicator(
         logger.error(f"❌ Macro save error: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Fout bij opslaan macro data: {e}"
+            detail=f"Fout bij opslaan macro data: {e}",
         )
 
     finally:
         conn.close()
-        
+
+
 # =====================================
 # 📄 Macro data ophalen (met user_id)
 # ✅ GEEN onboarding hier
@@ -215,13 +216,16 @@ async def get_macro_indicators(current_user: dict = Depends(get_current_user)):
 
     conn, cur = get_db_cursor()
     try:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, name, value, trend, interpretation, action, score, timestamp
             FROM macro_data
             WHERE user_id = %s
             ORDER BY timestamp DESC
             LIMIT 100;
-        """, (current_user["id"],))
+            """,
+            (current_user["id"],),
+        )
 
         rows = cur.fetchall()
 
@@ -234,7 +238,7 @@ async def get_macro_indicators(current_user: dict = Depends(get_current_user)):
                 "interpretation": r[4],
                 "action": r[5],
                 "score": r[6],
-                "timestamp": r[7].isoformat() if r[7] else None
+                "timestamp": r[7].isoformat() if r[7] else None,
             }
             for r in rows
         ]
@@ -260,25 +264,31 @@ async def get_latest_macro_day_data(current_user: dict = Depends(get_current_use
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
                 WHERE user_id = %s
                   AND DATE(timestamp) = CURRENT_DATE
                 ORDER BY timestamp DESC;
-            """, (current_user["id"],))
+                """,
+                (current_user["id"],),
+            )
 
             rows = cur.fetchall()
 
             # Fallback → laatste dag waarop data aanwezig is
             if not rows:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT timestamp
                     FROM macro_data
                     WHERE user_id = %s
                     ORDER BY timestamp DESC
                     LIMIT 1;
-                """, (current_user["id"],))
+                    """,
+                    (current_user["id"],),
+                )
 
                 ts = cur.fetchone()
                 if not ts:
@@ -286,13 +296,16 @@ async def get_latest_macro_day_data(current_user: dict = Depends(get_current_use
 
                 fallback = ts[0].date()
 
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT name, value, trend, interpretation, action, score, timestamp
                     FROM macro_data
                     WHERE user_id = %s
                       AND DATE(timestamp) = %s
                     ORDER BY timestamp DESC;
-                """, (current_user["id"], fallback))
+                    """,
+                    (current_user["id"], fallback),
+                )
 
                 rows = cur.fetchall()
 
@@ -304,7 +317,7 @@ async def get_latest_macro_day_data(current_user: dict = Depends(get_current_use
                 "interpretation": r[3],
                 "action": r[4],
                 "score": r[5],
-                "timestamp": r[6].isoformat() if r[6] else None
+                "timestamp": r[6].isoformat() if r[6] else None,
             }
             for r in rows
         ]
@@ -328,25 +341,31 @@ async def get_macro_week_data(current_user: dict = Depends(get_current_user)):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT DISTINCT DATE(timestamp)
                 FROM macro_data
                 WHERE user_id = %s
                 ORDER BY DATE(timestamp) DESC
                 LIMIT 7;
-            """, (current_user["id"],))
+                """,
+                (current_user["id"],),
+            )
 
             dagen = [r[0] for r in cur.fetchall()]
             if not dagen:
                 return []
 
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
                 WHERE user_id = %s
                   AND DATE(timestamp) = ANY(%s)
                 ORDER BY timestamp DESC;
-            """, (current_user["id"], dagen))
+                """,
+                (current_user["id"], dagen),
+            )
 
             rows = cur.fetchall()
 
@@ -358,7 +377,7 @@ async def get_macro_week_data(current_user: dict = Depends(get_current_user)):
                 "interpretation": r[3],
                 "action": r[4],
                 "score": r[5],
-                "timestamp": r[6].isoformat() if r[6] else None
+                "timestamp": r[6].isoformat() if r[6] else None,
             }
             for r in rows
         ]
@@ -379,25 +398,31 @@ async def get_macro_month_data(current_user: dict = Depends(get_current_user)):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT DISTINCT DATE_TRUNC('week', timestamp)::date
                 FROM macro_data
                 WHERE user_id = %s
                 ORDER BY 1 DESC
                 LIMIT 4;
-            """, (current_user["id"],))
+                """,
+                (current_user["id"],),
+            )
 
             weken = [r[0] for r in cur.fetchall()]
             if not weken:
                 return []
 
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
                 WHERE user_id = %s
                   AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
                 ORDER BY timestamp DESC;
-            """, (current_user["id"], weken))
+                """,
+                (current_user["id"], weken),
+            )
 
             rows = cur.fetchall()
 
@@ -409,7 +434,7 @@ async def get_macro_month_data(current_user: dict = Depends(get_current_user)):
                 "interpretation": r[3],
                 "action": r[4],
                 "score": r[5],
-                "timestamp": r[6].isoformat() if r[6] else None
+                "timestamp": r[6].isoformat() if r[6] else None,
             }
             for r in rows
         ]
@@ -430,25 +455,31 @@ async def get_macro_quarter_data(current_user: dict = Depends(get_current_user))
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT DISTINCT DATE_TRUNC('week', timestamp)::date
                 FROM macro_data
                 WHERE user_id = %s
                 ORDER BY 1 DESC
                 LIMIT 12;
-            """, (current_user["id"],))
+                """,
+                (current_user["id"],),
+            )
 
             weken = [r[0] for r in cur.fetchall()]
             if not weken:
                 return []
 
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT name, value, trend, interpretation, action, score, timestamp
                 FROM macro_data
                 WHERE user_id = %s
                   AND DATE_TRUNC('week', timestamp)::date = ANY(%s)
                 ORDER BY timestamp DESC;
-            """, (current_user["id"], weken))
+                """,
+                (current_user["id"], weken),
+            )
 
             rows = cur.fetchall()
 
@@ -460,7 +491,7 @@ async def get_macro_quarter_data(current_user: dict = Depends(get_current_user))
                 "interpretation": r[3],
                 "action": r[4],
                 "score": r[5],
-                "timestamp": r[6].isoformat() if r[6] else None
+                "timestamp": r[6].isoformat() if r[6] else None,
             }
             for r in rows
         ]
@@ -481,13 +512,15 @@ async def get_all_macro_indicators():
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT name, display_name
                 FROM indicators
                 WHERE active = TRUE
                   AND category = 'macro'
                 ORDER BY name;
-            """)
+                """
+            )
             rows = cur.fetchall()
 
         return [{"name": r[0], "display_name": r[1]} for r in rows]
@@ -508,12 +541,15 @@ async def get_rules_for_macro_indicator(indicator_name: str):
 
     try:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, indicator, range_min, range_max, score, trend, interpretation, action
                 FROM macro_indicator_rules
                 WHERE indicator = %s
-                ORDER BY score ASC;
-            """, (indicator_name,))
+                ORDER BY range_min ASC;
+                """,
+                (indicator_name,),
+            )
 
             rows = cur.fetchall()
 
@@ -526,7 +562,7 @@ async def get_rules_for_macro_indicator(indicator_name: str):
                 "score": r[4],
                 "trend": r[5],
                 "interpretation": r[6],
-                "action": r[7]
+                "action": r[7],
             }
             for r in rows
         ]
@@ -556,7 +592,7 @@ async def delete_macro_indicator(name: str, current_user: dict = Depends(get_cur
             if count == 0:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Indicator '{name}' niet gevonden voor deze gebruiker."
+                    detail=f"Indicator '{name}' niet gevonden voor deze gebruiker.",
                 )
 
             cur.execute(
@@ -567,7 +603,7 @@ async def delete_macro_indicator(name: str, current_user: dict = Depends(get_cur
 
         return {
             "message": f"Indicator '{name}' verwijderd.",
-            "rows_deleted": count
+            "rows_deleted": count,
         }
 
     finally:
