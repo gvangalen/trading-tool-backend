@@ -539,16 +539,16 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
 @shared_task(name="backend.celery_task.strategy_task.run_daily_strategy_snapshot")
 def run_daily_strategy_snapshot(user_id: int):
     """
-    DAGELIJKSE STRATEGY SNAPSHOT
+    DAGELIJKSE STRATEGY SNAPSHOT (BOT-DRIVEN)
 
     Contract:
+    - Snapshot per actieve bot
     - EXACT 1 snapshot per (user_id, setup_id, snapshot_date)
-    - Snapshot is VERPLICHT voor bot execution
-    - Bot-agent leest 1-op-1 uit active_strategy_snapshot
-    - Strategy AI insight is UITSLUITEND voor UI
+    - Snapshot is source-of-truth voor bot execution
+    - Strategy AI insight is UI-only
     """
 
-    logger.info(f"🟡 Daily strategy snapshot | user={user_id}")
+    logger.info(f"🟡 Daily strategy snapshot (BOT-driven) | user={user_id}")
     today = date.today()
 
     conn = get_db_connection()
@@ -558,31 +558,26 @@ def run_daily_strategy_snapshot(user_id: int):
 
     try:
         # ==================================================
-        # 1️⃣ Best-of-day setup bepalen
+        # 1️⃣ Actieve bots ophalen
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT setup_id
-                FROM daily_setup_scores
+                SELECT id, strategy_id
+                FROM bot_configs
                 WHERE user_id = %s
-                  AND report_date = %s
-                  AND is_best = TRUE
-                LIMIT 1;
+                  AND is_active = TRUE;
                 """,
-                (user_id, today),
+                (user_id,),
             )
-            row = cur.fetchone()
+            bots = cur.fetchall()
 
-        if not row:
-            logger.warning("⚠️ Geen best-of-day setup")
+        if not bots:
+            logger.warning("⚠️ Geen actieve bots")
             return
 
-        setup_id = row[0]
-        setup = load_setup_from_db(setup_id, user_id)
-
         # ==================================================
-        # 2️⃣ Market context
+        # 2️⃣ Market context van vandaag ophalen (1x)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -608,177 +603,198 @@ def run_daily_strategy_snapshot(user_id: int):
         }
 
         # ==================================================
-        # 3️⃣ Laatste strategy ophalen
+        # 3️⃣ Per bot snapshot maken
         # ==================================================
-        base_strategy = load_latest_strategy(setup_id, user_id)
-        if not base_strategy:
-            logger.warning("⚠️ Geen base strategy gevonden")
-            return
+        for bot_id, strategy_id in bots:
 
-        strategy_id = base_strategy["strategy_id"]
+            logger.info(f"🤖 Verwerken bot_id={bot_id} strategy_id={strategy_id}")
 
-        # ==================================================
-        # 4️⃣ AI adjustment
-        # ==================================================
-        adjustment = adjust_strategy_for_today(
-            user_id=user_id,
-            base_strategy=base_strategy,
-            setup=setup,
-            market_context=market_context,
-        )
-
-        if not adjustment:
-            raise RuntimeError("AI adjustment gaf None terug")
-
-        # ==================================================
-        # 5️⃣ Normalisatie
-        # ==================================================
-        entry_value = adjustment.get("entry", base_strategy.get("entry"))
-        targets_value = adjustment.get("targets") or base_strategy.get("targets") or []
-        stop_value = adjustment.get("stop_loss", base_strategy.get("stop_loss"))
-
-        entry_num = safe_numeric(entry_value)
-        stop_num = safe_numeric(stop_value)
-        confidence = safe_confidence(
-            adjustment.get("confidence_score"),
-            fallback=50,
-        )
-
-        adjustment_reason = adjustment.get(
-            "adjustment_reason",
-            "Daily strategy snapshot"
-        )
-
-        # ==================================================
-        # 6️⃣ Snapshot opslaan (BOT SOURCE OF TRUTH)
-        # ==================================================
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO active_strategy_snapshot (
-                    user_id,
-                    setup_id,
-                    strategy_id,
-                    snapshot_date,
-                    entry,
-                    targets,
-                    stop_loss,
-                    confidence_score,
-                    adjustment_reason,
-                    market_context,
-                    changes,
-                    created_at
+            # Strategy → setup_id ophalen
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT setup_id
+                    FROM strategies
+                    WHERE id = %s AND user_id = %s;
+                    """,
+                    (strategy_id, user_id),
                 )
-                VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s,
-                    %s::jsonb,
-                    %s::jsonb,
-                    NOW()
-                )
-                ON CONFLICT (user_id, setup_id, snapshot_date)
-                DO UPDATE SET
-                    entry = EXCLUDED.entry,
-                    targets = EXCLUDED.targets,
-                    stop_loss = EXCLUDED.stop_loss,
-                    confidence_score = EXCLUDED.confidence_score,
-                    adjustment_reason = EXCLUDED.adjustment_reason,
-                    market_context = EXCLUDED.market_context,
-                    changes = EXCLUDED.changes;
-                """,
-                (
-                    user_id,
-                    setup_id,
-                    strategy_id,
-                    today,
-                    entry_num,
-                    ",".join(map(str, targets_value)),
-                    stop_num,
-                    confidence,
-                    adjustment_reason,
-                    json.dumps(market_context),
-                    json.dumps(adjustment.get("changes") or {}, ensure_ascii=False),
-                ),
+                row = cur.fetchone()
+
+            if not row:
+                logger.warning(f"⚠️ Strategy {strategy_id} niet gevonden")
+                continue
+
+            setup_id = row[0]
+            setup = load_setup_from_db(setup_id, user_id)
+
+            # --------------------------------------------------
+            # Laatste strategy laden
+            # --------------------------------------------------
+            base_strategy = load_latest_strategy(setup_id, user_id)
+            if not base_strategy:
+                logger.warning(f"⚠️ Geen base strategy voor setup {setup_id}")
+                continue
+
+            # --------------------------------------------------
+            # AI adjustment
+            # --------------------------------------------------
+            adjustment = adjust_strategy_for_today(
+                user_id=user_id,
+                base_strategy=base_strategy,
+                setup=setup,
+                market_context=market_context,
             )
 
-        conn.commit()
-        logger.info(f"✅ Snapshot opgeslagen | strategy_id={strategy_id}")
+            if not adjustment:
+                logger.warning("⚠️ Geen AI adjustment ontvangen")
+                continue
 
-        # ==================================================
-        # 7️⃣ Strategy AI Insight (NU ZONDER SILENT FAIL)
-        # ==================================================
-        analysis = analyze_strategies(
-            user_id=user_id,
-            strategies=[
-                {
-                    "strategy_id": strategy_id,
-                    "setup_id": setup_id,
-                    "entry": entry_value,
-                    "targets": targets_value,
-                    "stop_loss": stop_value,
-                    "confidence_score": confidence,
-                    "market_context": market_context,
-                    "adjustment_reason": adjustment_reason,
-                }
-            ],
-        )
+            entry_value = adjustment.get("entry", base_strategy.get("entry"))
+            targets_value = adjustment.get("targets") or base_strategy.get("targets") or []
+            stop_value = adjustment.get("stop_loss", base_strategy.get("stop_loss"))
 
-        if not analysis:
-            raise RuntimeError("analyze_strategies gaf None terug")
+            entry_num = safe_numeric(entry_value)
+            stop_num = safe_numeric(stop_value)
 
-        if "comment" not in analysis or "recommendation" not in analysis:
-            raise RuntimeError("AI insight mist verplichte velden")
+            confidence = safe_confidence(
+                adjustment.get("confidence_score"),
+                fallback=50,
+            )
 
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO ai_category_insights (
-                    category,
-                    user_id,
-                    avg_score,
-                    trend,
-                    bias,
-                    risk,
-                    summary,
-                    top_signals,
-                    date
-                )
-                VALUES (
-                    'strategy',
-                    %s, %s,
-                    %s, %s, %s,
-                    %s,
-                    %s::jsonb,
-                    %s
-                )
-                ON CONFLICT (user_id, category, date)
-                DO UPDATE SET
-                    avg_score = EXCLUDED.avg_score,
-                    trend = EXCLUDED.trend,
-                    bias = EXCLUDED.bias,
-                    risk = EXCLUDED.risk,
-                    summary = EXCLUDED.summary,
-                    top_signals = EXCLUDED.top_signals,
-                    updated_at = NOW();
-                """,
-                (
-                    user_id,
-                    confidence,
-                    "Actief" if confidence >= 60 else "Neutraal",
-                    "Kopen" if confidence >= 60 else "Afwachten",
-                    "Gemiddeld",
-                    analysis["comment"],
-                    json.dumps(
-                        [analysis["recommendation"]],
-                        ensure_ascii=False,
+            adjustment_reason = adjustment.get(
+                "adjustment_reason",
+                "Daily strategy snapshot"
+            )
+
+            # --------------------------------------------------
+            # 🔥 Snapshot opslaan (BOT SOURCE OF TRUTH)
+            # --------------------------------------------------
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO active_strategy_snapshot (
+                        user_id,
+                        setup_id,
+                        strategy_id,
+                        snapshot_date,
+                        entry,
+                        targets,
+                        stop_loss,
+                        confidence_score,
+                        adjustment_reason,
+                        market_context,
+                        changes,
+                        created_at
+                    )
+                    VALUES (
+                        %s, %s, %s, %s,
+                        %s, %s, %s,
+                        %s, %s,
+                        %s::jsonb,
+                        %s::jsonb,
+                        NOW()
+                    )
+                    ON CONFLICT (user_id, setup_id, snapshot_date)
+                    DO UPDATE SET
+                        entry = EXCLUDED.entry,
+                        targets = EXCLUDED.targets,
+                        stop_loss = EXCLUDED.stop_loss,
+                        confidence_score = EXCLUDED.confidence_score,
+                        adjustment_reason = EXCLUDED.adjustment_reason,
+                        market_context = EXCLUDED.market_context,
+                        changes = EXCLUDED.changes;
+                    """,
+                    (
+                        user_id,
+                        setup_id,
+                        strategy_id,
+                        today,
+                        entry_num,
+                        ",".join(map(str, targets_value)),
+                        stop_num,
+                        confidence,
+                        adjustment_reason,
+                        json.dumps(market_context),
+                        json.dumps(adjustment.get("changes") or {}, ensure_ascii=False),
                     ),
-                    today,
-                ),
+                )
+
+            conn.commit()
+            logger.info(f"✅ Snapshot opgeslagen | bot_id={bot_id}")
+
+            # --------------------------------------------------
+            # 📊 Strategy AI Insight (UI-only)
+            # --------------------------------------------------
+            analysis = analyze_strategies(
+                user_id=user_id,
+                strategies=[
+                    {
+                        "strategy_id": strategy_id,
+                        "setup_id": setup_id,
+                        "entry": entry_value,
+                        "targets": targets_value,
+                        "stop_loss": stop_value,
+                        "confidence_score": confidence,
+                        "market_context": market_context,
+                        "adjustment_reason": adjustment_reason,
+                    }
+                ],
             )
 
-        conn.commit()
-        logger.info("✅ Strategy AI insight opgeslagen")
+            if not analysis:
+                logger.warning("⚠️ AI analyse gaf None terug")
+                continue
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO ai_category_insights (
+                        category,
+                        user_id,
+                        avg_score,
+                        trend,
+                        bias,
+                        risk,
+                        summary,
+                        top_signals,
+                        date
+                    )
+                    VALUES (
+                        'strategy',
+                        %s, %s,
+                        %s, %s, %s,
+                        %s,
+                        %s::jsonb,
+                        %s
+                    )
+                    ON CONFLICT (user_id, category, date)
+                    DO UPDATE SET
+                        avg_score = EXCLUDED.avg_score,
+                        trend = EXCLUDED.trend,
+                        bias = EXCLUDED.bias,
+                        risk = EXCLUDED.risk,
+                        summary = EXCLUDED.summary,
+                        top_signals = EXCLUDED.top_signals,
+                        updated_at = NOW();
+                    """,
+                    (
+                        user_id,
+                        confidence,
+                        "Actief" if confidence >= 60 else "Neutraal",
+                        "Kopen" if confidence >= 60 else "Afwachten",
+                        "Gemiddeld",
+                        analysis.get("comment", ""),
+                        json.dumps(
+                            [analysis.get("recommendation", "")],
+                            ensure_ascii=False,
+                        ),
+                        today,
+                    ),
+                )
+
+            conn.commit()
+            logger.info(f"✅ AI insight opgeslagen | bot_id={bot_id}")
 
     except Exception:
         logger.exception("❌ Daily strategy snapshot crash")
