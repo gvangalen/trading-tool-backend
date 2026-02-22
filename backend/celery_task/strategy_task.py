@@ -582,7 +582,7 @@ def run_daily_strategy_snapshot(user_id: int):
         setup = load_setup_from_db(setup_id, user_id)
 
         # ==================================================
-        # 2️⃣ Market context (scores van vandaag)
+        # 2️⃣ Market context
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -608,7 +608,7 @@ def run_daily_strategy_snapshot(user_id: int):
         }
 
         # ==================================================
-        # 3️⃣ Laatste bestaande strategy ophalen
+        # 3️⃣ Laatste strategy ophalen
         # ==================================================
         base_strategy = load_latest_strategy(setup_id, user_id)
         if not base_strategy:
@@ -618,7 +618,7 @@ def run_daily_strategy_snapshot(user_id: int):
         strategy_id = base_strategy["strategy_id"]
 
         # ==================================================
-        # 4️⃣ AI strategy adjustment (dagelijks snapshot)
+        # 4️⃣ AI adjustment
         # ==================================================
         adjustment = adjust_strategy_for_today(
             user_id=user_id,
@@ -628,11 +628,10 @@ def run_daily_strategy_snapshot(user_id: int):
         )
 
         if not adjustment:
-            logger.warning("⚠️ Geen AI adjustment ontvangen")
-            return
+            raise RuntimeError("AI adjustment gaf None terug")
 
         # ==================================================
-        # 5️⃣ Normalisatie & fallback
+        # 5️⃣ Normalisatie
         # ==================================================
         entry_value = adjustment.get("entry", base_strategy.get("entry"))
         targets_value = adjustment.get("targets") or base_strategy.get("targets") or []
@@ -651,7 +650,7 @@ def run_daily_strategy_snapshot(user_id: int):
         )
 
         # ==================================================
-        # 6️⃣ 🔥 SNAPSHOT OPSLAAN — BOT SOURCE OF TRUTH
+        # 6️⃣ Snapshot opslaan (BOT SOURCE OF TRUTH)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
@@ -704,90 +703,91 @@ def run_daily_strategy_snapshot(user_id: int):
             )
 
         conn.commit()
+        logger.info(f"✅ Snapshot opgeslagen | strategy_id={strategy_id}")
 
-        logger.info(
-            f"✅ Active strategy snapshot opgeslagen | setup_id={setup_id} | strategy_id={strategy_id} | {today}"
+        # ==================================================
+        # 7️⃣ Strategy AI Insight (NU ZONDER SILENT FAIL)
+        # ==================================================
+        analysis = analyze_strategies(
+            user_id=user_id,
+            strategies=[
+                {
+                    "strategy_id": strategy_id,
+                    "setup_id": setup_id,
+                    "entry": entry_value,
+                    "targets": targets_value,
+                    "stop_loss": stop_value,
+                    "confidence_score": confidence,
+                    "market_context": market_context,
+                    "adjustment_reason": adjustment_reason,
+                }
+            ],
         )
 
-        # ==================================================
-        # 7️⃣ STRATEGY AI INSIGHT (DASHBOARD / STRATEGY TAB)
-        # ❗ Mag NOOIT snapshot breken
-        # ==================================================
-        try:
-            analysis = analyze_strategies(
-                user_id=user_id,
-                strategies=[
-                    {
-                        "strategy_id": strategy_id,
-                        "setup_id": setup_id,
-                        "entry": entry_value,
-                        "targets": targets_value,
-                        "stop_loss": stop_value,
-                        "confidence_score": confidence,
-                        "market_context": market_context,
-                        "adjustment_reason": adjustment_reason,
-                    }
-                ],
+        if not analysis:
+            raise RuntimeError("analyze_strategies gaf None terug")
+
+        if "comment" not in analysis or "recommendation" not in analysis:
+            raise RuntimeError("AI insight mist verplichte velden")
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ai_category_insights (
+                    category,
+                    user_id,
+                    avg_score,
+                    trend,
+                    bias,
+                    risk,
+                    summary,
+                    top_signals,
+                    date
+                )
+                VALUES (
+                    'strategy',
+                    %s, %s,
+                    %s, %s, %s,
+                    %s,
+                    %s::jsonb,
+                    %s
+                )
+                ON CONFLICT (user_id, category, date)
+                DO UPDATE SET
+                    avg_score = EXCLUDED.avg_score,
+                    trend = EXCLUDED.trend,
+                    bias = EXCLUDED.bias,
+                    risk = EXCLUDED.risk,
+                    summary = EXCLUDED.summary,
+                    top_signals = EXCLUDED.top_signals,
+                    updated_at = NOW();
+                """,
+                (
+                    user_id,
+                    confidence,
+                    "Actief" if confidence >= 60 else "Neutraal",
+                    "Kopen" if confidence >= 60 else "Afwachten",
+                    "Gemiddeld",
+                    analysis["comment"],
+                    json.dumps(
+                        [analysis["recommendation"]],
+                        ensure_ascii=False,
+                    ),
+                    today,
+                ),
             )
 
-            if analysis:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO ai_category_insights (
-                            category,
-                            user_id,
-                            avg_score,
-                            trend,
-                            bias,
-                            risk,
-                            summary,
-                            top_signals,
-                            date
-                        )
-                        VALUES (
-                            'strategy',
-                            %s, %s,
-                            %s, %s, %s,
-                            %s,
-                            %s::jsonb,
-                            %s
-                        )
-                        ON CONFLICT (user_id, category, date)
-                        DO UPDATE SET
-                            avg_score = EXCLUDED.avg_score,
-                            trend = EXCLUDED.trend,
-                            bias = EXCLUDED.bias,
-                            risk = EXCLUDED.risk,
-                            summary = EXCLUDED.summary,
-                            top_signals = EXCLUDED.top_signals,
-                            created_at = NOW();
-                        """,
-                        (
-                            user_id,
-                            confidence,
-                            "Actief" if confidence >= 60 else "Neutraal",
-                            "Kopen" if confidence >= 60 else "Afwachten",
-                            "Gemiddeld",
-                            analysis.get("comment", ""),
-                            json.dumps(
-                                [analysis.get("recommendation", "")],
-                                ensure_ascii=False,
-                            ),
-                            today,
-                        ),
-                    )
-                conn.commit()
-
-        except Exception:
-            logger.warning("⚠️ Strategy AI insight mislukt (snapshot blijft geldig)")
+        conn.commit()
+        logger.info("✅ Strategy AI insight opgeslagen")
 
     except Exception:
-        logger.exception("❌ Daily strategy snapshot fout")
+        logger.exception("❌ Daily strategy snapshot crash")
         try:
             conn.rollback()
         except Exception:
             pass
+        raise
+
     finally:
         conn.close()
 
