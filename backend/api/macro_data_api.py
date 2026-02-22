@@ -61,7 +61,7 @@ async def add_macro_indicator(
 
     try:
         # --------------------------------------------------
-        # ❌ DUPLICATE CHECK (CRUCIAAL)
+        # ❌ DUPLICATE CHECK
         # --------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
@@ -134,7 +134,7 @@ async def add_macro_indicator(
                 value = float(result)
 
         # --------------------------------------------------
-        # Scoring (✅ via centrale scoring_engine)
+        # 🧮 USER-AWARE SCORING FIX
         # --------------------------------------------------
         from backend.utils.scoring_utils import normalize_indicator_name
         from backend.utils.scoring_engine import score_indicator
@@ -146,6 +146,7 @@ async def add_macro_indicator(
             category="macro",
             indicator=normalized,
             value=value,
+            user_id=user_id,  # ✅ CRUCIALE FIX
         )
 
         score = scored.get("score", 10)
@@ -534,24 +535,52 @@ async def get_all_macro_indicators():
 # ✅ GEEN onboarding hier
 # =====================================
 @router.get("/macro_indicator_rules/{indicator_name}")
-async def get_rules_for_macro_indicator(indicator_name: str):
+async def get_rules_for_macro_indicator(
+    indicator_name: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Haalt scoreregels op voor macro indicator.
+    Eerst user-specific rules,
+    anders fallback naar template rules (user_id IS NULL).
+    """
+    user_id = current_user["id"]
+
     conn = get_db_connection()
     if not conn:
         raise HTTPException(500, "❌ Geen databaseverbinding.")
 
     try:
         with conn.cursor() as cur:
+
+            # 1️⃣ Probeer user rules
             cur.execute(
                 """
                 SELECT id, indicator, range_min, range_max, score, trend, interpretation, action
                 FROM macro_indicator_rules
                 WHERE indicator = %s
+                  AND user_id = %s
                 ORDER BY range_min ASC;
                 """,
-                (indicator_name,),
+                (indicator_name, user_id),
             )
 
             rows = cur.fetchall()
+
+            # 2️⃣ Fallback naar template
+            if not rows:
+                cur.execute(
+                    """
+                    SELECT id, indicator, range_min, range_max, score, trend, interpretation, action
+                    FROM macro_indicator_rules
+                    WHERE indicator = %s
+                      AND user_id IS NULL
+                    ORDER BY range_min ASC;
+                    """,
+                    (indicator_name,),
+                )
+
+                rows = cur.fetchall()
 
         return [
             {
@@ -569,7 +598,6 @@ async def get_rules_for_macro_indicator(indicator_name: str):
 
     finally:
         conn.close()
-
 
 # =====================================
 # ❌ Verwijderen macro indicator
