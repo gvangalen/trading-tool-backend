@@ -179,18 +179,32 @@ def fetch_rules_for_indicator(
     return out
 
 
-def pick_rule_for_value(rules: List[RuleRow], value: Optional[float]) -> Optional[RuleRow]:
+def pick_rule_for_value(
+    rules: List[RuleRow],
+    value: Optional[float]
+) -> Optional[RuleRow]:
     """
-    Matcht op range_min <= value <= range_max
-    Als value None -> geen rule.
+    Matcht op:
+      range_min <= value < range_max
+    Laatste bucket: inclusive max.
     """
-    if value is None:
-        return None
-    for rule in rules:
-        if rule.range_min <= value <= rule.range_max:
-            return rule
-    return None
 
+    if value is None or not rules:
+        return None
+
+    last_index = len(rules) - 1
+
+    for idx, rule in enumerate(rules):
+
+        # Laatste bucket → max inclusief
+        if idx == last_index:
+            if rule.range_min <= value <= rule.range_max:
+                return rule
+        else:
+            if rule.range_min <= value < rule.range_max:
+                return rule
+
+    return None
 
 # ============================================================
 # Scoring (single indicator)
