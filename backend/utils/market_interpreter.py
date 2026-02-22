@@ -23,6 +23,7 @@ def normalize_market_value(indicator: str, value: float) -> float:
     """
     Zet raw market value om naar genormaliseerde 0–100 schaal.
     Alles wordt uniform en UX-proof.
+    (Magnitude-based design is bewust gekozen.)
     """
 
     try:
@@ -56,7 +57,7 @@ def normalize_market_value(indicator: str, value: float) -> float:
             return min(100, (abs_dev / cap) * 100)
 
         # -------------------------------------------------
-        # Price trend / volume strength (als al 0–100)
+        # Price trend / volume strength (al 0–100)
         # -------------------------------------------------
         if indicator in ["price_trend", "volume_strength"]:
             return max(0, min(100, value))
@@ -72,20 +73,21 @@ def normalize_market_value(indicator: str, value: float) -> float:
 
 
 # =========================================================
-# 🔹 Market Interpreter
+# 🔹 Market Interpreter (USER-AWARE)
 # =========================================================
 def interpret_market_indicator(indicator: str, value: float, user_id: int):
     """
     Interpreteert market indicator via centrale DB scoreregels.
     Flow:
     raw_value → normalized_value (0–100) → DB rules → score
+
+    ✅ User-based rules supported
     """
 
     try:
         if value is None:
             return _fallback("Geen waarde beschikbaar")
 
-        # 🔹 veilig normaliseren
         indicator = (indicator or "").strip().lower()
 
         mapped = MARKET_INDICATOR_MAP.get(indicator, indicator)
@@ -95,18 +97,19 @@ def interpret_market_indicator(indicator: str, value: float, user_id: int):
             f"Market interpret → {indicator} → {normalized_name} raw={value}"
         )
 
-        # 🔥 NIEUW: eerst normaliseren naar 0–100
+        # 🔹 Stap 1: normaliseren naar 0–100
         normalized_value = normalize_market_value(normalized_name, value)
 
         logger.debug(
             f"Normalized value (0–100): {normalized_value}"
         )
 
-        # 🔹 daarna rule lookup
+        # 🔹 Stap 2: user-aware rule lookup
         rule = get_score_rule_from_db(
             "market",
             normalized_name,
             normalized_value,
+            user_id=user_id,  # ✅ FIX: user_id meegeven
         )
 
         if not rule:
@@ -129,7 +132,7 @@ def interpret_market_indicator(indicator: str, value: float, user_id: int):
 
 
 # =========================================================
-# fallback helper
+# 🔹 Fallback helper
 # =========================================================
 def _fallback(reason: str):
     return {
