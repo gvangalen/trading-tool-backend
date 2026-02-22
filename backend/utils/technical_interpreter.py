@@ -33,12 +33,12 @@ def calculate_rsi(closes, period=14):
 
 
 # =========================================================
-# 🌐 Technische indicator waarde ophalen (ASYNC)
+# 🌐 Technische indicator waarde ophalen (RAW ONLY)
 # =========================================================
 async def fetch_technical_value(name: str, source: str = None, link: str = None):
     """
     Async fetch voor technische indicatoren.
-    Crasht nooit.
+    Geeft ALLEEN raw values terug.
     """
 
     try:
@@ -66,18 +66,18 @@ async def fetch_technical_value(name: str, source: str = None, link: str = None)
             if not closes:
                 return None
 
-            # RSI
+            # RSI (0–100 al correct)
             if "rsi" in lname:
                 value = calculate_rsi(closes)
                 return {"value": value}
 
-            # MA200 ratio
+            # MA200 ratio (bijv 1.08 of 0.95)
             if "ma200" in lname or "ma_200" in lname:
                 if len(closes) >= 200:
                     ma = sum(closes[-200:]) / 200
                     return {"value": closes[-1] / ma}
 
-            # Volume strength
+            # Volume strength (absolute volume)
             if "volume" in lname:
                 return {"value": sum(volumes[-10:])}
 
@@ -108,27 +108,88 @@ async def fetch_technical_value(name: str, source: str = None, link: str = None)
 
 
 # =========================================================
-# 🧠 Interpretatie via DB scoreregels
+# 🔹 Technische normalisatie naar 0–100
 # =========================================================
-def interpret_technical_indicator_db(indicator: str, value: float, user_id: int):
+def normalize_technical_value(indicator: str, value: float) -> float:
     """
-    Interpreteert technische indicator via database scoreregels.
+    Zet raw technische waarde om naar genormaliseerde 0–100 schaal.
     """
 
     try:
-        normalized = normalize_indicator_name(indicator)
+        if value is None:
+            return 0
 
-        result = get_score_rule_from_db("technical", normalized, value)
+        value = float(value)
+        indicator = indicator.lower()
+
+        # RSI is al 0–100
+        if "rsi" in indicator:
+            return max(0, min(100, value))
+
+        # MA200 ratio (1.0 = neutraal)
+        if "ma200" in indicator or "ma_200" in indicator:
+            deviation = abs(value - 1)
+            cap = 0.2  # 20% boven MA = extreem
+            return min(100, (deviation / cap) * 100)
+
+        # Volume strength (absolute → schaal)
+        if "volume" in indicator:
+            cap = 1_000_000_000  # schaal afhankelijk van je timeframe
+            return min(100, (value / cap) * 100)
+
+        # Price (optioneel deviation-based)
+        if "close" in indicator or "price" in indicator:
+            return max(0, min(100, value))
+
+        # Fallback
+        return max(0, min(100, value))
+
+    except Exception:
+        logger.error("Technische normalisatie fout", exc_info=True)
+        return 0
+
+
+# =========================================================
+# 🧠 Interpretatie via DB scoreregels (met normalisatie)
+# =========================================================
+def interpret_technical_indicator_db(indicator: str, value: float, user_id: int):
+    """
+    Flow:
+    raw_value → normalized_value (0–100) → DB rules → score
+    """
+
+    try:
+        normalized_name = normalize_indicator_name(indicator)
+
+        # 🔥 eerst normaliseren
+        normalized_value = normalize_technical_value(
+            normalized_name,
+            value,
+        )
+
+        result = get_score_rule_from_db(
+            "technical",
+            normalized_name,
+            normalized_value,
+        )
+
+        if not result:
+            return {
+                "score": 10,
+                "trend": "neutral",
+                "interpretation": "Geen scoreregel match",
+                "action": "Geen actie",
+            }
 
         return {
-            "score": result.get("score", 10),
+            "score": max(0, min(100, result.get("score", 10))),
             "trend": result.get("trend") or "neutral",
             "interpretation": result.get("interpretation")
                 or "Geen interpretatie beschikbaar",
             "action": result.get("action") or "Geen actie",
         }
 
-    except Exception as e:
+    except Exception:
         logger.error("❌ interpret_technical_indicator_db fout", exc_info=True)
 
         return {
