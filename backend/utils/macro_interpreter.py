@@ -110,7 +110,7 @@ def normalize_macro_value(indicator: str, value: float) -> float:
         value = float(value)
 
         # Fear & Greed is al 0–100
-        if indicator in ("fear_greed", "fear_and_greed"):
+        if indicator in ("fear_greed", "fear_and_greed", "fear_greed_index"):
             return max(0, min(100, value))
 
         # BTC dominance 0–100%
@@ -133,9 +133,14 @@ def normalize_macro_value(indicator: str, value: float) -> float:
 
 
 # ============================================================
-# 🧠 Macro interpretatie via DB rules (met normalisatie)
+# 🧠 Macro interpretatie via DB rules (USER-AWARE)
 # ============================================================
 def interpret_macro_indicator(name: str, value: float, user_id: int):
+    """
+    Flow:
+    raw_value → normalized_value → DB rules (user → template fallback)
+    """
+
     try:
         normalized_name = normalize_indicator_name(name)
 
@@ -146,6 +151,7 @@ def interpret_macro_indicator(name: str, value: float, user_id: int):
             "macro",
             normalized_name,
             normalized_value,
+            user_id=user_id,   # ✅ FIX: user-id meegeven
         )
 
         if not rule:
@@ -158,7 +164,7 @@ def interpret_macro_indicator(name: str, value: float, user_id: int):
 
         return {
             "score": max(0, min(100, rule.get("score", 10))),
-            "trend": rule.get("trend"),
+            "trend": rule.get("trend") or "neutral",
             "interpretation": rule.get("interpretation"),
             "action": rule.get("action"),
         }
