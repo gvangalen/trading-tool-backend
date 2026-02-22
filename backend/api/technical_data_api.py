@@ -6,10 +6,10 @@ from dotenv import load_dotenv
 
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
-from backend.utils.scoring_utils import (
-    get_score_rule_from_db,
-    normalize_indicator_name
-)
+from backend.utils.scoring_utils import normalize_indicator_name
+
+# ✅ Centrale scoring engine (1 bron van waarheid)
+from backend.utils.scoring_engine import score_indicator
 
 # ⭐ Onboarding — alleen gebruiken in POST
 from backend.api.onboarding_api import mark_step_completed
@@ -102,7 +102,7 @@ async def add_technical_indicator(
     if not name_raw:
         raise HTTPException(400, "❌ 'indicator' is verplicht.")
 
-    # 🔤 Normaliseren (rsi → RSI)
+    # 🔤 Normaliseren (consistent met rules in DB)
     name = normalize_indicator_name(name_raw)
 
     conn = get_db_connection()
@@ -111,7 +111,7 @@ async def add_technical_indicator(
 
     try:
         # ======================================================
-        # 0️⃣ DUPLICATE CHECK (⭐ NIEUW)
+        # 0️⃣ DUPLICATE CHECK
         # ======================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -169,18 +169,21 @@ async def add_technical_indicator(
         value = float(result["value"] if isinstance(result, dict) else result)
 
         # ======================================================
-        # 3️⃣ Score bepalen via DB-rules
+        # 3️⃣ Score bepalen via centrale scoring_engine (✅)
         # ======================================================
-        score_obj = get_score_rule_from_db("technical", name, value)
-        if not score_obj:
-            raise HTTPException(
-                status_code=500,
-                detail=f"❌ Geen scoreregels gevonden voor '{name}'."
-            )
+        normalized = normalize_indicator_name(name)
 
-        score = score_obj["score"]
-        advies = score_obj["trend"]
-        uitleg = score_obj["interpretation"]
+        scored = score_indicator(
+            conn=conn,
+            category="technical",
+            indicator=normalized,
+            value=value,
+        )
+
+        score = scored.get("score", 10)
+        # jouw UI gebruikt 'advies' als trendlabel
+        advies = scored.get("trend") or "neutral"
+        uitleg = scored.get("interpretation") or "Geen interpretatie beschikbaar"
 
         # ======================================================
         # 4️⃣ Opslaan in DB
@@ -220,7 +223,6 @@ async def add_technical_indicator(
         }
 
     except HTTPException:
-        # 🔁 bewust doorgeven (409, 404, etc.)
         raise
 
     except Exception as e:
@@ -232,6 +234,7 @@ async def add_technical_indicator(
 
     finally:
         conn.close()
+
 
 # ===============================================================
 # 📅 DAY — fallback + user filtering (GEEN onboarding)
@@ -334,7 +337,6 @@ async def get_technical_week_data(current_user: dict = Depends(get_current_user)
         conn.close()
 
 
-
 @router.get("/technical_data/month")
 async def get_technical_month_data(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
@@ -374,7 +376,6 @@ async def get_technical_month_data(current_user: dict = Depends(get_current_user
 
     finally:
         conn.close()
-
 
 
 @router.get("/technical_data/quarter")
