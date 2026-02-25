@@ -1601,3 +1601,69 @@ async def get_trade_plan(
         raise HTTPException(status_code=500, detail="Trade plan ophalen mislukt")
     finally:
         conn.close()
+
+
+# =====================================
+# 📈 PORTFOLIO BALANCE HISTORY (Chart)
+# - Bron: portfolio_balance_snapshots
+# - Bucket based (1h default)
+# - Wordt gebruikt door BotPage chart
+# =====================================
+@router.get("/portfolio/balance-history")
+async def get_portfolio_balance_history(
+    bucket: str = "1h",
+    limit: int = 500,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Return globale portfolio equity history
+    voor chart rendering.
+
+    Bucket voorbeelden:
+      - 1h
+      - 1d
+      - 1w
+    """
+
+    user_id = current_user["id"]
+
+    if limit < 1:
+        limit = 1
+    if limit > 2000:
+        limit = 2000
+
+    conn, cur = get_db_cursor()
+    try:
+        if not _table_exists(conn, "portfolio_balance_snapshots"):
+            return []
+
+        cur.execute(
+            """
+            SELECT ts, equity_eur
+            FROM portfolio_balance_snapshots
+            WHERE user_id = %s
+              AND bucket = %s
+            ORDER BY ts ASC
+            LIMIT %s
+            """,
+            (user_id, bucket, limit),
+        )
+
+        rows = cur.fetchall()
+
+        return [
+            {
+                "ts": r[0],
+                "equity": float(r[1] or 0),
+            }
+            for r in rows
+        ]
+
+    except Exception:
+        logger.error("❌ portfolio balance history error", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Portfolio history ophalen mislukt",
+        )
+    finally:
+        conn.close()
