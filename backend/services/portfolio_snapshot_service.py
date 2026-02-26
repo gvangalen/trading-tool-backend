@@ -1,11 +1,8 @@
-# backend/services/portfolio_snapshot_service.py
-
 import logging
 from datetime import datetime
 from typing import Literal, List
 
 from backend.utils.db import get_db_connection
-from backend.services.price_service import get_latest_btc_price
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -31,6 +28,27 @@ def floor_timestamp(dt: datetime, bucket: BucketType) -> datetime:
 
 
 # =====================================================
+# 💰 Haal laatste BTC prijs uit market_data
+# =====================================================
+
+def _get_latest_btc_price(cur) -> float:
+    cur.execute("""
+        SELECT price
+        FROM market_data
+        WHERE symbol = 'BTC'
+          AND price IS NOT NULL
+        ORDER BY timestamp DESC
+        LIMIT 1
+    """)
+    row = cur.fetchone()
+
+    if not row:
+        raise RuntimeError("Geen BTC prijs gevonden in market_data")
+
+    return float(row[0])
+
+
+# =====================================================
 # 🚀 MASTER SNAPSHOT SERVICE
 # =====================================================
 
@@ -49,14 +67,17 @@ def snapshot_all_for_user(
 
     ts = floor_timestamp(datetime.utcnow(), bucket)
 
-    try:
-        price = float(get_latest_btc_price())
-    except Exception:
-        logger.exception("❌ Kon BTC prijs niet ophalen voor snapshot")
-        return
-
     with get_db_connection() as conn:
         with conn.cursor() as cur:
+
+            # =====================================================
+            # 📈 BTC PRIJS
+            # =====================================================
+            try:
+                price = _get_latest_btc_price(cur)
+            except Exception:
+                logger.exception("❌ Kon BTC prijs niet ophalen voor snapshot")
+                return
 
             # =====================================================
             # 📊 GLOBAL PORTFOLIO SNAPSHOT
