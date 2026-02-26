@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from backend.utils.db import get_db_connection
 from backend.utils.auth_utils import get_current_user
 from backend.ai_agents.trading_bot_agent import execute_manual_decision
+from backend.services.portfolio_snapshot_service import snapshot_all_for_user
 
 # (optioneel) onboarding helper — alleen gebruiken als jij dat wil
 # from backend.api.onboarding_api import mark_step_completed
@@ -790,6 +791,15 @@ async def mark_bot_executed(
 
         conn.commit()
 
+        # 🔥 DIRECT SNAPSHOT NA EXECUTION
+        try:
+            snapshot_all_for_user(user_id, bucket="1h")
+            snapshot_all_for_user(user_id, bucket="1d")
+        except Exception:
+            logger.exception(
+                f"⚠️ Snapshot mislukt na manual execute | user_id={user_id}"
+            )
+
         return {
             "ok": True,
             "bot_id": bot_id,
@@ -832,7 +842,7 @@ async def create_manual_order(
 
     bot_id = body.get("bot_id")
     symbol = body.get("symbol", "BTC")
-    side = body.get("side")              # buy / sell
+    side = body.get("side")
     quantity = body.get("quantity")
     price = body.get("price")
 
@@ -849,9 +859,7 @@ async def create_manual_order(
     try:
         with conn.cursor() as cur:
 
-            # =====================================
-            # 1️⃣ ORDER OPSLAAN
-            # =====================================
+            # 1️⃣ ORDER
             cur.execute(
                 """
                 INSERT INTO bot_orders (
@@ -875,9 +883,7 @@ async def create_manual_order(
             )
             order_id = cur.fetchone()[0]
 
-            # =====================================
-            # 2️⃣ EXECUTION RECORD
-            # =====================================
+            # 2️⃣ EXECUTION
             cur.execute(
                 """
                 INSERT INTO bot_executions (
@@ -893,9 +899,7 @@ async def create_manual_order(
                 (user_id, order_id, quantity, price),
             )
 
-            # =====================================
-            # 3️⃣ LEDGER UPDATE
-            # =====================================
+            # 3️⃣ LEDGER
             quantity = float(quantity)
             price = float(price)
 
@@ -923,6 +927,15 @@ async def create_manual_order(
             )
 
         conn.commit()
+
+        # 🔥 DIRECT SNAPSHOT NA TRADE
+        try:
+            snapshot_all_for_user(user_id, bucket="1h")
+            snapshot_all_for_user(user_id, bucket="1d")
+        except Exception:
+            logger.exception(
+                f"⚠️ Snapshot mislukt na manual order | user_id={user_id}"
+            )
 
         return {
             "ok": True,
