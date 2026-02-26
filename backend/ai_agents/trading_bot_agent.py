@@ -1198,6 +1198,26 @@ def run_trading_bot_agent(
         conn.close()
 
 # =====================================================
+# 🚀 Helper execute decision functie
+# =====================================================
+def _ledger_deltas(side: str, qty: float, price: float):
+    """
+    Correct boekhouden:
+    - buy  -> cash -, qty +
+    - sell -> cash +, qty -
+    """
+    side = (side or "").lower().strip()
+    notional = round(float(qty) * float(price), 2)
+
+    if side == "buy":
+        return -notional, float(qty), notional
+    if side == "sell":
+        return +notional, -float(qty), notional
+
+    raise RuntimeError(f"Invalid side for execution: {side}")
+
+
+# =====================================================
 # 🚀 Bot execute decision functie
 # =====================================================
 def _auto_execute_decision(
@@ -1208,14 +1228,19 @@ def _auto_execute_decision(
     decision_id: int,
     order: dict,
 ):
-    symbol = order.get("symbol", DEFAULT_SYMBOL)
+    symbol = (order.get("symbol") or DEFAULT_SYMBOL).upper()
+    side = (order.get("side") or "buy").lower().strip()
+
     qty = float(order.get("estimated_qty") or 0.0)
     price = float(order.get("estimated_price") or 0.0)
 
     if qty <= 0 or price <= 0:
         raise RuntimeError("Invalid execution parameters")
 
+    cash_delta, qty_delta, notional = _ledger_deltas(side, qty, price)
+
     with conn.cursor() as cur:
+        # 1) Decision -> executed
         cur.execute(
             """
             UPDATE bot_decisions
@@ -1228,38 +1253,49 @@ def _auto_execute_decision(
             (decision_id, user_id, bot_id),
         )
 
+        # 2) Order -> filled (BELANGRIJK: filter ook op user/bot/decision)
         cur.execute(
             """
             UPDATE bot_orders
             SET status='filled',
                 executed_price_eur=%s,
                 executed_qty=%s,
+                quote_amount_eur=COALESCE(quote_amount_eur, %s),
                 updated_at=NOW()
-            WHERE decision_id=%s
+            WHERE user_id=%s
+              AND bot_id=%s
+              AND decision_id=%s
             RETURNING id
             """,
-            (price, qty, decision_id),
+            (price, qty, notional, user_id, bot_id, decision_id),
         )
-        bot_order_id = cur.fetchone()[0]
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("No bot_order found to execute")
 
-        # ✅ ledger entry met prijsinfo (future analytics)
+        bot_order_id = int(row[0])
+
+        # 3) ✅ Ledger entry (NU CORRECT)
         record_bot_ledger_entry(
             conn=conn,
             user_id=user_id,
             bot_id=bot_id,
             entry_type="execute",
-            cash_delta_eur=0.0,
-            qty_delta=qty,
+            cash_delta_eur=cash_delta,
+            qty_delta=qty_delta,
             symbol=symbol,
             decision_id=decision_id,
             order_id=bot_order_id,
             note="Auto execution",
             meta={
+                "side": side,
                 "price": price,
-                "notional_eur": round(qty * price, 2),
+                "qty": qty,
+                "notional_eur": notional,
             },
         )
 
+        # 4) Execution -> filled
         cur.execute(
             """
             UPDATE bot_executions
@@ -1267,12 +1303,13 @@ def _auto_execute_decision(
                 filled_qty=%s,
                 avg_fill_price=%s,
                 updated_at=NOW()
-            WHERE bot_order_id=%s
+            WHERE user_id=%s
+              AND bot_order_id=%s
             """,
-            (qty, price, bot_order_id),
+            (qty, price, user_id, bot_order_id),
         )
 
-    logger.info(f"⚡ Auto executed | bot={bot_id} | qty={qty} | price={price}")
+    logger.info(f"⚡ Auto executed | bot={bot_id} | side={side} | qty={qty} | price={price}")
 
 
 # =====================================================
@@ -1285,13 +1322,18 @@ def execute_manual_decision(
     bot_id: int,
     decision_id: int,
 ):
+    # 1) Pak executable order (incl side)
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT o.id, o.symbol, o.estimated_qty, o.estimated_price_eur
+            SELECT o.id, o.symbol, o.side, o.estimated_qty, o.estimated_price_eur
             FROM bot_orders o
             JOIN bot_decisions d ON d.id = o.decision_id
-            WHERE d.id=%s AND d.user_id=%s AND d.bot_id=%s AND d.status='planned'
+            WHERE d.id=%s
+              AND d.user_id=%s
+              AND d.bot_id=%s
+              AND d.status='planned'
+              AND o.status IN ('ready','pending')
             """,
             (decision_id, user_id, bot_id),
         )
@@ -1300,11 +1342,19 @@ def execute_manual_decision(
     if not row:
         raise RuntimeError("No executable order")
 
-    bot_order_id, symbol, qty, price = row
-    qty = float(qty)
-    price = float(price)
+    bot_order_id, symbol, side, qty, price = row
+    symbol = (symbol or DEFAULT_SYMBOL).upper()
+    side = (side or "buy").lower().strip()
+    qty = float(qty or 0.0)
+    price = float(price or 0.0)
+
+    if qty <= 0 or price <= 0:
+        raise RuntimeError("Invalid order execution values")
+
+    cash_delta, qty_delta, notional = _ledger_deltas(side, qty, price)
 
     with conn.cursor() as cur:
+        # 2) Decision -> executed
         cur.execute(
             """
             UPDATE bot_decisions
@@ -1312,36 +1362,46 @@ def execute_manual_decision(
                 executed_by='manual',
                 executed_at=NOW(),
                 updated_at=NOW()
-            WHERE id=%s
+            WHERE id=%s AND user_id=%s AND bot_id=%s
             """,
-            (decision_id,),
+            (decision_id, user_id, bot_id),
         )
 
+        # 3) Order -> filled
         cur.execute(
             """
             UPDATE bot_orders
             SET status='filled',
                 executed_price_eur=%s,
                 executed_qty=%s,
+                quote_amount_eur=COALESCE(quote_amount_eur, %s),
                 updated_at=NOW()
-            WHERE id=%s
+            WHERE id=%s AND user_id=%s AND bot_id=%s
             """,
-            (price, qty, bot_order_id),
+            (price, qty, notional, bot_order_id, user_id, bot_id),
         )
 
+        # 4) ✅ Ledger entry (NU CORRECT)
         record_bot_ledger_entry(
             conn=conn,
             user_id=user_id,
             bot_id=bot_id,
             entry_type="execute",
-            cash_delta_eur=0.0,
-            qty_delta=qty,
+            cash_delta_eur=cash_delta,
+            qty_delta=qty_delta,
             symbol=symbol,
             decision_id=decision_id,
             order_id=bot_order_id,
             note="Manual execution",
+            meta={
+                "side": side,
+                "price": price,
+                "qty": qty,
+                "notional_eur": notional,
+            },
         )
 
+        # 5) Execution -> filled
         cur.execute(
             """
             UPDATE bot_executions
@@ -1349,7 +1409,8 @@ def execute_manual_decision(
                 filled_qty=%s,
                 avg_fill_price=%s,
                 updated_at=NOW()
-            WHERE bot_order_id=%s
+            WHERE user_id=%s
+              AND bot_order_id=%s
             """,
-            (qty, price, bot_order_id),
+            (qty, price, user_id, bot_order_id),
         )
