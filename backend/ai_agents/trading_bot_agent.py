@@ -967,6 +967,8 @@ def _persist_decision_and_order(
         )
 
     return decision_id
+
+
 # =====================================================
 # 🚀 PUBLIC ENTRYPOINT (KEEP NAME!)
 # =====================================================
@@ -1017,7 +1019,7 @@ def run_trading_bot_agent(
             warnings: List[str] = []
 
             # =================================================
-            # NO SNAPSHOT → observe mode
+            # SNAPSHOT BESTAAT NIET → OBSERVE
             # =================================================
             if snapshot is None:
 
@@ -1029,21 +1031,16 @@ def run_trading_bot_agent(
                     "amount_eur": 0.0,
                     "setup_match": setup_match,
                     "reasons": ["no_active_strategy_snapshot"],
-
                     "market_health": market_health,
                     "market_pressure": 50,
                     "transition_risk": 50,
                     "exposure_multiplier": 1.0,
-
                     "max_risk_per_trade": max_risk_per_trade,
                     "max_daily_allocation": max_daily_allocation,
                     "warnings": warnings,
                     "regime": None,
                     "risk_state": None,
-
                     "trade_plan": None,
-
-                    # 🆕 WATCH MODE DEFAULTS
                     "watch_levels": None,
                     "monitoring": False,
                     "alerts_active": False,
@@ -1079,55 +1076,29 @@ def run_trading_bot_agent(
 
                 amount = float(brain.get("amount_eur") or 0.0)
 
-                engine_conf = brain.get("confidence")
-                if isinstance(engine_conf, (int, float)):
+                confidence_label = "low"
+                if isinstance(brain.get("confidence"), (int, float)):
+                    c = float(brain.get("confidence"))
                     confidence_label = (
-                        "high" if engine_conf >= 0.7 else
-                        "medium" if engine_conf >= 0.4 else
+                        "high" if c >= 0.7 else
+                        "medium" if c >= 0.4 else
                         "low"
                     )
-                else:
-                    confidence_label = "low"
 
-                engine_reason = brain.get("reason") or "engine_decision"
-                engine_regime = brain.get("regime")
-                engine_risk_state = brain.get("risk_state")
-
-                engine_pressure = float(brain.get("market_pressure") or 50)
-                engine_transition = float(brain.get("transition_risk") or 50)
-
-                exposure_multiplier = float(
-                    brain.get("exposure_multiplier") or 1.0
-                )
-
-                # 🆕 WATCH MODE DATA
-                watch_levels = brain.get("watch_levels")
-                monitoring = brain.get("monitoring", False)
-                alerts_active = brain.get("alerts_active", False)
-
-                # =================================================
-                # BUILD TRADE PLAN (execution plan)
-                # =================================================
                 trade_plan = None
-                try:
-                    entry = snapshot.get("entry")
-                    stop = snapshot.get("stop_loss")
-                    targets = snapshot.get("targets") or []
+                entry = snapshot.get("entry")
+                stop = snapshot.get("stop_loss")
+                targets = snapshot.get("targets") or []
 
-                    if entry is not None and stop is not None:
-                        trade_plan = {
-                            "symbol": bot["symbol"],
-                            "side": engine_action,
-                            "entry_plan": [{"type": "limit", "price": entry}],
-                            "stop_loss": {"price": stop},
-                            "targets": [{"label": f"TP{i+1}", "price": t} for i, t in enumerate(targets)],
-                            "risk": {
-                                "rr": brain.get("rr_ratio"),
-                                "regime": brain.get("regime"),
-                            },
-                        }
-                except Exception:
-                    trade_plan = None
+                if entry and stop:
+                    trade_plan = {
+                        "symbol": bot["symbol"],
+                        "side": engine_action,
+                        "entry_plan": [{"type": "limit", "price": entry}],
+                        "stop_loss": {"price": stop},
+                        "targets": [{"label": f"TP{i+1}", "price": t} for i, t in enumerate(targets)],
+                        "risk": {"rr": brain.get("rr_ratio")},
+                    }
 
                 decision = {
                     "symbol": bot["symbol"],
@@ -1136,30 +1107,24 @@ def run_trading_bot_agent(
                     "score": _clamp_score(scores.get("market", 10)),
                     "amount_eur": round(amount, 2),
                     "setup_match": setup_match,
-
-                    "reasons": [engine_reason],
-                    "regime": engine_regime,
-                    "risk_state": engine_risk_state,
-
+                    "reasons": [brain.get("reason") or "engine_decision"],
+                    "regime": brain.get("regime"),
+                    "risk_state": brain.get("risk_state"),
                     "market_health": market_health,
-                    "market_pressure": engine_pressure,
-                    "transition_risk": engine_transition,
-                    "exposure_multiplier": exposure_multiplier,
-
+                    "market_pressure": float(brain.get("market_pressure") or 50),
+                    "transition_risk": float(brain.get("transition_risk") or 50),
+                    "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
                     "max_risk_per_trade": max_risk_per_trade,
                     "max_daily_allocation": max_daily_allocation,
                     "warnings": warnings,
-
                     "trade_plan": trade_plan,
-
-                    # 🆕 WATCH MODE
-                    "watch_levels": watch_levels,
-                    "monitoring": monitoring,
-                    "alerts_active": alerts_active,
+                    "watch_levels": brain.get("watch_levels"),
+                    "monitoring": brain.get("monitoring", False),
+                    "alerts_active": brain.get("alerts_active", False),
                 }
 
             # =================================================
-            # Persist & order logic blijft ongewijzigd
+            # Persist decision
             # =================================================
             decision_id = _persist_decision_and_order(
                 conn=conn,
@@ -1171,6 +1136,46 @@ def run_trading_bot_agent(
                 decision=decision,
                 scores=scores,
             )
+
+            # =================================================
+            # 🛒 ORDER FLOW (🔥 DIT ONTBRAK BIJ JOU)
+            # =================================================
+            if decision["action"] == "buy" and decision["amount_eur"] > 0:
+
+                today_spent = get_today_spent_eur(
+                    conn, user_id, bot["bot_id"], report_date
+                )
+
+                total_balance = get_bot_balance(
+                    conn, user_id, bot["bot_id"]
+                )
+
+                order = build_order_proposal(
+                    conn=conn,
+                    bot=bot,
+                    decision=decision,
+                    today_spent_eur=today_spent,
+                    total_balance_eur=total_balance,
+                )
+
+                if order:
+
+                    allowed, reason = check_bot_budget(
+                        bot_config=bot,
+                        today_spent_eur=today_spent,
+                        proposed_amount_eur=decision["amount_eur"],
+                    )
+
+                    if allowed:
+                        _persist_bot_order(
+                            conn=conn,
+                            user_id=user_id,
+                            bot_id=bot["bot_id"],
+                            decision_id=decision_id,
+                            order=order,
+                        )
+                    else:
+                        logger.warning(f"⚠️ Budget block: {reason}")
 
             results.append({
                 "bot_id": bot["bot_id"],
