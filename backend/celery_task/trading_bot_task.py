@@ -1,72 +1,19 @@
 # backend/celery_task/trading_bot_task.py
 
 import logging
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from celery import shared_task
 
 from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
-from backend.utils.db import get_db_connection
-from backend.services.price_service import get_latest_btc_price
+from backend.services.portfolio_snapshot_service import snapshot_all_for_user
 
 # =====================================================
 # 🪵 Logging
 # =====================================================
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-
-# =====================================================
-# 🕒 Helpers
-# =====================================================
-def floor_to_hour(dt: datetime) -> datetime:
-    return dt.replace(minute=0, second=0, microsecond=0)
-
-
-def snapshot_portfolio_equity(user_id: int, bucket: str = "1h"):
-    """
-    Slaat globale portfolio equity snapshot op
-    in portfolio_balance_snapshots.
-
-    Equity = (net_qty * current_price) + net_cash
-    """
-
-    ts = floor_to_hour(datetime.utcnow())
-
-    # Laatste BTC prijs ophalen (single source)
-    price = get_latest_btc_price()
-
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-
-            # =====================================
-            # 📊 Ledger-based portfolio berekening
-            # =====================================
-            cur.execute("""
-                SELECT
-                    COALESCE(SUM(qty_delta), 0),
-                    COALESCE(SUM(cash_delta_eur), 0)
-                FROM bot_ledger
-                WHERE user_id = %s
-            """, (user_id,))
-
-            net_qty, net_cash = cur.fetchone()
-
-            equity = float(net_qty) * float(price) + float(net_cash)
-
-            # =====================================
-            # 📝 Snapshot insert/update
-            # =====================================
-            cur.execute("""
-                INSERT INTO portfolio_balance_snapshots
-                (user_id, bucket, ts, equity_eur)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id, bucket, ts)
-                DO UPDATE SET equity_eur = EXCLUDED.equity_eur
-            """, (user_id, bucket, ts, equity))
-
-        conn.commit()
 
 
 # =====================================================
@@ -122,13 +69,19 @@ def run_daily_trading_bot(user_id: int, report_date: Optional[str] = None):
         bots_count = result.get("bots", 0)
 
         # =====================================
-        # 📊 Portfolio Snapshot
+        # 📊 Portfolio Snapshots (GLOBAL + PER BOT)
         # =====================================
         try:
-            snapshot_portfolio_equity(user_id)
+            # Hourly bucket
+            snapshot_all_for_user(user_id, bucket="1h")
+
+            # Daily bucket (optioneel maar slim)
+            snapshot_all_for_user(user_id, bucket="1d")
+
             logger.info(
-                f"📊 Portfolio snapshot opgeslagen | user_id={user_id}"
+                f"📊 Portfolio snapshots opgeslagen | user_id={user_id}"
             )
+
         except Exception:
             logger.exception(
                 f"⚠️ Portfolio snapshot mislukt | user_id={user_id}"
