@@ -230,6 +230,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
     - 1 decision per actieve bot per dag
     - setup_match bestaat ALTIJD
+    - trade_plan wordt (indien aanwezig) attached op decision.trade_plan
     - executions = bot_executions + bot_orders (JOIN)
     - frontend hoeft niets te raden
     """
@@ -259,12 +260,12 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             SELECT
               b.id,
               b.name,
-              COALESCE(st.symbol, 'BTC')  AS symbol,
-              COALESCE(st.timeframe, '—') AS timeframe,
+              COALESCE(st.symbol, 'BTC')   AS symbol,
+              COALESCE(st.timeframe, '—')  AS timeframe,
               s.strategy_type
             FROM bot_configs b
             LEFT JOIN strategies s ON s.id = b.strategy_id
-            LEFT JOIN setups st ON st.id = s.setup_id
+            LEFT JOIN setups st    ON st.id = s.setup_id
             WHERE b.user_id=%s
               AND b.is_active=TRUE
             ORDER BY b.id ASC
@@ -347,7 +348,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             scores_payload = _safe_json(scores_json, {})
             reasons_payload = _safe_json(reason_json, [])
 
-            # 🔒 HARD DEFAULT — setup_match bestaat ALTIJD
+            # ✅ HARD DEFAULT: setup_match bestaat altijd
             setup_match = scores_payload.get("setup_match") or {
                 "status": "no_snapshot",
                 "summary": "Geen strategie context",
@@ -364,7 +365,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "action": action,
                 "confidence": confidence,
 
-                # 기존: volledige payload blijft beschikbaar
+                # volledige payload blijft beschikbaar
                 "scores": scores_payload or daily_scores,
                 "reasons": reasons_payload if isinstance(reasons_payload, list) else [str(reasons_payload)],
 
@@ -377,7 +378,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 # ✅ contract: setup_match top-level
                 "setup_match": setup_match,
 
-                # ✅ NEW: top-level fields for UI components
+                # ✅ top-level fields for UI components
                 "market_health": scores_payload.get("market_health"),
                 "market_pressure": scores_payload.get("market_pressure"),
                 "transition_risk": scores_payload.get("transition_risk"),
@@ -389,9 +390,12 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
                 "regime": scores_payload.get("regime"),
                 "risk_state": scores_payload.get("risk_state"),
+
+                # ✅ wordt hieronder attached (trade plan)
+                "trade_plan": None,
             }
 
-            decision_ids.append(decision_id)
+            decision_ids.append(int(decision_id))
 
         # =====================================================
         # SAFETY NET — ontbrekende decisions genereren
@@ -400,6 +404,34 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         if missing:
             run_trading_bot_agent(user_id=user_id, report_date=today)
             return await get_bot_today(current_user)
+
+        # =====================================================
+        # ✅ TRADE PLANS — attach to decisions
+        # =====================================================
+        if decision_ids and _table_exists(conn, "bot_trade_plans"):
+            with conn.cursor() as ctp:
+                ctp.execute(
+                    """
+                    SELECT decision_id, entry_plan, stop_loss, targets, risk_json
+                    FROM bot_trade_plans
+                    WHERE user_id=%s
+                      AND decision_id = ANY(%s)
+                    """,
+                    (user_id, decision_ids),
+                )
+
+                plans_by_decision = {}
+                for did, entry_plan, stop_loss, targets, risk_json in ctp.fetchall():
+                    plans_by_decision[int(did)] = {
+                        "entry_plan": _safe_json(entry_plan, []),
+                        "stop_loss": _safe_json(stop_loss, {}),
+                        "targets": _safe_json(targets, []),
+                        "risk": _safe_json(risk_json, {}),
+                    }
+
+            for bid, d in decisions_by_bot.items():
+                did = int(d["id"])
+                d["trade_plan"] = plans_by_decision.get(did)
 
         # =====================================================
         # ORDERS (informatief)
@@ -426,7 +458,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 })
 
         # =====================================================
-        # ✅ EXECUTIONS — CORRECTE BRON
+        # EXECUTIONS
         # =====================================================
         executions = []
         if decision_ids and _table_exists(conn, "bot_executions"):
@@ -503,15 +535,6 @@ async def get_bot_history(
 ):
     """
     BOT DECISION HISTORY (GEEN TRADES)
-
-    Betekenis:
-    - Wat heeft de bot per dag BESLOTEN
-    - Dit is GEEN execution / GEEN PnL
-    - Trades komen UITSLUITEND uit /bot/trades (bot_ledger)
-
-    UI:
-    - Tijdlijn / overzicht
-    - Context + discipline
     """
 
     user_id = current_user["id"]
@@ -572,6 +595,15 @@ async def get_bot_history(
             scores = _safe_json(scores_json, {})
             reasons = _safe_json(reason_json, [])
 
+            # ✅ HARD DEFAULT setup_match
+            setup_match = scores.get("setup_match") or {
+                "status": "no_snapshot",
+                "summary": "Geen strategie context",
+                "detail": "Er is geen actief strategy snapshot beschikbaar.",
+                "score": 10,
+                "confidence": "low",
+            }
+
             out.append({
                 "decision_id": decision_id,
                 "bot_id": bot_id,
@@ -579,11 +611,11 @@ async def get_bot_history(
                 "symbol": symbol,
                 "date": decision_date,
                 "decision_ts": decision_ts,
-                "action": action,              # buy / sell / hold
+                "action": action,
                 "confidence": confidence,
-                "setup_match": scores.get("setup_match"),
+                "setup_match": setup_match,
                 "reasons": reasons if isinstance(reasons, list) else [str(reasons)],
-                "status": status,              # planned / executed / skipped
+                "status": status,
             })
 
         return out
@@ -593,7 +625,6 @@ async def get_bot_history(
         raise HTTPException(status_code=500, detail="Bot history ophalen mislukt")
     finally:
         conn.close()
-
 
 # =====================================
 # 🔁 FORCE GENERATE (vandaag / datum)
@@ -1565,7 +1596,117 @@ async def get_bot_trades(
         conn.close()
 
 # =====================================
-# 📊 BOT Trade Plan
+# 💾 SAVE / UPSERT BOT Trade Plan
+# =====================================
+@router.post("/bot/trade-plan/{decision_id}")
+async def save_trade_plan(
+    decision_id: int,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Slaat manual edits op voor een decision trade plan.
+    - UPSERT op (user_id, decision_id)
+    - Frontend stuurt volledige trade_plan payload
+    """
+
+    user_id = current_user["id"]
+    body = await request.json()
+
+    # verwacht payload:
+    # {
+    #   "entry_plan": [...],
+    #   "stop_loss": { "price": ... },
+    #   "targets": [...],
+    #   "risk": {...}
+    # }
+
+    entry_plan = body.get("entry_plan") or []
+    stop_loss = body.get("stop_loss") or {}
+    targets = body.get("targets") or []
+    risk = body.get("risk") or {}
+
+    # basic sanity (niet te streng, maar voorkomt troep)
+    if not isinstance(entry_plan, list):
+        raise HTTPException(status_code=400, detail="entry_plan moet een lijst zijn")
+    if not isinstance(targets, list):
+        raise HTTPException(status_code=400, detail="targets moet een lijst zijn")
+    if not isinstance(stop_loss, dict):
+        raise HTTPException(status_code=400, detail="stop_loss moet een object zijn")
+    if not isinstance(risk, dict):
+        raise HTTPException(status_code=400, detail="risk moet een object zijn")
+
+    conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
+
+    try:
+        with conn.cursor() as cur:
+            # check: decision hoort bij user
+            cur.execute(
+                """
+                SELECT 1
+                FROM bot_decisions
+                WHERE id=%s AND user_id=%s
+                """,
+                (decision_id, user_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Decision niet gevonden")
+
+            # UPSERT trade plan
+            cur.execute(
+                """
+                INSERT INTO bot_trade_plans (
+                    user_id,
+                    decision_id,
+                    entry_plan,
+                    stop_loss,
+                    targets,
+                    risk_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                ON CONFLICT (user_id, decision_id)
+                DO UPDATE SET
+                    entry_plan = EXCLUDED.entry_plan,
+                    stop_loss  = EXCLUDED.stop_loss,
+                    targets    = EXCLUDED.targets,
+                    risk_json  = EXCLUDED.risk_json,
+                    updated_at = NOW()
+                RETURNING decision_id
+                """,
+                (user_id, decision_id, json.dumps(entry_plan), json.dumps(stop_loss), json.dumps(targets), json.dumps(risk)),
+            )
+            _ = cur.fetchone()
+
+        conn.commit()
+
+        return {
+            "ok": True,
+            "decision_id": decision_id,
+            "trade_plan": {
+                "entry_plan": entry_plan,
+                "stop_loss": stop_loss,
+                "targets": targets,
+                "risk": risk,
+            },
+        }
+
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        logger.error("❌ save trade-plan error", exc_info=True)
+        raise HTTPException(status_code=500, detail="Trade plan opslaan mislukt")
+    finally:
+        conn.close()
+
+
+# =====================================
+# 📊 BOT Trade Plan (fallback-safe)
 # =====================================
 @router.get("/bot/trade-plan/{decision_id}")
 async def get_trade_plan(
@@ -1592,29 +1733,29 @@ async def get_trade_plan(
 
             row = cur.fetchone()
 
+            # ✅ UI contract: nooit 404, altijd een plan-structuur
             if not row:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Trade plan niet gevonden",
-                )
+                return {
+                    "entry_plan": [],
+                    "stop_loss": {},
+                    "targets": [],
+                    "risk": {},
+                }
 
             entry_plan, stop_loss, targets, risk_json = row
 
             return {
-                "entry_plan": entry_plan or [],
-                "stop_loss": stop_loss or {},
-                "targets": targets or [],
-                "risk": risk_json or {},
+                "entry_plan": _safe_json(entry_plan, []),
+                "stop_loss": _safe_json(stop_loss, {}),
+                "targets": _safe_json(targets, []),
+                "risk": _safe_json(risk_json, {}),
             }
 
-    except HTTPException:
-        raise
     except Exception:
         logger.error("❌ trade-plan fetch error", exc_info=True)
         raise HTTPException(status_code=500, detail="Trade plan ophalen mislukt")
     finally:
         conn.close()
-
 
 # =====================================
 # 📈 PORTFOLIO BALANCE HISTORY (Chart)
