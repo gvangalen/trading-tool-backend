@@ -1759,7 +1759,7 @@ async def get_trade_plan(
 
 
 # =====================================
-# 📈 PORTFOLIO BALANCE HISTORY (Chart)
+# 📈 PORTFOLIO BALANCE HISTORY (PRO)
 # =====================================
 @router.get("/portfolio/balance-history")
 async def get_portfolio_balance_history(
@@ -1768,13 +1768,15 @@ async def get_portfolio_balance_history(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Return globale portfolio history.
+    Global portfolio history.
 
-    Nu inclusief:
+    Nu inclusief 6 professionele metrics:
       - equity
       - cash
       - btc_qty
       - btc_value
+      - invested
+      - unrealized_pnl
     """
 
     user_id = current_user["id"]
@@ -1796,7 +1798,9 @@ async def get_portfolio_balance_history(
                 equity_eur,
                 cash_eur,
                 btc_qty,
-                btc_value_eur
+                btc_value_eur,
+                invested_eur,
+                unrealized_pnl_eur
             FROM portfolio_balance_snapshots
             WHERE user_id = %s
               AND bucket = %s
@@ -1815,6 +1819,8 @@ async def get_portfolio_balance_history(
                 "cash": float(r[2] or 0),
                 "btc_qty": float(r[3] or 0),
                 "btc_value": float(r[4] or 0),
+                "invested": float(r[5] or 0),
+                "unrealized_pnl": float(r[6] or 0),
             }
             for r in rows
         ]
@@ -1830,7 +1836,7 @@ async def get_portfolio_balance_history(
 
 
 # =====================================
-# 📈 BOT BALANCE HISTORY (per bot)
+# 📈 BOT BALANCE HISTORY (PRO)
 # =====================================
 @router.get("/bot/balance-history")
 async def get_bot_balance_history(
@@ -1845,9 +1851,10 @@ async def get_bot_balance_history(
     Inclusief:
       - equity
       - cash
-      - btc_qty (net_qty)
+      - btc_qty
       - price
       - invested
+      - unrealized_pnl (live berekend)
     """
 
     user_id = current_user["id"]
@@ -1883,17 +1890,31 @@ async def get_bot_balance_history(
 
         rows = cur.fetchall()
 
-        return [
-            {
-                "ts": r[0],
-                "equity": float(r[1] or 0),
-                "cash": float(r[2] or 0),
-                "btc_qty": float(r[3] or 0),
-                "price": float(r[4] or 0),
-                "invested": float(r[5] or 0),
-            }
-            for r in rows
-        ]
+        out = []
+        for r in rows:
+            ts, equity, cash, qty, price, invested = r
+
+            qty = float(qty or 0)
+            price = float(price or 0)
+            invested = float(invested or 0)
+
+            btc_value = qty * price
+            unrealized = btc_value - invested
+
+            out.append(
+                {
+                    "ts": ts,
+                    "equity": float(equity or 0),
+                    "cash": float(cash or 0),
+                    "btc_qty": qty,
+                    "price": price,
+                    "invested": invested,
+                    "btc_value": btc_value,
+                    "unrealized_pnl": unrealized,
+                }
+            )
+
+        return out
 
     except Exception:
         logger.error("❌ bot balance history error", exc_info=True)
