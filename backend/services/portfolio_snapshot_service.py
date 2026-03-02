@@ -161,25 +161,67 @@ def snapshot_all_for_user(
                 )
 
             # =====================================================
-            # 🌍 GLOBAL SNAPSHOT
+            # 🌍 GLOBAL SNAPSHOT (uitgebreid)
             # =====================================================
+            
+            global_cash = 0.0
+            global_qty = 0.0
+            
+            for bot_id, budget_total in bots:
+            
+                cur.execute("""
+                    SELECT
+                        COALESCE(SUM(qty_delta),0),
+                        COALESCE(SUM(cash_delta_eur),0)
+                    FROM bot_ledger
+                    WHERE user_id=%s
+                      AND bot_id=%s
+                """, (user_id, bot_id))
+            
+                net_qty, net_cash_delta = cur.fetchone() or (0, 0)
+            
+                net_qty = float(net_qty or 0)
+                net_cash_delta = float(net_cash_delta or 0)
+                budget_total = float(budget_total or 0)
+            
+                cash_eur = budget_total + net_cash_delta
+            
+                global_cash += cash_eur
+                global_qty += net_qty
+            
+            global_btc_value = global_qty * price
+            global_equity = global_cash + global_btc_value
+            
             cur.execute("""
                 INSERT INTO portfolio_balance_snapshots
-                (user_id, bucket, ts, equity_eur)
-                VALUES (%s,%s,%s,%s)
+                (
+                    user_id,
+                    bucket,
+                    ts,
+                    equity_eur,
+                    cash_eur,
+                    btc_qty,
+                    btc_value_eur
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (user_id, bucket, ts)
-                DO UPDATE SET equity_eur = EXCLUDED.equity_eur
+                DO UPDATE SET
+                    equity_eur    = EXCLUDED.equity_eur,
+                    cash_eur      = EXCLUDED.cash_eur,
+                    btc_qty       = EXCLUDED.btc_qty,
+                    btc_value_eur = EXCLUDED.btc_value_eur
             """, (
                 user_id,
                 bucket,
                 ts,
-                global_equity
+                global_equity,
+                global_cash,
+                global_qty,
+                global_btc_value
             ))
-
+            
             logger.info(
-                f"📊 Global snapshot | equity={round(global_equity,2)}"
+                f"📊 Global snapshot | equity={round(global_equity,2)} "
+                f"| cash={round(global_cash,2)} "
+                f"| btc={round(global_qty,6)}"
             )
-
-        conn.commit()
-
-    logger.info("📊 Snapshot complete")
