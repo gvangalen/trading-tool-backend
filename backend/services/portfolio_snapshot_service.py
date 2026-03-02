@@ -42,7 +42,7 @@ def _get_latest_btc_price(cur) -> float:
 
 
 # =====================================================
-# 🚀 SNAPSHOT SERVICE (FULL VERSION)
+# 🚀 SNAPSHOT SERVICE (PRO VERSION)
 # =====================================================
 
 def snapshot_all_for_user(
@@ -75,14 +75,16 @@ def snapshot_all_for_user(
 
             bots: List[Tuple[int, float]] = cur.fetchall()
 
-            global_equity = 0.0
-
             # =====================================================
             # 🔁 PER BOT
             # =====================================================
+
+            global_cash = 0.0
+            global_qty = 0.0
+            global_invested = 0.0
+
             for bot_id, budget_total in bots:
 
-                # Ledger totals
                 cur.execute("""
                     SELECT
                         COALESCE(SUM(qty_delta),0),
@@ -107,16 +109,22 @@ def snapshot_all_for_user(
                 invested_eur = float(invested_eur or 0)
                 budget_total = float(budget_total or 0)
 
-                # 🔥 Cash = start budget + ledger delta
+                # Cash = start budget + ledger delta
                 cash_eur = budget_total + net_cash_delta
 
-                # 🔥 Position value
+                # Position value
                 position_value = net_qty * price
 
-                # 🔥 Equity
+                # Equity
                 bot_equity = cash_eur + position_value
 
-                global_equity += bot_equity
+                # Unrealized PnL
+                unrealized_pnl = position_value - invested_eur
+
+                # Accumulate globals
+                global_cash += cash_eur
+                global_qty += net_qty
+                global_invested += invested_eur
 
                 # =====================================================
                 # 🤖 BOT SNAPSHOT
@@ -157,41 +165,18 @@ def snapshot_all_for_user(
                 ))
 
                 logger.info(
-                    f"📊 Bot snapshot | bot={bot_id} | equity={round(bot_equity,2)}"
+                    f"📊 Bot snapshot | bot={bot_id} | equity={round(bot_equity,2)} "
+                    f"| invested={round(invested_eur,2)}"
                 )
 
             # =====================================================
-            # 🌍 GLOBAL SNAPSHOT (uitgebreid)
+            # 🌍 GLOBAL SNAPSHOT (PRO)
             # =====================================================
-            
-            global_cash = 0.0
-            global_qty = 0.0
-            
-            for bot_id, budget_total in bots:
-            
-                cur.execute("""
-                    SELECT
-                        COALESCE(SUM(qty_delta),0),
-                        COALESCE(SUM(cash_delta_eur),0)
-                    FROM bot_ledger
-                    WHERE user_id=%s
-                      AND bot_id=%s
-                """, (user_id, bot_id))
-            
-                net_qty, net_cash_delta = cur.fetchone() or (0, 0)
-            
-                net_qty = float(net_qty or 0)
-                net_cash_delta = float(net_cash_delta or 0)
-                budget_total = float(budget_total or 0)
-            
-                cash_eur = budget_total + net_cash_delta
-            
-                global_cash += cash_eur
-                global_qty += net_qty
-            
+
             global_btc_value = global_qty * price
             global_equity = global_cash + global_btc_value
-            
+            global_unrealized = global_btc_value - global_invested
+
             cur.execute("""
                 INSERT INTO portfolio_balance_snapshots
                 (
@@ -201,15 +186,19 @@ def snapshot_all_for_user(
                     equity_eur,
                     cash_eur,
                     btc_qty,
-                    btc_value_eur
+                    btc_value_eur,
+                    invested_eur,
+                    unrealized_pnl_eur
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (user_id, bucket, ts)
                 DO UPDATE SET
-                    equity_eur    = EXCLUDED.equity_eur,
-                    cash_eur      = EXCLUDED.cash_eur,
-                    btc_qty       = EXCLUDED.btc_qty,
-                    btc_value_eur = EXCLUDED.btc_value_eur
+                    equity_eur          = EXCLUDED.equity_eur,
+                    cash_eur            = EXCLUDED.cash_eur,
+                    btc_qty             = EXCLUDED.btc_qty,
+                    btc_value_eur       = EXCLUDED.btc_value_eur,
+                    invested_eur        = EXCLUDED.invested_eur,
+                    unrealized_pnl_eur  = EXCLUDED.unrealized_pnl_eur
             """, (
                 user_id,
                 bucket,
@@ -217,11 +206,15 @@ def snapshot_all_for_user(
                 global_equity,
                 global_cash,
                 global_qty,
-                global_btc_value
+                global_btc_value,
+                global_invested,
+                global_unrealized
             ))
-            
+
             logger.info(
-                f"📊 Global snapshot | equity={round(global_equity,2)} "
+                f"🌍 Global snapshot | equity={round(global_equity,2)} "
                 f"| cash={round(global_cash,2)} "
-                f"| btc={round(global_qty,6)}"
+                f"| btc={round(global_qty,6)} "
+                f"| invested={round(global_invested,2)} "
+                f"| unrealized={round(global_unrealized,2)}"
             )
