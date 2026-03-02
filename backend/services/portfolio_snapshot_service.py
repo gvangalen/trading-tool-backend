@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Literal, List
+from typing import Literal, List, Tuple
 
 from backend.utils.db import get_db_connection
 
@@ -49,7 +49,7 @@ def _get_latest_btc_price(cur) -> float:
 
 
 # =====================================================
-# 🚀 MASTER SNAPSHOT SERVICE
+# 🚀 MASTER SNAPSHOT SERVICE (FIXED)
 # =====================================================
 
 def snapshot_all_for_user(
@@ -62,7 +62,11 @@ def snapshot_all_for_user(
         1️⃣ Global portfolio
         2️⃣ Per bot portfolio
 
-    Alles binnen één DB-transaction.
+    Correcte equity formule:
+
+        cash_eur = budget_total_eur + SUM(cash_delta_eur)
+        position_value = SUM(qty_delta) * price
+        equity = cash_eur + position_value
     """
 
     ts = floor_timestamp(datetime.utcnow(), bucket)
@@ -80,46 +84,24 @@ def snapshot_all_for_user(
                 return
 
             # =====================================================
-            # 📊 GLOBAL PORTFOLIO SNAPSHOT
+            # 🤖 ALLE BOTS OPHALEN (incl budget)
             # =====================================================
             cur.execute("""
-                SELECT
-                    COALESCE(SUM(qty_delta), 0),
-                    COALESCE(SUM(cash_delta_eur), 0)
-                FROM bot_ledger
-                WHERE user_id = %s
-            """, (user_id,))
-
-            net_qty, net_cash = cur.fetchone() or (0, 0)
-
-            global_equity = float(net_qty or 0) * price + float(net_cash or 0)
-
-            cur.execute("""
-                INSERT INTO portfolio_balance_snapshots
-                (user_id, bucket, ts, equity_eur)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id, bucket, ts)
-                DO UPDATE SET equity_eur = EXCLUDED.equity_eur
-            """, (user_id, bucket, ts, global_equity))
-
-            logger.info(
-                f"📊 Global snapshot | user={user_id} | bucket={bucket} | equity={round(global_equity,2)}"
-            )
-
-            # =====================================================
-            # 🤖 BOT-LEVEL SNAPSHOTS
-            # =====================================================
-            cur.execute("""
-                SELECT id
+                SELECT id, COALESCE(budget_total_eur, 0)
                 FROM bot_configs
                 WHERE user_id = %s
-                  AND is_active = TRUE
             """, (user_id,))
 
-            bots: List[int] = [r[0] for r in cur.fetchall()]
+            bots: List[Tuple[int, float]] = cur.fetchall()
 
-            for bot_id in bots:
+            global_equity = 0.0
 
+            # =====================================================
+            # 🔁 PER BOT EQUITY BEREKENEN
+            # =====================================================
+            for bot_id, budget_total in bots:
+
+                # Ledger totals per bot
                 cur.execute("""
                     SELECT
                         COALESCE(SUM(qty_delta), 0),
@@ -129,10 +111,26 @@ def snapshot_all_for_user(
                       AND bot_id = %s
                 """, (user_id, bot_id))
 
-                net_qty, net_cash = cur.fetchone() or (0, 0)
+                net_qty, net_cash_delta = cur.fetchone() or (0, 0)
 
-                bot_equity = float(net_qty or 0) * price + float(net_cash or 0)
+                net_qty = float(net_qty or 0)
+                net_cash_delta = float(net_cash_delta or 0)
+                budget_total = float(budget_total or 0)
 
+                # 🔥 CORRECTE CASH
+                cash_eur = budget_total + net_cash_delta
+
+                # 🔥 POSITIE WAARDE
+                position_value = net_qty * price
+
+                # 🔥 EQUITY
+                bot_equity = cash_eur + position_value
+
+                global_equity += bot_equity
+
+                # =====================================================
+                # 🤖 BOT SNAPSHOT
+                # =====================================================
                 cur.execute("""
                     INSERT INTO bot_portfolio_snapshots
                     (user_id, bot_id, bucket, ts, equity_eur)
@@ -144,6 +142,21 @@ def snapshot_all_for_user(
                 logger.info(
                     f"📊 Bot snapshot | user={user_id} | bot={bot_id} | bucket={bucket} | equity={round(bot_equity,2)}"
                 )
+
+            # =====================================================
+            # 🌍 GLOBAL SNAPSHOT (som van bots)
+            # =====================================================
+            cur.execute("""
+                INSERT INTO portfolio_balance_snapshots
+                (user_id, bucket, ts, equity_eur)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, bucket, ts)
+                DO UPDATE SET equity_eur = EXCLUDED.equity_eur
+            """, (user_id, bucket, ts, global_equity))
+
+            logger.info(
+                f"📊 Global snapshot | user={user_id} | bucket={bucket} | equity={round(global_equity,2)}"
+            )
 
         conn.commit()
 
