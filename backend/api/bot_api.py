@@ -1757,11 +1757,9 @@ async def get_trade_plan(
     finally:
         conn.close()
 
+
 # =====================================
 # 📈 PORTFOLIO BALANCE HISTORY (Chart)
-# - Bron: portfolio_balance_snapshots
-# - Bucket based (1h default)
-# - Wordt gebruikt door BotPage chart
 # =====================================
 @router.get("/portfolio/balance-history")
 async def get_portfolio_balance_history(
@@ -1770,13 +1768,13 @@ async def get_portfolio_balance_history(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Return globale portfolio equity history
-    voor chart rendering.
+    Return globale portfolio history.
 
-    Bucket voorbeelden:
-      - 1h
-      - 1d
-      - 1w
+    Nu inclusief:
+      - equity
+      - cash
+      - btc_qty
+      - btc_value
     """
 
     user_id = current_user["id"]
@@ -1793,7 +1791,12 @@ async def get_portfolio_balance_history(
 
         cur.execute(
             """
-            SELECT ts, equity_eur
+            SELECT
+                ts,
+                equity_eur,
+                cash_eur,
+                btc_qty,
+                btc_value_eur
             FROM portfolio_balance_snapshots
             WHERE user_id = %s
               AND bucket = %s
@@ -1809,6 +1812,9 @@ async def get_portfolio_balance_history(
             {
                 "ts": r[0],
                 "equity": float(r[1] or 0),
+                "cash": float(r[2] or 0),
+                "btc_qty": float(r[3] or 0),
+                "btc_value": float(r[4] or 0),
             }
             for r in rows
         ]
@@ -1834,8 +1840,14 @@ async def get_bot_balance_history(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Per bot equity history.
-    Bron: bot_portfolio_snapshots
+    Per bot portfolio history.
+
+    Inclusief:
+      - equity
+      - cash
+      - btc_qty (net_qty)
+      - price
+      - invested
     """
 
     user_id = current_user["id"]
@@ -1852,7 +1864,13 @@ async def get_bot_balance_history(
 
         cur.execute(
             """
-            SELECT ts, equity_eur
+            SELECT
+                ts,
+                equity_eur,
+                cash_eur,
+                net_qty,
+                price_eur,
+                invested_eur
             FROM bot_portfolio_snapshots
             WHERE user_id = %s
               AND bot_id = %s
@@ -1869,6 +1887,10 @@ async def get_bot_balance_history(
             {
                 "ts": r[0],
                 "equity": float(r[1] or 0),
+                "cash": float(r[2] or 0),
+                "btc_qty": float(r[3] or 0),
+                "price": float(r[4] or 0),
+                "invested": float(r[5] or 0),
             }
             for r in rows
         ]
