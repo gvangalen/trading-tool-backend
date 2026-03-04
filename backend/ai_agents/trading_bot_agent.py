@@ -85,6 +85,29 @@ def _safe_json(v, fallback):
     except Exception:
         return fallback
 
+def _default_trade_plan(symbol: str, action: str, reason: str = "no_trade_today") -> dict:
+    """
+    Hard UI contract:
+    - Elke decision heeft een trade_plan
+    - Ook observe / hold
+    """
+
+    symbol = (symbol or DEFAULT_SYMBOL).upper()
+    side = (action or "observe").lower()
+
+    return {
+        "symbol": symbol,
+        "side": side,
+        "entry_plan": [],
+        "stop_loss": {"price": None},
+        "targets": [],
+        "risk": {
+            "rr": None,
+            "risk_eur": None,
+        },
+        "notes": [reason],
+    }
+
 
 # =====================================================
 # ✅ Strategy setup payload (from DB) — single truth for bot_brain
@@ -756,16 +779,20 @@ def _persist_trade_plan(
 ):
     """
     Store structured trade plan for execution & UI.
+
+    HARD CONTRACT:
+    - trade_plan bestaat altijd
+    - ook voor observe/hold
     """
 
     if not plan:
         return
 
-    symbol = (symbol or "BTC").upper()
-    side = (side or "buy").lower()
+    symbol = (symbol or DEFAULT_SYMBOL).upper()
+    side = (side or "observe").lower()
 
     entry_plan = plan.get("entry_plan") or []
-    stop_loss = plan.get("stop_loss")
+    stop_loss = plan.get("stop_loss") or {"price": None}
     targets = plan.get("targets") or []
     risk = plan.get("risk") or {}
 
@@ -833,28 +860,19 @@ def _persist_decision_and_order(
 
     setup_match = decision.get("setup_match") or {}
 
-    # =========================================================
-    # 🆕 WATCH MODE FIELDS
-    # =========================================================
     watch_levels = decision.get("watch_levels")
     monitoring = bool(decision.get("monitoring", False))
     alerts_active = bool(decision.get("alerts_active", False))
 
-    # =========================================================
-    # 📊 SCORE & MARKET CONTEXT PAYLOAD
-    # =========================================================
     scores_payload = {
-        # core scores
         "macro": _clamp_score(scores.get("macro", 10)),
         "technical": _clamp_score(scores.get("technical", 10)),
         "market": _clamp_score(scores.get("market", 10)),
         "setup": _clamp_score(scores.get("setup", 10)),
         "combined": _clamp_score(decision.get("score", 10)),
 
-        # setup intelligence
         "setup_match": setup_match,
 
-        # market state
         "market_health": float(decision.get("market_health") or 50),
         "market_pressure": float(decision.get("market_pressure") or 50),
         "transition_risk": float(decision.get("transition_risk") or 50),
@@ -862,28 +880,106 @@ def _persist_decision_and_order(
         "structure_bias": decision.get("structure_bias"),
         "trend_strength": decision.get("trend_strength"),
 
-        # risk & sizing
         "exposure_multiplier": float(decision.get("exposure_multiplier") or 1.0),
         "max_risk_per_trade": decision.get("max_risk_per_trade"),
         "max_daily_allocation": decision.get("max_daily_allocation"),
 
-        # regime context
         "regime": decision.get("regime"),
         "risk_state": decision.get("risk_state"),
 
-        # trade quality
         "trade_quality": decision.get("trade_quality"),
 
-        # warnings
         "warnings": decision.get("warnings")
         if isinstance(decision.get("warnings"), list)
         else [],
 
-        # 🆕 WATCH MODE INTELLIGENCE
         "watch_levels": watch_levels,
         "monitoring": monitoring,
         "alerts_active": alerts_active,
     }
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO bot_decisions (
+                user_id,
+                bot_id,
+                strategy_id,
+                setup_id,
+                symbol,
+                decision_date,
+                decision_ts,
+                action,
+                confidence,
+                amount_eur,
+                scores_json,
+                reason_json,
+                status,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                %s,%s,%s,%s,
+                %s,%s,
+                NOW(),
+                %s,%s,%s,
+                %s,%s,
+                'planned',
+                NOW(), NOW()
+            )
+            ON CONFLICT (user_id, bot_id, decision_date)
+            DO UPDATE SET
+                action        = EXCLUDED.action,
+                confidence    = EXCLUDED.confidence,
+                amount_eur    = EXCLUDED.amount_eur,
+                scores_json   = EXCLUDED.scores_json,
+                reason_json   = EXCLUDED.reason_json,
+                status        = 'planned',
+                executed_by   = NULL,
+                executed_at   = NULL,
+                updated_at    = NOW()
+            RETURNING id
+            """,
+            (
+                user_id,
+                bot_id,
+                strategy_id,
+                setup_id,
+                symbol,
+                report_date,
+                action,
+                confidence,
+                amount_eur,
+                json.dumps(scores_payload, default=float),
+                json.dumps(reasons),
+            ),
+        )
+
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("Failed to persist bot decision")
+
+        decision_id = int(row[0])
+
+    # =========================================================
+    # ALWAYS persist trade plan
+    # =========================================================
+    plan = decision.get("trade_plan")
+
+    if not plan:
+        plan = _default_trade_plan(symbol, action, "fallback_plan")
+
+    _persist_trade_plan(
+        conn=conn,
+        user_id=user_id,
+        bot_id=bot_id,
+        decision_id=decision_id,
+        symbol=symbol,
+        side=action,
+        plan=plan,
+    )
+
+    return decision_id
 
     # =========================================================
     # Persist decision
@@ -1031,25 +1127,34 @@ def run_trading_bot_agent(
                     "amount_eur": 0.0,
                     "setup_match": setup_match,
                     "reasons": ["no_active_strategy_snapshot"],
+
                     "market_health": market_health,
                     "market_pressure": 50,
                     "transition_risk": 50,
+
                     "exposure_multiplier": 1.0,
                     "max_risk_per_trade": max_risk_per_trade,
                     "max_daily_allocation": max_daily_allocation,
+
                     "warnings": warnings,
+
                     "regime": None,
                     "risk_state": None,
-                    "trade_plan": None,
+
+                    # 🔧 FIX → altijd trade_plan
+                    "trade_plan": _default_trade_plan(
+                        bot["symbol"],
+                        "observe",
+                        "no_active_strategy_snapshot"
+                    ),
+
                     "watch_levels": None,
                     "monitoring": False,
                     "alerts_active": False,
                 }
 
             else:
-                # =================================================
-                # ENGINE BRAIN
-                # =================================================
+
                 setup_payload = _get_strategy_setup_payload(
                     conn,
                     user_id=user_id,
@@ -1108,16 +1213,27 @@ def run_trading_bot_agent(
                     "amount_eur": round(amount, 2),
                     "setup_match": setup_match,
                     "reasons": [brain.get("reason") or "engine_decision"],
+
                     "regime": brain.get("regime"),
                     "risk_state": brain.get("risk_state"),
+
                     "market_health": market_health,
                     "market_pressure": float(brain.get("market_pressure") or 50),
                     "transition_risk": float(brain.get("transition_risk") or 50),
+
                     "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
                     "max_risk_per_trade": max_risk_per_trade,
                     "max_daily_allocation": max_daily_allocation,
+
                     "warnings": warnings,
-                    "trade_plan": trade_plan,
+
+                    # 🔧 fallback plan als engine geen plan maakt
+                    "trade_plan": trade_plan or _default_trade_plan(
+                        bot["symbol"],
+                        engine_action,
+                        "engine_no_plan"
+                    ),
+
                     "watch_levels": brain.get("watch_levels"),
                     "monitoring": brain.get("monitoring", False),
                     "alerts_active": brain.get("alerts_active", False),
@@ -1136,46 +1252,6 @@ def run_trading_bot_agent(
                 decision=decision,
                 scores=scores,
             )
-
-            # =================================================
-            # 🛒 ORDER FLOW (🔥 DIT ONTBRAK BIJ JOU)
-            # =================================================
-            if decision["action"] == "buy" and decision["amount_eur"] > 0:
-
-                today_spent = get_today_spent_eur(
-                    conn, user_id, bot["bot_id"], report_date
-                )
-
-                total_balance = get_bot_balance(
-                    conn, user_id, bot["bot_id"]
-                )
-
-                order = build_order_proposal(
-                    conn=conn,
-                    bot=bot,
-                    decision=decision,
-                    today_spent_eur=today_spent,
-                    total_balance_eur=total_balance,
-                )
-
-                if order:
-
-                    allowed, reason = check_bot_budget(
-                        bot_config=bot,
-                        today_spent_eur=today_spent,
-                        proposed_amount_eur=decision["amount_eur"],
-                    )
-
-                    if allowed:
-                        _persist_bot_order(
-                            conn=conn,
-                            user_id=user_id,
-                            bot_id=bot["bot_id"],
-                            decision_id=decision_id,
-                            order=order,
-                        )
-                    else:
-                        logger.warning(f"⚠️ Budget block: {reason}")
 
             results.append({
                 "bot_id": bot["bot_id"],
