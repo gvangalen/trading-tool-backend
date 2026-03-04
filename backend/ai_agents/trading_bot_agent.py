@@ -876,6 +876,7 @@ def _persist_decision_and_order(
         "market_health": float(decision.get("market_health") or 50),
         "market_pressure": float(decision.get("market_pressure") or 50),
         "transition_risk": float(decision.get("transition_risk") or 50),
+
         "volatility_state": decision.get("volatility_state"),
         "structure_bias": decision.get("structure_bias"),
         "trend_strength": decision.get("trend_strength"),
@@ -898,6 +899,9 @@ def _persist_decision_and_order(
         "alerts_active": alerts_active,
     }
 
+    # =====================================================
+    # Insert / update decision
+    # =====================================================
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -961,9 +965,9 @@ def _persist_decision_and_order(
 
         decision_id = int(row[0])
 
-    # =========================================================
-    # ALWAYS persist trade plan
-    # =========================================================
+    # =====================================================
+    # ALWAYS persist trade plan (UI contract)
+    # =====================================================
     plan = decision.get("trade_plan")
 
     if not plan:
@@ -978,23 +982,6 @@ def _persist_decision_and_order(
         side=action,
         plan=plan,
     )
-
-    return decision_id
-
-    # =========================================================
-    # Save trade plan (execution plan)
-    # =========================================================
-    plan = decision.get("trade_plan")
-    if plan and plan.get("entry_plan"):
-        _persist_trade_plan(
-            conn=conn,
-            user_id=user_id,
-            bot_id=bot_id,
-            decision_id=decision_id,
-            symbol=symbol,
-            side=action,
-            plan=plan,
-        )
 
     return decision_id
 
