@@ -1331,8 +1331,6 @@ async def delete_bot_config(
 
 # =====================================
 # 📦 BOT PORTFOLIOS (UI: Bot cards)
-# - Single source of truth: DB
-# - Return per bot: budget + ledger stats + (optioneel) price snapshot
 # =====================================
 @router.get("/bot/portfolios")
 async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
@@ -1340,10 +1338,9 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
     today = date.today()
 
     conn, cur = get_db_cursor()
+
     try:
-        # -----------------------------------------
-        # 1) Bots ophalen (configs = bron voor UI)
-        # -----------------------------------------
+
         if not _table_exists(conn, "bot_configs"):
             return []
 
@@ -1354,28 +1351,26 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
               name,
               is_active,
               mode,
-              COALESCE(risk_profile, 'balanced') AS risk_profile,
-              COALESCE(budget_total_eur, 0)       AS budget_total_eur,
-              COALESCE(budget_daily_limit_eur, 0) AS budget_daily_limit_eur,
-              COALESCE(budget_min_order_eur, 0)   AS budget_min_order_eur,
-              COALESCE(budget_max_order_eur, 0)   AS budget_max_order_eur
+              COALESCE(risk_profile,'balanced'),
+              COALESCE(budget_total_eur,0),
+              COALESCE(budget_daily_limit_eur,0),
+              COALESCE(budget_min_order_eur,0),
+              COALESCE(budget_max_order_eur,0)
             FROM bot_configs
-            WHERE user_id = %s
+            WHERE user_id=%s
             ORDER BY id ASC
             """,
             (user_id,),
         )
+
         bots = cur.fetchall()
+
         if not bots:
             return []
 
-        # -----------------------------------------
-        # 2) Ledger tables? Dan stats meenemen
-        # -----------------------------------------
         has_ledger = _table_exists(conn, "bot_ledger")
         has_market = _table_exists(conn, "market_data")
 
-        # Cache laatste prijzen per symbol (optioneel)
         last_price_by_symbol = {}
 
         out = []
@@ -1386,151 +1381,169 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
             is_active,
             mode,
             risk_profile,
-            budget_total_eur,
-            budget_daily_limit_eur,
-            budget_min_order_eur,
-            budget_max_order_eur,
+            budget_total,
+            budget_daily,
+            budget_min,
+            budget_max,
         ) in bots:
 
             bot_id = int(bot_id)
+            symbol = "BTC"
 
-            # -----------------------------
-            # Default stats (altijd veilig)
-            # -----------------------------
             stats = {
-                "net_cash_delta_eur": 0.0,          # alle cash deltas (reserve + execute + eventueel refunds)
-                "net_executed_cash_delta_eur": 0.0, # alleen execute cash deltas (echte trades)
-                "net_qty": 0.0,                     # holdings qty (alle qty_delta)
-                "today_spent_eur": 0.0,             # ✅ alleen execute vandaag (ECHT uitgegeven)
-                "today_reserved_eur": 0.0,          # reserve entries vandaag (preview/lock)
-                "today_executed_eur": 0.0,          # execute entries vandaag (trade)
+                "net_cash_delta_eur": 0.0,
+                "net_executed_cash_delta_eur": 0.0,
+                "net_qty": 0.0,
+                "today_spent_eur": 0.0,
+                "today_reserved_eur": 0.0,
+                "today_executed_eur": 0.0,
                 "last_price": None,
                 "position_value_eur": None,
+                "invested_eur": 0.0,
+                "available_eur": float(budget_total),
+                "remaining_daily_eur": float(budget_daily),
             }
 
-            symbol = "BTC"  # default; later per bot uitbreiden via join strategy/setup
-
-            # -----------------------------
-            # Ledger stats (als table bestaat)
-            # -----------------------------
             if has_ledger:
+
                 with conn.cursor() as c2:
-                    # (A) Net balances - alles
+
+                    # net balances
                     c2.execute(
                         """
                         SELECT
-                          COALESCE(SUM(cash_delta_eur), 0) AS net_cash_delta_eur,
-                          COALESCE(SUM(qty_delta), 0)      AS net_qty
+                          COALESCE(SUM(cash_delta_eur),0),
+                          COALESCE(SUM(qty_delta),0)
                         FROM bot_ledger
                         WHERE user_id=%s
-                          AND bot_id=%s
+                        AND bot_id=%s
                         """,
                         (user_id, bot_id),
                     )
-                    row = c2.fetchone() or (0, 0)
-                    stats["net_cash_delta_eur"] = float(row[0] or 0.0)
-                    stats["net_qty"] = float(row[1] or 0.0)
 
-                    # (B) Net executed cash only (echte trades)
+                    row = c2.fetchone()
+
+                    stats["net_cash_delta_eur"] = float(row[0] or 0)
+                    stats["net_qty"] = float(row[1] or 0)
+
+                    # executed cash
                     c2.execute(
                         """
-                        SELECT COALESCE(SUM(cash_delta_eur), 0)
+                        SELECT COALESCE(SUM(cash_delta_eur),0)
                         FROM bot_ledger
                         WHERE user_id=%s
-                          AND bot_id=%s
-                          AND entry_type='execute'
+                        AND bot_id=%s
+                        AND entry_type='execute'
                         """,
                         (user_id, bot_id),
                     )
-                    stats["net_executed_cash_delta_eur"] = float((c2.fetchone() or [0])[0] or 0.0)
 
-                    # (C) Vandaag: ✅ spent = alleen execute outflow
+                    executed_cash = float((c2.fetchone() or [0])[0] or 0)
+
+                    stats["net_executed_cash_delta_eur"] = executed_cash
+
+                    # invested = absolute cash used
+                    invested = abs(executed_cash)
+                    stats["invested_eur"] = invested
+
+                    # today spent
                     c2.execute(
                         """
-                        SELECT COALESCE(SUM(ABS(cash_delta_eur)), 0)
+                        SELECT COALESCE(SUM(ABS(cash_delta_eur)),0)
                         FROM bot_ledger
                         WHERE user_id=%s
-                          AND bot_id=%s
-                          AND entry_type='execute'
-                          AND cash_delta_eur < 0
-                          AND DATE(ts) = %s
+                        AND bot_id=%s
+                        AND entry_type='execute'
+                        AND cash_delta_eur < 0
+                        AND DATE(ts)=%s
                         """,
                         (user_id, bot_id, today),
                     )
-                    stats["today_spent_eur"] = float((c2.fetchone() or [0])[0] or 0.0)
 
-                    # (D) Vandaag: reserve
+                    stats["today_spent_eur"] = float((c2.fetchone() or [0])[0] or 0)
+
+                    # reserve today
                     c2.execute(
                         """
-                        SELECT COALESCE(SUM(ABS(cash_delta_eur)), 0)
+                        SELECT COALESCE(SUM(ABS(cash_delta_eur)),0)
                         FROM bot_ledger
                         WHERE user_id=%s
-                          AND bot_id=%s
-                          AND entry_type='reserve'
-                          AND cash_delta_eur < 0
-                          AND DATE(ts) = %s
+                        AND bot_id=%s
+                        AND entry_type='reserve'
+                        AND cash_delta_eur < 0
+                        AND DATE(ts)=%s
                         """,
                         (user_id, bot_id, today),
                     )
-                    stats["today_reserved_eur"] = float((c2.fetchone() or [0])[0] or 0.0)
 
-                    # (E) Vandaag: execute
-                    c2.execute(
-                        """
-                        SELECT COALESCE(SUM(ABS(cash_delta_eur)), 0)
-                        FROM bot_ledger
-                        WHERE user_id=%s
-                          AND bot_id=%s
-                          AND entry_type='execute'
-                          AND cash_delta_eur < 0
-                          AND DATE(ts) = %s
-                        """,
-                        (user_id, bot_id, today),
-                    )
-                    stats["today_executed_eur"] = float((c2.fetchone() or [0])[0] or 0.0)
+                    stats["today_reserved_eur"] = float((c2.fetchone() or [0])[0] or 0)
 
-            # -----------------------------
-            # Market price snapshot (optioneel)
-            # -----------------------------
+                    stats["today_executed_eur"] = stats["today_spent_eur"]
+
+            # ----------------------------------
+            # AVAILABLE BUDGET
+            # ----------------------------------
+
+            stats["available_eur"] = max(
+                float(budget_total) - stats["invested_eur"],
+                0,
+            )
+
+            stats["remaining_daily_eur"] = max(
+                float(budget_daily) - stats["today_spent_eur"],
+                0,
+            )
+
+            # ----------------------------------
+            # MARKET PRICE
+            # ----------------------------------
+
             if has_market:
+
                 if symbol not in last_price_by_symbol:
+
                     with conn.cursor() as c3:
+
                         c3.execute(
                             """
                             SELECT price
                             FROM market_data
                             WHERE symbol=%s
-                              AND price IS NOT NULL
                             ORDER BY timestamp DESC
                             LIMIT 1
                             """,
                             (symbol,),
                         )
+
                         prow = c3.fetchone()
-                        last_price_by_symbol[symbol] = float(prow[0]) if prow and prow[0] is not None else None
+
+                        last_price_by_symbol[symbol] = (
+                            float(prow[0]) if prow and prow[0] else None
+                        )
 
                 stats["last_price"] = last_price_by_symbol.get(symbol)
 
                 if stats["last_price"] is not None:
-                    stats["position_value_eur"] = round(stats["net_qty"] * float(stats["last_price"]), 2)
 
-            # -----------------------------
-            # Output object (UI contract)
-            # -----------------------------
+                    stats["position_value_eur"] = round(
+                        stats["net_qty"] * stats["last_price"],
+                        2,
+                    )
+
             out.append(
                 {
                     "bot_id": bot_id,
                     "name": name,
                     "is_active": bool(is_active),
                     "mode": mode,
-                    "risk_profile": risk_profile or "balanced",
-                    "budget": {
-                        "total_eur": float(budget_total_eur or 0),
-                        "daily_limit_eur": float(budget_daily_limit_eur or 0),
-                        "min_order_eur": float(budget_min_order_eur or 0),
-                        "max_order_eur": float(budget_max_order_eur or 0),
-                    },
+                    "risk_profile": risk_profile,
                     "symbol": symbol,
+                    "budget": {
+                        "total_eur": float(budget_total),
+                        "daily_limit_eur": float(budget_daily),
+                        "min_order_eur": float(budget_min),
+                        "max_order_eur": float(budget_max),
+                    },
                     "stats": stats,
                 }
             )
@@ -1540,6 +1553,7 @@ async def get_bot_portfolios(current_user: dict = Depends(get_current_user)):
     except Exception:
         logger.error("❌ bot/portfolios error", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot portfolios ophalen mislukt")
+
     finally:
         conn.close()
 
@@ -1631,6 +1645,7 @@ async def get_bot_trades(
     finally:
         conn.close()
 
+
 # =====================================
 # 💾 SAVE / UPSERT BOT Trade Plan
 # =====================================
@@ -1642,33 +1657,28 @@ async def save_trade_plan(
 ):
     """
     Slaat manual edits op voor een decision trade plan.
-    - UPSERT op (user_id, decision_id)
+    - UPSERT op decision_id
     - Frontend stuurt volledige trade_plan payload
     """
 
     user_id = current_user["id"]
     body = await request.json()
 
-    # verwacht payload:
-    # {
-    #   "entry_plan": [...],
-    #   "stop_loss": { "price": ... },
-    #   "targets": [...],
-    #   "risk": {...}
-    # }
-
     entry_plan = body.get("entry_plan") or []
     stop_loss = body.get("stop_loss") or {}
     targets = body.get("targets") or []
     risk = body.get("risk") or {}
 
-    # basic sanity (niet te streng, maar voorkomt troep)
+    # basic sanity checks
     if not isinstance(entry_plan, list):
         raise HTTPException(status_code=400, detail="entry_plan moet een lijst zijn")
+
     if not isinstance(targets, list):
         raise HTTPException(status_code=400, detail="targets moet een lijst zijn")
+
     if not isinstance(stop_loss, dict):
         raise HTTPException(status_code=400, detail="stop_loss moet een object zijn")
+
     if not isinstance(risk, dict):
         raise HTTPException(status_code=400, detail="risk moet een object zijn")
 
@@ -1678,15 +1688,18 @@ async def save_trade_plan(
 
     try:
         with conn.cursor() as cur:
-            # check: decision hoort bij user
+
+            # controleren of decision bestaat en bij user hoort
             cur.execute(
                 """
                 SELECT 1
                 FROM bot_decisions
-                WHERE id=%s AND user_id=%s
+                WHERE id=%s
+                  AND user_id=%s
                 """,
                 (decision_id, user_id),
             )
+
             if not cur.fetchone():
                 raise HTTPException(status_code=404, detail="Decision niet gevonden")
 
@@ -1704,7 +1717,7 @@ async def save_trade_plan(
                     updated_at
                 )
                 VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW())
-                ON CONFLICT (user_id, decision_id)
+                ON CONFLICT (decision_id)
                 DO UPDATE SET
                     entry_plan = EXCLUDED.entry_plan,
                     stop_loss  = EXCLUDED.stop_loss,
@@ -1713,8 +1726,16 @@ async def save_trade_plan(
                     updated_at = NOW()
                 RETURNING decision_id
                 """,
-                (user_id, decision_id, json.dumps(entry_plan), json.dumps(stop_loss), json.dumps(targets), json.dumps(risk)),
+                (
+                    user_id,
+                    decision_id,
+                    json.dumps(entry_plan),
+                    json.dumps(stop_loss),
+                    json.dumps(targets),
+                    json.dumps(risk),
+                ),
             )
+
             _ = cur.fetchone()
 
         conn.commit()
@@ -1733,10 +1754,12 @@ async def save_trade_plan(
     except HTTPException:
         conn.rollback()
         raise
+
     except Exception:
         conn.rollback()
         logger.error("❌ save trade-plan error", exc_info=True)
         raise HTTPException(status_code=500, detail="Trade plan opslaan mislukt")
+
     finally:
         conn.close()
 
