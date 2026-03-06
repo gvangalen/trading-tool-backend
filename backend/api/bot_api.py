@@ -236,14 +236,17 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
     """
 
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
+    import time
 
     user_id = current_user["id"]
     today = date.today()
 
     conn, cur = get_db_cursor()
+
     try:
+
         # =====================================================
-        # SCORES (fallback-safe)
+        # SCORES
         # =====================================================
         daily_scores = _get_daily_scores_row(conn, user_id, today) or {
             "macro": 10,
@@ -260,8 +263,8 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             SELECT
               b.id,
               b.name,
-              COALESCE(st.symbol, 'BTC')   AS symbol,
-              COALESCE(st.timeframe, '—')  AS timeframe,
+              COALESCE(st.symbol,'BTC')  AS symbol,
+              COALESCE(st.timeframe,'—') AS timeframe,
               s.strategy_type
             FROM bot_configs b
             LEFT JOIN strategies s ON s.id = b.strategy_id
@@ -272,6 +275,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             """,
             (user_id,),
         )
+
         bot_rows = cur.fetchall()
 
         if not bot_rows:
@@ -297,9 +301,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         # =====================================================
         # DECISIONS VAN VANDAAG
         # =====================================================
-        decisions_by_bot = {}
-        decision_ids = []
-
         cur.execute(
             """
             SELECT
@@ -324,7 +325,13 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             (user_id, today),
         )
 
-        for r in cur.fetchall():
+        rows = cur.fetchall()
+
+        decisions_by_bot = {}
+        decision_ids = []
+
+        for r in rows:
+
             (
                 decision_id,
                 bot_id,
@@ -342,13 +349,13 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             ) = r
 
             bot_id = int(bot_id)
+
             if bot_id in decisions_by_bot:
                 continue
 
             scores_payload = _safe_json(scores_json, {})
             reasons_payload = _safe_json(reason_json, [])
 
-            # ✅ HARD DEFAULT: setup_match bestaat altijd
             setup_match = scores_payload.get("setup_match") or {
                 "status": "no_snapshot",
                 "summary": "Geen strategie context",
@@ -364,80 +371,112 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "symbol": symbol,
                 "action": action,
                 "confidence": confidence,
-
-                # volledige payload blijft beschikbaar
                 "scores": scores_payload or daily_scores,
-                "reasons": reasons_payload if isinstance(reasons_payload, list) else [str(reasons_payload)],
-
+                "reasons": reasons_payload,
                 "setup_id": setup_id,
                 "strategy_id": strategy_id,
                 "status": status,
                 "created_at": created_at,
                 "updated_at": updated_at,
-
-                # ✅ contract: setup_match top-level
                 "setup_match": setup_match,
-
-                # ✅ top-level fields for UI components
-                "market_health": scores_payload.get("market_health"),
-                "market_pressure": scores_payload.get("market_pressure"),
-                "transition_risk": scores_payload.get("transition_risk"),
-                "exposure_multiplier": scores_payload.get("exposure_multiplier"),
-
-                "max_risk_per_trade": scores_payload.get("max_risk_per_trade"),
-                "max_daily_allocation": scores_payload.get("max_daily_allocation"),
-                "warnings": scores_payload.get("warnings") or [],
-
-                "regime": scores_payload.get("regime"),
-                "risk_state": scores_payload.get("risk_state"),
-
-                # ✅ wordt hieronder attached (trade plan)
                 "trade_plan": None,
             }
 
             decision_ids.append(int(decision_id))
 
         # =====================================================
-        # SAFETY NET — ontbrekende decisions genereren
+        # SAFETY NET — BOT AGENT RUN
         # =====================================================
         missing = [bid for bid in bots_by_id if bid not in decisions_by_bot]
+
         if missing:
-            run_trading_bot_agent(user_id=user_id, report_date=today)
-            return await get_bot_today(current_user)
+
+            logger.warning(f"⚠️ Missing decisions for bots: {missing}")
+
+            run_trading_bot_agent(
+                user_id=user_id,
+                report_date=today,
+            )
+
+            conn.commit()
+
+            # kleine delay zodat DB write klaar is
+            time.sleep(0.3)
+
+            # opnieuw ophalen
+            cur.execute(
+                """
+                SELECT
+                  id,
+                  bot_id,
+                  symbol,
+                  decision_ts,
+                  action,
+                  confidence,
+                  scores_json,
+                  reason_json,
+                  setup_id,
+                  strategy_id,
+                  status,
+                  created_at,
+                  updated_at
+                FROM bot_decisions
+                WHERE user_id=%s
+                  AND decision_date=%s
+                ORDER BY bot_id ASC, id DESC
+                """,
+                (user_id, today),
+            )
+
+            rows = cur.fetchall()
+
+            for r in rows:
+
+                decision_id, bot_id, symbol, decision_ts, action, confidence, scores_json, reason_json, setup_id, strategy_id, status, created_at, updated_at = r
+
+                bot_id = int(bot_id)
+
+                if bot_id in decisions_by_bot:
+                    continue
+
+                scores_payload = _safe_json(scores_json, {})
+                reasons_payload = _safe_json(reason_json, [])
+
+                setup_match = scores_payload.get("setup_match") or {
+                    "status": "no_snapshot",
+                    "summary": "Geen strategie context",
+                    "detail": "Er is vandaag geen actief strategy snapshot beschikbaar.",
+                    "score": 10,
+                    "confidence": "low",
+                }
+
+                decisions_by_bot[bot_id] = {
+                    "id": decision_id,
+                    "bot_id": bot_id,
+                    "bot_name": bots_by_id[bot_id]["bot_name"],
+                    "symbol": symbol,
+                    "action": action,
+                    "confidence": confidence,
+                    "scores": scores_payload,
+                    "reasons": reasons_payload,
+                    "setup_id": setup_id,
+                    "strategy_id": strategy_id,
+                    "status": status,
+                    "created_at": created_at,
+                    "updated_at": updated_at,
+                    "setup_match": setup_match,
+                    "trade_plan": None,
+                }
+
+                decision_ids.append(int(decision_id))
 
         # =====================================================
-        # ✅ TRADE PLANS — attach to decisions
-        # =====================================================
-        if decision_ids and _table_exists(conn, "bot_trade_plans"):
-            with conn.cursor() as ctp:
-                ctp.execute(
-                    """
-                    SELECT decision_id, entry_plan, stop_loss, targets, risk_json
-                    FROM bot_trade_plans
-                    WHERE user_id=%s
-                      AND decision_id = ANY(%s)
-                    """,
-                    (user_id, decision_ids),
-                )
-
-                plans_by_decision = {}
-                for did, entry_plan, stop_loss, targets, risk_json in ctp.fetchall():
-                    plans_by_decision[int(did)] = {
-                        "entry_plan": _safe_json(entry_plan, []),
-                        "stop_loss": _safe_json(stop_loss, {}),
-                        "targets": _safe_json(targets, []),
-                        "risk": _safe_json(risk_json, {}),
-                    }
-
-            for bid, d in decisions_by_bot.items():
-                did = int(d["id"])
-                d["trade_plan"] = plans_by_decision.get(did)
-
-        # =====================================================
-        # ORDERS (informatief)
+        # ORDERS
         # =====================================================
         orders = []
+
         if decision_ids and _table_exists(conn, "bot_orders"):
+
             cur.execute(
                 """
                 SELECT id, bot_id, decision_id, symbol, side, status
@@ -447,21 +486,26 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 """,
                 (user_id, decision_ids),
             )
+
             for r in cur.fetchall():
-                orders.append({
-                    "id": r[0],
-                    "bot_id": r[1],
-                    "decision_id": r[2],
-                    "symbol": r[3],
-                    "side": r[4],
-                    "status": r[5],
-                })
+                orders.append(
+                    {
+                        "id": r[0],
+                        "bot_id": r[1],
+                        "decision_id": r[2],
+                        "symbol": r[3],
+                        "side": r[4],
+                        "status": r[5],
+                    }
+                )
 
         # =====================================================
         # EXECUTIONS
         # =====================================================
         executions = []
+
         if decision_ids and _table_exists(conn, "bot_executions"):
+
             cur.execute(
                 """
                 SELECT
@@ -484,31 +528,22 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 (user_id, decision_ids),
             )
 
-            for (
-                exec_id,
-                bot_id,
-                decision_id,
-                symbol,
-                side,
-                qty,
-                price,
-                amount_eur,
-                status,
-                created_at,
-            ) in cur.fetchall():
+            for r in cur.fetchall():
 
-                executions.append({
-                    "id": exec_id,
-                    "bot_id": bot_id,
-                    "decision_id": decision_id,
-                    "symbol": symbol,
-                    "side": side,
-                    "qty": float(qty or 0),
-                    "price": float(price) if price is not None else None,
-                    "amount_eur": float(amount_eur) if amount_eur is not None else None,
-                    "executed_at": created_at,
-                    "mode": "auto" if status == "filled" else "manual",
-                })
+                executions.append(
+                    {
+                        "id": r[0],
+                        "bot_id": r[1],
+                        "decision_id": r[2],
+                        "symbol": r[3],
+                        "side": r[4],
+                        "qty": float(r[5] or 0),
+                        "price": float(r[6]) if r[6] else None,
+                        "amount_eur": float(r[7]) if r[7] else None,
+                        "executed_at": r[9],
+                        "mode": "auto" if r[8] == "filled" else "manual",
+                    }
+                )
 
         return {
             "date": str(today),
@@ -521,6 +556,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
     except Exception:
         logger.error("❌ bot/today error", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot today ophalen mislukt")
+
     finally:
         conn.close()
 
