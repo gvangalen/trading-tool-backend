@@ -145,26 +145,24 @@ def load_latest_strategy(setup_id: int, user_id: int) -> Optional[dict]:
     try:
         cols = _get_strategy_columns(conn)
 
-        # risk_reward bestaat bij jou NIET → query dynamisch
         select_fields = [
             "id",
             "entry",
-            "target",
+            "targets",
             "stop_loss",
             "explanation",
             "data",
             "created_at",
         ]
+
         if "risk_reward" in cols:
-            select_fields.insert(4, "risk_reward")  # na stop_loss
-        if "strategy_type" in cols:
-            # niet essentieel hier, maar soms handig
-            pass
+            select_fields.insert(4, "risk_reward")
 
         query = f"""
             SELECT {", ".join(select_fields)}
             FROM strategies
-            WHERE setup_id = %s AND user_id = %s
+            WHERE setup_id = %s
+              AND user_id = %s
             ORDER BY created_at DESC
             LIMIT 1;
         """
@@ -176,17 +174,15 @@ def load_latest_strategy(setup_id: int, user_id: int) -> Optional[dict]:
         if not row:
             return None
 
-        # Mapping op basis van select_fields
         row_map = dict(zip(select_fields, row))
 
-        targets_raw = row_map.get("target")
-        targets = targets_raw.split(",") if targets_raw else []
+        targets = row_map.get("targets") or []
 
         result = {
             "strategy_id": row_map.get("id"),
-            "entry": row_map.get("entry"),
-            "targets": [t.strip() for t in targets if str(t).strip()],
-            "stop_loss": row_map.get("stop_loss"),
+            "entry": float(row_map["entry"]) if row_map.get("entry") is not None else None,
+            "targets": [float(t) for t in targets],
+            "stop_loss": float(row_map["stop_loss"]) if row_map.get("stop_loss") is not None else None,
             "explanation": row_map.get("explanation"),
             "data": safe_json(row_map.get("data")),
             "created_at": row_map.get("created_at").isoformat()
