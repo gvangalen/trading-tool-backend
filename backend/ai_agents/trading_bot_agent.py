@@ -93,13 +93,12 @@ def _default_trade_plan(
     symbol: str,
     action: str,
     reason: str = "no_trade_today",
-    watch_levels: Optional[Dict[str, Any]] = None,
+    watch_levels: Optional[dict] = None,
 ) -> dict:
     """
     Hard UI contract:
     - Elke decision heeft een trade_plan
     - Ook observe / hold
-    - Kan watch levels tonen
     """
 
     symbol = (symbol or DEFAULT_SYMBOL).upper()
@@ -107,7 +106,6 @@ def _default_trade_plan(
 
     entry_plan = []
 
-    # 🔧 WATCH LEVELS → ENTRY PLAN
     if watch_levels:
 
         pullback = watch_levels.get("pullback_zone")
@@ -117,14 +115,14 @@ def _default_trade_plan(
             entry_plan.append({
                 "type": "watch",
                 "label": "Observe zone",
-                "price": pullback
+                "price": pullback,
             })
 
         if breakout:
             entry_plan.append({
                 "type": "watch",
                 "label": "Watch breakout",
-                "price": breakout
+                "price": breakout,
             })
 
     return {
