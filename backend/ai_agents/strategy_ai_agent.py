@@ -412,7 +412,6 @@ def analyze_and_store_strategy(
 # ===================================================================
 # 💾 ACTIVE STRATEGY SNAPSHOT (VERPLICHT VOOR BOT EXECUTION)
 # ===================================================================
-
 def persist_active_strategy_snapshot(
     *,
     user_id: int,
@@ -429,7 +428,37 @@ def persist_active_strategy_snapshot(
     - Bot-agent is hier volledig afhankelijk van
     """
 
+    # -------------------------------
+    # Type safety (AI kan strings geven)
+    # -------------------------------
+
+    entry = snapshot.get("entry")
+    stop_loss = snapshot.get("stop_loss")
+    targets = snapshot.get("targets") or []
+
+    try:
+        entry = float(entry) if entry is not None else None
+    except Exception:
+        entry = None
+
+    try:
+        stop_loss = float(stop_loss) if stop_loss is not None else None
+    except Exception:
+        stop_loss = None
+
+    clean_targets = []
+    for t in targets:
+        try:
+            clean_targets.append(float(t))
+        except Exception:
+            continue
+
+    # -------------------------------
+    # Database write
+    # -------------------------------
+
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -465,13 +494,15 @@ def persist_active_strategy_snapshot(
                     user_id,
                     strategy_id,
                     snapshot_date,
-                    snapshot.get("entry"),
-                    json.dumps(snapshot.get("targets") or []),
-                    snapshot.get("stop_loss"),
+                    entry,
+                    clean_targets,  # ← numeric[] direct uit Python list
+                    stop_loss,
                     float(snapshot.get("confidence_score") or 0),
                     snapshot.get("adjustment_reason", ""),
                 ),
             )
+
             conn.commit()
+
     finally:
         conn.close()
