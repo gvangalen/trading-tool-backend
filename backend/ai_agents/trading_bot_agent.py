@@ -85,20 +85,52 @@ def _safe_json(v, fallback):
     except Exception:
         return fallback
 
-def _default_trade_plan(symbol: str, action: str, reason: str = "no_trade_today") -> dict:
+
+# =====================================================
+# ✅ Default trade plan
+# =====================================================
+def _default_trade_plan(
+    symbol: str,
+    action: str,
+    reason: str = "no_trade_today",
+    watch_levels: Optional[Dict[str, Any]] = None,
+) -> dict:
     """
     Hard UI contract:
     - Elke decision heeft een trade_plan
     - Ook observe / hold
+    - Kan watch levels tonen
     """
 
     symbol = (symbol or DEFAULT_SYMBOL).upper()
     side = (action or "observe").lower()
 
+    entry_plan = []
+
+    # 🔧 WATCH LEVELS → ENTRY PLAN
+    if watch_levels:
+
+        pullback = watch_levels.get("pullback_zone")
+        breakout = watch_levels.get("breakout_trigger")
+
+        if pullback:
+            entry_plan.append({
+                "type": "watch",
+                "label": "Observe zone",
+                "price": pullback
+            })
+
+        if breakout:
+            entry_plan.append({
+                "type": "watch",
+                "label": "Watch breakout",
+                "price": breakout
+            })
+
     return {
         "symbol": symbol,
         "side": side,
-        "entry_plan": [],
+        "entry_plan": entry_plan,
         "stop_loss": {"price": None},
         "targets": [],
         "risk": {
@@ -107,7 +139,6 @@ def _default_trade_plan(symbol: str, action: str, reason: str = "no_trade_today"
         },
         "notes": [reason],
     }
-
 
 # =====================================================
 # ✅ Strategy setup payload (from DB) — single truth for bot_brain
