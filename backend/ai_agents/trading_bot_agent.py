@@ -1025,11 +1025,13 @@ def run_trading_bot_agent(
 ) -> Dict[str, Any]:
 
     report_date = report_date or date.today()
+
     conn = get_db_connection()
     if not conn:
         return {"ok": False, "error": "db_unavailable"}
 
     try:
+
         bots = _get_active_bots(conn, user_id)
 
         if bot_id is not None:
@@ -1039,6 +1041,7 @@ def run_trading_bot_agent(
             return {"ok": True, "date": str(report_date), "bots": 0, "decisions": []}
 
         scores = _get_daily_scores(conn, user_id, report_date)
+
         results = []
 
         for bot in bots:
@@ -1074,16 +1077,18 @@ def run_trading_bot_agent(
             warnings: List[str] = []
 
             # =================================================
-            # GEEN SNAPSHOT → OBSERVE
+            # GEEN SNAPSHOT → OBSERVE MODE
             # =================================================
             if snapshot is None:
 
                 decision = {
+
                     "symbol": bot["symbol"],
                     "action": "observe",
                     "confidence": "low",
                     "score": _clamp_score(scores.get("market", 10)),
                     "amount_eur": 0.0,
+
                     "setup_match": setup_match,
                     "reasons": ["no_active_strategy_snapshot"],
 
@@ -1092,6 +1097,7 @@ def run_trading_bot_agent(
                     "transition_risk": 50,
 
                     "exposure_multiplier": 1.0,
+
                     "max_risk_per_trade": max_risk_per_trade,
                     "max_daily_allocation": max_daily_allocation,
 
@@ -1113,7 +1119,7 @@ def run_trading_bot_agent(
                 }
 
             # =================================================
-            # SNAPSHOT BESTAAT → ENGINE BESLISSING
+            # SNAPSHOT BESTAAT → BOT BRAIN
             # =================================================
             else:
 
@@ -1126,8 +1132,7 @@ def run_trading_bot_agent(
                     symbol=bot.get("symbol"),
                 )
 
-                # 🔧 CRUCIALE FIX
-                # snapshot entry doorgeven aan brain
+                # snapshot data doorgeven aan brain
                 if snapshot.get("entry") is not None:
                     setup_payload["entry"] = snapshot.get("entry")
 
@@ -1156,8 +1161,11 @@ def run_trading_bot_agent(
                 amount = float(brain.get("amount_eur") or 0.0)
 
                 confidence_label = "low"
+
                 if isinstance(brain.get("confidence"), (int, float)):
+
                     c = float(brain.get("confidence"))
+
                     confidence_label = (
                         "high" if c >= 0.7 else
                         "medium" if c >= 0.4 else
@@ -1171,9 +1179,9 @@ def run_trading_bot_agent(
                 trade_plan = None
 
                 # =================================================
-                # EXECUTION PLAN (echte trade)
+                # ALLEEN ECHTE TRADE → EXECUTION PLAN
                 # =================================================
-                if entry and stop:
+                if engine_action in ["buy", "sell"] and entry and stop:
 
                     trade_plan = {
                         "symbol": bot["symbol"],
@@ -1184,7 +1192,9 @@ def run_trading_bot_agent(
                             {"label": f"TP{i+1}", "price": t}
                             for i, t in enumerate(targets)
                         ],
-                        "risk": {"rr": brain.get("rr_ratio")},
+                        "risk": {
+                            "rr": brain.get("rr_ratio")
+                        },
                     }
 
                 # =================================================
@@ -1217,7 +1227,7 @@ def run_trading_bot_agent(
 
                     "warnings": warnings,
 
-                    # 🔧 WATCH PLAN wanneer geen trade
+                    # observe / hold → watch plan
                     "trade_plan": trade_plan
                     or _default_trade_plan(
                         bot["symbol"],
@@ -1242,15 +1252,13 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            results.append(
-                {
-                    "bot_id": bot["bot_id"],
-                    "decision_id": decision_id,
-                    "action": decision["action"],
-                    "confidence": decision["confidence"],
-                    "amount_eur": decision["amount_eur"],
-                }
-            )
+            results.append({
+                "bot_id": bot["bot_id"],
+                "decision_id": decision_id,
+                "action": decision["action"],
+                "confidence": decision["confidence"],
+                "amount_eur": decision["amount_eur"],
+            })
 
         conn.commit()
 
@@ -1264,6 +1272,7 @@ def run_trading_bot_agent(
     except Exception:
 
         conn.rollback()
+
         logger.exception("trading_bot_agent crash")
 
         return {"ok": False, "error": "agent_crash"}
