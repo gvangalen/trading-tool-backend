@@ -161,8 +161,7 @@ def load_latest_strategy(setup_id: int, user_id: int) -> Optional[dict]:
         query = f"""
             SELECT {", ".join(select_fields)}
             FROM strategies
-            WHERE setup_id = %s
-              AND user_id = %s
+            WHERE setup_id = %s AND user_id = %s
             ORDER BY created_at DESC
             LIMIT 1;
         """
@@ -204,6 +203,7 @@ def load_latest_strategy(setup_id: int, user_id: int) -> Optional[dict]:
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.generate_for_setup")
 def generate_for_setup(user_id: int, setup_id: int):
+
     logger.info(f"🚀 Strategy generatie | user={user_id} setup={setup_id}")
     conn = None
 
@@ -217,39 +217,43 @@ def generate_for_setup(user_id: int, setup_id: int):
 
         cols = _get_strategy_columns(conn)
 
-        # Insert schema-proof maken
         has_risk_reward = "risk_reward" in cols
+
         insert_cols = [
             "setup_id",
             "entry",
-            "target",
+            "targets",
             "stop_loss",
             "explanation",
             "strategy_type",
             "data",
             "user_id",
         ]
+
         if has_risk_reward:
-            insert_cols.insert(5, "risk_reward")  # vóór strategy_type
+            insert_cols.insert(5, "risk_reward")
 
         placeholders = ", ".join(["%s"] * len(insert_cols))
 
+        targets = strategy.get("targets") or []
+        targets = [safe_numeric(t) for t in targets if safe_numeric(t) is not None]
+
         values = [
             setup_id,
-            strategy.get("entry"),
-            ",".join(map(str, strategy.get("targets", []))),
-            strategy.get("stop_loss"),
+            safe_numeric(strategy.get("entry")),
+            targets,
+            safe_numeric(strategy.get("stop_loss")),
             strategy.get("explanation"),
         ]
+
         if has_risk_reward:
             values.append(strategy.get("risk_reward"))
-        values.extend(
-            [
-                setup.get("strategy_type"),
-                json.dumps(strategy),
-                user_id,
-            ]
-        )
+
+        values.extend([
+            setup.get("strategy_type"),
+            json.dumps(strategy),
+            user_id,
+        ])
 
         with conn.cursor() as cur:
             cur.execute(
@@ -264,15 +268,21 @@ def generate_for_setup(user_id: int, setup_id: int):
             conn.commit()
 
         logger.info(f"✅ Strategy opgeslagen (id={strategy_id})")
-        return {"success": True, "strategy_id": strategy_id}
+
+        return {
+            "success": True,
+            "strategy_id": strategy_id
+        }
 
     except Exception:
         logger.error("❌ Strategy generatie fout", exc_info=True)
+
         if conn:
             try:
                 conn.rollback()
             except Exception:
                 pass
+
         return {"success": False}
 
     finally:
@@ -285,11 +295,11 @@ def generate_for_setup(user_id: int, setup_id: int):
 # ============================================================
 @shared_task(name="backend.celery_task.strategy_task.analyze_strategy")
 def analyze_strategy(user_id: int, strategy_id: int):
+
     logger.info(f"🧠 Analyse strategy | user={user_id} strategy={strategy_id}")
 
     conn = get_db_connection()
     if not conn:
-        logger.error("❌ Geen databaseverbinding")
         raise RuntimeError("Geen databaseverbinding")
 
     try:
@@ -299,12 +309,13 @@ def analyze_strategy(user_id: int, strategy_id: int):
             "id",
             "setup_id",
             "entry",
-            "target",
+            "targets",
             "stop_loss",
             "explanation",
             "data",
             "created_at",
         ]
+
         if "risk_reward" in cols:
             select_fields.insert(5, "risk_reward")
 
@@ -328,7 +339,7 @@ def analyze_strategy(user_id: int, strategy_id: int):
                 "strategy_id": row_map["id"],
                 "setup_id": row_map["setup_id"],
                 "entry": row_map["entry"],
-                "targets": row_map["target"].split(",") if row_map["target"] else [],
+                "targets": row_map.get("targets") or [],
                 "stop_loss": row_map["stop_loss"],
                 "risk_reward": row_map.get("risk_reward"),
                 "explanation": row_map["explanation"],
@@ -338,25 +349,18 @@ def analyze_strategy(user_id: int, strategy_id: int):
             }
         ]
 
-        logger.info("🚀 AI analyse payload:")
-        logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
-
-        # 🔧 FIX: user_id EXPLICIET meegeven
         analysis = analyze_strategies(
             user_id=user_id,
-            strategies=payload,
+            strategies=payload
         )
 
         if not analysis:
             raise RuntimeError("AI analyse gaf None terug")
 
         explanation_text = (
-            f"{analysis.get('comment', '')}\n\n"
-            f"{analysis.get('recommendation', '')}"
+            f"{analysis.get('comment','')}\n\n"
+            f"{analysis.get('recommendation','')}"
         ).strip()
-
-        if not explanation_text:
-            raise RuntimeError("Lege AI explanation")
 
         with conn.cursor() as cur:
             cur.execute(
@@ -374,6 +378,7 @@ def analyze_strategy(user_id: int, strategy_id: int):
             )
 
         conn.commit()
+
         logger.info("✅ Strategy AI explanation opgeslagen")
 
         return {"success": True}
@@ -382,9 +387,14 @@ def analyze_strategy(user_id: int, strategy_id: int):
         logger.exception("❌ analyze_strategy crash")
         conn.rollback()
         raise
+
     finally:
         conn.close()
 
+
+# ============================================================
+# 🧠 Run DCA-Strategy Snapshot
+# ============================================================
 def run_dca_strategy_snapshot(user_id: int, setup: dict):
     logger.info(f"🟢 DCA snapshot gestart | user={user_id} setup={setup['id']}")
 
