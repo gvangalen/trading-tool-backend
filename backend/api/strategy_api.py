@@ -254,7 +254,7 @@ async def save_strategy(
         conn.close()
         
 # ==========================================================
-# 2️⃣ QUERY STRATEGIES (cards)
+# 2️⃣ QUERY STRATEGIES (cards + bot dropdown)
 # ==========================================================
 @router.post("/strategies/query")
 async def query_strategies(
@@ -265,33 +265,82 @@ async def query_strategies(
     user_id = current_user["id"]
 
     conn = get_db_connection()
+
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+
             q = """
-                SELECT *
-                FROM strategies
-                WHERE user_id=%s
+                SELECT
+                    s.*,
+                    st.symbol AS setup_symbol,
+                    st.timeframe AS setup_timeframe,
+                    st.name AS setup_name
+                FROM strategies s
+                LEFT JOIN setups st
+                    ON st.id = s.setup_id
+                WHERE s.user_id=%s
             """
             p = [user_id]
 
+            # ----------------------------------
+            # Filters
+            # ----------------------------------
             if filters.get("symbol"):
-                q += " AND data->>'symbol'=%s"
+                q += " AND st.symbol=%s"
                 p.append(filters["symbol"])
 
             if filters.get("timeframe"):
-                q += " AND data->>'timeframe'=%s"
+                q += " AND st.timeframe=%s"
                 p.append(filters["timeframe"])
 
-            q += " ORDER BY created_at DESC"
+            q += " ORDER BY s.created_at DESC"
+
             cur.execute(q, tuple(p))
             rows = cur.fetchall()
 
-        return [format_strategy_row(r) for r in rows]
+        out = []
+
+        for r in rows:
+
+            strategy = format_strategy_row(r)
+
+            # -------------------------------------------------
+            # 🔥 FIX SYMBOL / TIMEFRAME
+            # -------------------------------------------------
+            strategy["symbol"] = (
+                r.get("setup_symbol")
+                or strategy.get("symbol")
+            )
+
+            strategy["timeframe"] = (
+                r.get("setup_timeframe")
+                or strategy.get("timeframe")
+            )
+
+            # -------------------------------------------------
+            # 🔥 FIX NAME (NO MORE UNDEFINED)
+            # -------------------------------------------------
+            if not strategy.get("name"):
+                strategy["name"] = (
+                    r.get("setup_name")
+                    or f"Strategy {strategy.get('id')}"
+                )
+
+            # -------------------------------------------------
+            # 🔥 OPTIONAL UI LABEL (HANDIG VOOR BOT DROPDOWN)
+            # -------------------------------------------------
+            strategy["display_name"] = (
+                f"{strategy['name']} · "
+                f"{strategy.get('symbol','')} · "
+                f"{strategy.get('timeframe','')}"
+            )
+
+            out.append(strategy)
+
+        return out
 
     finally:
         conn.close()
-
-
 # ==========================================================
 # 3️⃣ GENERATE STRATEGY (AI)
 # ==========================================================
