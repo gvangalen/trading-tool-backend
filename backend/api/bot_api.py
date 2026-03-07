@@ -110,6 +110,9 @@ def _get_daily_scores_row(conn, user_id: int, report_date: date):
 # =====================================
 # 📦 BOT CONFIGS (actieve bots)
 # =====================================
+# =====================================
+# 📦 BOT CONFIGS (actieve bots)
+# =====================================
 @router.get("/bot/configs")
 async def get_bot_configs(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
@@ -124,7 +127,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
               b.is_active,
               b.mode,
               b.cadence,
-              b.risk_profile,        -- ✅ NIEUW
+              b.risk_profile,
 
               b.budget_total_eur,
               b.budget_daily_limit_eur,
@@ -135,6 +138,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
               b.updated_at,
 
               s.id            AS strategy_id,
+              s.name          AS strategy_name,
               s.strategy_type AS strategy_type,
 
               st.id           AS setup_id,
@@ -161,7 +165,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                 is_active,
                 mode,
                 cadence,
-                risk_profile,        # ✅ NIEUW
+                risk_profile,
 
                 budget_total,
                 budget_daily,
@@ -172,7 +176,9 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                 updated_at,
 
                 strategy_id,
+                strategy_name,
                 strategy_type,
+
                 setup_id,
                 setup_name,
                 symbol,
@@ -185,7 +191,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                     "id": strategy_id,
                     "type": strategy_type,
                     "setup_id": setup_id,
-                    "name": setup_name,
+                    "name": strategy_name or setup_name,
                     "symbol": symbol,
                     "timeframe": timeframe,
                 }
@@ -197,7 +203,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                     "is_active": bool(is_active),
                     "mode": mode,
                     "cadence": cadence,
-                    "risk_profile": risk_profile or "balanced",  # ✅
+                    "risk_profile": risk_profile or "balanced",
 
                     "budget": {
                         "total_eur": float(budget_total or 0),
