@@ -1062,11 +1062,12 @@ def run_trading_bot_agent(
                     "regime": None,
                     "risk_state": None,
 
-                    # 🔧 FIX → altijd trade_plan
+                    # 🔧 WATCH PLAN
                     "trade_plan": _default_trade_plan(
                         bot["symbol"],
                         "observe",
-                        "no_active_strategy_snapshot"
+                        "no_active_strategy_snapshot",
+                        watch_levels=None
                     ),
 
                     "watch_levels": None,
@@ -1148,11 +1149,12 @@ def run_trading_bot_agent(
 
                     "warnings": warnings,
 
-                    # 🔧 fallback plan als engine geen plan maakt
+                    # 🔧 WATCH PLAN wanneer engine geen trade maakt
                     "trade_plan": trade_plan or _default_trade_plan(
                         bot["symbol"],
                         engine_action,
-                        "engine_no_plan"
+                        "engine_no_plan",
+                        watch_levels=brain.get("watch_levels"),
                     ),
 
                     "watch_levels": brain.get("watch_levels"),
@@ -1160,9 +1162,6 @@ def run_trading_bot_agent(
                     "alerts_active": brain.get("alerts_active", False),
                 }
 
-            # =================================================
-            # Persist decision
-            # =================================================
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -1198,6 +1197,7 @@ def run_trading_bot_agent(
 
     finally:
         conn.close()
+
 
 # =====================================================
 # 🚀 Helper execute decision functie
