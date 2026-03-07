@@ -1015,7 +1015,10 @@ def run_trading_bot_agent(
         for bot in bots:
 
             snapshot = _get_active_strategy_snapshot(
-                conn, user_id, bot["strategy_id"], report_date
+                conn,
+                user_id,
+                bot["strategy_id"],
+                report_date,
             )
 
             setup_match = _build_setup_match(
@@ -1028,15 +1031,21 @@ def run_trading_bot_agent(
                 float(scores.get("macro", 10)) * 0.4
                 + float(scores.get("technical", 10)) * 0.3
                 + float(scores.get("market", 10)) * 0.3,
-                1
+                1,
             )
 
-            max_risk_per_trade = float(bot.get("budget", {}).get("max_order_eur") or 0) or None
-            max_daily_allocation = float(bot.get("budget", {}).get("daily_limit_eur") or 0) or None
+            max_risk_per_trade = float(
+                bot.get("budget", {}).get("max_order_eur") or 0
+            ) or None
+
+            max_daily_allocation = float(
+                bot.get("budget", {}).get("daily_limit_eur") or 0
+            ) or None
+
             warnings: List[str] = []
 
             # =================================================
-            # SNAPSHOT BESTAAT NIET → OBSERVE
+            # GEEN SNAPSHOT → OBSERVE
             # =================================================
             if snapshot is None:
 
@@ -1062,12 +1071,11 @@ def run_trading_bot_agent(
                     "regime": None,
                     "risk_state": None,
 
-                    # 🔧 WATCH PLAN
                     "trade_plan": _default_trade_plan(
                         bot["symbol"],
                         "observe",
                         "no_active_strategy_snapshot",
-                        watch_levels=None
+                        watch_levels=None,
                     ),
 
                     "watch_levels": None,
@@ -1075,6 +1083,9 @@ def run_trading_bot_agent(
                     "alerts_active": False,
                 }
 
+            # =================================================
+            # SNAPSHOT BESTAAT → ENGINE BESLISSING
+            # =================================================
             else:
 
                 setup_payload = _get_strategy_setup_payload(
@@ -1085,6 +1096,17 @@ def run_trading_bot_agent(
                     setup_name=bot.get("strategy_type"),
                     symbol=bot.get("symbol"),
                 )
+
+                # 🔧 CRUCIALE FIX
+                # snapshot entry doorgeven aan brain
+                if snapshot.get("entry") is not None:
+                    setup_payload["entry"] = snapshot.get("entry")
+
+                if snapshot.get("stop_loss") is not None:
+                    setup_payload["stop_loss"] = snapshot.get("stop_loss")
+
+                if snapshot.get("targets") is not None:
+                    setup_payload["targets"] = snapshot.get("targets")
 
                 brain = run_bot_brain(
                     user_id=user_id,
@@ -1098,6 +1120,7 @@ def run_trading_bot_agent(
                 )
 
                 engine_action = (brain.get("action") or "hold").lower()
+
                 if engine_action not in ACTIONS:
                     engine_action = "hold"
 
@@ -1112,27 +1135,40 @@ def run_trading_bot_agent(
                         "low"
                     )
 
-                trade_plan = None
                 entry = snapshot.get("entry")
                 stop = snapshot.get("stop_loss")
                 targets = snapshot.get("targets") or []
 
+                trade_plan = None
+
+                # =================================================
+                # EXECUTION PLAN (echte trade)
+                # =================================================
                 if entry and stop:
+
                     trade_plan = {
                         "symbol": bot["symbol"],
                         "side": engine_action,
                         "entry_plan": [{"type": "limit", "price": entry}],
                         "stop_loss": {"price": stop},
-                        "targets": [{"label": f"TP{i+1}", "price": t} for i, t in enumerate(targets)],
+                        "targets": [
+                            {"label": f"TP{i+1}", "price": t}
+                            for i, t in enumerate(targets)
+                        ],
                         "risk": {"rr": brain.get("rr_ratio")},
                     }
 
+                # =================================================
+                # FINAL DECISION
+                # =================================================
                 decision = {
+
                     "symbol": bot["symbol"],
                     "action": engine_action,
                     "confidence": confidence_label,
                     "score": _clamp_score(scores.get("market", 10)),
                     "amount_eur": round(amount, 2),
+
                     "setup_match": setup_match,
                     "reasons": [brain.get("reason") or "engine_decision"],
 
@@ -1143,17 +1179,21 @@ def run_trading_bot_agent(
                     "market_pressure": float(brain.get("market_pressure") or 50),
                     "transition_risk": float(brain.get("transition_risk") or 50),
 
-                    "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
+                    "exposure_multiplier": float(
+                        brain.get("exposure_multiplier") or 1.0
+                    ),
+
                     "max_risk_per_trade": max_risk_per_trade,
                     "max_daily_allocation": max_daily_allocation,
 
                     "warnings": warnings,
 
-                    # 🔧 WATCH PLAN wanneer engine geen trade maakt
-                    "trade_plan": trade_plan or _default_trade_plan(
+                    # 🔧 WATCH PLAN wanneer geen trade
+                    "trade_plan": trade_plan
+                    or _default_trade_plan(
                         bot["symbol"],
                         engine_action,
-                        "engine_no_plan",
+                        "engine_watch_mode",
                         watch_levels=brain.get("watch_levels"),
                     ),
 
@@ -1173,13 +1213,15 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            results.append({
-                "bot_id": bot["bot_id"],
-                "decision_id": decision_id,
-                "action": decision["action"],
-                "confidence": decision["confidence"],
-                "amount_eur": decision["amount_eur"],
-            })
+            results.append(
+                {
+                    "bot_id": bot["bot_id"],
+                    "decision_id": decision_id,
+                    "action": decision["action"],
+                    "confidence": decision["confidence"],
+                    "amount_eur": decision["amount_eur"],
+                }
+            )
 
         conn.commit()
 
@@ -1191,13 +1233,15 @@ def run_trading_bot_agent(
         }
 
     except Exception:
+
         conn.rollback()
         logger.exception("trading_bot_agent crash")
+
         return {"ok": False, "error": "agent_crash"}
 
     finally:
-        conn.close()
 
+        conn.close()
 
 # =====================================================
 # 🚀 Helper execute decision functie
