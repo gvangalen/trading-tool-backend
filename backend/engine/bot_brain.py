@@ -240,24 +240,30 @@ def run_bot_brain(
     # 🆕 13️⃣ WATCH LEVELS (KEY UPDATE)
     # -------------------------------------------------
     watch_levels = None
+    
+    entry_raw = (
+        setup.get("entry_price")
+        or setup.get("entry")
+        or setup.get("trigger_price")
+    )
+    
+    entry = None
+    
     try:
-        entry = (
-            setup.get("entry_price")
-            or setup.get("entry")
-            or setup.get("trigger_price")
-        )
-        if entry:
-            entry = float(entry)
-            watch_levels = {
-                "pullback_zone": round(entry * 0.96, 2),
-                "breakout_trigger": round(entry * 1.03, 2),
-            }
+        if entry_raw is not None:
+            entry = float(entry_raw)
     except Exception:
-        watch_levels = None
-
+        entry = None
+    
+    if entry is not None:
+        watch_levels = {
+            "pullback_zone": round(entry * 0.96, 2),
+            "breakout_trigger": round(entry * 1.03, 2),
+        }
+    
     # monitoring active when bot is waiting
     monitoring = action == "hold"
-
+    
     # alerts active when market is tradable but waiting for trigger
     alerts_active = (
         monitoring
