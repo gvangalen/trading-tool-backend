@@ -39,18 +39,18 @@ celery_app = Celery(
 )
 
 # =========================================================
-# 🕒 TIMEZONE — NEDERLAND
+# 🕒 TIMEZONE
 # =========================================================
 celery_app.conf.enable_utc = False
 celery_app.conf.timezone = "Europe/Amsterdam"
 
 # =========================================================
-# 🕒 CELERY BEAT — DAGELIJKSE PIPELINE
+# 🚀 CELERY BEAT SCHEDULE
 # =========================================================
 celery_app.conf.beat_schedule = {
 
     # =====================================================
-    # 1️⃣ GLOBAL MARKET DATA
+    # 1️⃣ MARKET DATA (15 MIN)
     # =====================================================
     "fetch_market_data": {
         "task": "backend.celery_task.market_task.fetch_market_data",
@@ -59,20 +59,20 @@ celery_app.conf.beat_schedule = {
 
     "fetch_market_data_7d": {
         "task": "backend.celery_task.market_task.fetch_market_data_7d",
-        "schedule": crontab(hour=1, minute=20),
+        "schedule": crontab(hour=2, minute=10),
     },
 
     "save_market_data_daily": {
         "task": "backend.celery_task.market_task.save_market_data_daily",
-        "schedule": crontab(hour=1, minute=5),
+        "schedule": crontab(hour=2, minute=20),
     },
 
     # =====================================================
-    # 2️⃣ INDICATOR INGEST
+    # 2️⃣ INDICATOR INGEST (ELKE 2 UUR)
     # =====================================================
     "dispatch_macro_indicators": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=1, minute=12),
+        "schedule": crontab(hour="*/2", minute=5),
         "kwargs": {
             "task_name": "backend.celery_task.macro_task.fetch_macro_data"
         },
@@ -80,7 +80,7 @@ celery_app.conf.beat_schedule = {
 
     "dispatch_technical_indicators": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=1, minute=15),
+        "schedule": crontab(hour="*/2", minute=10),
         "kwargs": {
             "task_name": "backend.celery_task.technical_task.fetch_technical_data_day"
         },
@@ -88,26 +88,59 @@ celery_app.conf.beat_schedule = {
 
     "dispatch_market_indicators": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=1, minute=18),
+        "schedule": crontab(hour="*/2", minute=15),
         "kwargs": {
             "task_name": "backend.celery_task.market_task.fetch_market_indicators"
         },
     },
 
     # =====================================================
-    # 3️⃣ RULE-BASED SCORES
+    # 3️⃣ RULE BASED SCORES (15 MIN)
     # =====================================================
-    "run_rule_based_daily_scores": {
+    "run_rule_based_scores": {
         "task": "backend.celery_task.store_daily_scores_task.run_rule_based_daily_scores",
-        "schedule": crontab(hour=3, minute=0),
+        "schedule": crontab(minute="*/15"),
     },
 
     # =====================================================
-    # 4️⃣ AI CATEGORY AGENTS
+    # 4️⃣ PORTFOLIO SNAPSHOTS (15 MIN)  ⭐ NIEUW
+    # =====================================================
+    "dispatch_portfolio_snapshots": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+        "schedule": crontab(minute="*/15"),
+        "kwargs": {
+            "task_name": "backend.celery_task.portfolio_snapshot_task.run_portfolio_snapshot"
+        },
+    },
+
+    # =====================================================
+    # 5️⃣ SETUP SCANNER (15 MIN)
+    # =====================================================
+    "dispatch_setup_agent": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+        "schedule": crontab(minute="*/15"),
+        "kwargs": {
+            "task_name": "backend.celery_task.setup_task.run_setup_agent_daily"
+        },
+    },
+
+    # =====================================================
+    # 6️⃣ TRADING BOT DECISION ENGINE (15 MIN)
+    # =====================================================
+    "dispatch_trading_bot": {
+        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
+        "schedule": crontab(minute="*/15"),
+        "kwargs": {
+            "task_name": "backend.celery_task.trading_bot_task.run_daily_trading_bot"
+        },
+    },
+
+    # =====================================================
+    # 7️⃣ AI CATEGORY AGENTS (4x PER DAG)
     # =====================================================
     "dispatch_macro_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=10),
+        "schedule": crontab(hour="0,6,12,18", minute=5),
         "kwargs": {
             "task_name": "backend.celery_task.macro_task.run_macro_agent_daily"
         },
@@ -115,7 +148,7 @@ celery_app.conf.beat_schedule = {
 
     "dispatch_market_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=20),
+        "schedule": crontab(hour="0,6,12,18", minute=10),
         "kwargs": {
             "task_name": "backend.celery_task.market_task.run_market_agent_daily"
         },
@@ -123,63 +156,44 @@ celery_app.conf.beat_schedule = {
 
     "dispatch_technical_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=30),
+        "schedule": crontab(hour="0,6,12,18", minute=15),
         "kwargs": {
             "task_name": "backend.celery_task.technical_task.run_technical_agent_daily"
         },
     },
 
     # =====================================================
-    # ⭐ 5️⃣ REGIME MEMORY (CRITICAL LAYER)
+    # 8️⃣ REGIME MEMORY (1x PER DAG)
     # =====================================================
     "dispatch_regime_memory": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=3, minute=50),
+        "schedule": crontab(hour=3, minute=30),
         "kwargs": {
             "task_name": "backend.celery_task.regime_task.run_regime_memory"
         },
     },
 
     # =====================================================
-    # 6️⃣ SETUP + STRATEGY
+    # 9️⃣ STRATEGY SNAPSHOT (2x PER DAG)
     # =====================================================
-    "dispatch_setup_agent": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=4, minute=0),
-        "kwargs": {
-            "task_name": "backend.celery_task.setup_task.run_setup_agent_daily"
-        },
-    },
-
     "dispatch_strategy_snapshot": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=4, minute=10),
+        "schedule": crontab(hour="6,18", minute=20),
         "kwargs": {
             "task_name": "backend.celery_task.strategy_task.run_daily_strategy_snapshot"
         },
     },
 
     # =====================================================
-    # 7️⃣ MASTER SCORE
+    # 🔟 MASTER AI SCORE
     # =====================================================
     "run_master_score_ai": {
         "task": "backend.celery_task.store_daily_scores_task.run_master_score_ai",
-        "schedule": crontab(hour=4, minute=20),
+        "schedule": crontab(hour="0,6,12,18", minute=30),
     },
 
     # =====================================================
-    # 🤖 TRADING BOT
-    # =====================================================
-    "dispatch_trading_bot": {
-        "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour=4, minute=30),
-        "kwargs": {
-            "task_name": "backend.celery_task.trading_bot_task.run_daily_trading_bot"
-        },
-    },
-
-    # =====================================================
-    # 🔥 FINAL — DAILY REPORT
+    # 1️⃣1️⃣ DAILY REPORT
     # =====================================================
     "dispatch_daily_report": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -193,7 +207,7 @@ celery_app.conf.beat_schedule = {
 logger.info("🚀 Celery Beat schedule geladen (EUROPE/AMSTERDAM)")
 
 # =========================================================
-# 📌 FORCE IMPORTS — TASK REGISTRATIE
+# 📌 FORCE IMPORTS
 # =========================================================
 try:
     import backend.celery_task.dispatcher
@@ -204,14 +218,17 @@ try:
     import backend.celery_task.setup_task
     import backend.celery_task.strategy_task
     import backend.celery_task.trading_bot_task
-    import backend.celery_task.regime_memory_task   # ⭐ NIEUW
+    import backend.celery_task.regime_memory_task
+    import backend.celery_task.portfolio_snapshot_task   # ⭐ NIEUW
     import backend.celery_task.bootstrap_agents_task
+
     import backend.celery_task.daily_report_task
     import backend.celery_task.weekly_report_task
     import backend.celery_task.monthly_report_task
     import backend.celery_task.quarterly_report_task
 
     logger.info("✅ Alle Celery TASKS succesvol geïmporteerd")
+
 except Exception:
     logger.error("❌ Fout bij Celery task imports", exc_info=True)
 
