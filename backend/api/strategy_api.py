@@ -90,6 +90,9 @@ def format_strategy_row(row: dict):
 # ==========================================================
 # 1️⃣ CREATE STRATEGY
 # ==========================================================
+# ==========================================================
+# 1️⃣ CREATE STRATEGY
+# ==========================================================
 @router.post("/strategies")
 async def save_strategy(
     request: Request,
@@ -146,7 +149,7 @@ async def save_strategy(
                 raise HTTPException(409, "Strategie bestaat al")
 
             # --------------------------------------------------
-            # ⭐ STRATEGY NAME (REQUIRED)
+            # STRATEGY NAME
             # --------------------------------------------------
             strategy_name = (data.get("name") or "").strip()
 
@@ -156,7 +159,7 @@ async def save_strategy(
                 strategy_name = f"{strategy_type.upper()} {symbol} {tf}".strip()
 
             # --------------------------------------------------
-            # ⭐ SAVE CUSTOM CURVE (OPTIONAL)
+            # SAVE CUSTOM CURVE
             # --------------------------------------------------
             curve_id = None
 
@@ -190,7 +193,7 @@ async def save_strategy(
                 data["decision_curve_name"] = curve_name
 
             # --------------------------------------------------
-            # INSERT STRATEGY ✅ FINAL SAFE VERSION
+            # INSERT STRATEGY
             # --------------------------------------------------
             cur.execute("""
                 INSERT INTO strategies (
