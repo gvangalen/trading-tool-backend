@@ -231,15 +231,6 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
 # =====================================
 @router.get("/bot/today")
 async def get_bot_today(current_user: dict = Depends(get_current_user)):
-    """
-    DEFINITIEF CONTRACT (STABIEL)
-
-    - 1 decision per actieve bot per dag
-    - setup_match bestaat ALTIJD
-    - trade_plan wordt (indien aanwezig) attached op decision.trade_plan
-    - executions = bot_executions + bot_orders (JOIN)
-    - frontend hoeft niets te raden
-    """
 
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
     import time
@@ -359,6 +350,12 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             if bot_id in decisions_by_bot:
                 continue
 
+            # 🔧 FIX: veilige bot lookup
+            bot = bots_by_id.get(bot_id)
+            if not bot:
+                logger.warning(f"⚠️ Decision verwijst naar onbekende bot_id={bot_id}")
+                continue
+
             scores_payload = _safe_json(scores_json, {})
             reasons_payload = _safe_json(reason_json, [])
 
@@ -373,7 +370,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             decisions_by_bot[bot_id] = {
                 "id": decision_id,
                 "bot_id": bot_id,
-                "bot_name": bots_by_id[bot_id]["bot_name"],
+                "bot_name": bot["bot_name"],
                 "symbol": symbol,
                 "action": action,
                 "confidence": confidence,
@@ -405,11 +402,8 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             )
 
             conn.commit()
-
-            # kleine delay zodat DB write klaar is
             time.sleep(0.3)
 
-            # opnieuw ophalen
             cur.execute(
                 """
                 SELECT
@@ -445,6 +439,12 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 if bot_id in decisions_by_bot:
                     continue
 
+                # 🔧 FIX: veilige bot lookup
+                bot = bots_by_id.get(bot_id)
+                if not bot:
+                    logger.warning(f"⚠️ Decision verwijst naar onbekende bot_id={bot_id}")
+                    continue
+
                 scores_payload = _safe_json(scores_json, {})
                 reasons_payload = _safe_json(reason_json, [])
 
@@ -459,7 +459,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 decisions_by_bot[bot_id] = {
                     "id": decision_id,
                     "bot_id": bot_id,
-                    "bot_name": bots_by_id[bot_id]["bot_name"],
+                    "bot_name": bot["bot_name"],
                     "symbol": symbol,
                     "action": action,
                     "confidence": confidence,
