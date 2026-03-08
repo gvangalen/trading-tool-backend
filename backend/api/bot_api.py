@@ -106,10 +106,6 @@ def _get_daily_scores_row(conn, user_id: int, report_date: date):
         "setup": float(setup or 10),
     }
 
-
-# =====================================
-# 📦 BOT CONFIGS (actieve bots)
-# =====================================
 # =====================================
 # 📦 BOT CONFIGS (actieve bots)
 # =====================================
@@ -1024,7 +1020,6 @@ async def create_manual_order(
     finally:
         conn.close()
 
-
 # =====================================
 # ⏭️ ADD BOT 
 # =====================================
@@ -1039,7 +1034,7 @@ async def create_bot_config(
     name = body.get("name")
     strategy_id = body.get("strategy_id")
     mode = body.get("mode", "manual")
-    risk_profile = body.get("risk_profile", "balanced")  # ✅ NIEUW
+    risk_profile = body.get("risk_profile", "balanced")
 
     if risk_profile not in ("conservative", "balanced", "aggressive"):
         raise HTTPException(status_code=400, detail="Ongeldig risk_profile")
@@ -1055,6 +1050,9 @@ async def create_bot_config(
         raise HTTPException(status_code=400, detail="strategy_id is verplicht")
 
     conn = get_db_connection()
+    if not conn:
+        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
+
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -1064,7 +1062,7 @@ async def create_bot_config(
                     name,
                     strategy_id,
                     mode,
-                    risk_profile,          -- ✅
+                    risk_profile,
                     budget_total_eur,
                     budget_daily_limit_eur,
                     budget_min_order_eur,
@@ -1087,14 +1085,30 @@ async def create_bot_config(
                     budget_max,
                 ),
             )
+
             bot_id = cur.fetchone()[0]
 
         conn.commit()
-        return {"ok": True, "id": bot_id}
+
+        # 🔥 DIRECT PORTFOLIO SNAPSHOT
+        try:
+            snapshot_all_for_user(user_id, bucket="1h")
+            snapshot_all_for_user(user_id, bucket="1d")
+        except Exception:
+            logger.exception(
+                f"⚠️ Snapshot mislukt na bot create | user_id={user_id}"
+            )
+
+        return {
+            "ok": True,
+            "id": bot_id,
+        }
 
     except Exception:
         conn.rollback()
+        logger.error("❌ Bot create failed", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot aanmaken mislukt")
+
     finally:
         conn.close()
 
