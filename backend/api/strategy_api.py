@@ -230,7 +230,7 @@ async def save_strategy(
                 curve_id,
                 data.get("frequency"),
                 str(data.get("entry")) if data.get("entry") else None,
-                data.get("target"),
+                json.dumps(data.get("targets")) if data.get("targets") else None,
                 str(data.get("stop_loss")) if data.get("stop_loss") else None,
                 data.get("explanation"),
                 data.get("risk_profile"),
