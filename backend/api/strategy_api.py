@@ -23,48 +23,45 @@ from backend.api.onboarding_api import mark_step_completed
 def format_strategy_row(row: dict):
     data = row.get("data") or {}
 
+    targets = row.get("targets")
+
+    if isinstance(targets, str):
+        try:
+            targets = json.loads(targets)
+        except:
+            targets = None
+
     return {
-        # Identity
         "id": row.get("id"),
         "setup_id": row.get("setup_id"),
 
-        # ⭐ FIX: altijd DB kolom gebruiken
-        "name": row.get("name"),
+        # ⭐ naam altijd correct
+        "name": row.get("name") or data.get("name"),
 
         "strategy_type": row.get("strategy_type"),
 
-        # Execution
         "execution_mode": row.get("execution_mode"),
         "base_amount": row.get("base_amount"),
         "frequency": row.get("frequency"),
         "decision_curve": row.get("decision_curve"),
 
-        # Curve metadata
         "decision_curve_name": data.get("decision_curve_name"),
         "decision_curve_id": data.get("decision_curve_id"),
 
-        # Core info
         "symbol": data.get("symbol"),
         "timeframe": data.get("timeframe"),
 
-        # Trading levels
         "entry": row.get("entry") or data.get("entry"),
-
-        # FIX: eerst kolom, daarna json
-        "targets": row.get("targets") or data.get("targets"),
-
+        "targets": targets or data.get("targets"),
         "stop_loss": row.get("stop_loss") or data.get("stop_loss"),
 
-        # Explanation
         "explanation": row.get("explanation") or data.get("explanation"),
         "ai_explanation": data.get("ai_explanation"),
 
-        # Meta
         "risk_profile": row.get("risk_profile") or data.get("risk_profile"),
         "tags": data.get("tags", []),
         "favorite": data.get("favorite", False),
 
-        # Timestamp
         "created_at": (
             row.get("created_at").isoformat()
             if row.get("created_at") else None
