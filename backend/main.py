@@ -111,6 +111,7 @@ safe_include("backend.api.dashboard_api", "dashboard_api")
 safe_include("backend.api.sidebar_api", "sidebar_api")
 safe_include("backend.api.agents_api", "agents_api")
 safe_include("backend.api.bot_api", "bot_api")
+safe_include("backend.api.system_api", "system_api")
 safe_include("backend.api.report_api", "report_api")
 
 safe_include("backend.api.report_public_api", "report_public_api")
