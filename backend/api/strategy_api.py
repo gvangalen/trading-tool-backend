@@ -203,7 +203,7 @@ async def save_strategy(
                     decision_curve_id,
                     frequency,
                     entry,
-                    target,
+                    targets,
                     stop_loss,
                     explanation,
                     risk_profile,
