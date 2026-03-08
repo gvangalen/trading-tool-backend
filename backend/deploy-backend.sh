@@ -15,7 +15,7 @@ export PATH="$NVM_DIR/versions/node/$(nvm current)/bin:$PATH"
 # DIRECTORIES
 # =====================================================
 BACKEND_DIR="$HOME/trading-tool-backend"
-ENV_FILE="$HOME/.secrets/trading.env"   # ✅ buiten repo
+ENV_FILE="$HOME/.secrets/trading.env"
 LOG_DIR="/var/log/pm2"
 
 mkdir -p "$LOG_DIR"
@@ -49,16 +49,7 @@ git reset --hard origin/main
 # INSTALL DEPENDENCIES
 # =====================================================
 echo "📦 Installing Python dependencies..."
-pip install --user -r backend/requirements.txt
-
-# =====================================================
-# STOP PM2 COMPLETELY
-# =====================================================
-echo "🛑 Stopping PM2..."
-pm2 delete all || true
-pm2 kill || true
-rm -f ~/.pm2/dump.pm2 || true
-sleep 2
+pip install -r backend/requirements.txt
 
 # =====================================================
 # LOAD ENV
@@ -81,6 +72,17 @@ fi
 
 echo "✅ Environment loaded"
 echo "➡ FRONTEND_URL=$FRONTEND_URL"
+
+# =====================================================
+# RESTART BACKEND SERVICES ONLY
+# =====================================================
+echo "♻️ Restarting backend services..."
+
+pm2 delete backend || true
+pm2 delete celery || true
+pm2 delete celery-beat || true
+
+sleep 2
 
 # =====================================================
 # START FASTAPI
