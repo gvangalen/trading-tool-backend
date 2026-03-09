@@ -63,13 +63,16 @@ def get_active_macro_indicators():
             rows = cur.fetchall()
 
         logger.info(f"📡 {len(rows)} actieve macro-indicatoren gevonden")
+
         return [
             {"name": r[0], "source": r[1], "link": r[2]}
             for r in rows
         ]
+
     except Exception:
         logger.error("❌ Fout bij ophalen macro-indicatoren", exc_info=True)
         return []
+
     finally:
         conn.close()
 
@@ -95,6 +98,7 @@ def fetch_value_from_source(indicator: dict):
         raise
 
     try:
+
         if "fear" in link or "alternative" in source:
             return float(data["data"][0]["value"])
 
@@ -143,11 +147,14 @@ def store_macro_data(payload: dict, user_id: int):
                 payload["action"],
                 payload["score"],
             ))
+
         conn.commit()
         logger.info(f"💾 Macro opgeslagen: {payload['name']} (user_id={user_id})")
+
     except Exception:
         conn.rollback()
         logger.error("❌ Fout bij opslaan macro_data", exc_info=True)
+
     finally:
         conn.close()
 
@@ -156,9 +163,11 @@ def store_macro_data(payload: dict, user_id: int):
 # 🧠 Macro ingestie
 # =====================================================
 def fetch_and_process_macro(user_id: int):
+
     logger.info(f"🚀 Macro ingestie gestart (user_id={user_id})")
 
     indicators = get_active_macro_indicators()
+
     if not indicators:
         logger.warning("⚠️ Geen actieve macro-indicatoren")
         return
@@ -166,19 +175,24 @@ def fetch_and_process_macro(user_id: int):
     success = 0
     skipped = 0
 
+    # ⭐ Scores één keer ophalen
+    score_data = generate_scores_db("macro", user_id=user_id)
+    scores = score_data.get("scores", {})
+
     for ind in indicators:
+
         raw_name = ind["name"]
         name = normalize_indicator_name(raw_name)
 
         try:
+
             value = fetch_value_from_source(ind)
+
             if value is None:
                 skipped += 1
                 continue
 
-            # ✅ FIX: GEEN data= ARGUMENT MEER
-            score_data = generate_scores_db("macro", user_id=user_id)
-            score = score_data.get("scores", {}).get(name)
+            score = scores.get(name)
 
             if not score:
                 logger.warning(f"⚠️ Geen scoreregels voor {name}")
