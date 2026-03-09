@@ -4,7 +4,7 @@ from celery import shared_task
 
 from backend.utils.db import get_db_connection
 from backend.utils.technical_interpreter import (
-    fetch_technical_value,              # ⬅️ async functie
+    fetch_technical_value,
     interpret_technical_indicator_db,
 )
 from backend.ai_agents.technical_ai_agent import run_technical_agent
@@ -17,30 +17,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-# =====================================================
-# 📅 Check of indicator vandaag al verwerkt is
-# =====================================================
-def already_fetched_today(indicator: str, user_id: int) -> bool:
-    conn = get_db_connection()
-    if not conn:
-        return False
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT 1
-                FROM technical_indicators
-                WHERE indicator = %s
-                  AND user_id = %s
-                  AND timestamp::date = CURRENT_DATE
-            """, (indicator, user_id))
-            return cur.fetchone() is not None
-    except Exception:
-        logger.error("⚠️ Fout bij check technical_indicators", exc_info=True)
-        return False
-    finally:
-        conn.close()
 
 
 # =====================================================
@@ -114,7 +90,7 @@ def get_active_technical_indicators(user_id: int):
 
 
 # =====================================================
-# 🧠 Technische ingestie (SYNC wrapper)
+# 🧠 Technische ingestie
 # =====================================================
 def fetch_and_process_technical(user_id: int):
     logger.info("========================================")
@@ -134,14 +110,9 @@ def fetch_and_process_technical(user_id: int):
         name = ind["name"]
         logger.info(f"➡️ Verwerk indicator: {name}")
 
-        if already_fetched_today(name, user_id):
-            logger.info(f"⏩ SKIP {name} — al verwerkt vandaag (user_id={user_id})")
-            continue
-
         try:
             logger.info(f"🌐 Ophalen waarde voor {name}")
 
-            # 🔥 FIX: async → sync
             result = asyncio.run(
                 fetch_technical_value(
                     name,
