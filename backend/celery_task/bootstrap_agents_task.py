@@ -1,11 +1,11 @@
 import logging
 from celery import shared_task
 
-from backend.tasks.market_task import fetch_market_data
-from backend.tasks.macro_task import generate_macro_scores
-from backend.tasks.technical_task import generate_technical_scores
-from backend.tasks.setup_validation_task import validate_setups
-from backend.tasks.ai_insights_task import generate_ai_category_insights
+from backend.celery_task.market_task import fetch_market_data
+from backend.celery_task.macro_task import fetch_macro_data
+from backend.celery_task.technical_task import fetch_technical_data_day
+from backend.celery_task.setup_task import run_setup_agent_daily
+from backend.celery_task.market_task import run_market_agent_daily
 from backend.services.portfolio_snapshot_service import snapshot_all_for_user
 
 logger = logging.getLogger(__name__)
@@ -27,21 +27,21 @@ def bootstrap_agents_task(self, user_id: int):
         logger.info("📊 Fetching market data")
         fetch_market_data()
 
-        # 2️⃣ Macro scores
-        logger.info("🌍 Generating macro scores")
-        generate_macro_scores(user_id=user_id)
+        # 2️⃣ Macro ingest
+        logger.info("🌍 Fetching macro indicators")
+        fetch_macro_data(user_id=user_id)
 
-        # 3️⃣ Technical scores
-        logger.info("📈 Generating technical scores")
-        generate_technical_scores(user_id=user_id)
+        # 3️⃣ Technical ingest
+        logger.info("📈 Fetching technical indicators")
+        fetch_technical_data_day(user_id=user_id)
 
         # 4️⃣ Setup validation
-        logger.info("🧠 Validating setups")
-        validate_setups(user_id=user_id)
+        logger.info("🧠 Running setup agent")
+        run_setup_agent_daily(user_id=user_id)
 
         # 5️⃣ AI insights
-        logger.info("🤖 Generating AI insights")
-        generate_ai_category_insights(user_id=user_id)
+        logger.info("🤖 Running market AI agent")
+        run_market_agent_daily(user_id=user_id)
 
         # 6️⃣ Portfolio snapshot
         logger.info("💰 Creating portfolio snapshot")
