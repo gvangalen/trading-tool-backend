@@ -362,15 +362,18 @@ def calculate_and_save_forward_returns():
 # 📊 USER-AWARE MARKET INDICATORS (PRO DEBUG + MAPPING)
 # =====================================================
 def fetch_and_process_market_indicators(user_id: int):
+
     logger.info("========================================")
     logger.info(f"📊 START market indicators ingestie (user_id={user_id})")
 
     conn = get_db_connection()
+
     if not conn:
         logger.error("❌ Geen DB-verbinding (market indicators)")
         return
 
     try:
+
         # =====================================================
         # 1️⃣ Actieve market-indicators ophalen
         # =====================================================
@@ -407,6 +410,7 @@ def fetch_and_process_market_indicators(user_id: int):
 
         volume_today = volumes[0]
         avg_volume = sum(volumes[1:]) / len(volumes[1:])
+
         volume_change_pct = (
             round(((volume_today - avg_volume) / avg_volume) * 100, 2)
             if avg_volume > 0 else None
@@ -439,9 +443,13 @@ def fetch_and_process_market_indicators(user_id: int):
         # 4️⃣ RAW indicator-waarden opslaan
         # =====================================================
         inserted = 0
+
         with conn.cursor() as cur:
+
             for name in indicators:
+
                 value = indicator_value_map.get(name)
+
                 if value is None:
                     continue
 
@@ -454,13 +462,15 @@ def fetch_and_process_market_indicators(user_id: int):
                     name,
                     value,
                 ))
+
                 inserted += 1
 
         conn.commit()
+
         logger.info(f"✅ Market indicator ingestie klaar | indicators={inserted}")
 
         # =====================================================
-        # 5️⃣ CENTRALE MARKET SCORING (ENIGE BRON)
+        # 5️⃣ CENTRALE MARKET SCORING (1x berekenen)
         # =====================================================
         market_scores = generate_scores_db(
             category="market",
@@ -470,10 +480,12 @@ def fetch_and_process_market_indicators(user_id: int):
         scores = market_scores.get("scores", {})
 
         # =====================================================
-        # 5️⃣b ENRICHMENT → score / trend / uitleg / actie
+        # 6️⃣ ENRICHMENT → score / trend / uitleg / actie
         # =====================================================
         with conn.cursor() as cur:
+
             for name, obj in scores.items():
+
                 cur.execute("""
                     UPDATE market_data_indicators
                     SET
@@ -494,12 +506,13 @@ def fetch_and_process_market_indicators(user_id: int):
                 ))
 
         # =====================================================
-        # 6️⃣ Opslaan market_score + top contributors
+        # 7️⃣ Opslaan market_score + top contributors
         # =====================================================
         market_score = market_scores.get("total_score", 10)
         top_contributors = market_scores.get("top_contributors", [])
 
         with conn.cursor() as cur:
+
             cur.execute("""
                 UPDATE daily_scores
                 SET
@@ -520,11 +533,13 @@ def fetch_and_process_market_indicators(user_id: int):
         logger.info("========================================")
 
     except Exception:
+
         conn.rollback()
         logger.exception("❌ Fout in market indicator ingestie")
+
     finally:
         conn.close()
-
+        
 # =====================================================
 # 🧠 MARKET AI AGENT — CELERY WRAPPER
 # =====================================================
