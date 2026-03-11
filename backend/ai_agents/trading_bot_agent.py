@@ -893,11 +893,23 @@ def _persist_decision_and_order(
     monitoring = bool(decision.get("monitoring", False))
     alerts_active = bool(decision.get("alerts_active", False))
 
+    # =====================================================
+    # POSITION SIZE + EXPOSURE
+    # =====================================================
+
+    position_size = float(decision.get("position_size") or decision.get("exposure_multiplier") or 1.0)
+
+    # =====================================================
+    # SCORES PAYLOAD
+    # =====================================================
+
     scores_payload = {
+
         "macro": _clamp_score(scores.get("macro", 10)),
         "technical": _clamp_score(scores.get("technical", 10)),
         "market": _clamp_score(scores.get("market", 10)),
         "setup": _clamp_score(scores.get("setup", 10)),
+
         "combined": _clamp_score(decision.get("score", 10)),
 
         "setup_match": setup_match,
@@ -910,7 +922,10 @@ def _persist_decision_and_order(
         "structure_bias": decision.get("structure_bias"),
         "trend_strength": decision.get("trend_strength"),
 
-        "exposure_multiplier": float(decision.get("exposure_multiplier") or 1.0),
+        # 🔑 POSITION SIZE
+        "position_size": position_size,
+        "exposure_multiplier": position_size,
+
         "max_risk_per_trade": decision.get("max_risk_per_trade"),
         "max_daily_allocation": decision.get("max_daily_allocation"),
 
@@ -928,10 +943,8 @@ def _persist_decision_and_order(
         "alerts_active": alerts_active,
     }
 
-    # =====================================================
-    # Insert / update decision
-    # =====================================================
     with conn.cursor() as cur:
+
         cur.execute(
             """
             INSERT INTO bot_decisions (
@@ -989,14 +1002,12 @@ def _persist_decision_and_order(
         )
 
         row = cur.fetchone()
+
         if not row:
             raise RuntimeError("Failed to persist bot decision")
 
         decision_id = int(row[0])
 
-    # =====================================================
-    # ALWAYS persist trade plan (UI contract)
-    # =====================================================
     plan = decision.get("trade_plan")
 
     if not plan:
@@ -1084,38 +1095,48 @@ def run_trading_bot_agent(
                 decision = {
 
                     "symbol": bot["symbol"],
-                    "action": "observe",
-                    "confidence": "low",
+                    "action": engine_action,
+                    "confidence": confidence_label,
+                
                     "score": _clamp_score(scores.get("market", 10)),
-                    "amount_eur": 0.0,
-
+                    "amount_eur": round(amount, 2),
+                
+                    # =================================================
+                    # POSITION SIZE (BOT BRAIN)
+                    # =================================================
+                
+                    "position_size": float(brain.get("exposure_multiplier") or 1.0),
+                
                     "setup_match": setup_match,
-                    "reasons": ["no_active_strategy_snapshot"],
-
+                    "reasons": [brain.get("reason") or "engine_decision"],
+                
+                    "regime": brain.get("regime"),
+                    "risk_state": brain.get("risk_state"),
+                
                     "market_health": market_health,
-                    "market_pressure": 50,
-                    "transition_risk": 50,
-
-                    "exposure_multiplier": 1.0,
-
+                    "market_pressure": float(brain.get("market_pressure") or 50),
+                    "transition_risk": float(brain.get("transition_risk") or 50),
+                
+                    "exposure_multiplier": float(
+                        brain.get("exposure_multiplier") or 1.0
+                    ),
+                
                     "max_risk_per_trade": max_risk_per_trade,
                     "max_daily_allocation": max_daily_allocation,
-
+                
                     "warnings": warnings,
-
-                    "regime": None,
-                    "risk_state": None,
-
-                    "trade_plan": _default_trade_plan(
+                
+                    "trade_plan": trade_plan
+                    or _default_trade_plan(
                         bot["symbol"],
-                        "observe",
-                        "no_active_strategy_snapshot",
-                        watch_levels=None,
+                        engine_action,
+                        "engine_watch_mode",
+                        watch_levels=brain.get("watch_levels"),
                     ),
-
-                    "watch_levels": None,
-                    "monitoring": False,
-                    "alerts_active": False,
+                
+                    "watch_levels": brain.get("watch_levels"),
+                    "monitoring": brain.get("monitoring", False),
+                    "alerts_active": brain.get("alerts_active", False),
                 }
 
             # =================================================
