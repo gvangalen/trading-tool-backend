@@ -1070,6 +1070,97 @@ def run_trading_bot_agent(
                 snapshot=snapshot,
             )
 
+            setup_payload = _get_strategy_setup_payload(
+                conn,
+                user_id=user_id,
+                strategy_id=bot["strategy_id"],
+                setup_id=bot.get("setup_id"),
+                setup_name=bot.get("strategy_type"),
+                symbol=bot.get("symbol"),
+            )
+
+            if snapshot:
+                if snapshot.get("entry") is not None:
+                    setup_payload["entry"] = snapshot.get("entry")
+
+                if snapshot.get("stop_loss") is not None:
+                    setup_payload["stop_loss"] = snapshot.get("stop_loss")
+
+                if snapshot.get("targets") is not None:
+                    setup_payload["targets"] = snapshot.get("targets")
+
+            # =================================================
+            # BOT BRAIN (ALTIJD)
+            # =================================================
+
+            brain = run_bot_brain(
+                user_id=user_id,
+                setup=setup_payload,
+                scores={
+                    "macro_score": scores.get("macro"),
+                    "technical_score": scores.get("technical"),
+                    "market_score": scores.get("market"),
+                    "setup_score": scores.get("setup"),
+                },
+            )
+
+            engine_action = (brain.get("action") or "hold").lower()
+
+            if engine_action not in ACTIONS:
+                engine_action = "hold"
+
+            amount = float(brain.get("amount_eur") or 0)
+
+            confidence_value = brain.get("confidence") or 0
+
+            if isinstance(confidence_value, (int, float)):
+
+                if confidence_value >= 0.7:
+                    confidence_label = "high"
+                elif confidence_value >= 0.4:
+                    confidence_label = "medium"
+                else:
+                    confidence_label = "low"
+
+            else:
+                confidence_label = "low"
+
+            # =================================================
+            # TRADE PLAN
+            # =================================================
+
+            trade_plan = None
+
+            if snapshot:
+
+                entry = snapshot.get("entry")
+                stop = snapshot.get("stop_loss")
+                targets = snapshot.get("targets") or []
+
+                if engine_action in ["buy", "sell"] and entry and stop:
+
+                    trade_plan = {
+                        "symbol": bot["symbol"],
+                        "side": engine_action,
+                        "entry_plan": [{"type": "limit", "price": entry}],
+                        "stop_loss": {"price": stop},
+                        "targets": [
+                            {"label": f"TP{i+1}", "price": t}
+                            for i, t in enumerate(targets)
+                        ],
+                        "risk": {
+                            "rr": brain.get("rr_ratio")
+                        },
+                    }
+
+            if not trade_plan:
+                trade_plan = _default_trade_plan(
+                    bot["symbol"],
+                    engine_action,
+                    "engine_watch_mode",
+                    watch_levels=brain.get("watch_levels"),
+                )
+
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
                 + float(scores.get("technical", 10)) * 0.3
@@ -1088,179 +1179,45 @@ def run_trading_bot_agent(
             warnings: List[str] = []
 
             # =================================================
-            # GEEN SNAPSHOT → OBSERVE MODE
+            # FINAL DECISION
             # =================================================
-            if snapshot is None:
 
-                decision = {
+            decision = {
 
-                    "symbol": bot["symbol"],
-                    "action": engine_action,
-                    "confidence": confidence_label,
-                
-                    "score": _clamp_score(scores.get("market", 10)),
-                    "amount_eur": round(amount, 2),
-                
-                    # =================================================
-                    # POSITION SIZE (BOT BRAIN)
-                    # =================================================
-                
-                    "position_size": float(brain.get("exposure_multiplier") or 1.0),
-                
-                    "setup_match": setup_match,
-                    "reasons": [brain.get("reason") or "engine_decision"],
-                
-                    "regime": brain.get("regime"),
-                    "risk_state": brain.get("risk_state"),
-                
-                    "market_health": market_health,
-                    "market_pressure": float(brain.get("market_pressure") or 50),
-                    "transition_risk": float(brain.get("transition_risk") or 50),
-                
-                    "exposure_multiplier": float(
-                        brain.get("exposure_multiplier") or 1.0
-                    ),
-                
-                    "max_risk_per_trade": max_risk_per_trade,
-                    "max_daily_allocation": max_daily_allocation,
-                
-                    "warnings": warnings,
-                
-                    "trade_plan": trade_plan
-                    or _default_trade_plan(
-                        bot["symbol"],
-                        engine_action,
-                        "engine_watch_mode",
-                        watch_levels=brain.get("watch_levels"),
-                    ),
-                
-                    "watch_levels": brain.get("watch_levels"),
-                    "monitoring": brain.get("monitoring", False),
-                    "alerts_active": brain.get("alerts_active", False),
-                }
+                "symbol": bot["symbol"],
+                "action": engine_action,
+                "confidence": confidence_label,
 
-            # =================================================
-            # SNAPSHOT BESTAAT → BOT BRAIN
-            # =================================================
-            else:
+                "score": _clamp_score(scores.get("market", 10)),
+                "amount_eur": round(amount, 2),
 
-                setup_payload = _get_strategy_setup_payload(
-                    conn,
-                    user_id=user_id,
-                    strategy_id=bot["strategy_id"],
-                    setup_id=bot.get("setup_id"),
-                    setup_name=bot.get("strategy_type"),
-                    symbol=bot.get("symbol"),
-                )
+                "position_size": float(brain.get("exposure_multiplier") or 1.0),
 
-                # snapshot data doorgeven aan brain
-                if snapshot.get("entry") is not None:
-                    setup_payload["entry"] = snapshot.get("entry")
+                "setup_match": setup_match,
+                "reasons": [brain.get("reason") or "engine_decision"],
 
-                if snapshot.get("stop_loss") is not None:
-                    setup_payload["stop_loss"] = snapshot.get("stop_loss")
+                "regime": brain.get("regime"),
+                "risk_state": brain.get("risk_state"),
 
-                if snapshot.get("targets") is not None:
-                    setup_payload["targets"] = snapshot.get("targets")
+                "market_health": market_health,
+                "market_pressure": float(brain.get("market_pressure") or 50),
+                "transition_risk": float(brain.get("transition_risk") or 50),
 
-                brain = run_bot_brain(
-                    user_id=user_id,
-                    setup=setup_payload,
-                    scores={
-                        "macro_score": scores.get("macro"),
-                        "technical_score": scores.get("technical"),
-                        "market_score": scores.get("market"),
-                        "setup_score": scores.get("setup"),
-                    },
-                )
+                "exposure_multiplier": float(
+                    brain.get("exposure_multiplier") or 1.0
+                ),
 
-                engine_action = (brain.get("action") or "hold").lower()
+                "max_risk_per_trade": max_risk_per_trade,
+                "max_daily_allocation": max_daily_allocation,
 
-                if engine_action not in ACTIONS:
-                    engine_action = "hold"
+                "warnings": warnings,
 
-                amount = float(brain.get("amount_eur") or 0.0)
+                "trade_plan": trade_plan,
 
-                confidence_label = "low"
-
-                if isinstance(brain.get("confidence"), (int, float)):
-
-                    c = float(brain.get("confidence"))
-
-                    confidence_label = (
-                        "high" if c >= 0.7 else
-                        "medium" if c >= 0.4 else
-                        "low"
-                    )
-
-                entry = snapshot.get("entry")
-                stop = snapshot.get("stop_loss")
-                targets = snapshot.get("targets") or []
-
-                trade_plan = None
-
-                # =================================================
-                # ALLEEN ECHTE TRADE → EXECUTION PLAN
-                # =================================================
-                if engine_action in ["buy", "sell"] and entry and stop:
-
-                    trade_plan = {
-                        "symbol": bot["symbol"],
-                        "side": engine_action,
-                        "entry_plan": [{"type": "limit", "price": entry}],
-                        "stop_loss": {"price": stop},
-                        "targets": [
-                            {"label": f"TP{i+1}", "price": t}
-                            for i, t in enumerate(targets)
-                        ],
-                        "risk": {
-                            "rr": brain.get("rr_ratio")
-                        },
-                    }
-
-                # =================================================
-                # FINAL DECISION
-                # =================================================
-                decision = {
-
-                    "symbol": bot["symbol"],
-                    "action": engine_action,
-                    "confidence": confidence_label,
-                    "score": _clamp_score(scores.get("market", 10)),
-                    "amount_eur": round(amount, 2),
-
-                    "setup_match": setup_match,
-                    "reasons": [brain.get("reason") or "engine_decision"],
-
-                    "regime": brain.get("regime"),
-                    "risk_state": brain.get("risk_state"),
-
-                    "market_health": market_health,
-                    "market_pressure": float(brain.get("market_pressure") or 50),
-                    "transition_risk": float(brain.get("transition_risk") or 50),
-
-                    "exposure_multiplier": float(
-                        brain.get("exposure_multiplier") or 1.0
-                    ),
-
-                    "max_risk_per_trade": max_risk_per_trade,
-                    "max_daily_allocation": max_daily_allocation,
-
-                    "warnings": warnings,
-
-                    # observe / hold → watch plan
-                    "trade_plan": trade_plan
-                    or _default_trade_plan(
-                        bot["symbol"],
-                        engine_action,
-                        "engine_watch_mode",
-                        watch_levels=brain.get("watch_levels"),
-                    ),
-
-                    "watch_levels": brain.get("watch_levels"),
-                    "monitoring": brain.get("monitoring", False),
-                    "alerts_active": brain.get("alerts_active", False),
-                }
+                "watch_levels": brain.get("watch_levels"),
+                "monitoring": brain.get("monitoring", False),
+                "alerts_active": brain.get("alerts_active", False),
+            }
 
             decision_id = _persist_decision_and_order(
                 conn=conn,
