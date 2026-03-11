@@ -50,12 +50,6 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 
 
 def _normalize_scores(scores: Dict[str, float]) -> Dict[str, float]:
-    """
-    Accepteert zowel:
-      - {macro_score, technical_score, market_score, setup_score}
-    als:
-      - {macro, technical, market, setup}
-    """
     return {
         "macro_score": scores.get("macro_score", scores.get("macro", 10)),
         "technical_score": scores.get("technical_score", scores.get("technical", 10)),
@@ -77,6 +71,67 @@ def _classify_risk_state(transition_risk: float, pressure: float) -> str:
 
 
 # =========================================================
+# 🆕 Market Cycle
+# =========================================================
+
+
+def _determine_market_cycle(
+    trend_strength: float,
+    market_pressure: float,
+    transition_risk: float,
+) -> str:
+
+    if trend_strength < 0.35 and market_pressure < 0.45:
+        return "accumulation"
+
+    if trend_strength >= 0.35 and market_pressure >= 0.45 and transition_risk < 0.6:
+        return "expansion"
+
+    if trend_strength >= 0.55 and transition_risk > 0.5:
+        return "distribution"
+
+    if trend_strength < 0.35 and transition_risk > 0.6:
+        return "correction"
+
+    return "neutral"
+
+
+# =========================================================
+# 🆕 Temperature
+# =========================================================
+
+
+def _determine_temperature(market_pressure: float) -> str:
+
+    if market_pressure > 0.75:
+        return "hot"
+
+    if market_pressure > 0.55:
+        return "warm"
+
+    if market_pressure > 0.35:
+        return "cool"
+
+    return "cold"
+
+
+# =========================================================
+# 🆕 Trend Detection
+# =========================================================
+
+
+def _determine_trend(value: float) -> str:
+
+    if value > 0.65:
+        return "bullish"
+
+    if value < 0.35:
+        return "bearish"
+
+    return "trading_range"
+
+
+# =========================================================
 # Core brain
 # =========================================================
 
@@ -88,21 +143,6 @@ def run_bot_brain(
     scores: Dict[str, float],
     action_rules: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
-    """
-    Single-source decision brain.
-
-    Output contract (used by trading_bot_agent):
-      - action: buy|hold (optioneel later sell)
-      - amount_eur: float
-      - confidence: 0..1
-      - reason: str
-      - market_pressure: 0..1
-      - transition_risk: 0..1
-      - exposure_multiplier: float
-      - watch_levels: dict|None
-      - monitoring: bool
-      - alerts_active: bool
-    """
 
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
     scores = _normalize_scores(scores)
@@ -110,53 +150,71 @@ def run_bot_brain(
     # -------------------------------------------------
     # 1️⃣ Regime Memory
     # -------------------------------------------------
+
     regime_memory = None
     regime_label = None
     regime_confidence = None
 
     try:
         regime_memory = get_regime_memory(user_id)
+
         if isinstance(regime_memory, dict):
             regime_label = regime_memory.get("regime_label")
             regime_confidence = regime_memory.get("confidence")
+
     except Exception as e:
         logger.warning("Regime memory unavailable: %s", e)
 
     # -------------------------------------------------
     # 2️⃣ Transition Risk
     # -------------------------------------------------
+
     try:
         transition_risk = float(get_transition_risk_value(user_id))
         transition_risk = _clamp(transition_risk, 0.0, 1.0)
         transition_snapshot = compute_transition_detector(user_id)
+
     except Exception as e:
+
         logger.warning("Transition detector fallback: watch mode %s", e)
+
         transition_risk = 0.5
         transition_snapshot = None
 
     # -------------------------------------------------
     # 3️⃣ Market Pressure
     # -------------------------------------------------
+
     try:
-        market_pressure = float(get_market_pressure(user_id=user_id, scores=scores))
+
+        market_pressure = float(
+            get_market_pressure(user_id=user_id, scores=scores)
+        )
+
         market_pressure = _clamp(market_pressure, 0.0, 1.0)
+
     except Exception as e:
+
         logger.warning("Market pressure fallback: %s", e)
         market_pressure = 0.5
 
     # -------------------------------------------------
     # 4️⃣ Volatility Regime
     # -------------------------------------------------
+
     if transition_risk > 0.7:
         volatility_state = "expanding"
+
     elif market_pressure < 0.35:
         volatility_state = "compressed"
+
     else:
         volatility_state = "normal"
 
     # -------------------------------------------------
     # 5️⃣ Trend Strength
     # -------------------------------------------------
+
     trend_strength = (
         float(scores.get("technical_score", 10)) * 0.6
         + float(scores.get("market_score", 10)) * 0.4
@@ -165,21 +223,58 @@ def run_bot_brain(
     # -------------------------------------------------
     # 6️⃣ Structure Bias
     # -------------------------------------------------
+
     if trend_strength > 0.65:
         structure_bias = "trend"
+
     elif trend_strength < 0.35:
         structure_bias = "range"
+
     else:
         structure_bias = "neutral"
 
     # -------------------------------------------------
+    # 🆕 6.5 Market Cycle
+    # -------------------------------------------------
+
+    market_cycle = _determine_market_cycle(
+        trend_strength=trend_strength,
+        market_pressure=market_pressure,
+        transition_risk=transition_risk,
+    )
+
+    # -------------------------------------------------
+    # 🆕 6.6 Temperature
+    # -------------------------------------------------
+
+    temperature = _determine_temperature(market_pressure)
+
+    # -------------------------------------------------
+    # 🆕 6.7 Multi timeframe trends
+    # -------------------------------------------------
+
+    short_trend = _determine_trend(trend_strength)
+
+    mid_trend = _determine_trend(
+        (trend_strength * 0.7) + (market_pressure * 0.3)
+    )
+
+    long_trend = _determine_trend(
+        (trend_strength * 0.5)
+        + (market_pressure * 0.3)
+        + ((1 - transition_risk) * 0.2)
+    )
+
+    # -------------------------------------------------
     # 7️⃣ Risk Environment
     # -------------------------------------------------
+
     risk_environment = ((1.0 - transition_risk) * 0.5) + (market_pressure * 0.5)
 
     # -------------------------------------------------
     # 8️⃣ Exposure Multiplier
     # -------------------------------------------------
+
     exposure_pack = compute_exposure_multiplier(
         regime_memory=regime_memory,
         transition_risk=transition_risk,
@@ -194,102 +289,90 @@ def run_bot_brain(
     # -------------------------------------------------
     # 9️⃣ Base Amount
     # -------------------------------------------------
+
     try:
-        base_amount = float(decide_amount(setup=setup, scores=scores))
+
+        base_amount = float(
+            decide_amount(setup=setup, scores=scores)
+        )
+
         base_amount = max(0.0, base_amount)
         base_reason = "Base amount via DecisionEngine."
+
     except Exception as e:
+
         base_amount = 0.0
         base_reason = f"DecisionEngine fallback: {e}"
 
     # -------------------------------------------------
     # 🔟 Apply Exposure
     # -------------------------------------------------
+
     final_amount = apply_exposure_to_amount(base_amount, exposure_multiplier)
 
     # -------------------------------------------------
     # 11️⃣ Risk State
     # -------------------------------------------------
+
     risk_state = _classify_risk_state(transition_risk, market_pressure)
 
     # -------------------------------------------------
     # 12️⃣ Action Logic
     # -------------------------------------------------
+
     market_score = _safe_float(scores.get("market_score"), 10) or 10.0
+
     action = "hold"
     reason_parts = []
 
     if base_amount <= 0 or final_amount <= 0:
+
         reason_parts.append("No executable size.")
         reason_parts.append(base_reason)
 
     elif transition_risk > float(rules["max_transition_risk_to_buy"]):
+
         reason_parts.append("Transition risk too high.")
 
     elif market_pressure < float(rules["min_market_pressure_to_buy"]):
+
         reason_parts.append("Market pressure too low.")
 
     elif market_score < float(rules["min_market_score_to_buy"]):
+
         reason_parts.append("Market score below threshold.")
 
     else:
+
         action = "buy"
         reason_parts.append("All allocator conditions satisfied.")
 
     # -------------------------------------------------
-    # 🆕 13️⃣ WATCH LEVELS (KEY UPDATE)
+    # Confidence
     # -------------------------------------------------
-    watch_levels = None
-    
-    entry_raw = (
-        setup.get("entry_price")
-        or setup.get("entry")
-        or setup.get("trigger_price")
-    )
-    
-    entry = None
-    
-    try:
-        if entry_raw is not None:
-            entry = float(entry_raw)
-    except Exception:
-        entry = None
-    
-    if entry is not None:
-        watch_levels = {
-            "pullback_zone": round(entry * 0.96, 2),
-            "breakout_trigger": round(entry * 1.03, 2),
-        }
-    
-    # monitoring active when bot is waiting
-    monitoring = action == "hold"
-    
-    # alerts active when market is tradable but waiting for trigger
-    alerts_active = (
-        monitoring
-        and transition_risk < 0.75
-        and market_pressure > 0.35
-    )
 
-    # -------------------------------------------------
-    # 14️⃣ Confidence
-    # -------------------------------------------------
     confidence_components = []
 
     if isinstance(regime_confidence, (int, float)):
+
         rc = float(regime_confidence)
+
         if rc > 1:
             rc = rc / 100.0
+
         confidence_components.append(_clamp(rc, 0.0, 1.0))
 
     confidence_components.append(_clamp(1.0 - transition_risk, 0.0, 1.0))
     confidence_components.append(_clamp(market_pressure, 0.0, 1.0))
 
-    confidence = round(sum(confidence_components) / max(1, len(confidence_components)), 3)
+    confidence = round(
+        sum(confidence_components) / max(1, len(confidence_components)), 3
+    )
 
     # -------------------------------------------------
-    # 15️⃣ Trade Quality
+    # Trade Quality
     # -------------------------------------------------
+
     trade_quality = round(
         (
             risk_environment * 0.4
@@ -303,32 +386,43 @@ def run_bot_brain(
     # -------------------------------------------------
     # FINAL OUTPUT
     # -------------------------------------------------
+
     return {
         "date": date.today().isoformat(),
+
         "action": action,
         "amount_eur": round(float(final_amount), 2),
         "confidence": confidence,
         "reason": " ".join(reason_parts),
+
         # regime
         "regime": regime_label,
-        "risk_state": risk_state,
+        "cycle": market_cycle,
+        "temperature": temperature,
+
+        # trends
+        "short_trend": short_trend,
+        "mid_trend": mid_trend,
+        "long_trend": long_trend,
+
         # market state
         "market_pressure": market_pressure,
         "transition_risk": transition_risk,
         "volatility_state": volatility_state,
+
         # structure
         "trend_strength": trend_strength,
         "structure_bias": structure_bias,
+
         # environment
         "risk_environment": risk_environment,
+
         # sizing
         "exposure_multiplier": exposure_multiplier,
+
         # scoring
         "trade_quality": trade_quality,
-        # 🆕 WATCH MODE INTELLIGENCE
-        "watch_levels": watch_levels,
-        "monitoring": monitoring,
-        "alerts_active": alerts_active,
+
         # debug
         "debug": {
             "scores": scores,
