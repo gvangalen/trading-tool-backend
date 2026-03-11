@@ -105,25 +105,15 @@ async def get_market_intelligence(
                 "long": brain.get("long_trend"),
             },
 
-            "metrics": {
-
-                "market_pressure": brain.get("market_pressure"),
-                "transition_risk": brain.get("transition_risk"),
-
-                # dashboard label
-                "setup_quality": brain.get("trade_quality"),
-
-                "volatility": brain.get("volatility_state"),
-                "trend_strength": brain.get("trend_strength"),
-
-                "position_size": brain.get("exposure_multiplier"),
-            },
+            # 👇 metrics direct uit bot brain
+            "metrics": brain.get("metrics", {}),
 
             # extra informatie voor andere panels
             "state": {
                 "risk_environment": brain.get("risk_environment"),
                 "risk_state": brain.get("risk_state"),
                 "structure_bias": brain.get("structure_bias"),
+                "volatility_state": brain.get("volatility_state"),
             },
 
             "generated_at": date.today().isoformat(),
@@ -132,7 +122,6 @@ async def get_market_intelligence(
     except Exception:
 
         logger.exception("❌ market intelligence error")
-
         raise
 
     finally:
