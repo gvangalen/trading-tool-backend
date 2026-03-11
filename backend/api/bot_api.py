@@ -683,6 +683,7 @@ async def generate_bot_today(
     - executed = HARD LOCK
     - skipped = MAG opnieuw gegenereerd worden
     """
+
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 
     user_id = current_user["id"]
@@ -710,6 +711,7 @@ async def generate_bot_today(
 
     try:
         with conn.cursor() as cur:
+
             # ==========================================
             # Check bestaande decision vandaag
             # ==========================================
@@ -725,6 +727,7 @@ async def generate_bot_today(
                 """,
                 (user_id, bot_id, report_date),
             )
+
             row = cur.fetchone()
 
             if row:
@@ -764,6 +767,7 @@ async def generate_bot_today(
                 """,
                 (bot_id, user_id),
             )
+
             brow = cur.fetchone()
             mode = brow[0] if brow else "manual"
 
@@ -772,6 +776,7 @@ async def generate_bot_today(
         # ==========================================
         # 🚀 RUN TRADING BOT AGENT
         # ==========================================
+
         logger.info(
             f"🤖 run_trading_bot_agent user_id={user_id} bot_id={bot_id} mode={mode}"
         )
@@ -780,12 +785,13 @@ async def generate_bot_today(
             user_id=user_id,
             report_date=report_date,
             bot_id=bot_id,
-            auto_execute=(mode == "auto"),
+            mode=mode,   # ✅ FIX: auto_execute verwijderd
         )
 
         # ==========================================
         # FAILSAFE RESPONSE
         # ==========================================
+
         if not result or not result.get("ok"):
             logger.warning(
                 f"⚠️ bot agent failed user_id={user_id} bot_id={bot_id}"
@@ -798,8 +804,9 @@ async def generate_bot_today(
             }
 
         # ==========================================
-        # ✅ SUCCESS
+        # SUCCESS
         # ==========================================
+
         return {
             "ok": True,
             "bot_id": bot_id,
@@ -818,7 +825,6 @@ async def generate_bot_today(
 
     finally:
         conn.close()
-
 
 # =====================================
 # ✅ MARK EXECUTED (human-in-the-loop)
