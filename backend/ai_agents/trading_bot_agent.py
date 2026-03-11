@@ -905,7 +905,7 @@ def _persist_decision_and_order(
     )
 
     # =====================================================
-    # GUARDRAILS (FIX)
+    # GUARDRAILS
     # =====================================================
 
     guardrails_payload = {
@@ -958,6 +958,9 @@ def _persist_decision_and_order(
         "alerts_active": alerts_active,
     }
 
+    scores_json = json.dumps(scores_payload)
+    reasons_json = json.dumps(reasons)
+
     with conn.cursor() as cur:
 
         cur.execute(
@@ -984,7 +987,7 @@ def _persist_decision_and_order(
                 %s,%s,
                 NOW(),
                 %s,%s,%s,
-                %s,%s,
+                %s::jsonb,%s::jsonb,
                 'planned',
                 NOW(), NOW()
             )
@@ -1011,8 +1014,8 @@ def _persist_decision_and_order(
                 action,
                 confidence,
                 amount_eur,
-                json.dumps(scores_payload),
-                json.dumps(reasons),
+                scores_json,
+                reasons_json,
             ),
         )
 
@@ -1022,6 +1025,10 @@ def _persist_decision_and_order(
             raise RuntimeError("Failed to persist bot decision")
 
         decision_id = int(row[0])
+
+    # =====================================================
+    # TRADE PLAN
+    # =====================================================
 
     plan = decision.get("trade_plan")
 
