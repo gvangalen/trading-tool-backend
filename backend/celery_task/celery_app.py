@@ -103,7 +103,7 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 4️⃣ PORTFOLIO SNAPSHOTS (15 MIN)  ⭐ NIEUW
+    # 4️⃣ PORTFOLIO SNAPSHOTS (15 MIN)
     # =====================================================
     "dispatch_portfolio_snapshots": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
@@ -136,11 +136,11 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 7️⃣ AI CATEGORY AGENTS (4x PER DAG)
+    # 7️⃣ AI CATEGORY AGENTS (1x PER DAG)
     # =====================================================
     "dispatch_macro_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour="0,6,12,18", minute=5),
+        "schedule": crontab(hour=4, minute=5),
         "kwargs": {
             "task_name": "backend.celery_task.macro_task.run_macro_agent_daily"
         },
@@ -148,7 +148,7 @@ celery_app.conf.beat_schedule = {
 
     "dispatch_market_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour="0,6,12,18", minute=10),
+        "schedule": crontab(hour=4, minute=10),
         "kwargs": {
             "task_name": "backend.celery_task.market_task.run_market_agent_daily"
         },
@@ -156,7 +156,7 @@ celery_app.conf.beat_schedule = {
 
     "dispatch_technical_ai": {
         "task": "backend.celery_task.dispatcher.dispatch_for_all_users",
-        "schedule": crontab(hour="0,6,12,18", minute=15),
+        "schedule": crontab(hour=4, minute=15),
         "kwargs": {
             "task_name": "backend.celery_task.technical_task.run_technical_agent_daily"
         },
@@ -185,11 +185,11 @@ celery_app.conf.beat_schedule = {
     },
 
     # =====================================================
-    # 🔟 MASTER AI SCORE
+    # 🔟 MASTER AI SCORE (1x PER DAG)
     # =====================================================
     "run_master_score_ai": {
         "task": "backend.celery_task.store_daily_scores_task.run_master_score_ai",
-        "schedule": crontab(hour="0,6,12,18", minute=30),
+        "schedule": crontab(hour=4, minute=30),
     },
 
     # =====================================================
@@ -219,7 +219,7 @@ try:
     import backend.celery_task.strategy_task
     import backend.celery_task.trading_bot_task
     import backend.celery_task.regime_memory_task
-    import backend.celery_task.portfolio_snapshot_task   # ⭐ NIEUW
+    import backend.celery_task.portfolio_snapshot_task
     import backend.celery_task.bootstrap_agents_task
 
     import backend.celery_task.daily_report_task
