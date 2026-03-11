@@ -895,7 +895,7 @@ def _persist_decision_and_order(
     alerts_active = bool(decision.get("alerts_active", False))
 
     # =====================================================
-    # POSITION SIZE + EXPOSURE
+    # POSITION SIZE
     # =====================================================
 
     position_size = float(
@@ -903,6 +903,17 @@ def _persist_decision_and_order(
         or decision.get("exposure_multiplier")
         or 1.0
     )
+
+    # =====================================================
+    # GUARDRAILS (FIX)
+    # =====================================================
+
+    guardrails_payload = {
+        "kill_switch": True,
+        "max_trade_risk_eur": decision.get("max_risk_per_trade"),
+        "daily_allocation_eur": decision.get("max_daily_allocation"),
+        "position_size": position_size,
+    }
 
     # =====================================================
     # SCORES PAYLOAD
@@ -927,12 +938,8 @@ def _persist_decision_and_order(
         "structure_bias": decision.get("structure_bias"),
         "trend_strength": decision.get("trend_strength"),
 
-        # 🔑 POSITION SIZE
         "position_size": position_size,
         "exposure_multiplier": position_size,
-
-        "max_risk_per_trade": decision.get("max_risk_per_trade"),
-        "max_daily_allocation": decision.get("max_daily_allocation"),
 
         "regime": decision.get("regime"),
         "risk_state": decision.get("risk_state"),
@@ -943,8 +950,8 @@ def _persist_decision_and_order(
         if isinstance(decision.get("warnings"), list)
         else [],
 
-        # ⭐ GUARDRAILS FIX
-        "guardrails": decision.get("guardrails") or {},
+        # ⭐ GUARDRAILS
+        "guardrails": guardrails_payload,
 
         "watch_levels": watch_levels,
         "monitoring": monitoring,
@@ -1004,7 +1011,7 @@ def _persist_decision_and_order(
                 action,
                 confidence,
                 amount_eur,
-                json.dumps(scores_payload, default=float),
+                json.dumps(scores_payload),
                 json.dumps(reasons),
             ),
         )
