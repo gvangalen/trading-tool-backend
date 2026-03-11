@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Depends
 
 from backend.utils.auth_utils import get_current_user
-from backend.tasks.bootstrap_agents_task import bootstrap_agents_task
+from backend.celery_tasks.bootstrap_agents_task import bootstrap_agents_task
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
