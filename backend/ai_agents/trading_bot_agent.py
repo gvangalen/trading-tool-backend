@@ -1181,39 +1181,45 @@ def run_trading_bot_agent(
             # =================================================
             # FINAL DECISION
             # =================================================
-
+            
+            # Position size uit EXACT dezelfde bron als market_intelligence
+            position_size = float(
+                brain.get("metrics", {}).get("position_size")
+                or brain.get("position_size")
+                or brain.get("exposure_multiplier")
+                or 1.0
+            )
+            
             decision = {
-
+            
                 "symbol": bot["symbol"],
                 "action": engine_action,
                 "confidence": confidence_label,
-
+            
                 "score": _clamp_score(scores.get("market", 10)),
                 "amount_eur": round(amount, 2),
-
-                "position_size": float(brain.get("exposure_multiplier") or 1.0),
-
+            
+                # 👇 nu identiek aan Market Intelligence
+                "position_size": position_size,
+                "exposure_multiplier": position_size,
+            
                 "setup_match": setup_match,
                 "reasons": [brain.get("reason") or "engine_decision"],
-
+            
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
-
+            
                 "market_health": market_health,
                 "market_pressure": float(brain.get("market_pressure") or 50),
                 "transition_risk": float(brain.get("transition_risk") or 50),
-
-                "exposure_multiplier": float(
-                    brain.get("exposure_multiplier") or 1.0
-                ),
-
+            
                 "max_risk_per_trade": max_risk_per_trade,
                 "max_daily_allocation": max_daily_allocation,
-
+            
                 "warnings": warnings,
-
+            
                 "trade_plan": trade_plan,
-
+            
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring", False),
                 "alerts_active": brain.get("alerts_active", False),
