@@ -668,6 +668,9 @@ async def get_bot_history(
 # 🔁 FORCE GENERATE (vandaag / datum)
 # - Lazy import van trading_bot_agent
 # =====================================
+# =====================================
+# 🔁 FORCE GENERATE (vandaag / datum)
+# =====================================
 @router.post("/bot/generate/today")
 async def generate_bot_today(
     request: Request,
@@ -756,21 +759,6 @@ async def generate_bot_today(
                         (decision_id, user_id),
                     )
 
-            # ==========================================
-            # Bot mode ophalen (manual / auto)
-            # ==========================================
-            cur.execute(
-                """
-                SELECT mode
-                FROM bot_configs
-                WHERE id=%s AND user_id=%s
-                """,
-                (bot_id, user_id),
-            )
-
-            brow = cur.fetchone()
-            mode = brow[0] if brow else "manual"
-
         conn.commit()
 
         # ==========================================
@@ -778,14 +766,13 @@ async def generate_bot_today(
         # ==========================================
 
         logger.info(
-            f"🤖 run_trading_bot_agent user_id={user_id} bot_id={bot_id} mode={mode}"
+            f"🤖 run_trading_bot_agent user_id={user_id} bot_id={bot_id}"
         )
 
         result = run_trading_bot_agent(
             user_id=user_id,
             report_date=report_date,
             bot_id=bot_id,
-            mode=mode,   # ✅ FIX: auto_execute verwijderd
         )
 
         # ==========================================
@@ -800,7 +787,6 @@ async def generate_bot_today(
                 "ok": False,
                 "bot_id": bot_id,
                 "date": str(report_date),
-                "mode": mode,
             }
 
         # ==========================================
@@ -811,7 +797,6 @@ async def generate_bot_today(
             "ok": True,
             "bot_id": bot_id,
             "date": str(report_date),
-            "mode": mode,
         }
 
     except Exception:
@@ -820,7 +805,6 @@ async def generate_bot_today(
             "ok": False,
             "bot_id": bot_id,
             "date": str(report_date),
-            "mode": "unknown",
         }
 
     finally:
