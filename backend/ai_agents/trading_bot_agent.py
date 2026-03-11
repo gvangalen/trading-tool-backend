@@ -1090,7 +1090,7 @@ def run_trading_bot_agent(
                     setup_payload["targets"] = snapshot.get("targets")
 
             # =================================================
-            # BOT BRAIN (ALTIJD)
+            # BOT BRAIN
             # =================================================
 
             brain = run_bot_brain(
@@ -1104,26 +1104,46 @@ def run_trading_bot_agent(
                 },
             )
 
-            engine_action = (brain.get("action") or "hold").lower()
+            # -------------------------------------------------
+            # SAFE ENGINE ACTION
+            # -------------------------------------------------
 
-            if engine_action not in ACTIONS:
-                engine_action = "hold"
+            engine_action = _normalize_action(brain.get("action"))
 
-            amount = float(brain.get("amount_eur") or 0)
+            # -------------------------------------------------
+            # CONFIDENCE
+            # -------------------------------------------------
 
-            confidence_value = brain.get("confidence") or 0
+            confidence_value = brain.get("confidence")
 
             if isinstance(confidence_value, (int, float)):
-
                 if confidence_value >= 0.7:
                     confidence_label = "high"
                 elif confidence_value >= 0.4:
                     confidence_label = "medium"
                 else:
                     confidence_label = "low"
-
             else:
                 confidence_label = "low"
+
+            # -------------------------------------------------
+            # POSITION SIZE (SOURCE OF TRUTH)
+            # -------------------------------------------------
+
+            metrics = brain.get("metrics") or {}
+
+            position_size = float(
+                metrics.get("position_size")
+                or brain.get("position_size")
+                or brain.get("exposure_multiplier")
+                or 1.0
+            )
+
+            # -------------------------------------------------
+            # AMOUNT
+            # -------------------------------------------------
+
+            amount = float(brain.get("amount_eur") or 0)
 
             # =================================================
             # TRADE PLAN
@@ -1148,9 +1168,7 @@ def run_trading_bot_agent(
                             {"label": f"TP{i+1}", "price": t}
                             for i, t in enumerate(targets)
                         ],
-                        "risk": {
-                            "rr": brain.get("rr_ratio")
-                        },
+                        "risk": {"rr": brain.get("rr_ratio")},
                     }
 
             if not trade_plan:
@@ -1160,6 +1178,10 @@ def run_trading_bot_agent(
                     "engine_watch_mode",
                     watch_levels=brain.get("watch_levels"),
                 )
+
+            # =================================================
+            # MARKET HEALTH
+            # =================================================
 
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
@@ -1181,45 +1203,37 @@ def run_trading_bot_agent(
             # =================================================
             # FINAL DECISION
             # =================================================
-            
-            # Position size uit EXACT dezelfde bron als market_intelligence
-            position_size = float(
-                brain.get("metrics", {}).get("position_size")
-                or brain.get("position_size")
-                or brain.get("exposure_multiplier")
-                or 1.0
-            )
-            
+
             decision = {
-            
+
                 "symbol": bot["symbol"],
                 "action": engine_action,
                 "confidence": confidence_label,
-            
+
                 "score": _clamp_score(scores.get("market", 10)),
                 "amount_eur": round(amount, 2),
-            
-                # 👇 nu identiek aan Market Intelligence
+
+                # 🔑 EXACT dezelfde multiplier als Market Intelligence
                 "position_size": position_size,
                 "exposure_multiplier": position_size,
-            
+
                 "setup_match": setup_match,
                 "reasons": [brain.get("reason") or "engine_decision"],
-            
+
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
-            
+
                 "market_health": market_health,
                 "market_pressure": float(brain.get("market_pressure") or 50),
                 "transition_risk": float(brain.get("transition_risk") or 50),
-            
+
                 "max_risk_per_trade": max_risk_per_trade,
                 "max_daily_allocation": max_daily_allocation,
-            
+
                 "warnings": warnings,
-            
+
                 "trade_plan": trade_plan,
-            
+
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring", False),
                 "alerts_active": brain.get("alerts_active", False),
@@ -1242,6 +1256,7 @@ def run_trading_bot_agent(
                 "action": decision["action"],
                 "confidence": decision["confidence"],
                 "amount_eur": decision["amount_eur"],
+                "position_size": position_size,
             })
 
         conn.commit()
