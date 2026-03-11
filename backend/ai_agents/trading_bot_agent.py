@@ -898,7 +898,11 @@ def _persist_decision_and_order(
     # POSITION SIZE + EXPOSURE
     # =====================================================
 
-    position_size = float(decision.get("position_size") or decision.get("exposure_multiplier") or 1.0)
+    position_size = float(
+        decision.get("position_size")
+        or decision.get("exposure_multiplier")
+        or 1.0
+    )
 
     # =====================================================
     # SCORES PAYLOAD
@@ -938,6 +942,9 @@ def _persist_decision_and_order(
         "warnings": decision.get("warnings")
         if isinstance(decision.get("warnings"), list)
         else [],
+
+        # ⭐ GUARDRAILS FIX
+        "guardrails": decision.get("guardrails") or {},
 
         "watch_levels": watch_levels,
         "monitoring": monitoring,
@@ -1025,7 +1032,6 @@ def _persist_decision_and_order(
     )
 
     return decision_id
-
 
 # =====================================================
 # 🚀 PUBLIC ENTRYPOINT (KEEP NAME!)
