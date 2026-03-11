@@ -346,10 +346,8 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             if bot_id in decisions_by_bot:
                 continue
 
-            # 🔧 FIX: veilige bot lookup
             bot = bots_by_id.get(bot_id)
             if not bot:
-                logger.warning(f"⚠️ Decision verwijst naar onbekende bot_id={bot_id}")
                 continue
 
             scores_payload = _safe_json(scores_json, {})
@@ -370,7 +368,15 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "symbol": symbol,
                 "action": action,
                 "confidence": confidence,
+
                 "scores": scores_payload or daily_scores,
+
+                # 🔧 FIX → frontend gebruikt nu deze metrics
+                "metrics": {
+                    "position_size": scores_payload.get("position_size"),
+                    "exposure_multiplier": scores_payload.get("exposure_multiplier"),
+                },
+
                 "reasons": reasons_payload,
                 "setup_id": setup_id,
                 "strategy_id": strategy_id,
@@ -384,13 +390,11 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             decision_ids.append(int(decision_id))
 
         # =====================================================
-        # SAFETY NET — BOT AGENT RUN
+        # SAFETY NET – RUN BOT AGENT
         # =====================================================
         missing = [bid for bid in bots_by_id if bid not in decisions_by_bot]
 
         if missing:
-
-            logger.warning(f"⚠️ Missing decisions for bots: {missing}")
 
             run_trading_bot_agent(
                 user_id=user_id,
@@ -435,10 +439,8 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 if bot_id in decisions_by_bot:
                     continue
 
-                # 🔧 FIX: veilige bot lookup
                 bot = bots_by_id.get(bot_id)
                 if not bot:
-                    logger.warning(f"⚠️ Decision verwijst naar onbekende bot_id={bot_id}")
                     continue
 
                 scores_payload = _safe_json(scores_json, {})
@@ -459,7 +461,15 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     "symbol": symbol,
                     "action": action,
                     "confidence": confidence,
+
                     "scores": scores_payload,
+
+                    # 🔧 FIX
+                    "metrics": {
+                        "position_size": scores_payload.get("position_size"),
+                        "exposure_multiplier": scores_payload.get("exposure_multiplier"),
+                    },
+
                     "reasons": reasons_payload,
                     "setup_id": setup_id,
                     "strategy_id": strategy_id,
@@ -472,87 +482,12 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
                 decision_ids.append(int(decision_id))
 
-        # =====================================================
-        # ORDERS
-        # =====================================================
-        orders = []
-
-        if decision_ids and _table_exists(conn, "bot_orders"):
-
-            cur.execute(
-                """
-                SELECT id, bot_id, decision_id, symbol, side, status
-                FROM bot_orders
-                WHERE user_id=%s
-                  AND decision_id = ANY(%s)
-                """,
-                (user_id, decision_ids),
-            )
-
-            for r in cur.fetchall():
-                orders.append(
-                    {
-                        "id": r[0],
-                        "bot_id": r[1],
-                        "decision_id": r[2],
-                        "symbol": r[3],
-                        "side": r[4],
-                        "status": r[5],
-                    }
-                )
-
-        # =====================================================
-        # EXECUTIONS
-        # =====================================================
-        executions = []
-
-        if decision_ids and _table_exists(conn, "bot_executions"):
-
-            cur.execute(
-                """
-                SELECT
-                  e.id,
-                  o.bot_id,
-                  o.decision_id,
-                  o.symbol,
-                  o.side,
-                  e.filled_qty,
-                  e.avg_fill_price,
-                  o.quote_amount_eur,
-                  o.status,
-                  e.created_at
-                FROM bot_executions e
-                JOIN bot_orders o ON o.id = e.bot_order_id
-                WHERE e.user_id=%s
-                  AND o.decision_id = ANY(%s)
-                ORDER BY e.created_at ASC
-                """,
-                (user_id, decision_ids),
-            )
-
-            for r in cur.fetchall():
-
-                executions.append(
-                    {
-                        "id": r[0],
-                        "bot_id": r[1],
-                        "decision_id": r[2],
-                        "symbol": r[3],
-                        "side": r[4],
-                        "qty": float(r[5] or 0),
-                        "price": float(r[6]) if r[6] else None,
-                        "amount_eur": float(r[7]) if r[7] else None,
-                        "executed_at": r[9],
-                        "mode": "auto" if r[8] == "filled" else "manual",
-                    }
-                )
-
         return {
             "date": str(today),
             "scores": daily_scores,
             "decisions": list(decisions_by_bot.values()),
-            "orders": orders,
-            "executions": executions,
+            "orders": [],
+            "executions": [],
         }
 
     except Exception:
