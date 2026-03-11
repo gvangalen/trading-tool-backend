@@ -5,6 +5,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 
 from backend.utils.db import get_db_connection
+from backend.engine.guardrails_engine import apply_guardrails
 
 # ✅ Engine brain (single source of truth)
 from backend.engine.bot_brain import run_bot_brain
@@ -1104,15 +1105,11 @@ def run_trading_bot_agent(
                 },
             )
 
-            # -------------------------------------------------
-            # SAFE ENGINE ACTION
-            # -------------------------------------------------
-
             engine_action = _normalize_action(brain.get("action"))
 
-            # -------------------------------------------------
+            # =================================================
             # CONFIDENCE
-            # -------------------------------------------------
+            # =================================================
 
             confidence_value = brain.get("confidence")
 
@@ -1126,9 +1123,9 @@ def run_trading_bot_agent(
             else:
                 confidence_label = "low"
 
-            # -------------------------------------------------
-            # POSITION SIZE (SOURCE OF TRUTH)
-            # -------------------------------------------------
+            # =================================================
+            # POSITION SIZE
+            # =================================================
 
             metrics = brain.get("metrics") or {}
 
@@ -1139,11 +1136,48 @@ def run_trading_bot_agent(
                 or 1.0
             )
 
-            # -------------------------------------------------
-            # AMOUNT
-            # -------------------------------------------------
+            # =================================================
+            # AMOUNT FROM BRAIN
+            # =================================================
 
             amount = float(brain.get("amount_eur") or 0)
+
+            # =================================================
+            # GUARDRAILS ENGINE
+            # =================================================
+
+            portfolio_value_eur = get_bot_balance(conn, user_id, bot["bot_id"])
+
+            current_asset_value_eur = portfolio_value_eur
+
+            today_spent_eur = get_today_spent_eur(
+                conn,
+                user_id,
+                bot["bot_id"],
+                report_date,
+            )
+
+            guard = apply_guardrails(
+                proposed_amount_eur=amount,
+                portfolio_value_eur=portfolio_value_eur,
+                current_asset_value_eur=current_asset_value_eur,
+                today_allocated_eur=today_spent_eur,
+                kill_switch=True,
+                max_trade_risk_eur=float(
+                    bot.get("budget", {}).get("max_order_eur") or 0
+                ),
+                daily_allocation_eur=float(
+                    bot.get("budget", {}).get("daily_limit_eur") or 0
+                ),
+                max_asset_exposure_pct=40,
+            )
+
+            amount = float(guard.get("adjusted_amount_eur") or 0)
+
+            warnings = guard.get("warnings") or []
+
+            if not guard.get("allowed"):
+                engine_action = "hold"
 
             # =================================================
             # TRADE PLAN
@@ -1198,8 +1232,6 @@ def run_trading_bot_agent(
                 bot.get("budget", {}).get("daily_limit_eur") or 0
             ) or None
 
-            warnings: List[str] = []
-
             # =================================================
             # FINAL DECISION
             # =================================================
@@ -1213,7 +1245,6 @@ def run_trading_bot_agent(
                 "score": _clamp_score(scores.get("market", 10)),
                 "amount_eur": round(amount, 2),
 
-                # 🔑 EXACT dezelfde multiplier als Market Intelligence
                 "position_size": position_size,
                 "exposure_multiplier": position_size,
 
@@ -1229,6 +1260,8 @@ def run_trading_bot_agent(
 
                 "max_risk_per_trade": max_risk_per_trade,
                 "max_daily_allocation": max_daily_allocation,
+
+                "guardrails": guard.get("guardrails"),
 
                 "warnings": warnings,
 
