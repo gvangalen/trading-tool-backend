@@ -1124,6 +1124,7 @@ def run_trading_bot_agent(
             )
 
             if snapshot:
+
                 if snapshot.get("entry") is not None:
                     setup_payload["entry"] = snapshot.get("entry")
 
@@ -1133,9 +1134,9 @@ def run_trading_bot_agent(
                 if snapshot.get("targets") is not None:
                     setup_payload["targets"] = snapshot.get("targets")
 
-            # =================================================
+            # =============================================
             # BOT BRAIN
-            # =================================================
+            # =============================================
 
             brain = run_bot_brain(
                 user_id=user_id,
@@ -1150,9 +1151,9 @@ def run_trading_bot_agent(
 
             engine_action = _normalize_action(brain.get("action"))
 
-            # =================================================
+            # =============================================
             # CONFIDENCE
-            # =================================================
+            # =============================================
 
             confidence_value = brain.get("confidence")
 
@@ -1166,9 +1167,9 @@ def run_trading_bot_agent(
             else:
                 confidence_label = "low"
 
-            # =================================================
+            # =============================================
             # POSITION SIZE
-            # =================================================
+            # =============================================
 
             metrics = brain.get("metrics") or {}
 
@@ -1179,23 +1180,21 @@ def run_trading_bot_agent(
                 or 1.0
             )
 
-            # =================================================
+            # =============================================
             # AMOUNT FROM BRAIN
-            # =================================================
+            # =============================================
 
             requested_amount = float(brain.get("amount_eur") or 0)
 
-            # =================================================
-            # GUARDRAILS ENGINE
-            # =================================================
+            # =============================================
+            # GUARDRAILS
+            # =============================================
 
             portfolio_value_eur = get_bot_balance(
                 conn,
                 user_id,
                 bot["bot_id"],
             )
-
-            current_asset_value_eur = portfolio_value_eur
 
             today_spent_eur = get_today_spent_eur(
                 conn,
@@ -1207,7 +1206,7 @@ def run_trading_bot_agent(
             guard = apply_guardrails(
                 proposed_amount_eur=requested_amount,
                 portfolio_value_eur=portfolio_value_eur,
-                current_asset_value_eur=current_asset_value_eur,
+                current_asset_value_eur=portfolio_value_eur,
                 today_allocated_eur=today_spent_eur,
                 kill_switch=True,
                 max_trade_risk_eur=float(
@@ -1225,9 +1224,9 @@ def run_trading_bot_agent(
             if not guard.get("allowed"):
                 engine_action = "hold"
 
-            # =================================================
+            # =============================================
             # TRADE PLAN
-            # =================================================
+            # =============================================
 
             trade_plan = None
 
@@ -1259,9 +1258,9 @@ def run_trading_bot_agent(
                     watch_levels=brain.get("watch_levels"),
                 )
 
-            # =================================================
+            # =============================================
             # MARKET HEALTH
-            # =================================================
+            # =============================================
 
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
@@ -1270,17 +1269,9 @@ def run_trading_bot_agent(
                 1,
             )
 
-            max_risk_per_trade = float(
-                bot.get("budget", {}).get("max_order_eur") or 0
-            ) or None
-
-            max_daily_allocation = float(
-                bot.get("budget", {}).get("daily_limit_eur") or 0
-            ) or None
-
-            # =================================================
-            # FINAL DECISION
-            # =================================================
+            # =============================================
+            # FINAL DECISION OBJECT
+            # =============================================
 
             decision = {
 
@@ -1306,8 +1297,13 @@ def run_trading_bot_agent(
                 "market_pressure": float(brain.get("market_pressure") or 50),
                 "transition_risk": float(brain.get("transition_risk") or 50),
 
-                "max_risk_per_trade": max_risk_per_trade,
-                "max_daily_allocation": max_daily_allocation,
+                "max_risk_per_trade": float(
+                    bot.get("budget", {}).get("max_order_eur") or 0
+                ) or None,
+
+                "max_daily_allocation": float(
+                    bot.get("budget", {}).get("daily_limit_eur") or 0
+                ) or None,
 
                 "guardrails_result": guard,
 
@@ -1323,44 +1319,20 @@ def run_trading_bot_agent(
                 "alerts_active": brain.get("alerts_active", False),
             }
 
-            # =================================================
-            # SAVE DECISION
-            # =================================================
+            # =============================================
+            # SAVE DECISION (FIXED)
+            # =============================================
 
-            with conn.cursor() as cur:
-
-                cur.execute(
-                    """
-                    INSERT INTO bot_decisions (
-                        user_id,
-                        bot_id,
-                        symbol,
-                        decision_date,
-                        decision_ts,
-                        action,
-                        confidence,
-                        scores_json,
-                        reason_json,
-                        status,
-                        created_at,
-                        updated_at
-                    )
-                    VALUES (%s,%s,%s,%s,NOW(),%s,%s,%s,%s,'planned',NOW(),NOW())
-                    RETURNING id
-                    """,
-                    (
-                        user_id,
-                        bot["bot_id"],
-                        bot["symbol"],
-                        report_date,
-                        engine_action,
-                        confidence_label,
-                        json.dumps(decision),
-                        json.dumps(decision.get("reasons")),
-                    ),
-                )
-
-                decision_id = cur.fetchone()[0]
+            decision_id = _persist_decision_and_order(
+                conn=conn,
+                user_id=user_id,
+                bot_id=bot["bot_id"],
+                strategy_id=bot["strategy_id"],
+                setup_id=bot.get("setup_id"),
+                report_date=report_date,
+                decision=decision,
+                scores=scores,
+            )
 
             results.append(
                 {
