@@ -369,12 +369,14 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "action": action,
                 "confidence": confidence,
 
-                "scores": scores_payload or daily_scores,
+                # 🔥 FIX → frontend verwacht scores_json
+                "scores_json": scores_payload or daily_scores,
 
-                # 🔧 FIX → frontend gebruikt nu deze metrics
                 "metrics": {
                     "position_size": scores_payload.get("position_size"),
                     "exposure_multiplier": scores_payload.get("exposure_multiplier"),
+                    "max_trade_risk_eur": scores_payload.get("guardrails", {}).get("max_trade_risk_eur"),
+                    "daily_allocation_eur": scores_payload.get("guardrails", {}).get("daily_allocation_eur"),
                 },
 
                 "reasons": reasons_payload,
@@ -432,7 +434,21 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
             for r in rows:
 
-                decision_id, bot_id, symbol, decision_ts, action, confidence, scores_json, reason_json, setup_id, strategy_id, status, created_at, updated_at = r
+                (
+                    decision_id,
+                    bot_id,
+                    symbol,
+                    decision_ts,
+                    action,
+                    confidence,
+                    scores_json,
+                    reason_json,
+                    setup_id,
+                    strategy_id,
+                    status,
+                    created_at,
+                    updated_at,
+                ) = r
 
                 bot_id = int(bot_id)
 
@@ -462,12 +478,14 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     "action": action,
                     "confidence": confidence,
 
-                    "scores": scores_payload,
+                    # 🔥 FIX
+                    "scores_json": scores_payload,
 
-                    # 🔧 FIX
                     "metrics": {
                         "position_size": scores_payload.get("position_size"),
                         "exposure_multiplier": scores_payload.get("exposure_multiplier"),
+                        "max_trade_risk_eur": scores_payload.get("guardrails", {}).get("max_trade_risk_eur"),
+                        "daily_allocation_eur": scores_payload.get("guardrails", {}).get("daily_allocation_eur"),
                     },
 
                     "reasons": reasons_payload,
@@ -496,7 +514,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
     finally:
         conn.close()
-
 
 # =====================================
 # 📜 BOT HISTORY (laatste N dagen)
