@@ -1182,26 +1182,30 @@ def run_trading_bot_agent(
             # =================================================
             # AMOUNT FROM BRAIN
             # =================================================
-
-            amount = float(brain.get("amount_eur") or 0)
-
+            
+            requested_amount = float(brain.get("amount_eur") or 0)
+            
             # =================================================
             # GUARDRAILS ENGINE
             # =================================================
-
-            portfolio_value_eur = get_bot_balance(conn, user_id, bot["bot_id"])
-
+            
+            portfolio_value_eur = get_bot_balance(
+                conn,
+                user_id,
+                bot["bot_id"],
+            )
+            
             current_asset_value_eur = portfolio_value_eur
-
+            
             today_spent_eur = get_today_spent_eur(
                 conn,
                 user_id,
                 bot["bot_id"],
                 report_date,
             )
-
+            
             guard = apply_guardrails(
-                proposed_amount_eur=amount,
+                proposed_amount_eur=requested_amount,
                 portfolio_value_eur=portfolio_value_eur,
                 current_asset_value_eur=current_asset_value_eur,
                 today_allocated_eur=today_spent_eur,
@@ -1214,28 +1218,28 @@ def run_trading_bot_agent(
                 ),
                 max_asset_exposure_pct=40,
             )
-
-            amount = float(guard.get("adjusted_amount_eur") or 0)
-
+            
+            adjusted_amount = float(guard.get("adjusted_amount_eur") or 0)
+            
             warnings = guard.get("warnings") or []
-
+            
             if not guard.get("allowed"):
                 engine_action = "hold"
-
+            
             # =================================================
             # TRADE PLAN
             # =================================================
-
+            
             trade_plan = None
-
+            
             if snapshot:
-
+            
                 entry = snapshot.get("entry")
                 stop = snapshot.get("stop_loss")
                 targets = snapshot.get("targets") or []
-
+            
                 if engine_action in ["buy", "sell"] and entry and stop:
-
+            
                     trade_plan = {
                         "symbol": bot["symbol"],
                         "side": engine_action,
@@ -1247,7 +1251,7 @@ def run_trading_bot_agent(
                         ],
                         "risk": {"rr": brain.get("rr_ratio")},
                     }
-
+            
             if not trade_plan:
                 trade_plan = _default_trade_plan(
                     bot["symbol"],
@@ -1255,125 +1259,92 @@ def run_trading_bot_agent(
                     "engine_watch_mode",
                     watch_levels=brain.get("watch_levels"),
                 )
-
+            
             # =================================================
             # MARKET HEALTH
             # =================================================
-
+            
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
                 + float(scores.get("technical", 10)) * 0.3
                 + float(scores.get("market", 10)) * 0.3,
                 1,
             )
-
+            
             max_risk_per_trade = float(
                 bot.get("budget", {}).get("max_order_eur") or 0
             ) or None
-
+            
             max_daily_allocation = float(
                 bot.get("budget", {}).get("daily_limit_eur") or 0
             ) or None
-
+            
             # =================================================
             # FINAL DECISION
             # =================================================
-
+            
             decision = {
-
+            
                 "symbol": bot["symbol"],
                 "action": engine_action,
                 "confidence": confidence_label,
-
+            
                 "score": _clamp_score(scores.get("market", 10)),
-                "amount_eur": round(amount, 2),
-
+            
+                # requested vs adjusted
+                "requested_amount_eur": round(requested_amount, 2),
+                "amount_eur": round(adjusted_amount, 2),
+            
                 "position_size": position_size,
                 "exposure_multiplier": position_size,
-
+            
                 "setup_match": setup_match,
                 "reasons": [brain.get("reason") or "engine_decision"],
-
+            
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
-
+            
                 "market_health": market_health,
                 "market_pressure": float(brain.get("market_pressure") or 50),
                 "transition_risk": float(brain.get("transition_risk") or 50),
-
+            
                 "max_risk_per_trade": max_risk_per_trade,
                 "max_daily_allocation": max_daily_allocation,
-
-                "guardrails": guard.get("guardrails"),
-
+            
+                # 🛡 volledige guardrails result
+                "guardrails_result": guard,
+            
+                # reason voor UI
+                "guardrail_reason": guard.get("blocked_by")
+                    or (guard.get("warnings")[0] if guard.get("warnings") else None),
+            
                 "warnings": warnings,
-
+            
                 "trade_plan": trade_plan,
-
+            
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring", False),
                 "alerts_active": brain.get("alerts_active", False),
             }
-
-            decision_id = _persist_decision_and_order(
-                conn=conn,
-                user_id=user_id,
-                bot_id=bot["bot_id"],
-                strategy_id=bot["strategy_id"],
-                setup_id=bot["setup_id"],
-                report_date=report_date,
-                decision=decision,
-                scores=scores,
-            )
-
-            results.append({
-                "bot_id": bot["bot_id"],
-                "decision_id": decision_id,
-                "action": decision["action"],
-                "confidence": decision["confidence"],
-                "amount_eur": decision["amount_eur"],
-                "position_size": position_size,
-            })
-
-        conn.commit()
-
-        return {
-            "ok": True,
-            "date": str(report_date),
-            "bots": len(results),
-            "decisions": results,
-        }
-
-    except Exception:
-
-        conn.rollback()
-
-        logger.exception("trading_bot_agent crash")
-
-        return {"ok": False, "error": "agent_crash"}
-
-    finally:
-
-        conn.close()
-
-# =====================================================
-# 🚀 Helper execute decision functie
-# =====================================================
-def _ledger_deltas(side: str, qty: float, price: float):
-    """
-    Correct boekhouden:
-    - buy  -> cash -, qty +
-    - sell -> cash +, qty -
-    """
-    side = (side or "").lower().strip()
-    notional = round(float(qty) * float(price), 2)
-
-    if side == "buy":
-        return -notional, float(qty), notional
-    if side == "sell":
-        return +notional, -float(qty), notional
-
-    raise RuntimeError(f"Invalid side for execution: {side}")
+            
+            # =====================================================
+            # 🚀 Helper execute decision functie
+            # =====================================================
+            def _ledger_deltas(side: str, qty: float, price: float):
+                """
+                Correct boekhouden:
+                - buy  -> cash -, qty +
+                - sell -> cash +, qty -
+                """
+                side = (side or "").lower().strip()
+                notional = round(float(qty) * float(price), 2)
+            
+                if side == "buy":
+                    return -notional, float(qty), notional
+                if side == "sell":
+                    return +notional, -float(qty), notional
+            
+                raise RuntimeError(f"Invalid side for execution: {side}")
 
 
 # =====================================================
