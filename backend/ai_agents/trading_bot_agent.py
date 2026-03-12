@@ -878,11 +878,19 @@ def _persist_decision_and_order(
     scores: Dict[str, float],
 ) -> int:
 
+    logger.info("🧠 Persist decision start")
+    logger.info("🧠 Decision RAW: %s", decision)
+    logger.info("📊 Scores RAW: %s", scores)
+
     action = _normalize_action(decision.get("action"))
     confidence = _normalize_confidence(decision.get("confidence") or "low")
 
     symbol = decision.get("symbol", DEFAULT_SYMBOL)
     amount_eur = float(decision.get("amount_eur") or 0.0)
+
+    logger.info("⚙️ Action normalized: %s", action)
+    logger.info("⚙️ Confidence normalized: %s", confidence)
+    logger.info("💰 Amount EUR: %s", amount_eur)
 
     reasons = decision.get("reasons", [])
     if not isinstance(reasons, list):
@@ -904,6 +912,8 @@ def _persist_decision_and_order(
         or 1.0
     )
 
+    logger.info("📏 Position size: %s", position_size)
+
     # =====================================================
     # GUARDRAILS
     # =====================================================
@@ -914,6 +924,8 @@ def _persist_decision_and_order(
         "daily_allocation_eur": decision.get("max_daily_allocation"),
         "position_size": position_size,
     }
+
+    logger.info("🛡 Guardrails payload: %s", guardrails_payload)
 
     # =====================================================
     # SCORES PAYLOAD
@@ -950,7 +962,6 @@ def _persist_decision_and_order(
         if isinstance(decision.get("warnings"), list)
         else [],
 
-        # ⭐ GUARDRAILS
         "guardrails": guardrails_payload,
 
         "watch_levels": watch_levels,
@@ -958,8 +969,12 @@ def _persist_decision_and_order(
         "alerts_active": alerts_active,
     }
 
+    logger.info("📦 Scores payload: %s", scores_payload)
+
     scores_json = json.dumps(scores_payload)
     reasons_json = json.dumps(reasons)
+
+    logger.info("📦 scores_json serialized: %s", scores_json)
 
     with conn.cursor() as cur:
 
@@ -1022,9 +1037,12 @@ def _persist_decision_and_order(
         row = cur.fetchone()
 
         if not row:
+            logger.error("❌ Failed to persist bot decision")
             raise RuntimeError("Failed to persist bot decision")
 
         decision_id = int(row[0])
+
+        logger.info("✅ Decision persisted | decision_id=%s", decision_id)
 
     # =====================================================
     # TRADE PLAN
@@ -1033,7 +1051,10 @@ def _persist_decision_and_order(
     plan = decision.get("trade_plan")
 
     if not plan:
+        logger.info("⚠️ No trade plan provided, using default")
         plan = _default_trade_plan(symbol, action, "fallback_plan")
+
+    logger.info("📊 Trade plan: %s", plan)
 
     _persist_trade_plan(
         conn=conn,
@@ -1044,6 +1065,8 @@ def _persist_decision_and_order(
         side=action,
         plan=plan,
     )
+
+    logger.info("✅ Trade plan persisted")
 
     return decision_id
 
