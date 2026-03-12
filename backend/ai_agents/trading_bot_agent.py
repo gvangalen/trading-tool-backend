@@ -1071,7 +1071,7 @@ def _persist_decision_and_order(
     return decision_id
 
 # =====================================================
-# 🚀 PUBLIC ENTRYPOINT (KEEP NAME!)
+# 🚀 Run Trading Bot Agent
 # =====================================================
 def run_trading_bot_agent(
     user_id: int,
@@ -1182,28 +1182,28 @@ def run_trading_bot_agent(
             # =================================================
             # AMOUNT FROM BRAIN
             # =================================================
-            
+
             requested_amount = float(brain.get("amount_eur") or 0)
-            
+
             # =================================================
             # GUARDRAILS ENGINE
             # =================================================
-            
+
             portfolio_value_eur = get_bot_balance(
                 conn,
                 user_id,
                 bot["bot_id"],
             )
-            
+
             current_asset_value_eur = portfolio_value_eur
-            
+
             today_spent_eur = get_today_spent_eur(
                 conn,
                 user_id,
                 bot["bot_id"],
                 report_date,
             )
-            
+
             guard = apply_guardrails(
                 proposed_amount_eur=requested_amount,
                 portfolio_value_eur=portfolio_value_eur,
@@ -1218,28 +1218,27 @@ def run_trading_bot_agent(
                 ),
                 max_asset_exposure_pct=40,
             )
-            
+
             adjusted_amount = float(guard.get("adjusted_amount_eur") or 0)
-            
             warnings = guard.get("warnings") or []
-            
+
             if not guard.get("allowed"):
                 engine_action = "hold"
-            
+
             # =================================================
             # TRADE PLAN
             # =================================================
-            
+
             trade_plan = None
-            
+
             if snapshot:
-            
+
                 entry = snapshot.get("entry")
                 stop = snapshot.get("stop_loss")
                 targets = snapshot.get("targets") or []
-            
+
                 if engine_action in ["buy", "sell"] and entry and stop:
-            
+
                     trade_plan = {
                         "symbol": bot["symbol"],
                         "side": engine_action,
@@ -1251,7 +1250,7 @@ def run_trading_bot_agent(
                         ],
                         "risk": {"rr": brain.get("rr_ratio")},
                     }
-            
+
             if not trade_plan:
                 trade_plan = _default_trade_plan(
                     bot["symbol"],
@@ -1259,92 +1258,138 @@ def run_trading_bot_agent(
                     "engine_watch_mode",
                     watch_levels=brain.get("watch_levels"),
                 )
-            
+
             # =================================================
             # MARKET HEALTH
             # =================================================
-            
+
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
                 + float(scores.get("technical", 10)) * 0.3
                 + float(scores.get("market", 10)) * 0.3,
                 1,
             )
-            
+
             max_risk_per_trade = float(
                 bot.get("budget", {}).get("max_order_eur") or 0
             ) or None
-            
+
             max_daily_allocation = float(
                 bot.get("budget", {}).get("daily_limit_eur") or 0
             ) or None
-            
+
             # =================================================
             # FINAL DECISION
             # =================================================
-            
+
             decision = {
-            
+
                 "symbol": bot["symbol"],
                 "action": engine_action,
                 "confidence": confidence_label,
-            
+
                 "score": _clamp_score(scores.get("market", 10)),
-            
-                # requested vs adjusted
+
                 "requested_amount_eur": round(requested_amount, 2),
                 "amount_eur": round(adjusted_amount, 2),
-            
+
                 "position_size": position_size,
                 "exposure_multiplier": position_size,
-            
+
                 "setup_match": setup_match,
                 "reasons": [brain.get("reason") or "engine_decision"],
-            
+
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
-            
+
                 "market_health": market_health,
                 "market_pressure": float(brain.get("market_pressure") or 50),
                 "transition_risk": float(brain.get("transition_risk") or 50),
-            
+
                 "max_risk_per_trade": max_risk_per_trade,
                 "max_daily_allocation": max_daily_allocation,
-            
-                # 🛡 volledige guardrails result
+
                 "guardrails_result": guard,
-            
-                # reason voor UI
+
                 "guardrail_reason": guard.get("blocked_by")
-                    or (guard.get("warnings")[0] if guard.get("warnings") else None),
-            
+                or (guard.get("warnings")[0] if guard.get("warnings") else None),
+
                 "warnings": warnings,
-            
+
                 "trade_plan": trade_plan,
-            
+
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring", False),
                 "alerts_active": brain.get("alerts_active", False),
             }
-            
-            # =====================================================
-            # 🚀 Helper execute decision functie
-            # =====================================================
-            def _ledger_deltas(side: str, qty: float, price: float):
-                """
-                Correct boekhouden:
-                - buy  -> cash -, qty +
-                - sell -> cash +, qty -
-                """
-                side = (side or "").lower().strip()
-                notional = round(float(qty) * float(price), 2)
-            
-                if side == "buy":
-                    return -notional, float(qty), notional
-                if side == "sell":
-                    return +notional, -float(qty), notional
-            
-                raise RuntimeError(f"Invalid side for execution: {side}")
+
+            # =================================================
+            # SAVE DECISION
+            # =================================================
+
+            with conn.cursor() as cur:
+
+                cur.execute(
+                    """
+                    INSERT INTO bot_decisions (
+                        user_id,
+                        bot_id,
+                        symbol,
+                        decision_date,
+                        decision_ts,
+                        action,
+                        confidence,
+                        scores_json,
+                        reason_json,
+                        status,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (%s,%s,%s,%s,NOW(),%s,%s,%s,%s,'planned',NOW(),NOW())
+                    RETURNING id
+                    """,
+                    (
+                        user_id,
+                        bot["bot_id"],
+                        bot["symbol"],
+                        report_date,
+                        engine_action,
+                        confidence_label,
+                        json.dumps(decision),
+                        json.dumps(decision.get("reasons")),
+                    ),
+                )
+
+                decision_id = cur.fetchone()[0]
+
+            results.append(
+                {
+                    "bot_id": bot["bot_id"],
+                    "decision_id": decision_id,
+                    "action": engine_action,
+                }
+            )
+
+        conn.commit()
+
+        return {
+            "ok": True,
+            "date": str(report_date),
+            "bots": len(bots),
+            "decisions": results,
+        }
+
+    except Exception as e:
+
+        logger.exception("❌ trading_bot_agent failed")
+
+        return {
+            "ok": False,
+            "error": str(e),
+        }
+
+    finally:
+        conn.close()
 
 
 # =====================================================
