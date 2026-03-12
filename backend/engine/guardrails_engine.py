@@ -50,29 +50,6 @@ def apply_guardrails(
     daily_allocation_eur: Optional[float] = None,
     max_asset_exposure_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """
-    Guardrails layer for bot execution.
-
-    Input:
-    - proposed_amount_eur: bedrag dat Bot Brain wil alloceren
-    - portfolio_value_eur: totale portfolio waarde
-    - current_asset_value_eur: huidige waarde van asset exposure (bijv BTC)
-    - today_allocated_eur: wat vandaag al besteed / gereserveerd is
-    - kill_switch: hard on/off
-    - max_trade_risk_eur: max bedrag per trade
-    - daily_allocation_eur: max bedrag per dag
-    - max_asset_exposure_pct: max % van portfolio in asset (0-100)
-
-    Return:
-    {
-        "allowed": bool,
-        "adjusted_amount_eur": float,
-        "original_amount_eur": float,
-        "warnings": [],
-        "blocked_by": None | str,
-        "guardrails": {...}
-    }
-    """
 
     original_amount = max(_safe_float(proposed_amount_eur, 0.0), 0.0)
     adjusted_amount = original_amount
@@ -122,6 +99,7 @@ def apply_guardrails(
     # 3. Daily allocation
     # -----------------------------------------------------
     if daily_allocation > 0:
+
         remaining_daily = max(daily_allocation - today_allocated, 0.0)
 
         if remaining_daily <= 0:
@@ -149,11 +127,18 @@ def apply_guardrails(
             warnings.append("daily_allocation_trimmed")
 
     # -----------------------------------------------------
-    # 4. Max asset exposure %
+    # 4. Max asset exposure
     # -----------------------------------------------------
     if max_asset_exposure > 0 and portfolio_value > 0:
-        max_asset_value_allowed = portfolio_value * (_clamp(max_asset_exposure, 0.0, 100.0) / 100.0)
-        remaining_asset_capacity = max(max_asset_value_allowed - current_asset_value, 0.0)
+
+        max_asset_value_allowed = portfolio_value * (
+            _clamp(max_asset_exposure, 0.0, 100.0) / 100.0
+        )
+
+        remaining_asset_capacity = max(
+            max_asset_value_allowed - current_asset_value,
+            0.0,
+        )
 
         if remaining_asset_capacity <= 0:
             return {
@@ -179,15 +164,18 @@ def apply_guardrails(
             adjusted_amount = remaining_asset_capacity
             warnings.append("asset_exposure_trimmed")
 
+    # -----------------------------------------------------
+    # Final result
+    # -----------------------------------------------------
     adjusted_amount = max(adjusted_amount, 0.0)
     adjusted_amount = _round_money(adjusted_amount)
 
-    if adjusted_amount <= 0:
-        blocked_by = blocked_by or "no_allocatable_size"
-
     allowed = adjusted_amount > 0
 
-    return {
+    if not allowed and not blocked_by:
+        blocked_by = "no_allocatable_size"
+
+    result = {
         "allowed": allowed,
         "adjusted_amount_eur": adjusted_amount,
         "original_amount_eur": _round_money(original_amount),
@@ -200,7 +188,7 @@ def apply_guardrails(
             "remaining_daily_eur": _round_money(
                 max(daily_allocation - today_allocated, 0.0)
             ) if daily_allocation > 0 else None,
-            "max_asset_exposure_pct": max_asset_exposure if max_asset_exposure > 0 else None,
+            "max_asset_exposure_pct": max_asset_exposure,
             "current_asset_exposure_pct": _calculate_exposure_pct(
                 current_asset_value_eur=current_asset_value,
                 portfolio_value_eur=portfolio_value,
@@ -215,6 +203,19 @@ def apply_guardrails(
         },
     }
 
+    logger.info(
+        "Guardrails result",
+        extra={
+            "original_amount": original_amount,
+            "adjusted_amount": adjusted_amount,
+            "allowed": allowed,
+            "blocked_by": blocked_by,
+            "warnings": warnings,
+        },
+    )
+
+    return result
+
 
 # =========================================================
 # Exposure helpers
@@ -224,6 +225,7 @@ def _calculate_exposure_pct(
     current_asset_value_eur: float,
     portfolio_value_eur: float,
 ) -> float:
+
     asset_value = max(_safe_float(current_asset_value_eur, 0.0), 0.0)
     portfolio_value = max(_safe_float(portfolio_value_eur, 0.0), 0.0)
 
@@ -239,49 +241,24 @@ def _calculate_remaining_asset_capacity(
     current_asset_value_eur: float,
     max_asset_exposure_pct: float,
 ) -> float:
+
     portfolio_value = max(_safe_float(portfolio_value_eur, 0.0), 0.0)
     current_asset_value = max(_safe_float(current_asset_value_eur, 0.0), 0.0)
-    max_asset_exposure_pct = _clamp(_safe_float(max_asset_exposure_pct, 0.0), 0.0, 100.0)
+
+    max_asset_exposure_pct = _clamp(
+        _safe_float(max_asset_exposure_pct, 0.0),
+        0.0,
+        100.0,
+    )
 
     if portfolio_value <= 0 or max_asset_exposure_pct <= 0:
         return 0.0
 
-    max_asset_value_allowed = portfolio_value * (max_asset_exposure_pct / 100.0)
-    return max(max_asset_value_allowed - current_asset_value, 0.0)
+    max_asset_value_allowed = portfolio_value * (
+        max_asset_exposure_pct / 100.0
+    )
 
-
-# =========================================================
-# UI helper
-# =========================================================
-def build_guardrails_summary(
-    *,
-    kill_switch: bool,
-    max_trade_risk_eur: float,
-    daily_allocation_eur: float,
-    current_asset_exposure_pct: float,
-    max_asset_exposure_pct: float,
-) -> Dict[str, Any]:
-    """
-    Helper voor frontend card.
-    """
-
-    current_pct = _safe_float(current_asset_exposure_pct, 0.0)
-    max_pct = _safe_float(max_asset_exposure_pct, 0.0)
-
-    if max_pct > 0 and current_pct >= max_pct:
-        exposure_status = "limit_reached"
-    elif max_pct > 0 and current_pct >= (max_pct * 0.9):
-        exposure_status = "near_limit"
-    else:
-        exposure_status = "ok"
-
-    return {
-        "kill_switch": _safe_bool(kill_switch, True),
-        "max_trade_risk_eur": _round_money(max_trade_risk_eur),
-        "daily_allocation_eur": _round_money(daily_allocation_eur),
-        "btc_exposure": {
-            "current_pct": round(current_pct, 2),
-            "max_pct": round(max_pct, 2),
-            "status": exposure_status,
-        },
-    }
+    return max(
+        max_asset_value_allowed - current_asset_value,
+        0.0,
+    )
