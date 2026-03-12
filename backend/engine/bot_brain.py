@@ -69,6 +69,30 @@ def _classify_risk_state(transition_risk: float, pressure: float) -> str:
         return "risk_on"
     return "neutral"
 
+def _extract_decision_amount(decision_result: Any) -> tuple[float, str]:
+    """
+    Decision engine kan teruggeven:
+    - float/int
+    - dict met amount_eur / amount / reason
+    """
+
+    if isinstance(decision_result, dict):
+        amount = _safe_float(
+            decision_result.get("amount_eur", decision_result.get("amount")),
+            0.0,
+        ) or 0.0
+
+        reason = str(
+            decision_result.get("reason")
+            or decision_result.get("message")
+            or "Base amount via DecisionEngine dict."
+        )
+
+        return max(0.0, amount), reason
+
+    amount = _safe_float(decision_result, 0.0) or 0.0
+    return max(0.0, amount), "Base amount via DecisionEngine."
+
 
 # =========================================================
 # Market Cycle
@@ -149,8 +173,6 @@ def _map_volatility_state_to_score(volatility_state: str) -> int:
 # =========================================================
 # Core brain
 # =========================================================
-
-
 def run_bot_brain(
     *,
     user_id: int,
@@ -296,37 +318,14 @@ def run_bot_brain(
     # -------------------------------------------------
 
     try:
+        decision_result = decide_amount(setup=setup, scores=scores)
+        logger.info("DecisionEngine raw output: %s", decision_result)
 
-    decision_amount = decide_amount(setup=setup, scores=scores)
+        base_amount, base_reason = _extract_decision_amount(decision_result)
 
-    # -------------------------------------------------
-    # DecisionEngine kan float OF dict teruggeven
-    # -------------------------------------------------
-
-    if isinstance(decision_amount, dict):
-
-        base_amount = float(
-            decision_amount.get("amount_eur")
-            or decision_amount.get("amount")
-            or 0.0
-        )
-
-        base_reason = decision_amount.get(
-            "reason",
-            "Base amount via DecisionEngine dict.",
-        )
-
-    else:
-
-        base_amount = float(decision_amount)
-        base_reason = "Base amount via DecisionEngine."
-
-    base_amount = max(0.0, base_amount)
-
-except Exception as e:
-
-    base_amount = 0.0
-    base_reason = f"DecisionEngine fallback: {e}"
+    except Exception as e:
+        base_amount = 0.0
+        base_reason = f"DecisionEngine fallback: {e}"
 
     # -------------------------------------------------
     # 🔟 Apply Exposure
@@ -384,7 +383,8 @@ except Exception as e:
     confidence_components.append(_clamp(market_pressure, 0.0, 1.0))
 
     confidence = round(
-        sum(confidence_components) / max(1, len(confidence_components)), 3
+        sum(confidence_components) / max(1, len(confidence_components)),
+        3,
     )
 
     # -------------------------------------------------
@@ -396,8 +396,7 @@ except Exception as e:
             risk_environment * 0.4
             + trend_strength * 0.3
             + (float(scores.get("setup_score", 10)) / 100.0) * 0.3
-        )
-        * 100.0,
+        ) * 100.0,
         1,
     )
 
@@ -417,7 +416,6 @@ except Exception as e:
 
     return {
         "date": date.today().isoformat(),
-
         "action": action,
         "amount_eur": round(float(final_amount), 2),
         "confidence": confidence,
@@ -433,7 +431,7 @@ except Exception as e:
         "mid_trend": mid_trend,
         "long_trend": long_trend,
 
-        # raw engine state (0..1 / strings) - behouden voor interne logica
+        # raw engine state
         "market_pressure": market_pressure,
         "transition_risk": transition_risk,
         "volatility_state": volatility_state,
@@ -464,6 +462,7 @@ except Exception as e:
             "transition_snapshot": transition_snapshot,
             "regime_memory": regime_memory,
             "exposure": exposure_pack,
+            "decision_result": decision_result if "decision_result" in locals() else None,
             "base_amount": base_amount,
             "final_amount": final_amount,
             "base_reason": base_reason,
