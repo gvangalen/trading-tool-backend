@@ -296,15 +296,37 @@ def run_bot_brain(
     # -------------------------------------------------
 
     try:
+
+    decision_amount = decide_amount(setup=setup, scores=scores)
+
+    # -------------------------------------------------
+    # DecisionEngine kan float OF dict teruggeven
+    # -------------------------------------------------
+
+    if isinstance(decision_amount, dict):
+
         base_amount = float(
-            decide_amount(setup=setup, scores=scores)
+            decision_amount.get("amount_eur")
+            or decision_amount.get("amount")
+            or 0.0
         )
-        base_amount = max(0.0, base_amount)
+
+        base_reason = decision_amount.get(
+            "reason",
+            "Base amount via DecisionEngine dict.",
+        )
+
+    else:
+
+        base_amount = float(decision_amount)
         base_reason = "Base amount via DecisionEngine."
 
-    except Exception as e:
-        base_amount = 0.0
-        base_reason = f"DecisionEngine fallback: {e}"
+    base_amount = max(0.0, base_amount)
+
+except Exception as e:
+
+    base_amount = 0.0
+    base_reason = f"DecisionEngine fallback: {e}"
 
     # -------------------------------------------------
     # 🔟 Apply Exposure
