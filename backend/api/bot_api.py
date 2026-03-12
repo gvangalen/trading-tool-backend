@@ -361,22 +361,32 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "confidence": "low",
             }
 
+            guard = scores_payload.get("guardrails_result", {})
+            guard_limits = guard.get("guardrails", {})
+
             decisions_by_bot[bot_id] = {
                 "id": decision_id,
                 "bot_id": bot_id,
                 "bot_name": bot["bot_name"],
                 "symbol": symbol,
+
                 "action": action,
                 "confidence": confidence,
 
-                # 🔥 FIX → frontend verwacht scores_json
+                # complete payload voor UI
                 "scores_json": scores_payload or daily_scores,
+
+                # 🔥 nieuwe velden voor Guardrails UI
+                "requested_amount_eur": scores_payload.get("requested_amount_eur"),
+                "amount_eur": scores_payload.get("amount_eur"),
+                "guardrails_result": guard,
+                "guardrail_reason": scores_payload.get("guardrail_reason"),
 
                 "metrics": {
                     "position_size": scores_payload.get("position_size"),
                     "exposure_multiplier": scores_payload.get("exposure_multiplier"),
-                    "max_trade_risk_eur": scores_payload.get("guardrails", {}).get("max_trade_risk_eur"),
-                    "daily_allocation_eur": scores_payload.get("guardrails", {}).get("daily_allocation_eur"),
+                    "max_trade_risk_eur": guard_limits.get("max_trade_risk_eur"),
+                    "daily_allocation_eur": guard_limits.get("daily_allocation_eur"),
                 },
 
                 "reasons": reasons_payload,
@@ -462,13 +472,8 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 scores_payload = _safe_json(scores_json, {})
                 reasons_payload = _safe_json(reason_json, [])
 
-                setup_match = scores_payload.get("setup_match") or {
-                    "status": "no_snapshot",
-                    "summary": "Geen strategie context",
-                    "detail": "Er is vandaag geen actief strategy snapshot beschikbaar.",
-                    "score": 10,
-                    "confidence": "low",
-                }
+                guard = scores_payload.get("guardrails_result", {})
+                guard_limits = guard.get("guardrails", {})
 
                 decisions_by_bot[bot_id] = {
                     "id": decision_id,
@@ -478,14 +483,18 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     "action": action,
                     "confidence": confidence,
 
-                    # 🔥 FIX
                     "scores_json": scores_payload,
+
+                    "requested_amount_eur": scores_payload.get("requested_amount_eur"),
+                    "amount_eur": scores_payload.get("amount_eur"),
+                    "guardrails_result": guard,
+                    "guardrail_reason": scores_payload.get("guardrail_reason"),
 
                     "metrics": {
                         "position_size": scores_payload.get("position_size"),
                         "exposure_multiplier": scores_payload.get("exposure_multiplier"),
-                        "max_trade_risk_eur": scores_payload.get("guardrails", {}).get("max_trade_risk_eur"),
-                        "daily_allocation_eur": scores_payload.get("guardrails", {}).get("daily_allocation_eur"),
+                        "max_trade_risk_eur": guard_limits.get("max_trade_risk_eur"),
+                        "daily_allocation_eur": guard_limits.get("daily_allocation_eur"),
                     },
 
                     "reasons": reasons_payload,
@@ -494,7 +503,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                     "status": status,
                     "created_at": created_at,
                     "updated_at": updated_at,
-                    "setup_match": setup_match,
+                    "setup_match": scores_payload.get("setup_match"),
                     "trade_plan": None,
                 }
 
