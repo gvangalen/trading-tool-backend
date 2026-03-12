@@ -86,6 +86,63 @@ def _safe_json(v, fallback):
     except Exception:
         return fallback
 
+# =====================================================
+# 📊 Asset position value (per symbol)
+# =====================================================
+def get_asset_position_value(
+    conn,
+    user_id: int,
+    bot_id: int,
+    symbol: str,
+) -> float:
+    """
+    Returns current EUR value of a specific asset position.
+    Used for asset exposure guardrails.
+    """
+
+    symbol = (symbol or DEFAULT_SYMBOL).upper()
+
+    with conn.cursor() as cur:
+
+        # current qty
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(qty_delta), 0)
+            FROM bot_ledger
+            WHERE user_id = %s
+              AND bot_id = %s
+              AND symbol = %s
+            """,
+            (user_id, bot_id, symbol),
+        )
+
+        qty = float(cur.fetchone()[0] or 0)
+
+        if qty <= 0:
+            return 0.0
+
+        # latest market price
+        cur.execute(
+            """
+            SELECT price
+            FROM market_data
+            WHERE symbol=%s
+              AND price IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (symbol,),
+        )
+
+        row = cur.fetchone()
+
+        if not row:
+            return 0.0
+
+        price = float(row[0] or 0)
+
+    return round(qty * price, 2)
+
 
 # =====================================================
 # ✅ Default trade plan
@@ -1134,9 +1191,9 @@ def run_trading_bot_agent(
                 if snapshot.get("targets") is not None:
                     setup_payload["targets"] = snapshot.get("targets")
 
-            # =============================================
+            # =====================================================
             # BOT BRAIN
-            # =============================================
+            # =====================================================
 
             brain = run_bot_brain(
                 user_id=user_id,
@@ -1151,9 +1208,9 @@ def run_trading_bot_agent(
 
             engine_action = _normalize_action(brain.get("action"))
 
-            # =============================================
+            # =====================================================
             # CONFIDENCE
-            # =============================================
+            # =====================================================
 
             confidence_value = brain.get("confidence")
 
@@ -1167,9 +1224,9 @@ def run_trading_bot_agent(
             else:
                 confidence_label = "low"
 
-            # =============================================
+            # =====================================================
             # POSITION SIZE
-            # =============================================
+            # =====================================================
 
             metrics = brain.get("metrics") or {}
 
@@ -1180,20 +1237,27 @@ def run_trading_bot_agent(
                 or 1.0
             )
 
-            # =============================================
+            # =====================================================
             # AMOUNT FROM BRAIN
-            # =============================================
+            # =====================================================
 
             requested_amount = float(brain.get("amount_eur") or 0)
 
-            # =============================================
-            # GUARDRAILS
-            # =============================================
+            # =====================================================
+            # CURRENT PORTFOLIO STATE
+            # =====================================================
 
             portfolio_value_eur = get_bot_balance(
                 conn,
                 user_id,
                 bot["bot_id"],
+            )
+
+            asset_value_eur = get_asset_position_value(
+                conn,
+                user_id,
+                bot["bot_id"],
+                bot["symbol"],
             )
 
             today_spent_eur = get_today_spent_eur(
@@ -1203,10 +1267,14 @@ def run_trading_bot_agent(
                 report_date,
             )
 
+            # =====================================================
+            # GUARDRAILS
+            # =====================================================
+
             guard = apply_guardrails(
                 proposed_amount_eur=requested_amount,
                 portfolio_value_eur=portfolio_value_eur,
-                current_asset_value_eur=portfolio_value_eur,
+                current_asset_value_eur=asset_value_eur,
                 today_allocated_eur=today_spent_eur,
                 kill_switch=True,
                 max_trade_risk_eur=float(
@@ -1215,18 +1283,21 @@ def run_trading_bot_agent(
                 daily_allocation_eur=float(
                     bot.get("budget", {}).get("daily_limit_eur") or 0
                 ),
-                max_asset_exposure_pct=40,
+                max_asset_exposure_pct=float(
+                    bot.get("budget", {}).get("max_asset_exposure_pct") or 40
+                ),
             )
 
             adjusted_amount = float(guard.get("adjusted_amount_eur") or 0)
             warnings = guard.get("warnings") or []
 
-            if not guard.get("allowed"):
+            # guardrails trim size instead of blocking
+            if adjusted_amount <= 0:
                 engine_action = "hold"
 
-            # =============================================
+            # =====================================================
             # TRADE PLAN
-            # =============================================
+            # =====================================================
 
             trade_plan = None
 
@@ -1258,9 +1329,9 @@ def run_trading_bot_agent(
                     watch_levels=brain.get("watch_levels"),
                 )
 
-            # =============================================
+            # =====================================================
             # MARKET HEALTH
-            # =============================================
+            # =====================================================
 
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
@@ -1269,9 +1340,9 @@ def run_trading_bot_agent(
                 1,
             )
 
-            # =============================================
+            # =====================================================
             # FINAL DECISION OBJECT
-            # =============================================
+            # =====================================================
 
             decision = {
 
@@ -1318,10 +1389,6 @@ def run_trading_bot_agent(
                 "monitoring": brain.get("monitoring", False),
                 "alerts_active": brain.get("alerts_active", False),
             }
-
-            # =============================================
-            # SAVE DECISION (FIXED)
-            # =============================================
 
             decision_id = _persist_decision_and_order(
                 conn=conn,
