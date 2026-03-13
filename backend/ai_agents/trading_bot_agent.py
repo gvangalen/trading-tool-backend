@@ -920,6 +920,7 @@ def _persist_trade_plan(
             json.dumps(risk),
         ))
 
+
 # =====================================================
 # Persist decision
 # =====================================================
@@ -943,11 +944,14 @@ def _persist_decision_and_order(
     confidence = _normalize_confidence(decision.get("confidence") or "low")
 
     symbol = decision.get("symbol", DEFAULT_SYMBOL)
+
+    requested_amount = float(decision.get("requested_amount_eur") or 0.0)
     amount_eur = float(decision.get("amount_eur") or 0.0)
 
     logger.info("⚙️ Action normalized: %s", action)
     logger.info("⚙️ Confidence normalized: %s", confidence)
-    logger.info("💰 Amount EUR: %s", amount_eur)
+    logger.info("💰 Requested EUR: %s", requested_amount)
+    logger.info("💰 Final EUR: %s", amount_eur)
 
     reasons = decision.get("reasons", [])
     if not isinstance(reasons, list):
@@ -975,6 +979,8 @@ def _persist_decision_and_order(
     # GUARDRAILS
     # =====================================================
 
+    guardrails_result = decision.get("guardrails_result") or {}
+
     guardrails_payload = {
         "kill_switch": True,
         "max_trade_risk_eur": decision.get("max_risk_per_trade"),
@@ -982,7 +988,7 @@ def _persist_decision_and_order(
         "position_size": position_size,
     }
 
-    logger.info("🛡 Guardrails payload: %s", guardrails_payload)
+    logger.info("🛡 Guardrails result: %s", guardrails_result)
 
     # =====================================================
     # SCORES PAYLOAD
@@ -1019,7 +1025,14 @@ def _persist_decision_and_order(
         if isinstance(decision.get("warnings"), list)
         else [],
 
+        # legacy simple guardrail limits
         "guardrails": guardrails_payload,
+
+        # 🔴 CRUCIAAL VOOR FRONTEND
+        "requested_amount_eur": requested_amount,
+        "amount_eur": amount_eur,
+        "guardrails_result": guardrails_result,
+        "guardrail_reason": decision.get("guardrail_reason"),
 
         "watch_levels": watch_levels,
         "monitoring": monitoring,
