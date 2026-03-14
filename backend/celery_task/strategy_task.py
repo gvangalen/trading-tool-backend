@@ -487,6 +487,14 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
             stop = safe_numeric(base_strategy.get("stop_loss"))
             targets = base_strategy.get("targets") or []
         
+            # targets opslaan als text (DB kolom = text)
+            targets_text = ",".join(map(str, targets)) if targets else None
+        
+            confidence = safe_confidence(
+                analysis.get("confidence_score"),
+                fallback=50
+            )
+        
             cur.execute(
                 """
                 INSERT INTO active_strategy_snapshot (
@@ -496,33 +504,33 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
                     entry,
                     stop_loss,
                     targets,
-                    confidence,
+                    confidence_score,
                     snapshot_date
                 )
                 VALUES (
                     %s, %s, %s,
                     %s, %s,
-                    %s::jsonb,
+                    %s,
                     %s,
                     %s
                 )
-                ON CONFLICT (user_id, strategy_id, snapshot_date)
+                ON CONFLICT (user_id, setup_id, snapshot_date)
                 DO UPDATE SET
                     entry = EXCLUDED.entry,
                     stop_loss = EXCLUDED.stop_loss,
                     targets = EXCLUDED.targets,
-                    confidence = EXCLUDED.confidence,
-                    updated_at = NOW();
+                    confidence_score = EXCLUDED.confidence_score,
+                    created_at = NOW();
                 """,
                 (
                     user_id,
                     base_strategy["strategy_id"],
-                    setup["id"],
+                    setup_id,
                     entry,
                     stop,
-                    json.dumps(targets),
+                    targets_text,
                     confidence,
-                    date.today(),
+                    today,
                 ),
             )
         
@@ -739,6 +747,14 @@ def run_daily_strategy_snapshot(user_id: int):
             stop = safe_numeric(base_strategy.get("stop_loss"))
             targets = base_strategy.get("targets") or []
         
+            # targets opslaan als text (DB kolom = text)
+            targets_text = ",".join(map(str, targets)) if targets else None
+        
+            confidence = safe_confidence(
+                analysis.get("confidence_score"),
+                fallback=50
+            )
+        
             cur.execute(
                 """
                 INSERT INTO active_strategy_snapshot (
@@ -748,23 +764,23 @@ def run_daily_strategy_snapshot(user_id: int):
                     entry,
                     stop_loss,
                     targets,
-                    confidence,
+                    confidence_score,
                     snapshot_date
                 )
                 VALUES (
                     %s, %s, %s,
                     %s, %s,
-                    %s::jsonb,
+                    %s,
                     %s,
                     %s
                 )
-                ON CONFLICT (user_id, strategy_id, snapshot_date)
+                ON CONFLICT (user_id, setup_id, snapshot_date)
                 DO UPDATE SET
                     entry = EXCLUDED.entry,
                     stop_loss = EXCLUDED.stop_loss,
                     targets = EXCLUDED.targets,
-                    confidence = EXCLUDED.confidence,
-                    updated_at = NOW();
+                    confidence_score = EXCLUDED.confidence_score,
+                    created_at = NOW();
                 """,
                 (
                     user_id,
@@ -772,8 +788,8 @@ def run_daily_strategy_snapshot(user_id: int):
                     setup_id,
                     entry,
                     stop,
-                    json.dumps(targets),
-                    50,
+                    targets_text,
+                    confidence,
                     today,
                 ),
             )
