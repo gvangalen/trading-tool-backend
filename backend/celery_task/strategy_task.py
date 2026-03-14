@@ -517,12 +517,12 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
                 (
                     user_id,
                     base_strategy["strategy_id"],
-                    setup_id,
+                    setup["id"],
                     entry,
                     stop,
                     json.dumps(targets),
-                    50,
-                    today,
+                    confidence,
+                    date.today(),
                 ),
             )
         
