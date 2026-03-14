@@ -259,6 +259,11 @@ def fetch_strategy_score_for_today(
 def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
     """
     Genereert een initiële tradingstrategie op basis van een setup.
+
+    Flow:
+    1️⃣ AI probeert levels te genereren
+    2️⃣ Levels worden gevalideerd
+    3️⃣ Als AI faalt → fallback met live price
     """
 
     logger.info(f"⚙️ AI strategy generatie | setup={setup.get('id')}")
@@ -272,6 +277,15 @@ Regels:
 - Geen hype
 - Geen voorspellingen
 - Focus op uitvoerbaarheid
+
+Output ALLEEN JSON:
+{
+  "entry": "",
+  "targets": [],
+  "stop_loss": "",
+  "risk_reward": "",
+  "explanation": ""
+}
 """
 
     system_prompt = build_system_prompt(
@@ -282,25 +296,81 @@ Regels:
     prompt = f"""
 SETUP:
 {json.dumps(setup, ensure_ascii=False, indent=2)}
-
-ANTWOORD ALLEEN GELDIGE JSON:
-{{
-  "entry": "",
-  "targets": [],
-  "stop_loss": "",
-  "risk_reward": "",
-  "explanation": ""
-}}
 """
 
     result = ask_gpt(prompt, system_role=system_prompt)
 
     if not isinstance(result, dict):
-        raise ValueError("❌ AI strategy generatie gaf geen geldige JSON")
+        logger.warning("⚠️ AI gaf geen geldige JSON — fallback gebruikt")
+        result = {}
 
-    required_keys = {"entry", "targets", "stop_loss"}
-    if not required_keys.issubset(result.keys()):
-        raise ValueError("❌ Strategy mist verplichte velden")
+    result.setdefault("entry", None)
+    result.setdefault("targets", [])
+    result.setdefault("stop_loss", None)
+    result.setdefault("risk_reward", None)
+    result.setdefault("explanation", "")
+
+    # -------------------------------------------------
+    # Numeric parsing
+    # -------------------------------------------------
+
+    def to_float(v):
+        try:
+            return float(v)
+        except Exception:
+            return None
+
+    entry = to_float(result.get("entry"))
+    stop = to_float(result.get("stop_loss"))
+
+    raw_targets = result.get("targets") or []
+    targets = []
+
+    for t in raw_targets:
+        try:
+            targets.append(float(t))
+        except Exception:
+            continue
+
+    # -------------------------------------------------
+    # Fallback logic (AI gaf geen levels)
+    # -------------------------------------------------
+
+    if entry is None or stop is None or not targets:
+
+        logger.warning("⚠️ AI levels ongeldig — deterministic fallback gebruikt")
+
+        try:
+            from backend.market.market_price import get_current_price
+
+            symbol = setup.get("symbol", "BTC")
+            price = float(get_current_price(symbol))
+
+        except Exception:
+            logger.warning("⚠️ Live price niet beschikbaar — fallback prijs gebruikt")
+            price = 50000
+
+        entry = price
+
+        # stop loss 8% onder entry
+        stop = round(price * 0.92, 2)
+
+        # RR targets
+        targets = [
+            round(price * 1.05, 2),
+            round(price * 1.12, 2),
+            round(price * 1.25, 2),
+        ]
+
+        result["risk_reward"] = 2.5
+
+    # -------------------------------------------------
+    # Final result
+    # -------------------------------------------------
+
+    result["entry"] = entry
+    result["stop_loss"] = stop
+    result["targets"] = targets
 
     return result
 
