@@ -11,6 +11,34 @@ from backend.ai_core.agent_context import build_agent_context
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+def _get_latest_market_price(symbol: str = "BTC") -> float:
+    conn = get_db_connection()
+    if not conn:
+        raise RuntimeError("Geen databaseverbinding")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT price
+                FROM market_data
+                WHERE symbol = %s
+                  AND price IS NOT NULL
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (symbol,),
+            )
+            row = cur.fetchone()
+
+        if not row or row[0] is None:
+            raise RuntimeError(f"Geen market price gevonden voor {symbol}")
+
+        return float(row[0])
+
+    finally:
+        conn.close()
+
 
 # ===================================================================
 # 🎯 AI — ANALYSE VAN BESTAANDE STRATEGIEËN (GEEN GENERATIE)
@@ -255,7 +283,6 @@ def fetch_strategy_score_for_today(
 # 🚀 INITIËLE STRATEGY GENERATIE (SETUP → STRATEGY)
 # ⚠️ Alleen hier mag AI iets "maken"
 # ===================================================================
-
 def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
     """
     Genereert een initiële tradingstrategie op basis van een setup.
@@ -263,7 +290,7 @@ def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
     Flow:
     1️⃣ AI probeert levels te genereren
     2️⃣ Levels worden gevalideerd
-    3️⃣ Als AI faalt → fallback met live price
+    3️⃣ Als AI faalt → fallback met market helper
     """
 
     logger.info(f"⚙️ AI strategy generatie | setup={setup.get('id')}")
@@ -298,7 +325,15 @@ SETUP:
 {json.dumps(setup, ensure_ascii=False, indent=2)}
 """
 
-    result = ask_gpt(prompt, system_role=system_prompt)
+    # -------------------------------------------------
+    # AI generatie
+    # -------------------------------------------------
+
+    try:
+        result = ask_gpt(prompt, system_role=system_prompt)
+    except Exception as e:
+        logger.warning(f"⚠️ AI error tijdens strategy generatie: {e}")
+        result = {}
 
     if not isinstance(result, dict):
         logger.warning("⚠️ AI gaf geen geldige JSON — fallback gebruikt")
@@ -340,29 +375,28 @@ SETUP:
 
         logger.warning("⚠️ AI levels ongeldig — deterministic fallback gebruikt")
 
+        symbol = setup.get("symbol", "BTC")
+
         try:
-            from backend.market.market_price import get_current_price
+            # ⭐ jouw market helper
+            price = float(_get_latest_market_price(symbol))
+        except Exception as e:
+            logger.warning(f"⚠️ Market helper faalde: {e}")
+            price = 50000  # laatste fallback
 
-            symbol = setup.get("symbol", "BTC")
-            price = float(get_current_price(symbol))
-
-        except Exception:
-            logger.warning("⚠️ Live price niet beschikbaar — fallback prijs gebruikt")
-            price = 50000
-
-        entry = price
+        entry = round(price, 2)
 
         # stop loss 8% onder entry
         stop = round(price * 0.92, 2)
 
-        # RR targets
+        # targets met logische RR ladder
         targets = [
             round(price * 1.05, 2),
             round(price * 1.12, 2),
-            round(price * 1.25, 2),
+            round(price * 1.20, 2),
         ]
 
-        result["risk_reward"] = 2.5
+        result["risk_reward"] = round((targets[-1] - entry) / (entry - stop), 2)
 
     # -------------------------------------------------
     # Final result
