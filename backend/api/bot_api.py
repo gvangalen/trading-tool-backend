@@ -106,6 +106,7 @@ def _get_daily_scores_row(conn, user_id: int, report_date: date):
         "setup": float(setup or 10),
     }
 
+
 # =====================================
 # 📦 BOT CONFIGS (actieve bots)
 # =====================================
@@ -188,10 +189,17 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                 strategy = {
                     "id": strategy_id,
                     "type": strategy_type,
-                    "setup_id": setup_id,
-                    "name": strategy_name or setup_name,
-                    "symbol": symbol,
-                    "timeframe": timeframe,
+
+                    # 🔹 STRATEGY INFO
+                    "name": strategy_name,
+
+                    # 🔹 SETUP INFO (nieuw)
+                    "setup": {
+                        "id": setup_id,
+                        "name": setup_name,
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                    },
                 }
 
             out.append(
