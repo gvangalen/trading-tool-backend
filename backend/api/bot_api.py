@@ -236,6 +236,9 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
 # =====================================
 # 📄 BOT TODAY (decisions + orders + proposal)
 # =====================================
+# =====================================
+# 📄 BOT TODAY (decisions + orders + proposal)
+# =====================================
 @router.get("/bot/today")
 async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
@@ -269,7 +272,8 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
               b.name,
               COALESCE(st.symbol,'BTC')  AS symbol,
               COALESCE(st.timeframe,'—') AS timeframe,
-              s.strategy_type
+              s.strategy_type,
+              st.name AS setup_name
             FROM bot_configs b
             LEFT JOIN strategies s ON s.id = b.strategy_id
             LEFT JOIN setups st    ON st.id = s.setup_id
@@ -298,6 +302,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "symbol": r[2],
                 "timeframe": r[3],
                 "strategy_type": r[4],
+                "setup_name": r[5],   # 🔥 NIEUW
             }
             for r in bot_rows
         }
@@ -364,14 +369,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             scores_payload = _safe_json(scores_json, {})
             reasons_payload = _safe_json(reason_json, [])
 
-            setup_match = scores_payload.get("setup_match") or {
-                "status": "no_snapshot",
-                "summary": "Geen strategie context",
-                "detail": "Er is vandaag geen actief strategy snapshot beschikbaar.",
-                "score": 10,
-                "confidence": "low",
-            }
-
             guard = scores_payload.get("guardrails_result", {})
             guard_limits = guard.get("guardrails", {})
 
@@ -381,13 +378,14 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "bot_name": bot["bot_name"],
                 "symbol": symbol,
 
+                # 🔥 NIEUW → setup naam voor frontend
+                "setup_name": bot.get("setup_name"),
+
                 "action": action,
                 "confidence": confidence,
 
-                # complete payload voor UI
                 "scores_json": scores_payload or daily_scores,
 
-                # 🔥 nieuwe velden voor Guardrails UI
                 "requested_amount_eur": scores_payload.get("requested_amount_eur"),
                 "amount_eur": scores_payload.get("amount_eur"),
                 "guardrails_result": guard,
@@ -406,119 +404,11 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "status": status,
                 "created_at": created_at,
                 "updated_at": updated_at,
-                "setup_match": setup_match,
+                "setup_match": scores_payload.get("setup_match"),
                 "trade_plan": None,
             }
 
             decision_ids.append(int(decision_id))
-
-        # =====================================================
-        # SAFETY NET – RUN BOT AGENT
-        # =====================================================
-        missing = [bid for bid in bots_by_id if bid not in decisions_by_bot]
-
-        if missing:
-
-            run_trading_bot_agent(
-                user_id=user_id,
-                report_date=today,
-            )
-
-            conn.commit()
-            time.sleep(0.3)
-
-            cur.execute(
-                """
-                SELECT
-                  id,
-                  bot_id,
-                  symbol,
-                  decision_ts,
-                  action,
-                  confidence,
-                  scores_json,
-                  reason_json,
-                  setup_id,
-                  strategy_id,
-                  status,
-                  created_at,
-                  updated_at
-                FROM bot_decisions
-                WHERE user_id=%s
-                  AND decision_date=%s
-                ORDER BY bot_id ASC, id DESC
-                """,
-                (user_id, today),
-            )
-
-            rows = cur.fetchall()
-
-            for r in rows:
-
-                (
-                    decision_id,
-                    bot_id,
-                    symbol,
-                    decision_ts,
-                    action,
-                    confidence,
-                    scores_json,
-                    reason_json,
-                    setup_id,
-                    strategy_id,
-                    status,
-                    created_at,
-                    updated_at,
-                ) = r
-
-                bot_id = int(bot_id)
-
-                if bot_id in decisions_by_bot:
-                    continue
-
-                bot = bots_by_id.get(bot_id)
-                if not bot:
-                    continue
-
-                scores_payload = _safe_json(scores_json, {})
-                reasons_payload = _safe_json(reason_json, [])
-
-                guard = scores_payload.get("guardrails_result", {})
-                guard_limits = guard.get("guardrails", {})
-
-                decisions_by_bot[bot_id] = {
-                    "id": decision_id,
-                    "bot_id": bot_id,
-                    "bot_name": bot["bot_name"],
-                    "symbol": symbol,
-                    "action": action,
-                    "confidence": confidence,
-
-                    "scores_json": scores_payload,
-
-                    "requested_amount_eur": scores_payload.get("requested_amount_eur"),
-                    "amount_eur": scores_payload.get("amount_eur"),
-                    "guardrails_result": guard,
-                    "guardrail_reason": scores_payload.get("guardrail_reason"),
-
-                    "metrics": {
-                        "position_size": scores_payload.get("position_size"),
-                        "exposure_multiplier": scores_payload.get("exposure_multiplier"),
-                        "max_trade_risk_eur": guard_limits.get("max_trade_risk_eur"),
-                        "daily_allocation_eur": guard_limits.get("daily_allocation_eur"),
-                    },
-
-                    "reasons": reasons_payload,
-                    "setup_id": setup_id,
-                    "strategy_id": strategy_id,
-                    "status": status,
-                    "created_at": created_at,
-                    "updated_at": updated_at,
-                    "setup_match": scores_payload.get("setup_match"),
-                    "trade_plan": None,
-                }
-
-                decision_ids.append(int(decision_id))
 
         return {
             "date": str(today),
