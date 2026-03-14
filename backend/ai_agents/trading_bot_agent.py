@@ -9,7 +9,7 @@ from backend.engine.guardrails_engine import apply_guardrails
 
 # ✅ Engine brain (single source of truth)
 from backend.engine.bot_brain import run_bot_brain
-from backend.celery_task.strategy_task import run_daily_strategy_snapshot
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -1193,20 +1193,23 @@ def run_trading_bot_agent(
                     "⚠️ No strategy snapshot found | strategy=%s | generating snapshot",
                     bot["strategy_id"],
                 )
-
+            
                 try:
-
+            
+                    # 🔴 Lazy import om circular import te voorkomen
+                    from backend.celery_task.strategy_task import run_daily_strategy_snapshot
+            
                     # direct generator run (NIET async)
                     run_daily_strategy_snapshot(user_id=user_id)
-
-                    # opnieuw ophalen
+            
+                    # opnieuw snapshot ophalen
                     snapshot = _get_active_strategy_snapshot(
                         conn,
                         user_id,
                         bot["strategy_id"],
                         report_date,
                     )
-
+            
                     if snapshot:
                         logger.info(
                             "✅ Snapshot generated successfully | strategy=%s",
@@ -1217,7 +1220,7 @@ def run_trading_bot_agent(
                             "⚠️ Snapshot still missing after generation | strategy=%s",
                             bot["strategy_id"],
                         )
-
+            
                 except Exception:
                     logger.exception(
                         "❌ Failed to generate strategy snapshot"
