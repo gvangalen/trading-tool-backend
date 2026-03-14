@@ -9,6 +9,7 @@ from backend.engine.guardrails_engine import apply_guardrails
 
 # ✅ Engine brain (single source of truth)
 from backend.engine.bot_brain import run_bot_brain
+from backend.celery_task.strategy_task import run_daily_strategy_snapshot
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -1171,12 +1172,60 @@ def run_trading_bot_agent(
 
         for bot in bots:
 
+            # =====================================================
+            # 📸 SNAPSHOT LOOKUP
+            # =====================================================
+
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
                 bot["strategy_id"],
                 report_date,
             )
+
+            # =====================================================
+            # 🔴 SELF HEALING FALLBACK
+            # =====================================================
+
+            if not snapshot:
+
+                logger.warning(
+                    "⚠️ No strategy snapshot found | strategy=%s | generating snapshot",
+                    bot["strategy_id"],
+                )
+
+                try:
+
+                    # direct generator run (NIET async)
+                    run_daily_strategy_snapshot(user_id=user_id)
+
+                    # opnieuw ophalen
+                    snapshot = _get_active_strategy_snapshot(
+                        conn,
+                        user_id,
+                        bot["strategy_id"],
+                        report_date,
+                    )
+
+                    if snapshot:
+                        logger.info(
+                            "✅ Snapshot generated successfully | strategy=%s",
+                            bot["strategy_id"],
+                        )
+                    else:
+                        logger.warning(
+                            "⚠️ Snapshot still missing after generation | strategy=%s",
+                            bot["strategy_id"],
+                        )
+
+                except Exception:
+                    logger.exception(
+                        "❌ Failed to generate strategy snapshot"
+                    )
+
+            # =====================================================
+            # SETUP MATCH
+            # =====================================================
 
             setup_match = _build_setup_match(
                 bot=bot,
@@ -1304,10 +1353,6 @@ def run_trading_bot_agent(
             adjusted_amount = float(guard.get("adjusted_amount_eur") or 0)
             warnings = guard.get("warnings") or []
 
-            # =====================================================
-            # GUARDRAIL EDGE CASE FIX
-            # =====================================================
-
             if adjusted_amount <= 0:
 
                 logger.info("⚠️ Guardrails reduced allocation to zero → switching to HOLD")
@@ -1354,20 +1399,12 @@ def run_trading_bot_agent(
                     watch_levels=brain.get("watch_levels"),
                 )
 
-            # =====================================================
-            # MARKET HEALTH
-            # =====================================================
-
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
                 + float(scores.get("technical", 10)) * 0.3
                 + float(scores.get("market", 10)) * 0.3,
                 1,
             )
-
-            # =====================================================
-            # FINAL DECISION OBJECT
-            # =====================================================
 
             decision = {
 
