@@ -1304,9 +1304,21 @@ def run_trading_bot_agent(
             adjusted_amount = float(guard.get("adjusted_amount_eur") or 0)
             warnings = guard.get("warnings") or []
 
-            # guardrails trim size instead of blocking
+            # =====================================================
+            # GUARDRAIL EDGE CASE FIX
+            # =====================================================
+
             if adjusted_amount <= 0:
+
+                logger.info("⚠️ Guardrails reduced allocation to zero → switching to HOLD")
+
                 engine_action = "hold"
+
+                guard = {
+                    "blocked": False,
+                    "warnings": ["allocation_zero"],
+                    "adjusted_amount_eur": 0,
+                }
 
             # =====================================================
             # TRADE PLAN
@@ -1391,8 +1403,12 @@ def run_trading_bot_agent(
 
                 "guardrails_result": guard,
 
-                "guardrail_reason": guard.get("blocked_by")
-                or (guard.get("warnings")[0] if guard.get("warnings") else None),
+                "guardrail_reason": (
+                    "allocation_zero"
+                    if adjusted_amount <= 0
+                    else guard.get("blocked_by")
+                    or (guard.get("warnings")[0] if guard.get("warnings") else None)
+                ),
 
                 "warnings": warnings,
 
