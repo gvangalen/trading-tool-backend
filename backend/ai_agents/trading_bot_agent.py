@@ -169,14 +169,11 @@ def _default_trade_plan(
     targets = []
     stop_loss = {"price": None}
 
-    # ===============================================
     # 1️⃣ Brain watch levels
-    # ===============================================
-
     if watch_levels:
-
         pullback = watch_levels.get("pullback_zone")
         breakout = watch_levels.get("breakout_trigger")
+        entry = watch_levels.get("entry")
 
         if pullback:
             entry_plan.append({
@@ -192,35 +189,48 @@ def _default_trade_plan(
                 "price": breakout,
             })
 
-    # ===============================================
-    # 2️⃣ Snapshot fallback (BELANGRIJK)
-    # ===============================================
-
-    if not entry_plan and snapshot:
-
-        entry = snapshot.get("entry")
-        stop = snapshot.get("stop_loss")
-        tps = snapshot.get("targets") or []
-
-        if entry:
+        if entry and not entry_plan:
             entry_plan.append({
                 "type": "watch",
                 "label": "Potential entry",
                 "price": entry,
             })
 
+        stop = watch_levels.get("stop_loss")
         if stop:
             stop_loss = {"price": stop}
 
-        for i, t in enumerate(tps):
-            targets.append({
-                "label": f"TP{i+1}",
-                "price": t
+        watch_targets = watch_levels.get("targets") or []
+        for i, t in enumerate(watch_targets):
+            if t is not None:
+                targets.append({
+                    "label": f"TP{i+1}",
+                    "price": t,
+                })
+
+    # 2️⃣ Snapshot fallback
+    if snapshot:
+        entry = snapshot.get("entry")
+        stop = snapshot.get("stop_loss")
+        tps = snapshot.get("targets") or []
+
+        if entry is not None and not entry_plan:
+            entry_plan.append({
+                "type": "watch",
+                "label": "Potential entry",
+                "price": entry,
             })
 
-    # ===============================================
-    # RETURN PLAN
-    # ===============================================
+        if stop is not None and stop_loss.get("price") is None:
+            stop_loss = {"price": stop}
+
+        if not targets:
+            for i, t in enumerate(tps):
+                if t is not None:
+                    targets.append({
+                        "label": f"TP{i+1}",
+                        "price": t,
+                    })
 
     return {
         "symbol": symbol,
@@ -641,15 +651,41 @@ def _get_active_strategy_snapshot(
     if not row:
         return None
 
-    entry, targets, stop_loss, confidence, reason = row
+    entry, targets_raw, stop_loss, confidence, reason = row
+
+    parsed_targets = []
+
+    if isinstance(targets_raw, str) and targets_raw.strip():
+        try:
+            parsed = json.loads(targets_raw)
+            if isinstance(parsed, list):
+                parsed_targets = [
+                    float(t) for t in parsed
+                    if t is not None
+                ]
+        except Exception:
+            try:
+                parsed_targets = [
+                    float(t.strip())
+                    for t in targets_raw.split(",")
+                    if t and t.strip()
+                ]
+            except Exception:
+                parsed_targets = []
+
+    elif isinstance(targets_raw, list):
+        parsed_targets = [
+            float(t) for t in targets_raw
+            if t is not None
+        ]
+
     return {
-        "entry": entry,
-        "targets": targets,
-        "stop_loss": stop_loss,
+        "entry": float(entry) if entry is not None else None,
+        "targets": parsed_targets,
+        "stop_loss": float(stop_loss) if stop_loss is not None else None,
         "confidence": float(confidence or 0),
         "reason": reason,
     }
-
 
 # =====================================================
 # 📸 BOT BUDGET
@@ -1195,7 +1231,6 @@ def run_trading_bot_agent(
         return {"ok": False, "error": "db_unavailable"}
 
     try:
-
         bots = _get_active_bots(conn, user_id)
 
         if bot_id is not None:
@@ -1205,7 +1240,6 @@ def run_trading_bot_agent(
             return {"ok": True, "date": str(report_date), "bots": 0, "decisions": []}
 
         scores = _get_daily_scores(conn, user_id, report_date)
-
         results = []
 
         for bot in bots:
@@ -1213,7 +1247,6 @@ def run_trading_bot_agent(
             # =====================================================
             # 📸 SNAPSHOT LOOKUP
             # =====================================================
-
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -1224,30 +1257,24 @@ def run_trading_bot_agent(
             # =====================================================
             # 🔴 SELF HEALING FALLBACK
             # =====================================================
-
             if not snapshot:
-
                 logger.warning(
                     "⚠️ No strategy snapshot found | strategy=%s | generating snapshot",
                     bot["strategy_id"],
                 )
-            
+
                 try:
-            
-                    # 🔴 Lazy import om circular import te voorkomen
                     from backend.celery_task.strategy_task import run_daily_strategy_snapshot
-            
-                    # direct generator run (NIET async)
+
                     run_daily_strategy_snapshot(user_id=user_id)
-            
-                    # opnieuw snapshot ophalen
+
                     snapshot = _get_active_strategy_snapshot(
                         conn,
                         user_id,
                         bot["strategy_id"],
                         report_date,
                     )
-            
+
                     if snapshot:
                         logger.info(
                             "✅ Snapshot generated successfully | strategy=%s",
@@ -1258,16 +1285,13 @@ def run_trading_bot_agent(
                             "⚠️ Snapshot still missing after generation | strategy=%s",
                             bot["strategy_id"],
                         )
-            
+
                 except Exception:
-                    logger.exception(
-                        "❌ Failed to generate strategy snapshot"
-                    )
+                    logger.exception("❌ Failed to generate strategy snapshot")
 
             # =====================================================
             # SETUP MATCH
             # =====================================================
-
             setup_match = _build_setup_match(
                 bot=bot,
                 scores=scores,
@@ -1284,20 +1308,18 @@ def run_trading_bot_agent(
             )
 
             if snapshot:
-
                 if snapshot.get("entry") is not None:
                     setup_payload["entry"] = snapshot.get("entry")
 
                 if snapshot.get("stop_loss") is not None:
                     setup_payload["stop_loss"] = snapshot.get("stop_loss")
 
-                if snapshot.get("targets") is not None:
+                if snapshot.get("targets"):
                     setup_payload["targets"] = snapshot.get("targets")
 
             # =====================================================
             # BOT BRAIN
             # =====================================================
-
             brain = run_bot_brain(
                 user_id=user_id,
                 setup=setup_payload,
@@ -1314,7 +1336,6 @@ def run_trading_bot_agent(
             # =====================================================
             # CONFIDENCE
             # =====================================================
-
             confidence_value = brain.get("confidence")
 
             if isinstance(confidence_value, (int, float)):
@@ -1330,7 +1351,6 @@ def run_trading_bot_agent(
             # =====================================================
             # POSITION SIZE
             # =====================================================
-
             metrics = brain.get("metrics") or {}
 
             position_size = float(
@@ -1341,9 +1361,8 @@ def run_trading_bot_agent(
             )
 
             # =====================================================
-            # AMOUNT FROM BRAIN (DecisionEngine fallback support)
+            # AMOUNT FROM BRAIN
             # =====================================================
-            
             requested_amount = float(
                 brain.get("amount_eur")
                 or brain.get("final_amount")
@@ -1351,7 +1370,7 @@ def run_trading_bot_agent(
                 or brain.get("base_amount")
                 or 0
             )
-            
+
             logger.info(
                 "💰 Requested amount resolved | amount=%s | brain_keys=%s",
                 requested_amount,
@@ -1361,7 +1380,6 @@ def run_trading_bot_agent(
             # =====================================================
             # CURRENT PORTFOLIO STATE
             # =====================================================
-
             portfolio_value_eur = get_bot_balance(
                 conn,
                 user_id,
@@ -1385,7 +1403,6 @@ def run_trading_bot_agent(
             # =====================================================
             # GUARDRAILS
             # =====================================================
-
             guard = apply_guardrails(
                 proposed_amount_eur=requested_amount,
                 portfolio_value_eur=portfolio_value_eur,
@@ -1407,9 +1424,7 @@ def run_trading_bot_agent(
             warnings = guard.get("warnings") or []
 
             if adjusted_amount <= 0:
-
                 logger.info("⚠️ Guardrails reduced allocation to zero → switching to HOLD")
-
                 engine_action = "hold"
 
                 guard = {
@@ -1421,17 +1436,14 @@ def run_trading_bot_agent(
             # =====================================================
             # TRADE PLAN
             # =====================================================
-            
             trade_plan = None
-            
+
             if snapshot:
-            
                 entry = snapshot.get("entry")
                 stop = snapshot.get("stop_loss")
                 targets = snapshot.get("targets") or []
-            
+
                 if engine_action in ["buy", "sell"] and entry and stop:
-            
                     trade_plan = {
                         "symbol": bot["symbol"],
                         "side": engine_action,
@@ -1443,19 +1455,18 @@ def run_trading_bot_agent(
                         ],
                         "risk": {"rr": brain.get("rr_ratio")},
                     }
-            
-            # 🔴 BELANGRIJK: ook bij HOLD altijd watch levels tonen
+
+            # 🔴 Ook bij HOLD / OBSERVE altijd levels tonen
             if not trade_plan:
-            
-                watch_levels = brain.get("watch_levels")
-            
                 trade_plan = _default_trade_plan(
                     bot["symbol"],
                     engine_action,
                     "engine_watch_mode",
-                    watch_levels=watch_levels,
+                    watch_levels=brain.get("watch_levels"),
                     snapshot=snapshot,
-    )
+                )
+
+            logger.info("📊 Final trade plan built: %s", trade_plan)
 
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
@@ -1465,50 +1476,36 @@ def run_trading_bot_agent(
             )
 
             decision = {
-
                 "symbol": bot["symbol"],
                 "action": engine_action,
                 "confidence": confidence_label,
-
                 "score": _clamp_score(scores.get("market", 10)),
-
                 "requested_amount_eur": round(requested_amount, 2),
                 "amount_eur": round(adjusted_amount, 2),
-
                 "position_size": position_size,
                 "exposure_multiplier": position_size,
-
                 "setup_match": setup_match,
                 "reasons": [brain.get("reason") or "engine_decision"],
-
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
-
                 "market_health": market_health,
                 "market_pressure": float(brain.get("market_pressure") or 50),
                 "transition_risk": float(brain.get("transition_risk") or 50),
-
                 "max_risk_per_trade": float(
                     bot.get("budget", {}).get("max_order_eur") or 0
                 ) or None,
-
                 "max_daily_allocation": float(
                     bot.get("budget", {}).get("daily_limit_eur") or 0
                 ) or None,
-
                 "guardrails_result": guard,
-
                 "guardrail_reason": (
                     "allocation_zero"
                     if adjusted_amount <= 0
                     else guard.get("blocked_by")
                     or (guard.get("warnings")[0] if guard.get("warnings") else None)
                 ),
-
                 "warnings": warnings,
-
                 "trade_plan": trade_plan,
-
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring", False),
                 "alerts_active": brain.get("alerts_active", False),
@@ -1543,7 +1540,6 @@ def run_trading_bot_agent(
         }
 
     except Exception as e:
-
         logger.exception("❌ trading_bot_agent failed")
 
         return {
@@ -1553,7 +1549,6 @@ def run_trading_bot_agent(
 
     finally:
         conn.close()
-
 
 # =====================================================
 # 🚀 Bot execute decision functie
