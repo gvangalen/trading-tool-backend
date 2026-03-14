@@ -7,8 +7,21 @@ logger.setLevel(logging.INFO)
 
 
 # =========================================================
+# UI reason mapping
+# =========================================================
+
+BLOCK_REASON_LABELS = {
+    "kill_switch": "Bot is disabled",
+    "daily_allocation": "Daily allocation reached",
+    "asset_exposure": "Asset exposure limit reached",
+    "no_allocatable_size": "No valid trade setup",
+}
+
+
+# =========================================================
 # Helpers
 # =========================================================
+
 def _safe_float(value: Any, fallback: float = 0.0) -> float:
     try:
         if value is None:
@@ -39,6 +52,7 @@ def _round_money(value: float) -> float:
 # =========================================================
 # Core guardrails
 # =========================================================
+
 def apply_guardrails(
     *,
     proposed_amount_eur: float,
@@ -65,7 +79,6 @@ def apply_guardrails(
     max_trade_risk = _safe_float(max_trade_risk_eur, 0.0)
     daily_allocation = _safe_float(daily_allocation_eur, 0.0)
 
-    # 🔧 FIX: fallback exposure = 100
     max_asset_exposure = _safe_float(max_asset_exposure_pct, 100.0)
 
     logger.info(
@@ -82,13 +95,19 @@ def apply_guardrails(
     # -----------------------------------------------------
     # 1. Kill switch
     # -----------------------------------------------------
+
     if not kill_switch:
+
+        blocked_by = "kill_switch"
+
         return {
             "allowed": False,
             "adjusted_amount_eur": 0.0,
             "original_amount_eur": _round_money(original_amount),
             "warnings": ["kill_switch_off"],
-            "blocked_by": "kill_switch",
+            "blocked_by": blocked_by,
+            "reason": BLOCK_REASON_LABELS.get(blocked_by),
+            "debug_code": blocked_by,
             "guardrails": {
                 "kill_switch": False,
                 "max_trade_risk_eur": _round_money(max_trade_risk),
@@ -104,6 +123,7 @@ def apply_guardrails(
     # -----------------------------------------------------
     # 2. Max trade risk
     # -----------------------------------------------------
+
     if max_trade_risk > 0 and adjusted_amount > max_trade_risk:
         adjusted_amount = max_trade_risk
         warnings.append("max_trade_risk_trimmed")
@@ -111,17 +131,23 @@ def apply_guardrails(
     # -----------------------------------------------------
     # 3. Daily allocation
     # -----------------------------------------------------
+
     if daily_allocation > 0:
 
         remaining_daily = max(daily_allocation - today_allocated, 0.0)
 
         if remaining_daily <= 0:
+
+            blocked_by = "daily_allocation"
+
             return {
                 "allowed": False,
                 "adjusted_amount_eur": 0.0,
                 "original_amount_eur": _round_money(original_amount),
                 "warnings": warnings + ["daily_allocation_reached"],
-                "blocked_by": "daily_allocation",
+                "blocked_by": blocked_by,
+                "reason": BLOCK_REASON_LABELS.get(blocked_by),
+                "debug_code": blocked_by,
                 "guardrails": {
                     "kill_switch": True,
                     "max_trade_risk_eur": _round_money(max_trade_risk),
@@ -142,6 +168,7 @@ def apply_guardrails(
     # -----------------------------------------------------
     # 4. Max asset exposure
     # -----------------------------------------------------
+
     if max_asset_exposure > 0 and portfolio_value > 0:
 
         max_asset_value_allowed = portfolio_value * (
@@ -162,12 +189,17 @@ def apply_guardrails(
         )
 
         if remaining_asset_capacity <= 0:
+
+            blocked_by = "asset_exposure"
+
             return {
                 "allowed": False,
                 "adjusted_amount_eur": 0.0,
                 "original_amount_eur": _round_money(original_amount),
                 "warnings": warnings + ["asset_exposure_limit_reached"],
-                "blocked_by": "asset_exposure",
+                "blocked_by": blocked_by,
+                "reason": BLOCK_REASON_LABELS.get(blocked_by),
+                "debug_code": blocked_by,
                 "guardrails": {
                     "kill_switch": True,
                     "max_trade_risk_eur": _round_money(max_trade_risk),
@@ -188,6 +220,7 @@ def apply_guardrails(
     # -----------------------------------------------------
     # Final result
     # -----------------------------------------------------
+
     adjusted_amount = max(adjusted_amount, 0.0)
     adjusted_amount = _round_money(adjusted_amount)
 
@@ -202,6 +235,8 @@ def apply_guardrails(
         "original_amount_eur": _round_money(original_amount),
         "warnings": warnings,
         "blocked_by": blocked_by,
+        "reason": BLOCK_REASON_LABELS.get(blocked_by),
+        "debug_code": blocked_by,
         "guardrails": {
             "kill_switch": True,
             "max_trade_risk_eur": _round_money(max_trade_risk),
@@ -239,6 +274,7 @@ def apply_guardrails(
 # =========================================================
 # Exposure helpers
 # =========================================================
+
 def _calculate_exposure_pct(
     *,
     current_asset_value_eur: float,
