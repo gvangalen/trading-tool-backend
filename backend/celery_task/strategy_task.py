@@ -731,7 +731,57 @@ def run_daily_strategy_snapshot(user_id: int):
             return
 
         # ==================================================
-        # 5️⃣ Insight opslaan
+        # 5️⃣ Strategy snapshot opslaan voor trading bot
+        # ==================================================
+        with conn.cursor() as cur:
+        
+            entry = safe_numeric(base_strategy.get("entry"))
+            stop = safe_numeric(base_strategy.get("stop_loss"))
+            targets = base_strategy.get("targets") or []
+        
+            cur.execute(
+                """
+                INSERT INTO active_strategy_snapshot (
+                    user_id,
+                    strategy_id,
+                    setup_id,
+                    entry,
+                    stop_loss,
+                    targets,
+                    confidence,
+                    snapshot_date
+                )
+                VALUES (
+                    %s, %s, %s,
+                    %s, %s,
+                    %s::jsonb,
+                    %s,
+                    %s
+                )
+                ON CONFLICT (user_id, strategy_id, snapshot_date)
+                DO UPDATE SET
+                    entry = EXCLUDED.entry,
+                    stop_loss = EXCLUDED.stop_loss,
+                    targets = EXCLUDED.targets,
+                    confidence = EXCLUDED.confidence,
+                    updated_at = NOW();
+                """,
+                (
+                    user_id,
+                    base_strategy["strategy_id"],
+                    setup_id,
+                    entry,
+                    stop,
+                    json.dumps(targets),
+                    50,
+                    today,
+                ),
+            )
+        
+        logger.info("✅ Strategy snapshot opgeslagen voor bot")
+
+        # ==================================================
+        # 6 Insight opslaan
         # ==================================================
         with conn.cursor() as cur:
             cur.execute(
