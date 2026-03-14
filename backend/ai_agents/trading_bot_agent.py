@@ -153,17 +153,25 @@ def _default_trade_plan(
     action: str,
     reason: str = "no_trade_today",
     watch_levels: Optional[dict] = None,
+    snapshot: Optional[dict] = None,
 ) -> dict:
     """
     Hard UI contract:
     - Elke decision heeft een trade_plan
     - Ook observe / hold
+    - Als brain geen levels geeft → gebruik snapshot levels
     """
 
     symbol = (symbol or DEFAULT_SYMBOL).upper()
     side = (action or "observe").lower()
 
     entry_plan = []
+    targets = []
+    stop_loss = {"price": None}
+
+    # ===============================================
+    # 1️⃣ Brain watch levels
+    # ===============================================
 
     if watch_levels:
 
@@ -173,7 +181,7 @@ def _default_trade_plan(
         if pullback:
             entry_plan.append({
                 "type": "watch",
-                "label": "Observe zone",
+                "label": "Observe pullback zone",
                 "price": pullback,
             })
 
@@ -184,12 +192,42 @@ def _default_trade_plan(
                 "price": breakout,
             })
 
+    # ===============================================
+    # 2️⃣ Snapshot fallback (BELANGRIJK)
+    # ===============================================
+
+    if not entry_plan and snapshot:
+
+        entry = snapshot.get("entry")
+        stop = snapshot.get("stop_loss")
+        tps = snapshot.get("targets") or []
+
+        if entry:
+            entry_plan.append({
+                "type": "watch",
+                "label": "Potential entry",
+                "price": entry,
+            })
+
+        if stop:
+            stop_loss = {"price": stop}
+
+        for i, t in enumerate(tps):
+            targets.append({
+                "label": f"TP{i+1}",
+                "price": t
+            })
+
+    # ===============================================
+    # RETURN PLAN
+    # ===============================================
+
     return {
         "symbol": symbol,
         "side": side,
         "entry_plan": entry_plan,
-        "stop_loss": {"price": None},
-        "targets": [],
+        "stop_loss": stop_loss,
+        "targets": targets,
         "risk": {
             "rr": None,
             "risk_eur": None,
@@ -1383,17 +1421,17 @@ def run_trading_bot_agent(
             # =====================================================
             # TRADE PLAN
             # =====================================================
-
+            
             trade_plan = None
-
+            
             if snapshot:
-
+            
                 entry = snapshot.get("entry")
                 stop = snapshot.get("stop_loss")
                 targets = snapshot.get("targets") or []
-
+            
                 if engine_action in ["buy", "sell"] and entry and stop:
-
+            
                     trade_plan = {
                         "symbol": bot["symbol"],
                         "side": engine_action,
@@ -1405,14 +1443,19 @@ def run_trading_bot_agent(
                         ],
                         "risk": {"rr": brain.get("rr_ratio")},
                     }
-
+            
+            # 🔴 BELANGRIJK: ook bij HOLD altijd watch levels tonen
             if not trade_plan:
+            
+                watch_levels = brain.get("watch_levels")
+            
                 trade_plan = _default_trade_plan(
                     bot["symbol"],
                     engine_action,
                     "engine_watch_mode",
-                    watch_levels=brain.get("watch_levels"),
-                )
+                    watch_levels=watch_levels,
+                    snapshot=snapshot,
+    )
 
             market_health = round(
                 float(scores.get("macro", 10)) * 0.4
