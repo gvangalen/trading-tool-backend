@@ -64,7 +64,20 @@ def apply_guardrails(
 
     max_trade_risk = _safe_float(max_trade_risk_eur, 0.0)
     daily_allocation = _safe_float(daily_allocation_eur, 0.0)
-    max_asset_exposure = _safe_float(max_asset_exposure_pct, 0.0)
+
+    # 🔧 FIX: fallback exposure = 100
+    max_asset_exposure = _safe_float(max_asset_exposure_pct, 100.0)
+
+    logger.info(
+        "Guardrails input | proposed=%s portfolio=%s asset_value=%s daily_allocated=%s max_trade_risk=%s daily_limit=%s max_exposure=%s",
+        original_amount,
+        portfolio_value,
+        current_asset_value,
+        today_allocated,
+        max_trade_risk,
+        daily_allocation,
+        max_asset_exposure,
+    )
 
     # -----------------------------------------------------
     # 1. Kill switch
@@ -140,6 +153,14 @@ def apply_guardrails(
             0.0,
         )
 
+        logger.info(
+            "Exposure check | current_asset=%s max_pct=%s max_allowed=%s remaining=%s",
+            current_asset_value,
+            max_asset_exposure,
+            max_asset_value_allowed,
+            remaining_asset_capacity,
+        )
+
         if remaining_asset_capacity <= 0:
             return {
                 "allowed": False,
@@ -204,14 +225,12 @@ def apply_guardrails(
     }
 
     logger.info(
-        "Guardrails result",
-        extra={
-            "original_amount": original_amount,
-            "adjusted_amount": adjusted_amount,
-            "allowed": allowed,
-            "blocked_by": blocked_by,
-            "warnings": warnings,
-        },
+        "Guardrails result | original=%s adjusted=%s allowed=%s blocked_by=%s warnings=%s",
+        original_amount,
+        adjusted_amount,
+        allowed,
+        blocked_by,
+        warnings,
     )
 
     return result
@@ -246,7 +265,7 @@ def _calculate_remaining_asset_capacity(
     current_asset_value = max(_safe_float(current_asset_value_eur, 0.0), 0.0)
 
     max_asset_exposure_pct = _clamp(
-        _safe_float(max_asset_exposure_pct, 0.0),
+        _safe_float(max_asset_exposure_pct, 100.0),
         0.0,
         100.0,
     )
