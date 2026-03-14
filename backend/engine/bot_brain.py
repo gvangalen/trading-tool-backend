@@ -326,6 +326,7 @@ def run_bot_brain(
     except Exception as e:
         base_amount = 0.0
         base_reason = f"DecisionEngine fallback: {e}"
+        decision_result = None
 
     # -------------------------------------------------
     # 🔟 Apply Exposure
@@ -411,6 +412,44 @@ def run_bot_brain(
     volatility_score = _map_volatility_state_to_score(volatility_state)
 
     # -------------------------------------------------
+    # 16️⃣ Watch levels for hold / observe mode
+    # -------------------------------------------------
+
+    entry_value = _safe_float(setup.get("entry"))
+    stop_value = _safe_float(setup.get("stop_loss"))
+
+    raw_targets = setup.get("targets") or []
+    if not isinstance(raw_targets, list):
+        raw_targets = []
+
+    clean_targets = []
+    for t in raw_targets:
+        tv = _safe_float(t)
+        if tv is not None:
+            clean_targets.append(tv)
+
+    watch_levels = {
+        "entry": entry_value,
+        "stop_loss": stop_value,
+        "targets": clean_targets,
+        "pullback_zone": entry_value,
+        "breakout_trigger": clean_targets[0] if clean_targets else None,
+    }
+
+    monitoring = any(
+        v is not None and v != []
+        for v in [
+            watch_levels.get("entry"),
+            watch_levels.get("stop_loss"),
+            watch_levels.get("pullback_zone"),
+            watch_levels.get("breakout_trigger"),
+            watch_levels.get("targets"),
+        ]
+    )
+
+    alerts_active = monitoring
+
+    # -------------------------------------------------
     # FINAL OUTPUT
     # -------------------------------------------------
 
@@ -446,6 +485,11 @@ def run_bot_brain(
         # scoring
         "trade_quality": trade_quality,
 
+        # watch / monitoring
+        "watch_levels": watch_levels,
+        "monitoring": monitoring,
+        "alerts_active": alerts_active,
+
         # dashboard-ready metrics
         "metrics": {
             "market_pressure": market_pressure_score,
@@ -462,9 +506,10 @@ def run_bot_brain(
             "transition_snapshot": transition_snapshot,
             "regime_memory": regime_memory,
             "exposure": exposure_pack,
-            "decision_result": decision_result if "decision_result" in locals() else None,
+            "decision_result": decision_result,
             "base_amount": base_amount,
             "final_amount": final_amount,
             "base_reason": base_reason,
+            "watch_levels": watch_levels,
         },
     }
