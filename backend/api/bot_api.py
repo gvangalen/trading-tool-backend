@@ -233,9 +233,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
     finally:
         conn.close()
         
-# =====================================
-# 📄 BOT TODAY (decisions + orders + proposal)
-# =====================================
+
 # =====================================
 # 📄 BOT TODAY (decisions + orders + proposal)
 # =====================================
