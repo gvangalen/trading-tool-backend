@@ -459,8 +459,11 @@ def analyze_and_store_strategy(
     logger.info(f"🧠 Strategy AI dagrun | strategy_id={strategy_id} | {today}")
 
     conn = get_db_connection()
+
     try:
+        # -------------------------------------------------
         # 1️⃣ AI reflectie (GEEN scoring)
+        # -------------------------------------------------
         ai_result = analyze_strategies(
             user_id=user_id,
             strategies=strategies
@@ -472,7 +475,9 @@ def analyze_and_store_strategy(
                 ai_result=ai_result,
             )
 
-        # 2️⃣ Execution snapshot (altijd)
+        # -------------------------------------------------
+        # 2️⃣ Execution snapshot (AI adjustment)
+        # -------------------------------------------------
         snapshot = adjust_strategy_for_today(
             user_id=user_id,
             base_strategy=base_strategy,
@@ -480,7 +485,24 @@ def analyze_and_store_strategy(
             market_context=market_context,
         ) or {}
 
-        # 3️⃣ 🔥 STRATEGY SCORE OPHALEN (SOURCE OF TRUTH)
+        # -------------------------------------------------
+        # 🔧 CRUCIALE FIX
+        # Snapshot mag NOOIT levels verliezen
+        # fallback → base_strategy levels
+        # -------------------------------------------------
+
+        if not snapshot.get("entry"):
+            snapshot["entry"] = base_strategy.get("entry")
+
+        if not snapshot.get("stop_loss"):
+            snapshot["stop_loss"] = base_strategy.get("stop_loss")
+
+        if not snapshot.get("targets"):
+            snapshot["targets"] = base_strategy.get("targets") or []
+
+        # -------------------------------------------------
+        # 3️⃣ Strategy score ophalen
+        # -------------------------------------------------
         strategy_score = fetch_strategy_score_for_today(
             conn=conn,
             user_id=user_id,
@@ -492,7 +514,14 @@ def analyze_and_store_strategy(
 
         snapshot["confidence_score"] = strategy_score
 
-        # 4️⃣ OPSLAAN — BOT LEEST DIT
+        # -------------------------------------------------
+        # 4️⃣ Debug (tijdelijk handig)
+        # -------------------------------------------------
+        logger.info(f"📊 SNAPSHOT FINAL: {snapshot}")
+
+        # -------------------------------------------------
+        # 5️⃣ Opslaan voor bot
+        # -------------------------------------------------
         persist_active_strategy_snapshot(
             user_id=user_id,
             strategy_id=strategy_id,
