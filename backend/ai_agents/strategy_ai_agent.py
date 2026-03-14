@@ -459,14 +459,70 @@ def analyze_and_store_strategy(
     logger.info(f"🧠 Strategy AI dagrun | strategy_id={strategy_id} | {today}")
 
     conn = get_db_connection()
+    if not conn:
+        raise RuntimeError("Geen databaseverbinding")
 
     try:
-        # -------------------------------------------------
-        # 1️⃣ AI reflectie (GEEN scoring)
-        # -------------------------------------------------
+        # 1️⃣ Als base strategy nog geen levels heeft → eerst genereren
+        has_entry = base_strategy.get("entry") is not None
+        has_stop = base_strategy.get("stop_loss") is not None
+        has_targets = bool(base_strategy.get("targets"))
+
+        if not has_entry or not has_stop or not has_targets:
+            logger.warning(
+                "⚠️ Base strategy heeft geen levels | strategy_id=%s | bootstrap generator gestart",
+                strategy_id,
+            )
+
+            generated = generate_strategy_from_setup(setup)
+
+            base_strategy["entry"] = generated.get("entry")
+            base_strategy["stop_loss"] = generated.get("stop_loss")
+            base_strategy["targets"] = generated.get("targets") or []
+            base_strategy["risk_reward"] = generated.get("risk_reward")
+            base_strategy["explanation"] = generated.get("explanation", "")
+
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE strategies
+                    SET
+                        entry = %s,
+                        stop_loss = %s,
+                        targets = %s,
+                        explanation = COALESCE(NULLIF(%s, ''), explanation),
+                        data = COALESCE(data, '{}'::jsonb) || %s::jsonb
+                    WHERE id = %s
+                    """,
+                    (
+                        base_strategy["entry"],
+                        base_strategy["stop_loss"],
+                        base_strategy["targets"],
+                        base_strategy.get("explanation", ""),
+                        json.dumps(
+                            {
+                                "risk_reward": base_strategy.get("risk_reward"),
+                                "bootstrap_generated": True,
+                                "bootstrap_date": str(today),
+                            }
+                        ),
+                        strategy_id,
+                    ),
+                )
+            conn.commit()
+
+            logger.info(
+                "✅ Strategy bootstrap opgeslagen | strategy_id=%s | entry=%s | stop=%s | targets=%s",
+                strategy_id,
+                base_strategy["entry"],
+                base_strategy["stop_loss"],
+                base_strategy["targets"],
+            )
+
+        # 2️⃣ AI reflectie
         ai_result = analyze_strategies(
             user_id=user_id,
-            strategies=strategies
+            strategies=strategies,
         )
 
         if ai_result:
@@ -475,9 +531,7 @@ def analyze_and_store_strategy(
                 ai_result=ai_result,
             )
 
-        # -------------------------------------------------
-        # 2️⃣ Execution snapshot (AI adjustment)
-        # -------------------------------------------------
+        # 3️⃣ AI adjustment
         snapshot = adjust_strategy_for_today(
             user_id=user_id,
             base_strategy=base_strategy,
@@ -485,52 +539,43 @@ def analyze_and_store_strategy(
             market_context=market_context,
         ) or {}
 
-        # -------------------------------------------------
-        # 🔧 CRUCIALE FIX
-        # Snapshot mag NOOIT levels verliezen
-        # fallback → base_strategy levels
-        # -------------------------------------------------
-
-        if not snapshot.get("entry"):
+        # 4️⃣ Snapshot mag levels NOOIT verliezen
+        if snapshot.get("entry") is None:
             snapshot["entry"] = base_strategy.get("entry")
 
-        if not snapshot.get("stop_loss"):
+        if snapshot.get("stop_loss") is None:
             snapshot["stop_loss"] = base_strategy.get("stop_loss")
 
         if not snapshot.get("targets"):
             snapshot["targets"] = base_strategy.get("targets") or []
 
-        # -------------------------------------------------
-        # 3️⃣ Strategy score ophalen
-        # -------------------------------------------------
+        # 5️⃣ Score ophalen
         strategy_score = fetch_strategy_score_for_today(
             conn=conn,
             user_id=user_id,
         )
 
         if strategy_score is None:
-            logger.warning("⚠️ Geen strategy_score gevonden — snapshot geblokkeerd")
+            logger.warning("⚠️ Geen strategy_score gevonden — default 0")
             strategy_score = 0.0
 
         snapshot["confidence_score"] = strategy_score
 
-        # -------------------------------------------------
-        # 4️⃣ Debug (tijdelijk handig)
-        # -------------------------------------------------
-        logger.info(f"📊 SNAPSHOT FINAL: {snapshot}")
+        logger.info("📊 SNAPSHOT FINAL: %s", snapshot)
 
-        # -------------------------------------------------
-        # 5️⃣ Opslaan voor bot
-        # -------------------------------------------------
+        # 6️⃣ Snapshot opslaan
         persist_active_strategy_snapshot(
             user_id=user_id,
             strategy_id=strategy_id,
+            setup_id=setup["id"],
             snapshot_date=today,
             snapshot=snapshot,
         )
 
         logger.info(
-            f"✅ Strategy snapshot opgeslagen | score={strategy_score}"
+            "✅ Strategy snapshot opgeslagen | strategy_id=%s | score=%s",
+            strategy_id,
+            strategy_score,
         )
 
         return {
@@ -541,7 +586,6 @@ def analyze_and_store_strategy(
     finally:
         conn.close()
 
-
 # ===================================================================
 # 💾 ACTIVE STRATEGY SNAPSHOT (VERPLICHT VOOR BOT EXECUTION)
 # ===================================================================
@@ -549,21 +593,18 @@ def persist_active_strategy_snapshot(
     *,
     user_id: int,
     strategy_id: int,
+    setup_id: int,
     snapshot_date: date,
     snapshot: Dict[str, Any],
 ):
     """
-    Slaat DAGELIJKS het execution-plan op voor bots.
+    Slaat dagelijks het execution-plan op voor bots.
 
     Contract:
-    - EXACT 1 snapshot per strategy per dag
-    - Mag lege velden bevatten
-    - Bot-agent is hier volledig afhankelijk van
+    - EXACT 1 snapshot per setup per dag
+    - setup_id is verplicht (DB constraint)
+    - targets wordt opgeslagen als TEXT
     """
-
-    # -------------------------------
-    # Type safety (AI kan strings geven)
-    # -------------------------------
 
     entry = snapshot.get("entry")
     stop_loss = snapshot.get("stop_loss")
@@ -586,11 +627,19 @@ def persist_active_strategy_snapshot(
         except Exception:
             continue
 
-    # -------------------------------
-    # Database write
-    # -------------------------------
+    targets_text = ",".join(str(t) for t in clean_targets) if clean_targets else None
+
+    confidence_score = snapshot.get("confidence_score")
+    try:
+        confidence_score = float(confidence_score) if confidence_score is not None else 0.0
+    except Exception:
+        confidence_score = 0.0
+
+    adjustment_reason = snapshot.get("adjustment_reason") or ""
 
     conn = get_db_connection()
+    if not conn:
+        raise RuntimeError("Geen databaseverbinding")
 
     try:
         with conn.cursor() as cur:
@@ -598,44 +647,54 @@ def persist_active_strategy_snapshot(
                 """
                 INSERT INTO active_strategy_snapshot (
                     user_id,
+                    setup_id,
                     strategy_id,
                     snapshot_date,
                     entry,
                     targets,
                     stop_loss,
-                    confidence_score,
                     adjustment_reason,
-                    created_at,
-                    updated_at
+                    confidence_score,
+                    created_at
                 )
                 VALUES (
-                    %s,%s,%s,
-                    %s,%s,%s,
-                    %s,%s,
-                    NOW(), NOW()
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    NOW()
                 )
-                ON CONFLICT (user_id, strategy_id, snapshot_date)
+                ON CONFLICT (user_id, setup_id, snapshot_date)
                 DO UPDATE SET
+                    strategy_id        = EXCLUDED.strategy_id,
                     entry              = EXCLUDED.entry,
                     targets            = EXCLUDED.targets,
                     stop_loss          = EXCLUDED.stop_loss,
-                    confidence_score   = EXCLUDED.confidence_score,
                     adjustment_reason  = EXCLUDED.adjustment_reason,
-                    updated_at         = NOW()
+                    confidence_score   = EXCLUDED.confidence_score,
+                    created_at         = NOW()
                 """,
                 (
                     user_id,
+                    setup_id,
                     strategy_id,
                     snapshot_date,
                     entry,
-                    clean_targets,  # ← numeric[] direct uit Python list
+                    targets_text,
                     stop_loss,
-                    float(snapshot.get("confidence_score") or 0),
-                    snapshot.get("adjustment_reason", ""),
+                    adjustment_reason,
+                    confidence_score,
                 ),
             )
+        conn.commit()
 
-            conn.commit()
+        logger.info(
+            "✅ Active strategy snapshot opgeslagen | user=%s setup=%s strategy=%s entry=%s stop=%s targets=%s",
+            user_id,
+            setup_id,
+            strategy_id,
+            entry,
+            stop_loss,
+            targets_text,
+        )
 
     finally:
         conn.close()
