@@ -1303,10 +1303,22 @@ def run_trading_bot_agent(
             )
 
             # =====================================================
-            # AMOUNT FROM BRAIN
+            # AMOUNT FROM BRAIN (DecisionEngine fallback support)
             # =====================================================
-
-            requested_amount = float(brain.get("amount_eur") or 0)
+            
+            requested_amount = float(
+                brain.get("amount_eur")
+                or brain.get("final_amount")
+                or brain.get("sized_amount")
+                or brain.get("base_amount")
+                or 0
+            )
+            
+            logger.info(
+                "💰 Requested amount resolved | amount=%s | brain_keys=%s",
+                requested_amount,
+                list(brain.keys()),
+            )
 
             # =====================================================
             # CURRENT PORTFOLIO STATE
