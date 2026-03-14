@@ -129,6 +129,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
               b.budget_daily_limit_eur,
               b.budget_min_order_eur,
               b.budget_max_order_eur,
+              b.max_asset_exposure_pct,
 
               b.created_at,
               b.updated_at,
@@ -167,6 +168,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                 budget_daily,
                 budget_min,
                 budget_max,
+                max_asset_exposure_pct,
 
                 created_at,
                 updated_at,
@@ -206,6 +208,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                         "daily_limit_eur": float(budget_daily or 0),
                         "min_order_eur": float(budget_min or 0),
                         "max_order_eur": float(budget_max or 0),
+                        "max_asset_exposure_pct": float(max_asset_exposure_pct or 100),
                     },
 
                     "strategy": strategy,
@@ -625,10 +628,7 @@ async def get_bot_history(
     finally:
         conn.close()
 
-# =====================================
-# 🔁 FORCE GENERATE (vandaag / datum)
-# - Lazy import van trading_bot_agent
-# =====================================
+
 # =====================================
 # 🔁 FORCE GENERATE (vandaag / datum)
 # =====================================
@@ -995,17 +995,18 @@ async def create_bot_config(
     budget_min = body.get("budget_min_order_eur", 0)
     budget_max = body.get("budget_max_order_eur", 0)
 
+    max_asset_exposure_pct = body.get("max_asset_exposure_pct", 100)
+
     if not name:
         raise HTTPException(status_code=400, detail="Bot naam is verplicht")
     if not strategy_id:
         raise HTTPException(status_code=400, detail="strategy_id is verplicht")
 
     conn = get_db_connection()
-    if not conn:
-        raise HTTPException(status_code=500, detail="DB niet beschikbaar")
 
     try:
         with conn.cursor() as cur:
+
             cur.execute(
                 """
                 INSERT INTO bot_configs (
@@ -1018,10 +1019,11 @@ async def create_bot_config(
                     budget_daily_limit_eur,
                     budget_min_order_eur,
                     budget_max_order_eur,
+                    max_asset_exposure_pct,
                     created_at,
                     updated_at
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
                 RETURNING id
                 """,
                 (
@@ -1034,21 +1036,13 @@ async def create_bot_config(
                     budget_daily,
                     budget_min,
                     budget_max,
+                    max_asset_exposure_pct,
                 ),
             )
 
             bot_id = cur.fetchone()[0]
 
         conn.commit()
-
-        # 🔥 DIRECT PORTFOLIO SNAPSHOT
-        try:
-            snapshot_all_for_user(user_id, bucket="1h")
-            snapshot_all_for_user(user_id, bucket="1d")
-        except Exception:
-            logger.exception(
-                f"⚠️ Snapshot mislukt na bot create | user_id={user_id}"
-            )
 
         return {
             "ok": True,
@@ -1151,13 +1145,12 @@ async def update_bot_config(
     user_id = current_user["id"]
     body = await request.json()
 
-    # =============================
-    # FIELDS
-    # =============================
     name = body.get("name")
     mode = body.get("mode")
     risk_profile = body.get("risk_profile")
-    is_active = body.get("is_active")   # ✅ CRUCIAAL (pause / resume)
+    is_active = body.get("is_active")
+
+    max_asset_exposure_pct = body.get("max_asset_exposure_pct")
 
     if risk_profile and risk_profile not in ("conservative", "balanced", "aggressive"):
         raise HTTPException(status_code=400, detail="Ongeldig risk_profile")
@@ -1165,9 +1158,6 @@ async def update_bot_config(
     if is_active is not None:
         is_active = bool(is_active)
 
-    # =============================
-    # BUDGET FIELDS (flexibel)
-    # =============================
     budget_total = body.get("budget_total_eur", body.get("total_eur"))
     budget_daily = body.get("budget_daily_limit_eur", body.get("daily_limit_eur"))
     budget_min = body.get("budget_min_order_eur", body.get("min_order_eur"))
@@ -1185,13 +1175,13 @@ async def update_bot_config(
     budget_daily = _num(budget_daily)
     budget_min = _num(budget_min)
     budget_max = _num(budget_max)
+    max_asset_exposure_pct = _num(max_asset_exposure_pct)
 
-    # =============================
-    # DB UPDATE
-    # =============================
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
+
             cur.execute(
                 """
                 UPDATE bot_configs
@@ -1199,15 +1189,20 @@ async def update_bot_config(
                     name = COALESCE(%s, name),
                     mode = COALESCE(%s, mode),
                     risk_profile = COALESCE(%s, risk_profile),
-                    is_active = COALESCE(%s, is_active),      -- ✅ FIX
+                    is_active = COALESCE(%s, is_active),
+
                     budget_total_eur = COALESCE(%s, budget_total_eur),
                     budget_daily_limit_eur = COALESCE(%s, budget_daily_limit_eur),
                     budget_min_order_eur = COALESCE(%s, budget_min_order_eur),
                     budget_max_order_eur = COALESCE(%s, budget_max_order_eur),
+                    max_asset_exposure_pct = COALESCE(%s, max_asset_exposure_pct),
+
                     updated_at = NOW()
+
                 WHERE id = %s
                   AND user_id = %s
-                RETURNING id, name, mode, risk_profile, is_active
+
+                RETURNING id
                 """,
                 (
                     name,
@@ -1218,6 +1213,7 @@ async def update_bot_config(
                     budget_daily,
                     budget_min,
                     budget_max,
+                    max_asset_exposure_pct,
                     bot_id,
                     user_id,
                 ),
@@ -1231,20 +1227,14 @@ async def update_bot_config(
 
         return {
             "ok": True,
-            "bot_id": row[0],
-            "name": row[1],
-            "mode": row[2],
-            "risk_profile": row[3],
-            "is_active": row[4],
+            "bot_id": bot_id,
         }
 
-    except HTTPException:
-        conn.rollback()
-        raise
     except Exception:
         conn.rollback()
         logger.error("❌ update_bot_config error", exc_info=True)
         raise HTTPException(status_code=500, detail="Bot bijwerken mislukt")
+
     finally:
         conn.close()
 
