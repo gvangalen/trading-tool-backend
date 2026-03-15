@@ -237,11 +237,13 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
 # =====================================
 # 📄 BOT TODAY (decisions + orders + proposal)
 # =====================================
+# =====================================
+# 📄 BOT TODAY (decisions + orders + proposal)
+# =====================================
 @router.get("/bot/today")
 async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
-    import time
 
     user_id = current_user["id"]
     today = date.today()
@@ -300,7 +302,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "symbol": r[2],
                 "timeframe": r[3],
                 "strategy_type": r[4],
-                "setup_name": r[5],   # 🔥 NIEUW
+                "setup_name": r[5],
             }
             for r in bot_rows
         }
@@ -335,7 +337,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         rows = cur.fetchall()
 
         decisions_by_bot = {}
-        decision_ids = []
 
         for r in rows:
 
@@ -370,13 +371,45 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             guard = scores_payload.get("guardrails_result", {})
             guard_limits = guard.get("guardrails", {})
 
+            # =====================================================
+            # TRADE PLAN OPHALEN
+            # =====================================================
+            trade_plan = None
+
+            if _table_exists(conn, "bot_trade_plans"):
+
+                with conn.cursor() as tp_cur:
+                    tp_cur.execute(
+                        """
+                        SELECT entry_plan, stop_loss, targets, risk_json
+                        FROM bot_trade_plans
+                        WHERE decision_id=%s
+                        AND user_id=%s
+                        """,
+                        (decision_id, user_id),
+                    )
+
+                    tp_row = tp_cur.fetchone()
+
+                    if tp_row:
+                        entry_plan, stop_loss, targets, risk_json = tp_row
+
+                        trade_plan = {
+                            "entry_plan": _safe_json(entry_plan, []),
+                            "stop_loss": _safe_json(stop_loss, {}),
+                            "targets": _safe_json(targets, []),
+                            "risk": _safe_json(risk_json, {}),
+                        }
+
+            # =====================================================
+            # DECISION OBJECT
+            # =====================================================
             decisions_by_bot[bot_id] = {
                 "id": decision_id,
                 "bot_id": bot_id,
                 "bot_name": bot["bot_name"],
                 "symbol": symbol,
 
-                # 🔥 NIEUW → setup naam voor frontend
                 "setup_name": bot.get("setup_name"),
 
                 "action": action,
@@ -403,10 +436,10 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "created_at": created_at,
                 "updated_at": updated_at,
                 "setup_match": scores_payload.get("setup_match"),
-                "trade_plan": None,
-            }
 
-            decision_ids.append(int(decision_id))
+                # ⭐ HIER ZIT DE FIX
+                "trade_plan": trade_plan,
+            }
 
         return {
             "date": str(today),
