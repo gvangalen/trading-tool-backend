@@ -73,26 +73,41 @@ def _extract_decision_amount(decision_result: Any) -> tuple[float, str]:
     """
     Decision engine kan teruggeven:
     - float/int
-    - dict met amount_eur / amount / reason
+    - dict met final_amount / sized_amount / base_amount / amount_eur / amount
     """
 
     if isinstance(decision_result, dict):
         amount = _safe_float(
-            decision_result.get("amount_eur", decision_result.get("amount")),
+            decision_result.get("final_amount")
+            or decision_result.get("sized_amount")
+            or decision_result.get("base_amount")
+            or decision_result.get("amount_eur")
+            or decision_result.get("amount"),
             0.0,
         ) or 0.0
 
         reason = str(
             decision_result.get("reason")
             or decision_result.get("message")
+            or decision_result.get("exposure_reason")
             or "Base amount via DecisionEngine dict."
+        )
+
+        logger.info(
+            "💵 Extracted decision amount | final=%s sized=%s base=%s resolved=%s",
+            decision_result.get("final_amount"),
+            decision_result.get("sized_amount"),
+            decision_result.get("base_amount"),
+            amount,
         )
 
         return max(0.0, amount), reason
 
     amount = _safe_float(decision_result, 0.0) or 0.0
-    return max(0.0, amount), "Base amount via DecisionEngine."
 
+    logger.info("💵 Extracted scalar decision amount | resolved=%s", amount)
+
+    return max(0.0, amount), "Base amount via DecisionEngine."
 
 # =========================================================
 # Market Cycle
