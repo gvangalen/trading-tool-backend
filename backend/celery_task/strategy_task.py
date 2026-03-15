@@ -607,7 +607,9 @@ def run_daily_strategy_snapshot(user_id: int):
         return
 
     try:
-        # 1️⃣ Beste setup van vandaag ophalen
+        # ----------------------------------------------------
+        # 1️⃣ Beste setup van vandaag
+        # ----------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -629,59 +631,108 @@ def run_daily_strategy_snapshot(user_id: int):
         setup_id = row[0]
         setup = load_setup_from_db(setup_id, user_id)
 
+        # ----------------------------------------------------
         # 2️⃣ Strategy ophalen
+        # ----------------------------------------------------
         base_strategy = load_latest_strategy(setup_id, user_id)
 
-        if not base_strategy:
-            logger.info("ℹ️ Beste setup heeft nog geen strategy")
+        needs_bootstrap = (
+            not base_strategy
+            or base_strategy.get("entry") is None
+            or base_strategy.get("stop_loss") is None
+            or not base_strategy.get("targets")
+        )
+
+        # ----------------------------------------------------
+        # 3️⃣ BOOTSTRAP strategy indien nodig
+        # ----------------------------------------------------
+        if needs_bootstrap:
+
+            logger.warning(
+                "⚠️ Strategy ontbreekt of heeft geen levels → bootstrap"
+            )
+
+            strategy = generate_strategy_from_setup(setup)
+
+            entry = safe_numeric(strategy.get("entry"))
+            stop = safe_numeric(strategy.get("stop_loss"))
+
+            targets = strategy.get("targets") or []
+            targets = [safe_numeric(t) for t in targets if safe_numeric(t) is not None]
 
             with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO ai_category_insights (
-                        category,
-                        user_id,
-                        avg_score,
-                        trend,
-                        bias,
-                        risk,
-                        summary,
-                        top_signals,
-                        date
-                    )
-                    VALUES (
-                        'strategy',
-                        %s, %s,
-                        %s, %s, %s,
-                        %s,
-                        %s::jsonb,
-                        %s
-                    )
-                    ON CONFLICT (user_id, category, date)
-                    DO UPDATE SET
-                        summary = EXCLUDED.summary,
-                        top_signals = EXCLUDED.top_signals,
-                        updated_at = NOW();
-                    """,
-                    (
-                        user_id,
-                        0,
-                        "Geen strategy",
-                        "In afwachting",
-                        "N.v.t.",
-                        "De beste setup van vandaag heeft nog geen gekoppelde strategy. Voeg eerst een strategy toe om AI-analyse en execution mogelijk te maken.",
-                        json.dumps(
-                            ["Klik op 'Genereer strategy (AI)' of voeg handmatig een strategy toe."],
-                            ensure_ascii=False,
+
+                if not base_strategy:
+
+                    cur.execute(
+                        """
+                        INSERT INTO strategies (
+                            setup_id,
+                            entry,
+                            targets,
+                            stop_loss,
+                            explanation,
+                            strategy_type,
+                            data,
+                            user_id
+                        )
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                        RETURNING id
+                        """,
+                        (
+                            setup_id,
+                            entry,
+                            targets,
+                            stop,
+                            strategy.get("explanation"),
+                            setup.get("strategy_type"),
+                            json.dumps(strategy),
+                            user_id,
                         ),
-                        today,
-                    ),
-                )
+                    )
+
+                    strategy_id = cur.fetchone()[0]
+
+                else:
+
+                    strategy_id = base_strategy["strategy_id"]
+
+                    cur.execute(
+                        """
+                        UPDATE strategies
+                        SET
+                            entry=%s,
+                            stop_loss=%s,
+                            targets=%s
+                        WHERE id=%s
+                        """,
+                        (
+                            entry,
+                            stop,
+                            targets,
+                            strategy_id,
+                        ),
+                    )
 
             conn.commit()
-            return
 
-        # 3️⃣ Market context
+            base_strategy = {
+                "strategy_id": strategy_id,
+                "entry": entry,
+                "stop_loss": stop,
+                "targets": targets,
+            }
+
+            logger.info(
+                "✅ Strategy bootstrap gedaan | entry=%s stop=%s targets=%s",
+                entry,
+                stop,
+                targets,
+            )
+
+        # ----------------------------------------------------
+        # 4️⃣ Market context
+        # ----------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -705,7 +756,9 @@ def run_daily_strategy_snapshot(user_id: int):
             "market_score": float(scores[2]) if scores[2] is not None else None,
         }
 
-        # 4️⃣ AI analyse
+        # ----------------------------------------------------
+        # 5️⃣ AI analyse
+        # ----------------------------------------------------
         analysis = analyze_strategies(
             user_id=user_id,
             strategies=[
@@ -724,13 +777,15 @@ def run_daily_strategy_snapshot(user_id: int):
             logger.warning("⚠️ AI analyse gaf None terug")
             return
 
-        # 5️⃣ Strategy snapshot opslaan voor trading bot
+        # ----------------------------------------------------
+        # 6️⃣ Snapshot opslaan
+        # ----------------------------------------------------
         with conn.cursor() as cur:
+
             entry = safe_numeric(base_strategy.get("entry"))
             stop = safe_numeric(base_strategy.get("stop_loss"))
-            targets = base_strategy.get("targets") or []
 
-            # DB kolom is TEXT, dus bewust als JSON-string opslaan
+            targets = base_strategy.get("targets") or []
             targets_text = json.dumps(targets) if targets else None
 
             confidence = safe_confidence(
@@ -790,66 +845,17 @@ def run_daily_strategy_snapshot(user_id: int):
                 ),
             )
 
-        logger.info("✅ Strategy snapshot opgeslagen voor bot")
-
-        # 6️⃣ Insight opslaan
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO ai_category_insights (
-                    category,
-                    user_id,
-                    avg_score,
-                    trend,
-                    bias,
-                    risk,
-                    summary,
-                    top_signals,
-                    date
-                )
-                VALUES (
-                    'strategy',
-                    %s, %s,
-                    %s, %s, %s,
-                    %s,
-                    %s::jsonb,
-                    %s
-                )
-                ON CONFLICT (user_id, category, date)
-                DO UPDATE SET
-                    avg_score = EXCLUDED.avg_score,
-                    trend = EXCLUDED.trend,
-                    bias = EXCLUDED.bias,
-                    risk = EXCLUDED.risk,
-                    summary = EXCLUDED.summary,
-                    top_signals = EXCLUDED.top_signals,
-                    updated_at = NOW();
-                """,
-                (
-                    user_id,
-                    50,
-                    "Actief",
-                    "Plan actief",
-                    "Gemiddeld",
-                    analysis.get("comment", ""),
-                    json.dumps(
-                        [analysis.get("recommendation", "")],
-                        ensure_ascii=False,
-                    ),
-                    today,
-                ),
-            )
-
         conn.commit()
-        logger.info("✅ Strategy AI insight opgeslagen")
+
+        logger.info("✅ Strategy snapshot opgeslagen voor bot")
 
     except Exception:
         logger.exception("❌ Daily strategy snapshot crash")
         conn.rollback()
         raise
+
     finally:
         conn.close()
-
 
 # ============================================================
 # 🔄 BULK GENERATIE — BEWUST UIT
