@@ -1023,9 +1023,20 @@ def _persist_decision_and_order(
     requested_amount = float(decision.get("requested_amount_eur") or 0.0)
     amount_eur = float(decision.get("amount_eur") or 0.0)
 
-    reasons = decision.get("reasons", [])
-    if not isinstance(reasons, list):
-        reasons = [str(reasons)]
+    # -------------------------------------------------
+    # ✅ Reason handling (FIX)
+    # -------------------------------------------------
+
+    strategy_reason = decision.get("strategy_reason")
+    guardrail_reason = decision.get("guardrail_reason")
+
+    reasons = []
+
+    if guardrail_reason:
+        reasons.append(guardrail_reason)
+
+    elif strategy_reason:
+        reasons.append(strategy_reason)
 
     setup_match = decision.get("setup_match") or {}
 
@@ -1033,9 +1044,9 @@ def _persist_decision_and_order(
     monitoring = bool(decision.get("monitoring", False))
     alerts_active = bool(decision.get("alerts_active", False))
 
-    # =====================================================
+    # -------------------------------------------------
     # POSITION SIZE
-    # =====================================================
+    # -------------------------------------------------
 
     position_size = float(
         decision.get("position_size")
@@ -1043,39 +1054,33 @@ def _persist_decision_and_order(
         or 1.0
     )
 
-    # =====================================================
-    # GUARDRAILS RESULT FROM ENGINE
-    # =====================================================
+    # -------------------------------------------------
+    # GUARDRAILS RESULT
+    # -------------------------------------------------
 
     guardrails_result = decision.get("guardrails_result") or {}
 
-    # =====================================================
-    # GUARDRAILS PAYLOAD (FRONTEND CONTRACT)
-    # =====================================================
-
     guardrails_payload = {
+
         "kill_switch": True,
 
-        # frontend fields
         "max_trade_risk": decision.get("max_risk_per_trade"),
         "daily_allocation": decision.get("max_daily_allocation"),
 
-        # exposure
         "btc_exposure": round(position_size * 100, 2),
 
         "position_size": position_size,
 
-        # explanation
         "reason": (
-            decision.get("guardrail_reason")
+            guardrail_reason
             or (guardrails_result.get("warnings")[0] if guardrails_result.get("warnings") else None)
             or "within risk limits"
-        )
+        ),
     }
 
-    # =====================================================
-    # SCORES PAYLOAD (SENT TO FRONTEND)
-    # =====================================================
+    # -------------------------------------------------
+    # SCORES PAYLOAD (FRONTEND)
+    # -------------------------------------------------
 
     scores_payload = {
 
@@ -1087,6 +1092,10 @@ def _persist_decision_and_order(
         "combined": _clamp_score(decision.get("score", 10)),
 
         "setup_match": setup_match,
+
+        # ⭐ BELANGRIJK VOOR UI
+        "strategy_reason": strategy_reason,
+        "guardrail_reason": guardrail_reason,
 
         "market_health": float(decision.get("market_health") or 50),
         "market_pressure": float(decision.get("market_pressure") or 50),
@@ -1108,15 +1117,13 @@ def _persist_decision_and_order(
         if isinstance(decision.get("warnings"), list)
         else [],
 
-        # ✅ FRONTEND GUARDRAILS
         "guardrails": guardrails_payload,
 
-        # execution
         "requested_amount_eur": requested_amount,
         "amount_eur": amount_eur,
+
         "guardrails_result": guardrails_result,
 
-        # monitoring
         "watch_levels": watch_levels,
         "monitoring": monitoring,
         "alerts_active": alerts_active,
@@ -1190,9 +1197,9 @@ def _persist_decision_and_order(
 
         decision_id = int(row[0])
 
-    # =====================================================
+    # -------------------------------------------------
     # TRADE PLAN
-    # =====================================================
+    # -------------------------------------------------
 
     plan = decision.get("trade_plan")
 
@@ -1210,7 +1217,6 @@ def _persist_decision_and_order(
     )
 
     return decision_id
-
 
 # =====================================================
 # 🚀 Run Trading Bot Agent
