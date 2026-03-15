@@ -1482,7 +1482,7 @@ def run_trading_bot_agent(
                 "position_size": position_size,
                 "exposure_multiplier": position_size,
                 "setup_match": setup_match,
-                "reasons": [brain.get("reason") or "engine_decision"],
+                "strategy_reason": brain.get("reason") or "engine_decision",
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
                 "market_health": market_health,
