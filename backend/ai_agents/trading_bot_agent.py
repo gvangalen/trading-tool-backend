@@ -1023,11 +1023,6 @@ def _persist_decision_and_order(
     requested_amount = float(decision.get("requested_amount_eur") or 0.0)
     amount_eur = float(decision.get("amount_eur") or 0.0)
 
-    logger.info("⚙️ Action normalized: %s", action)
-    logger.info("⚙️ Confidence normalized: %s", confidence)
-    logger.info("💰 Requested EUR: %s", requested_amount)
-    logger.info("💰 Final EUR: %s", amount_eur)
-
     reasons = decision.get("reasons", [])
     if not isinstance(reasons, list):
         reasons = [str(reasons)]
@@ -1048,25 +1043,38 @@ def _persist_decision_and_order(
         or 1.0
     )
 
-    logger.info("📏 Position size: %s", position_size)
-
     # =====================================================
-    # GUARDRAILS
+    # GUARDRAILS RESULT FROM ENGINE
     # =====================================================
 
     guardrails_result = decision.get("guardrails_result") or {}
 
+    # =====================================================
+    # GUARDRAILS PAYLOAD (FRONTEND CONTRACT)
+    # =====================================================
+
     guardrails_payload = {
         "kill_switch": True,
-        "max_trade_risk_eur": decision.get("max_risk_per_trade"),
-        "daily_allocation_eur": decision.get("max_daily_allocation"),
+
+        # frontend fields
+        "max_trade_risk": decision.get("max_risk_per_trade"),
+        "daily_allocation": decision.get("max_daily_allocation"),
+
+        # exposure
+        "btc_exposure": round(position_size * 100, 2),
+
         "position_size": position_size,
+
+        # explanation
+        "reason": (
+            decision.get("guardrail_reason")
+            or (guardrails_result.get("warnings")[0] if guardrails_result.get("warnings") else None)
+            or "within risk limits"
+        )
     }
 
-    logger.info("🛡 Guardrails result: %s", guardrails_result)
-
     # =====================================================
-    # SCORES PAYLOAD
+    # SCORES PAYLOAD (SENT TO FRONTEND)
     # =====================================================
 
     scores_payload = {
@@ -1100,26 +1108,22 @@ def _persist_decision_and_order(
         if isinstance(decision.get("warnings"), list)
         else [],
 
-        # legacy simple guardrail limits
+        # ✅ FRONTEND GUARDRAILS
         "guardrails": guardrails_payload,
 
-        # 🔴 CRUCIAAL VOOR FRONTEND
+        # execution
         "requested_amount_eur": requested_amount,
         "amount_eur": amount_eur,
         "guardrails_result": guardrails_result,
-        "guardrail_reason": decision.get("guardrail_reason"),
 
+        # monitoring
         "watch_levels": watch_levels,
         "monitoring": monitoring,
         "alerts_active": alerts_active,
     }
 
-    logger.info("📦 Scores payload: %s", scores_payload)
-
     scores_json = json.dumps(scores_payload)
     reasons_json = json.dumps(reasons)
-
-    logger.info("📦 scores_json serialized: %s", scores_json)
 
     with conn.cursor() as cur:
 
@@ -1182,12 +1186,9 @@ def _persist_decision_and_order(
         row = cur.fetchone()
 
         if not row:
-            logger.error("❌ Failed to persist bot decision")
             raise RuntimeError("Failed to persist bot decision")
 
         decision_id = int(row[0])
-
-        logger.info("✅ Decision persisted | decision_id=%s", decision_id)
 
     # =====================================================
     # TRADE PLAN
@@ -1196,10 +1197,7 @@ def _persist_decision_and_order(
     plan = decision.get("trade_plan")
 
     if not plan:
-        logger.info("⚠️ No trade plan provided, using default")
         plan = _default_trade_plan(symbol, action, "fallback_plan")
-
-    logger.info("📊 Trade plan: %s", plan)
 
     _persist_trade_plan(
         conn=conn,
@@ -1211,9 +1209,8 @@ def _persist_decision_and_order(
         plan=plan,
     )
 
-    logger.info("✅ Trade plan persisted")
-
     return decision_id
+
 
 # =====================================================
 # 🚀 Run Trading Bot Agent
