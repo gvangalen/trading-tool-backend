@@ -5,6 +5,12 @@ from fastapi.responses import StreamingResponse
 from psycopg2.extras import RealDictCursor
 import json, csv, io, logging
 from datetime import datetime
+from backend.utils.data_normalizers import (
+    normalize_targets,
+    normalize_number,
+    normalize_string,
+    normalize_array
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -21,51 +27,131 @@ from backend.api.onboarding_api import mark_step_completed
 # 🧩 FORMATTER — ÉÉN waarheid voor strategy cards & edit
 # ==========================================================
 def format_strategy_row(row: dict):
+    """
+    Centrale formatter voor strategy responses.
+
+    Zorgt dat alle data die naar frontend gaat
+    consistente types heeft (float, list, string).
+    """
+
+    if not row:
+        return None
+
     data = row.get("data") or {}
 
-    targets = row.get("targets")
+    # --------------------------------------------------
+    # NUMERIC VALUES
+    # --------------------------------------------------
 
-    if isinstance(targets, str):
-        try:
-            targets = json.loads(targets)
-        except:
-            targets = None
+    entry = normalize_number(
+        row.get("entry") or data.get("entry")
+    )
+
+    stop_loss = normalize_number(
+        row.get("stop_loss") or data.get("stop_loss")
+    )
+
+    base_amount = normalize_number(
+        row.get("base_amount")
+    )
+
+    # --------------------------------------------------
+    # TARGETS
+    # --------------------------------------------------
+
+    targets = normalize_targets(
+        row.get("targets") or data.get("targets")
+    )
+
+    # --------------------------------------------------
+    # STRINGS
+    # --------------------------------------------------
+
+    name = normalize_string(
+        row.get("name") or data.get("name")
+    )
+
+    symbol = normalize_string(
+        data.get("symbol")
+    )
+
+    timeframe = normalize_string(
+        data.get("timeframe")
+    )
+
+    frequency = normalize_string(
+        row.get("frequency")
+    )
+
+    explanation = normalize_string(
+        row.get("explanation") or data.get("explanation")
+    )
+
+    risk_profile = normalize_string(
+        row.get("risk_profile") or data.get("risk_profile")
+    )
+
+    # --------------------------------------------------
+    # ARRAYS
+    # --------------------------------------------------
+
+    tags = normalize_array(
+        data.get("tags")
+    )
+
+    # --------------------------------------------------
+    # FAVORITE FLAG
+    # --------------------------------------------------
+
+    favorite = bool(data.get("favorite", False))
+
+    # --------------------------------------------------
+    # DATE FORMAT
+    # --------------------------------------------------
+
+    created_at = (
+        row.get("created_at").isoformat()
+        if row.get("created_at")
+        else None
+    )
+
+    # --------------------------------------------------
+    # OUTPUT
+    # --------------------------------------------------
 
     return {
         "id": row.get("id"),
         "setup_id": row.get("setup_id"),
 
-        # ⭐ naam altijd correct
-        "name": row.get("name") or data.get("name"),
-
+        "name": name,
         "strategy_type": row.get("strategy_type"),
 
         "execution_mode": row.get("execution_mode"),
-        "base_amount": row.get("base_amount"),
-        "frequency": row.get("frequency"),
+
+        "base_amount": base_amount,
+        "frequency": frequency,
+
         "decision_curve": row.get("decision_curve"),
 
         "decision_curve_name": data.get("decision_curve_name"),
         "decision_curve_id": data.get("decision_curve_id"),
 
-        "symbol": data.get("symbol"),
-        "timeframe": data.get("timeframe"),
+        "symbol": symbol,
+        "timeframe": timeframe,
 
-        "entry": row.get("entry") or data.get("entry"),
-        "targets": targets or data.get("targets"),
-        "stop_loss": row.get("stop_loss") or data.get("stop_loss"),
+        "entry": entry,
+        "targets": targets,
+        "stop_loss": stop_loss,
 
-        "explanation": row.get("explanation") or data.get("explanation"),
+        "explanation": explanation,
         "ai_explanation": data.get("ai_explanation"),
 
-        "risk_profile": row.get("risk_profile") or data.get("risk_profile"),
-        "tags": data.get("tags", []),
-        "favorite": data.get("favorite", False),
+        "risk_profile": risk_profile,
 
-        "created_at": (
-            row.get("created_at").isoformat()
-            if row.get("created_at") else None
-        ),
+        "tags": tags,
+        "favorite": favorite,
+
+        "created_at": created_at,
     }
     
 
