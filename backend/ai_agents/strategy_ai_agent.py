@@ -295,22 +295,40 @@ def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
 
     logger.info(f"⚙️ AI strategy generatie | setup={setup.get('id')}")
 
+    symbol = setup.get("symbol", "BTC")
+
+    # -------------------------------------------------
+    # ⭐ Live market price ophalen
+    # -------------------------------------------------
+
+    try:
+        live_price = float(_get_latest_market_price(symbol))
+        logger.info("📊 Live market price | %s = %s", symbol, live_price)
+    except Exception as e:
+        logger.warning(f"⚠️ Market price ophalen mislukt: {e}")
+        live_price = None
+
+    # -------------------------------------------------
+    # 🎯 AI TASK
+    # -------------------------------------------------
+
     TASK = """
 Genereer een CONCRETE tradingstrategie op basis van een setup.
 
 Regels:
-- Wees concreet
-- Geen educatie
-- Geen hype
-- Geen voorspellingen
-- Focus op uitvoerbaarheid
+- Gebruik de huidige marktprijs als referentiepunt
+- Entry moet dicht bij current_price liggen
+- Stop loss onder entry
+- Targets boven entry
+- Gebruik alleen numerieke waarden
 
-Output ALLEEN JSON:
+Output ALLEEN GELDIGE JSON:
+
 {
-  "entry": "",
-  "targets": [],
-  "stop_loss": "",
-  "risk_reward": "",
+  "entry": number,
+  "targets": [number, number, number],
+  "stop_loss": number,
+  "risk_reward": number,
   "explanation": ""
 }
 """
@@ -320,17 +338,32 @@ Output ALLEEN JSON:
         task=TASK
     )
 
-    prompt = f"""
-SETUP:
-{json.dumps(setup, ensure_ascii=False, indent=2)}
-"""
+    # -------------------------------------------------
+    # 📦 AI PAYLOAD
+    # -------------------------------------------------
+
+    payload = {
+        "setup": setup,
+        "market_context": {
+            "symbol": symbol,
+            "current_price": live_price
+        }
+    }
+
+    prompt = json.dumps(payload, ensure_ascii=False, indent=2)
+
+    logger.info("🧠 AI STRATEGY PAYLOAD:\n%s", prompt)
 
     # -------------------------------------------------
-    # AI generatie
+    # 🤖 AI GENERATIE
     # -------------------------------------------------
 
     try:
         result = ask_gpt(prompt, system_role=system_prompt)
+        logger.info(
+            "🤖 AI RAW RESPONSE:\n%s",
+            json.dumps(result, indent=2, ensure_ascii=False)
+        )
     except Exception as e:
         logger.warning(f"⚠️ AI error tijdens strategy generatie: {e}")
         result = {}
@@ -346,7 +379,7 @@ SETUP:
     result.setdefault("explanation", "")
 
     # -------------------------------------------------
-    # Numeric parsing
+    # 🔢 NUMERIC PARSING
     # -------------------------------------------------
 
     def to_float(v):
@@ -367,22 +400,33 @@ SETUP:
         except Exception:
             continue
 
+    logger.info(
+        "🔎 PARSED LEVELS | entry=%s stop=%s targets=%s",
+        entry,
+        stop,
+        targets
+    )
+
     # -------------------------------------------------
-    # Fallback logic (AI gaf geen levels)
+    # ⚠️ FALLBACK LOGIC (AI gaf geen valide levels)
     # -------------------------------------------------
 
     if entry is None or stop is None or not targets:
 
-        logger.warning("⚠️ AI levels ongeldig — deterministic fallback gebruikt")
+        logger.warning(
+            "⚠️ AI INVALID LEVELS | entry=%s stop=%s targets=%s",
+            entry,
+            stop,
+            targets
+        )
 
-        symbol = setup.get("symbol", "BTC")
+        logger.warning("⚠️ Deterministic fallback gebruikt")
 
         try:
-            # ⭐ jouw market helper
-            price = float(_get_latest_market_price(symbol))
+            price = float(live_price) if live_price else float(_get_latest_market_price(symbol))
         except Exception as e:
             logger.warning(f"⚠️ Market helper faalde: {e}")
-            price = 50000  # laatste fallback
+            price = 50000  # absolute fallback
 
         entry = round(price, 2)
 
@@ -398,16 +442,30 @@ SETUP:
 
         result["risk_reward"] = round((targets[-1] - entry) / (entry - stop), 2)
 
+        logger.info(
+            "🧮 FALLBACK LEVELS | entry=%s stop=%s targets=%s",
+            entry,
+            stop,
+            targets
+        )
+
     # -------------------------------------------------
-    # Final result
+    # 🧾 FINAL RESULT
     # -------------------------------------------------
 
     result["entry"] = entry
     result["stop_loss"] = stop
     result["targets"] = targets
 
-    return result
+    logger.info(
+        "✅ FINAL STRATEGY LEVELS | entry=%s stop=%s targets=%s rr=%s",
+        entry,
+        stop,
+        targets,
+        result.get("risk_reward")
+    )
 
+    return result
 
 # ===================================================================
 # 💾 OPSLAAN AI-UITLEG IN STRATEGY.DATA
