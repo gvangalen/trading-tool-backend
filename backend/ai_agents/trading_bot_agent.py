@@ -1550,6 +1550,38 @@ def run_trading_bot_agent(
     finally:
         conn.close()
 
+
+# =====================================================
+# 📊 Ledger delta calculator
+# =====================================================
+def _ledger_deltas(side: str, qty: float, price: float):
+    """
+    Calculates ledger deltas for a trade.
+
+    Returns:
+        cash_delta_eur
+        qty_delta
+        notional_eur
+    """
+
+    side = (side or "").lower().strip()
+
+    notional = round(qty * price, 2)
+
+    if side == "buy":
+        cash_delta = -notional
+        qty_delta = qty
+
+    elif side == "sell":
+        cash_delta = notional
+        qty_delta = -qty
+
+    else:
+        raise ValueError(f"Unsupported side for ledger: {side}")
+
+    return cash_delta, qty_delta, notional
+
+
 # =====================================================
 # 🚀 Bot execute decision functie
 # =====================================================
