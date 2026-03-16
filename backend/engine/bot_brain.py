@@ -4,12 +4,12 @@ import logging
 from datetime import date
 from typing import Any, Dict, Optional
 
-from backend.engine.transition_detector import (
-    compute_transition_detector,
-    get_transition_risk_value,
-)
+from backend.engine.transition_detector import compute_transition_detector
 from backend.engine.market_pressure_engine import get_market_pressure
+from backend.engine.market_intelligence_engine import get_market_intelligence
 from backend.engine.decision_engine import decide_amount
+from backend.engine.guardrails_engine import apply_guardrails
+from backend.engine.trade_plan_engine import build_trade_plan
 from backend.ai_core.regime_memory import get_regime_memory
 
 logger = logging.getLogger(__name__)
@@ -27,10 +27,10 @@ DEFAULT_ACTION_RULES = {
 
 EXPOSURE_CAP = 2.0
 
+
 # =========================================================
 # Helpers
 # =========================================================
-
 
 def _safe_float(x: Any, fallback: Optional[float] = None) -> Optional[float]:
     try:
@@ -64,6 +64,7 @@ def _classify_risk_state(transition_risk: float, pressure: float) -> str:
     if pressure > 0.7 and transition_risk < 0.3:
         return "risk_on"
     return "neutral"
+
 
 def _extract_decision_amount(decision_result: Any) -> tuple[float, str]:
     """
@@ -105,94 +106,94 @@ def _extract_decision_amount(decision_result: Any) -> tuple[float, str]:
 
     return max(0.0, amount), "Base amount via DecisionEngine."
 
-# =========================================================
-# Market Cycle
-# =========================================================
 
+def _default_trade_plan(
+    symbol: str,
+    action: str,
+    reason: str = "watch_mode",
+    watch_levels: Optional[dict] = None,
+) -> dict:
+    symbol = (symbol or "BTC").upper()
+    side = (action or "observe").lower()
 
-def _determine_market_cycle(
-    trend_strength: float,
-    market_pressure: float,
-    transition_risk: float,
-) -> str:
-    if trend_strength < 0.35 and market_pressure < 0.45:
-        return "accumulation"
+    entry_plan = []
+    targets = []
+    stop_loss = {"price": None}
 
-    if trend_strength >= 0.35 and market_pressure >= 0.45 and transition_risk < 0.6:
-        return "expansion"
+    if watch_levels:
+        pullback = watch_levels.get("pullback_zone")
+        breakout = watch_levels.get("breakout_trigger")
+        entry = watch_levels.get("entry")
 
-    if trend_strength >= 0.55 and transition_risk > 0.5:
-        return "distribution"
+        if pullback is not None:
+            entry_plan.append(
+                {
+                    "type": "watch",
+                    "label": "Observe pullback zone",
+                    "price": pullback,
+                }
+            )
 
-    if trend_strength < 0.35 and transition_risk > 0.6:
-        return "correction"
+        if breakout is not None:
+            entry_plan.append(
+                {
+                    "type": "watch",
+                    "label": "Watch breakout",
+                    "price": breakout,
+                }
+            )
 
-    return "neutral"
+        if entry is not None and not entry_plan:
+            entry_plan.append(
+                {
+                    "type": "watch",
+                    "label": "Potential entry",
+                    "price": entry,
+                }
+            )
 
+        stop = watch_levels.get("stop_loss")
+        if stop is not None:
+            stop_loss = {"price": stop}
 
-# =========================================================
-# Temperature
-# =========================================================
+        for i, t in enumerate(watch_levels.get("targets") or []):
+            if t is not None:
+                targets.append(
+                    {
+                        "label": f"TP{i+1}",
+                        "price": t,
+                    }
+                )
 
-
-def _determine_temperature(market_pressure: float) -> str:
-    if market_pressure > 0.75:
-        return "hot"
-
-    if market_pressure > 0.55:
-        return "warm"
-
-    if market_pressure > 0.35:
-        return "cool"
-
-    return "cold"
-
-
-# =========================================================
-# Trend Detection
-# =========================================================
-
-
-def _determine_trend(value: float) -> str:
-    if value > 0.65:
-        return "bullish"
-
-    if value < 0.35:
-        return "bearish"
-
-    return "trading_range"
-
-
-# =========================================================
-# Dashboard mapping helpers
-# =========================================================
-
-
-def _to_score_100(value: float) -> int:
-    return round(_clamp(value, 0.0, 1.0) * 100)
-
-
-def _map_volatility_state_to_score(volatility_state: str) -> int:
-    mapping = {
-        "compressed": 20,
-        "normal": 50,
-        "expanding": 80,
+    return {
+        "symbol": symbol,
+        "side": side,
+        "entry_plan": entry_plan,
+        "stop_loss": stop_loss,
+        "targets": targets,
+        "risk": {
+            "rr": None,
+            "risk_eur": None,
+        },
+        "notes": [reason],
     }
-    return mapping.get((volatility_state or "").lower(), 50)
 
 
 # =========================================================
 # Core brain
 # =========================================================
+
 def run_bot_brain(
     *,
     user_id: int,
     setup: Dict[str, Any],
     scores: Dict[str, float],
     action_rules: Optional[Dict[str, float]] = None,
+    portfolio_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
     scores = _normalize_scores(scores)
+    portfolio_context = portfolio_context or {}
 
     # -------------------------------------------------
     # 1️⃣ Regime Memory
@@ -206,23 +207,29 @@ def run_bot_brain(
         regime_memory = get_regime_memory(user_id)
 
         if isinstance(regime_memory, dict):
-            regime_label = regime_memory.get("regime_label")
+            regime_label = (
+                regime_memory.get("regime_label")
+                or regime_memory.get("label")
+            )
             regime_confidence = regime_memory.get("confidence")
 
     except Exception as e:
         logger.warning("Regime memory unavailable: %s", e)
 
     # -------------------------------------------------
-    # 2️⃣ Transition Risk
+    # 2️⃣ Transition Risk (single call)
     # -------------------------------------------------
 
     try:
-        transition_risk = float(get_transition_risk_value(user_id))
-        transition_risk = _clamp(transition_risk, 0.0, 1.0)
         transition_snapshot = compute_transition_detector(user_id)
+        transition_risk = _safe_float(
+            transition_snapshot.get("normalized_risk"),
+            0.5,
+        ) or 0.5
+        transition_risk = _clamp(transition_risk, 0.0, 1.0)
 
     except Exception as e:
-        logger.warning("Transition detector fallback: watch mode %s", e)
+        logger.warning("Transition detector fallback: %s", e)
         transition_risk = 0.5
         transition_snapshot = None
 
@@ -241,199 +248,116 @@ def run_bot_brain(
         market_pressure = 0.5
 
     # -------------------------------------------------
-    # 4️⃣ Volatility Regime
+    # 4️⃣ Market Intelligence Engine
     # -------------------------------------------------
 
-    if transition_risk > 0.7:
-        volatility_state = "expanding"
-    elif market_pressure < 0.35:
-        volatility_state = "compressed"
-    else:
-        volatility_state = "normal"
-
-    # -------------------------------------------------
-    # 5️⃣ Trend Strength
-    # -------------------------------------------------
-
-    trend_strength = (
-        float(scores.get("technical_score", 10)) * 0.6
-        + float(scores.get("market_score", 10)) * 0.4
-    ) / 100.0
-
-    # -------------------------------------------------
-    # 6️⃣ Structure Bias
-    # -------------------------------------------------
-
-    if trend_strength > 0.65:
-        structure_bias = "trend"
-    elif trend_strength < 0.35:
-        structure_bias = "range"
-    else:
-        structure_bias = "neutral"
-
-    # -------------------------------------------------
-    # 6.5️⃣ Market Cycle
-    # -------------------------------------------------
-
-    market_cycle = _determine_market_cycle(
-        trend_strength=trend_strength,
-        market_pressure=market_pressure,
-        transition_risk=transition_risk,
-    )
-
-    # -------------------------------------------------
-    # 6.6️⃣ Temperature
-    # -------------------------------------------------
-
-    temperature = _determine_temperature(market_pressure)
-
-    # -------------------------------------------------
-    # 6.7️⃣ Multi timeframe trends
-    # -------------------------------------------------
-
-    short_trend = _determine_trend(trend_strength)
-
-    mid_trend = _determine_trend(
-        (trend_strength * 0.7) + (market_pressure * 0.3)
-    )
-
-    long_trend = _determine_trend(
-        (trend_strength * 0.5)
-        + (market_pressure * 0.3)
-        + ((1 - transition_risk) * 0.2)
-    )
-
-    # -------------------------------------------------
-    # 7️⃣ Risk Environment
-    # -------------------------------------------------
-
-    risk_environment = ((1.0 - transition_risk) * 0.5) + (market_pressure * 0.5)
-
-    # -------------------------------------------------
-    # 8️⃣ Position Sizing via Decision Engine
-    # -------------------------------------------------
-    
     try:
-    
+        market_intelligence = get_market_intelligence(
+            user_id=user_id,
+            scores=scores,
+        )
+
+        market_cycle = market_intelligence.get("cycle", "neutral")
+        temperature = market_intelligence.get("temperature", "cool")
+
+        trend_block = market_intelligence.get("trend", {}) or {}
+        short_trend = trend_block.get("short", "trading_range")
+        mid_trend = trend_block.get("mid", "trading_range")
+        long_trend = trend_block.get("long", "trading_range")
+
+        state_block = market_intelligence.get("state", {}) or {}
+        volatility_state = state_block.get("volatility_state", "normal")
+        structure_bias = state_block.get("structure_bias", "neutral")
+        risk_environment = _safe_float(
+            state_block.get("risk_environment"),
+            0.5,
+        ) or 0.5
+
+        metrics_block = market_intelligence.get("metrics", {}) or {}
+
+        trend_strength = (
+            _safe_float(state_block.get("trend_strength"), None)
+            if state_block.get("trend_strength") is not None
+            else None
+        )
+
+        if trend_strength is None:
+            trend_strength = (
+                float(scores.get("technical_score", 10)) * 0.6
+                + float(scores.get("market_score", 10)) * 0.4
+            ) / 100.0
+
+        trend_strength = _clamp(float(trend_strength), 0.0, 1.0)
+
+    except Exception as e:
+        logger.warning("Market intelligence fallback: %s", e)
+
+        market_intelligence = {}
+
+        market_cycle = "neutral"
+        temperature = "cool"
+
+        short_trend = "trading_range"
+        mid_trend = "trading_range"
+        long_trend = "trading_range"
+
+        volatility_state = "normal"
+        structure_bias = "neutral"
+        risk_environment = 0.5
+
+        trend_strength = (
+            float(scores.get("technical_score", 10)) * 0.6
+            + float(scores.get("market_score", 10)) * 0.4
+        ) / 100.0
+        trend_strength = _clamp(trend_strength, 0.0, 1.0)
+
+        metrics_block = {}
+
+    # -------------------------------------------------
+    # 5️⃣ Position Sizing via Decision Engine
+    # -------------------------------------------------
+
+    try:
         decision_result = decide_amount(
             setup=setup,
             scores=scores,
             regime_memory=regime_memory,
             transition_risk=transition_risk,
         )
-    
+
         logger.info("DecisionEngine raw output: %s", decision_result)
-    
+
+        final_amount, base_reason = _extract_decision_amount(decision_result)
+
         base_amount = _safe_float(
             decision_result.get("base_amount"),
             0.0,
         ) or 0.0
-    
-        final_amount = _safe_float(
-            decision_result.get("final_amount"),
-            0.0,
-        ) or 0.0
-    
+
         exposure_multiplier = _safe_float(
             decision_result.get("exposure_multiplier"),
             1.0,
         ) or 1.0
-    
-        base_reason = str(
-            decision_result.get("exposure_reason")
-            or decision_result.get("reason")
-            or "DecisionEngine allocation"
-        )
-    
+
     except Exception as e:
-    
         logger.warning("DecisionEngine fallback triggered: %s", e)
-    
+
         decision_result = None
         base_amount = 0.0
         final_amount = 0.0
         exposure_multiplier = 1.0
         base_reason = f"DecisionEngine fallback: {e}"
-    
+
+    exposure_multiplier = _clamp(exposure_multiplier, 0.0, EXPOSURE_CAP)
+
     # -------------------------------------------------
-    # 11️⃣ Risk State
+    # 6️⃣ Risk State
     # -------------------------------------------------
 
     risk_state = _classify_risk_state(transition_risk, market_pressure)
 
     # -------------------------------------------------
-    # 12️⃣ Action Logic
-    # -------------------------------------------------
-
-    market_score = _safe_float(scores.get("market_score"), 10) or 10.0
-
-    action = "hold"
-    reason_parts = []
-
-    if base_amount <= 0 or final_amount <= 0:
-        reason_parts.append("No executable size.")
-        reason_parts.append(base_reason)
-
-    elif transition_risk > float(rules["max_transition_risk_to_buy"]):
-        reason_parts.append("Transition risk too high.")
-
-    elif market_pressure < float(rules["min_market_pressure_to_buy"]):
-        reason_parts.append("Market pressure too low.")
-
-    elif market_score < float(rules["min_market_score_to_buy"]):
-        reason_parts.append("Market score below threshold.")
-
-    else:
-        action = "buy"
-        reason_parts.append("All allocator conditions satisfied.")
-
-    # -------------------------------------------------
-    # 13️⃣ Confidence
-    # -------------------------------------------------
-
-    confidence_components = []
-
-    if isinstance(regime_confidence, (int, float)):
-        rc = float(regime_confidence)
-
-        if rc > 1:
-            rc = rc / 100.0
-
-        confidence_components.append(_clamp(rc, 0.0, 1.0))
-
-    confidence_components.append(_clamp(1.0 - transition_risk, 0.0, 1.0))
-    confidence_components.append(_clamp(market_pressure, 0.0, 1.0))
-
-    confidence = round(
-        sum(confidence_components) / max(1, len(confidence_components)),
-        3,
-    )
-
-    # -------------------------------------------------
-    # 14️⃣ Trade Quality
-    # -------------------------------------------------
-
-    trade_quality = round(
-        (
-            risk_environment * 0.4
-            + trend_strength * 0.3
-            + (float(scores.get("setup_score", 10)) / 100.0) * 0.3
-        ) * 100.0,
-        1,
-    )
-
-    # -------------------------------------------------
-    # 15️⃣ Dashboard-ready metrics
-    # -------------------------------------------------
-
-    market_pressure_score = _to_score_100(market_pressure)
-    transition_risk_score = _to_score_100(transition_risk)
-    trend_strength_score = _to_score_100(trend_strength)
-    setup_quality_score = round(trade_quality)
-    volatility_score = _map_volatility_state_to_score(volatility_state)
-
-    # -------------------------------------------------
-    # 16️⃣ Watch levels for hold / observe mode
+    # 7️⃣ Watch levels
     # -------------------------------------------------
 
     entry_value = _safe_float(setup.get("entry"))
@@ -471,15 +395,223 @@ def run_bot_brain(
     alerts_active = monitoring
 
     # -------------------------------------------------
-    # FINAL OUTPUT
+    # 8️⃣ Action Logic
+    # -------------------------------------------------
+
+    market_score = _safe_float(scores.get("market_score"), 10) or 10.0
+
+    action = "hold"
+    reason_parts = []
+
+    if base_amount <= 0 or final_amount <= 0:
+        reason_parts.append("No executable size.")
+        reason_parts.append(base_reason)
+
+    elif transition_risk > float(rules["max_transition_risk_to_buy"]):
+        reason_parts.append("Transition risk too high.")
+
+    elif market_pressure < float(rules["min_market_pressure_to_buy"]):
+        reason_parts.append("Market pressure too low.")
+
+    elif market_score < float(rules["min_market_score_to_buy"]):
+        reason_parts.append("Market score below threshold.")
+
+    else:
+        action = "buy"
+        reason_parts.append("All allocator conditions satisfied.")
+
+    strategy_reason = " ".join(reason_parts).strip() or "Engine decision"
+
+    # -------------------------------------------------
+    # 9️⃣ Guardrails Engine
+    # -------------------------------------------------
+
+    try:
+        guardrails_result = apply_guardrails(
+            proposed_amount_eur=final_amount,
+            portfolio_value_eur=_safe_float(
+                portfolio_context.get("portfolio_value_eur"),
+                0.0,
+            ) or 0.0,
+            current_asset_value_eur=_safe_float(
+                portfolio_context.get("current_asset_value_eur"),
+                0.0,
+            ) or 0.0,
+            today_allocated_eur=_safe_float(
+                portfolio_context.get("today_allocated_eur"),
+                0.0,
+            ) or 0.0,
+            kill_switch=portfolio_context.get("kill_switch", True),
+            max_trade_risk_eur=_safe_float(
+                portfolio_context.get("max_trade_risk_eur")
+                or setup.get("max_risk_per_trade"),
+                None,
+            ),
+            daily_allocation_eur=_safe_float(
+                portfolio_context.get("daily_allocation_eur"),
+                None,
+            ),
+            max_asset_exposure_pct=_safe_float(
+                portfolio_context.get("max_asset_exposure_pct"),
+                None,
+            ),
+        )
+
+    except Exception as e:
+        logger.warning("Guardrails fallback triggered: %s", e)
+        guardrails_result = {
+            "allowed": final_amount > 0,
+            "adjusted_amount_eur": round(float(final_amount), 2),
+            "original_amount_eur": round(float(final_amount), 2),
+            "warnings": [],
+            "blocked_by": None,
+            "reason": None,
+            "debug_code": "guardrails_fallback",
+            "guardrails": {
+                "kill_switch": portfolio_context.get("kill_switch", True),
+                "max_trade_risk_eur": portfolio_context.get("max_trade_risk_eur"),
+                "daily_allocation_eur": portfolio_context.get("daily_allocation_eur"),
+                "max_asset_exposure_pct": portfolio_context.get("max_asset_exposure_pct"),
+                "current_asset_exposure_pct": 0.0,
+            },
+        }
+
+    adjusted_amount = _safe_float(
+        guardrails_result.get("adjusted_amount_eur"),
+        final_amount,
+    ) or 0.0
+
+    guardrail_reason = (
+        guardrails_result.get("blocked_by")
+        or guardrails_result.get("reason")
+        or (
+            guardrails_result.get("warnings")[0]
+            if guardrails_result.get("warnings")
+            else None
+        )
+    )
+
+    if adjusted_amount <= 0:
+        action = "hold"
+
+    # -------------------------------------------------
+    # 10️⃣ Confidence
+    # -------------------------------------------------
+
+    confidence_components = []
+
+    if isinstance(regime_confidence, (int, float)):
+        rc = float(regime_confidence)
+
+        if rc > 1:
+            rc = rc / 100.0
+
+        confidence_components.append(_clamp(rc, 0.0, 1.0))
+
+    confidence_components.append(_clamp(1.0 - transition_risk, 0.0, 1.0))
+    confidence_components.append(_clamp(market_pressure, 0.0, 1.0))
+
+    confidence = round(
+        sum(confidence_components) / max(1, len(confidence_components)),
+        3,
+    )
+
+    # -------------------------------------------------
+    # 11️⃣ Trade Quality
+    # -------------------------------------------------
+
+    trade_quality = round(
+        (
+            risk_environment * 0.4
+            + trend_strength * 0.3
+            + (float(scores.get("setup_score", 10)) / 100.0) * 0.3
+        ) * 100.0,
+        1,
+    )
+
+    # -------------------------------------------------
+    # 12️⃣ Dashboard-ready metrics
+    # -------------------------------------------------
+
+    market_pressure_score = metrics_block.get("market_pressure")
+    transition_risk_score = metrics_block.get("transition_risk")
+    setup_quality_score = metrics_block.get("setup_quality")
+    volatility_score = metrics_block.get("volatility")
+    trend_strength_score = metrics_block.get("trend_strength")
+
+    if market_pressure_score is None:
+        market_pressure_score = round(_clamp(market_pressure, 0.0, 1.0) * 100)
+
+    if transition_risk_score is None:
+        transition_risk_score = round(_clamp(transition_risk, 0.0, 1.0) * 100)
+
+    if setup_quality_score is None:
+        setup_quality_score = round(trade_quality)
+
+    if volatility_score is None:
+        volatility_score = 50
+
+    if trend_strength_score is None:
+        trend_strength_score = round(_clamp(trend_strength, 0.0, 1.0) * 100)
+
+    # -------------------------------------------------
+    # 13️⃣ Trade Plan Engine
+    # -------------------------------------------------
+
+    snapshot_payload = {
+        "entry": entry_value,
+        "stop_loss": stop_value,
+        "targets": clean_targets,
+    }
+
+    decision_payload = {
+        "action": action,
+        "symbol": setup.get("symbol"),
+    }
+
+    bot_payload = {
+        "min_rr": _safe_float(setup.get("min_rr"), 1.5) or 1.5,
+        "max_risk_per_trade": _safe_float(
+            portfolio_context.get("max_trade_risk_eur")
+            or setup.get("max_risk_per_trade"),
+            None,
+        ),
+    }
+
+    brain_context = {
+        "regime": regime_label,
+        "reason": strategy_reason,
+    }
+
+    try:
+        trade_plan = build_trade_plan(
+            snapshot=snapshot_payload,
+            brain=brain_context,
+            decision=decision_payload,
+            bot=bot_payload,
+        )
+    except Exception as e:
+        logger.warning("Trade plan engine fallback: %s", e)
+        trade_plan = None
+
+    if not trade_plan:
+        trade_plan = _default_trade_plan(
+            symbol=setup.get("symbol", "BTC"),
+            action=action,
+            reason="watch_mode",
+            watch_levels=watch_levels,
+        )
+
+    # -------------------------------------------------
+    # Final output
     # -------------------------------------------------
 
     return {
         "date": date.today().isoformat(),
         "action": action,
-        "amount_eur": round(float(final_amount), 2),
+        "amount_eur": round(float(adjusted_amount), 2),
         "confidence": confidence,
-        "reason": " ".join(reason_parts),
+        "reason": strategy_reason,
 
         # regime / market structure
         "regime": regime_label,
@@ -501,6 +633,7 @@ def run_bot_brain(
         "risk_state": risk_state,
 
         # sizing
+        "base_amount": round(float(base_amount), 2),
         "exposure_multiplier": exposure_multiplier,
 
         # scoring
@@ -510,6 +643,13 @@ def run_bot_brain(
         "watch_levels": watch_levels,
         "monitoring": monitoring,
         "alerts_active": alerts_active,
+
+        # guardrails
+        "guardrails_result": guardrails_result,
+        "guardrail_reason": guardrail_reason,
+
+        # trade plan
+        "trade_plan": trade_plan,
 
         # dashboard-ready metrics
         "metrics": {
@@ -525,11 +665,14 @@ def run_bot_brain(
         "debug": {
             "scores": scores,
             "transition_snapshot": transition_snapshot,
+            "market_intelligence": market_intelligence,
             "regime_memory": regime_memory,
             "decision_result": decision_result,
             "base_amount": base_amount,
             "final_amount": final_amount,
+            "adjusted_amount": adjusted_amount,
             "base_reason": base_reason,
             "watch_levels": watch_levels,
+            "guardrails_result": guardrails_result,
         },
     }
