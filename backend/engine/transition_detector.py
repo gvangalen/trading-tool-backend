@@ -207,7 +207,7 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
     abs_chg = [abs(x) if x is not None else None for x in chg_5]
     vol_of_vol = _std(abs_chg)
 
-    risk = 50
+    risk = 45
     flags: List[str] = []
     confidence = 0.55
 
@@ -322,19 +322,25 @@ def compute_transition_detector(user_id: int, lookback_days: int = 14) -> Dict[s
 # =========================================================
 
 @lru_cache(maxsize=32)
-def get_transition_risk_value(user_id: int) -> float:
+def get_transition_risk_value(user_id: int, today: date = date.today()) -> float:
     """
     Clean engine accessor.
-    Cached → voorkomt multiple DB hits per run.
+
+    Cached per day.
+    Prevents multiple DB hits.
 
     Always returns float.
     Never crashes the bot.
     """
 
     try:
+
         snap = compute_transition_detector(user_id)
+
         return float(snap.get("normalized_risk", 0.5))
 
     except Exception as e:
+
         logger.warning("Transition risk fallback triggered: %s", e)
+
         return 0.5
