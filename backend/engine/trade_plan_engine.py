@@ -37,7 +37,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
     entry_price = float(entry[0])
     stop = float(stop)
 
-    regime = brain.get("regime")
+    regime = brain.get("regime") or "neutral"
 
     # =====================================================
     # REGIME AWARE STOP
