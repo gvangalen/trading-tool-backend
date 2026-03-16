@@ -1,8 +1,21 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 class CurveEngineError(Exception):
     pass
+
+
+# =====================================================
+# Helpers
+# =====================================================
+
+def _safe_float(value, fallback: Optional[float] = None) -> Optional[float]:
+    try:
+        if value is None:
+            return fallback
+        return float(value)
+    except Exception:
+        return fallback
 
 
 # =====================================================
@@ -28,17 +41,34 @@ def evaluate_curve(curve: Dict, x_value: float) -> float:
     if not curve or "points" not in curve:
         raise CurveEngineError("Curve ontbreekt of is ongeldig")
 
-    points: List[Dict[str, float]] = sorted(
-        curve["points"], key=lambda p: p["x"]
-    )
+    points_raw = curve.get("points")
 
-    if not points:
+    if not isinstance(points_raw, list) or len(points_raw) == 0:
         raise CurveEngineError("Curve bevat geen punten")
 
-    try:
-        x_value = float(x_value)
-    except Exception:
-        raise CurveEngineError("x_value is geen getal")
+    points: List[Dict[str, float]] = []
+
+    # -------------------------------------------------
+    # Validate curve points
+    # -------------------------------------------------
+    for p in points_raw:
+        x = _safe_float(p.get("x"))
+        y = _safe_float(p.get("y"))
+
+        if x is None or y is None:
+            continue
+
+        points.append({"x": x, "y": y})
+
+    if not points:
+        raise CurveEngineError("Geen geldige curve punten")
+
+    points = sorted(points, key=lambda p: p["x"])
+
+    x_value = _safe_float(x_value)
+
+    if x_value is None:
+        raise CurveEngineError("x_value ongeldig")
 
     # -------------------------------------------------
     # Onder minimum → clamp
@@ -56,18 +86,20 @@ def evaluate_curve(curve: Dict, x_value: float) -> float:
     # Interpolatie
     # -------------------------------------------------
     for i in range(len(points) - 1):
+
         left = points[i]
         right = points[i + 1]
 
         if left["x"] <= x_value <= right["x"]:
+
             x0, y0 = left["x"], left["y"]
             x1, y1 = right["x"], right["y"]
 
-            # 🔥 protect against divide-by-zero
             if x1 == x0:
                 return float(y0)
 
             ratio = (x_value - x0) / (x1 - x0)
+
             interpolated = y0 + ratio * (y1 - y0)
 
             return round(float(interpolated), 4)
@@ -101,13 +133,18 @@ def calculate_position_size(
     # -------------------------------------------------
     # Validate base amount
     # -------------------------------------------------
-    try:
-        base_amount = float(base_amount)
-    except Exception:
+    base_amount = _safe_float(base_amount)
+
+    if base_amount is None or base_amount <= 0:
         return 0.0
 
-    if base_amount <= 0:
-        return 0.0
+    # -------------------------------------------------
+    # Validate score
+    # -------------------------------------------------
+    score = _safe_float(score)
+
+    if score is None:
+        score = 50.0
 
     # -------------------------------------------------
     # Resolve multiplier
@@ -116,26 +153,26 @@ def calculate_position_size(
 
     try:
         multiplier = evaluate_curve(curve, score)
+
     except CurveEngineError:
         multiplier = 1.0
+
     except Exception:
         multiplier = 1.0
 
+    multiplier = _safe_float(multiplier, 1.0)
+
     # -------------------------------------------------
-    # Clamp multiplier (🔥 VERY IMPORTANT)
+    # Clamp multiplier
     # voorkomt user leverage mistakes
     # -------------------------------------------------
-    try:
-        multiplier = float(multiplier)
-    except Exception:
-        multiplier = 1.0
-
     multiplier = max(min_multiplier, min(multiplier, max_multiplier))
 
     # -------------------------------------------------
     # Final size
     # -------------------------------------------------
     try:
+
         position_size = base_amount * multiplier
 
         if position_size <= 0:
