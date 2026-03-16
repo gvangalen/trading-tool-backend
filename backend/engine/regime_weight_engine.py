@@ -7,7 +7,7 @@ class RegimeWeightEngineError(Exception):
 
 
 # =====================================================
-# Regime aliases (🔥 voorkomt silent mismatches)
+# Regime aliases
 # =====================================================
 
 REGIME_ALIASES = {
@@ -83,22 +83,26 @@ DEFAULT_REGIME_WEIGHTS: Dict[str, Dict[str, float]] = {
 # Helpers
 # =====================================================
 
-def _normalize_key(k: Optional[str]) -> str:
-    if not k:
+def _normalize_regime(label: Optional[str]) -> str:
+
+    if not label:
         return "neutral"
 
-    key = k.strip().lower().replace(" ", "_")
+    key = label.strip().lower().replace(" ", "_")
 
-    # 🔥 alias mapping
     return REGIME_ALIASES.get(key, key)
 
 
 def _safe_float(x, fallback: float = 1.0) -> float:
+
     try:
         v = float(x)
+
         if v <= 0:
             return fallback
+
         return v
+
     except Exception:
         return fallback
 
@@ -119,12 +123,15 @@ def apply_regime_weights(
     if not isinstance(curves, list) or not curves:
         return curves or []
 
-    label = _normalize_key(regime_label)
+    label = _normalize_regime(regime_label)
 
     weight_map = regime_weight_map or DEFAULT_REGIME_WEIGHTS
-    multipliers = weight_map.get(label) or weight_map.get("neutral") or {}
 
-    # Unknown regime → unchanged
+    multipliers = weight_map.get(label)
+
+    if multipliers is None:
+        multipliers = weight_map.get("neutral", {})
+
     if not multipliers:
         return curves
 
@@ -133,15 +140,18 @@ def apply_regime_weights(
     for row in adjusted:
 
         curve = row.get("curve") or {}
-        input_key = _normalize_key(curve.get("input"))
+
+        input_key = curve.get("input")
 
         if not input_key:
             continue
 
-        base_w = _safe_float(row.get("weight", 1.0), fallback=1.0)
-        regime_mult = _safe_float(multipliers.get(input_key, 1.0), fallback=1.0)
+        base_w = _safe_float(row.get("weight", 1.0))
+
+        regime_mult = _safe_float(multipliers.get(input_key, 1.0))
 
         new_w = base_w * regime_mult
+
         new_w = max(min_weight, min(new_w, max_weight))
 
         row["weight"] = round(float(new_w), 6)
