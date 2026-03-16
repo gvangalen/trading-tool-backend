@@ -1,7 +1,21 @@
 def build_trade_plan(snapshot, brain, decision, bot):
     """
     Builds structured trade plan for execution + UI.
-    Safe, flexible & future-proof.
+
+    Features
+    --------
+    • Long + Short support
+    • R-multiple targets
+    • Risk / Reward calculation
+    • Risk in EUR
+    • Position sizing
+    • Regime-aware stop logic
+
+    Targets
+    -------
+    TP1 = 0.6R
+    TP2 = 1.5R
+    TP3 = 2.5R
     """
 
     if not snapshot:
@@ -12,34 +26,33 @@ def build_trade_plan(snapshot, brain, decision, bot):
 
     entry = snapshot.get("entry")
     stop = snapshot.get("stop_loss")
-    targets = snapshot.get("targets") or []
 
     if not entry or not stop:
         return None
 
-    # ensure lists
+    # ensure list
     if not isinstance(entry, list):
         entry = [entry]
 
-    if not isinstance(targets, list):
-        targets = [targets]
+    entry_price = float(entry[0])
+    stop = float(stop)
 
     regime = brain.get("regime")
 
     # =====================================================
-    # 🔒 Stop adjustment logic (regime aware)
+    # REGIME AWARE STOP
     # =====================================================
+
     if regime == "risk_off":
-        # tighten stop slightly toward entry
-        stop = entry[0] - (entry[0] - stop) * 0.6
+        stop = entry_price - (entry_price - stop) * 0.6
 
     elif regime == "high_volatility":
-        # widen stop
-        stop = entry[0] - (entry[0] - stop) * 1.25
+        stop = entry_price - (entry_price - stop) * 1.25
 
     # =====================================================
-    # SELL / EXIT logic
+    # EXIT LOGIC
     # =====================================================
+
     if action == "sell":
         return {
             "symbol": symbol,
@@ -55,44 +68,114 @@ def build_trade_plan(snapshot, brain, decision, bot):
     # =====================================================
     # ENTRY PLAN
     # =====================================================
+
     entry_plan = [
         {"type": "limit", "price": float(p)}
         for p in entry
     ]
 
     # =====================================================
-    # TARGET PLAN
+    # RISK PER UNIT
     # =====================================================
-    targets_plan = [
-        {"label": f"TP{i+1}", "price": float(t)}
-        for i, t in enumerate(targets)
-    ]
 
-    # fallback if no targets
-    if not targets_plan:
-        targets_plan = [{"label": "TP1", "price": entry[0] * 1.05}]
+    try:
+        risk_per_unit = abs(entry_price - stop)
+    except Exception:
+        return None
+
+    if risk_per_unit == 0:
+        return None
 
     # =====================================================
-    # RISK METRICS
+    # TARGETS USING R MULTIPLES
     # =====================================================
-    rr = brain.get("rr_ratio")
 
-    if not rr:
+    r_levels = [0.6, 1.5, 2.5]
+
+    targets_plan = []
+
+    for i, r in enumerate(r_levels):
+
+        if action == "buy":
+            target_price = entry_price + (risk_per_unit * r)
+        else:
+            target_price = entry_price - (risk_per_unit * r)
+
+        targets_plan.append({
+            "label": f"TP{i+1}",
+            "price": round(target_price, 2),
+            "r_multiple": r,
+            "profit_per_unit": round(risk_per_unit * r, 2)
+        })
+
+    # =====================================================
+    # REWARD CALCULATION
+    # =====================================================
+
+    reward_per_unit = targets_plan[-1]["profit_per_unit"]
+
+    try:
+        rr = round(reward_per_unit / risk_per_unit, 2)
+    except Exception:
+        rr = None
+
+    # =====================================================
+    # MIN RR FILTER
+    # =====================================================
+
+    min_rr = bot.get("min_rr", 1.5)
+
+    if rr and rr < min_rr:
+        return None
+
+    # =====================================================
+    # POSITION SIZE
+    # =====================================================
+
+    max_risk_eur = bot.get("max_risk_per_trade")
+
+    position_size_units = None
+    risk_eur = None
+
+    if max_risk_eur and risk_per_unit > 0:
+
         try:
-            rr = round((targets_plan[-1]["price"] - entry[0]) / (entry[0] - stop), 2)
+            position_size_units = round(max_risk_eur / risk_per_unit, 6)
+            risk_eur = round(position_size_units * risk_per_unit, 2)
         except Exception:
-            rr = None
+            position_size_units = None
+            risk_eur = None
+
+    # =====================================================
+    # FINAL PLAN
+    # =====================================================
 
     plan = {
+
         "symbol": symbol,
+
         "side": action,
+
         "entry_plan": entry_plan,
-        "stop_loss": {"price": float(stop)},
-        "targets": targets_plan,
-        "risk": {
-            "rr": rr,
-            "regime": regime,
+
+        "stop_loss": {
+            "price": round(stop, 2)
         },
+
+        "targets": targets_plan,
+
+        "position": {
+            "units": position_size_units,
+        },
+
+        "risk": {
+            "risk_per_unit": round(risk_per_unit, 2),
+            "reward_per_unit": round(reward_per_unit, 2),
+            "risk_eur": risk_eur,
+            "rr": rr,
+            "regime": regime
+        }
+
     }
 
     return plan
