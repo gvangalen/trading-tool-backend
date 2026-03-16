@@ -24,6 +24,17 @@ class ScoreEngineError(Exception):
 
 
 # =====================================================
+# Helpers
+# =====================================================
+
+def _safe_float(value):
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+# =====================================================
 # Velocity Clamp
 # =====================================================
 
@@ -72,13 +83,14 @@ def calculate_score(
         return MIN_SCORE
 
     # -------------------------------------------------
-    # Apply regime weighting (if engine exists)
+    # Apply regime weighting (optional)
     # -------------------------------------------------
+
     if regime_label and apply_regime_weights:
+
         try:
             curves = apply_regime_weights(curves, regime_label)
         except Exception:
-            # fail soft — nooit crashen
             pass
 
     scores = []
@@ -89,30 +101,45 @@ def calculate_score(
     # -------------------------------------------------
     # Evaluate curves
     # -------------------------------------------------
+
     for curve_row in curves:
 
         curve = curve_row.get("curve")
+
         if not curve:
             continue
 
         input_key = curve.get("input")
+
         if input_key not in indicator_values:
             continue
 
-        expected_weight += float(curve_row.get("weight", 1.0))
+        x = _safe_float(indicator_values[input_key])
 
-        x = indicator_values[input_key]
+        if x is None:
+            continue
+
+        weight = _safe_float(curve_row.get("weight", 1.0))
+
+        if weight is None:
+            weight = 1.0
+
+        expected_weight += weight
 
         try:
             y = evaluate_curve(curve, x)
         except Exception:
-            continue  # fail soft
+            continue
+
+        y = _safe_float(y)
+
+        if y is None:
+            continue
 
         # clamp score
-        y = max(MIN_SCORE, min(float(y), MAX_SCORE))
+        y = max(MIN_SCORE, min(y, MAX_SCORE))
 
         # dominance protection
-        weight = float(curve_row.get("weight", 1.0))
         weight = min(weight, MAX_WEIGHT_PER_FACTOR)
 
         scores.append(y * weight)
@@ -121,6 +148,7 @@ def calculate_score(
     # -------------------------------------------------
     # No usable data
     # -------------------------------------------------
+
     if not scores or not weights:
         return MIN_SCORE
 
@@ -131,34 +159,35 @@ def calculate_score(
 
     # -------------------------------------------------
     # Weight drift protection
-    # voorkomt dat 1 indicator ineens alles bepaalt
     # -------------------------------------------------
+
     coverage = 1.0
 
     if expected_weight > 0:
+
         coverage = actual_weight / expected_weight
 
-        # harde ondergrens → data onvoldoende
-        if coverage < 0.5:
+        # extreem lage coverage → fallback
+        if coverage < 0.35:
             return MIN_SCORE
 
     # -------------------------------------------------
     # Weighted score
     # -------------------------------------------------
+
     raw_score = (sum(scores) / actual_weight) * coverage
 
-    # clamp
     raw_score = max(MIN_SCORE, min(raw_score, MAX_SCORE))
 
     # -------------------------------------------------
     # Velocity clamp
     # -------------------------------------------------
+
     final_score = clamp_score_velocity(
         new_score=raw_score,
         prev_score=prev_score,
     )
 
-    return round(
-        max(MIN_SCORE, min(final_score, MAX_SCORE)),
-        2,
-    )
+    final_score = max(MIN_SCORE, min(final_score, MAX_SCORE))
+
+    return round(final_score, 2)
