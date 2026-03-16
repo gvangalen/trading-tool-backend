@@ -10,7 +10,7 @@ class ExposureEngineError(Exception):
 
 
 # =====================================================
-# Hard Risk Guards (DO NOT REMOVE)
+# Hard Risk Guards
 # =====================================================
 
 MIN_EXPOSURE = 0.0
@@ -32,11 +32,18 @@ REGIME_EXPOSURE_MAP = {
 
 
 # =====================================================
-# Transition Dampening
-# EXPECTS 0–1 !!!
+# Clamp helper
 # =====================================================
 
-def _transition_dampener(transition_risk: float) -> float:
+def _clamp(value: float, lo: float = MIN_EXPOSURE, hi: float = MAX_EXPOSURE) -> float:
+    return max(lo, min(value, hi))
+
+
+# =====================================================
+# Transition Dampener
+# =====================================================
+
+def _transition_dampener(transition_risk: float | None) -> float:
 
     if transition_risk is None:
         return 1.0
@@ -46,8 +53,7 @@ def _transition_dampener(transition_risk: float) -> float:
     except Exception:
         return 1.0
 
-    # clamp
-    risk = max(0.0, min(risk, 1.0))
+    risk = _clamp(risk, 0.0, 1.0)
 
     if risk >= 0.8:
         return 0.25
@@ -65,7 +71,7 @@ def _transition_dampener(transition_risk: float) -> float:
 # Confidence Booster
 # =====================================================
 
-def _confidence_booster(confidence: float) -> float:
+def _confidence_booster(confidence: float | None) -> float:
 
     if confidence is None:
         return 1.0
@@ -75,9 +81,11 @@ def _confidence_booster(confidence: float) -> float:
     except Exception:
         return 1.0
 
-    # normalize
+    # normalize if % value
     if c > 1:
         c = c / 100.0
+
+    c = _clamp(c, 0.0, 1.0)
 
     if c >= 0.8:
         return 1.1
@@ -86,14 +94,6 @@ def _confidence_booster(confidence: float) -> float:
         return 0.9
 
     return 1.0
-
-
-# =====================================================
-# Clamp helper
-# =====================================================
-
-def _clamp(value: float) -> float:
-    return max(MIN_EXPOSURE, min(value, MAX_EXPOSURE))
 
 
 # =====================================================
@@ -108,6 +108,7 @@ def compute_exposure_multiplier(
 ) -> Dict[str, Any]:
 
     if not regime_memory:
+
         return {
             "multiplier": DEFAULT_EXPOSURE,
             "risk_mode": "neutral",
@@ -115,7 +116,18 @@ def compute_exposure_multiplier(
             "components": {},
         }
 
-    label = str(regime_memory.get("label", "neutral")).lower()
+    # -------------------------------------------------
+    # Resolve regime label
+    # -------------------------------------------------
+
+    label = (
+        regime_memory.get("label")
+        or regime_memory.get("regime_label")
+        or "neutral"
+    )
+
+    label = str(label).lower()
+
     confidence = regime_memory.get("confidence")
 
     base_exposure = REGIME_EXPOSURE_MAP.get(label, DEFAULT_EXPOSURE)
@@ -124,10 +136,15 @@ def compute_exposure_multiplier(
     booster = _confidence_booster(confidence)
 
     raw_exposure = base_exposure * dampener * booster
+
     final_exposure = _clamp(raw_exposure)
 
-    # 🔥 POLICY CAP (VERY IMPORTANT)
+    # -------------------------------------------------
+    # POLICY CAPS
+    # -------------------------------------------------
+
     if policy_caps:
+
         min_cap = policy_caps.get("min", MIN_EXPOSURE)
         max_cap = policy_caps.get("max", MAX_EXPOSURE)
 
@@ -138,12 +155,16 @@ def compute_exposure_multiplier(
     # -------------------------------------------------
     # Risk mode
     # -------------------------------------------------
+
     if final_exposure <= 0.4:
         risk_mode = "risk_off"
+
     elif final_exposure <= 0.9:
         risk_mode = "defensive"
+
     elif final_exposure <= 1.2:
         risk_mode = "neutral"
+
     else:
         risk_mode = "risk_on"
 
