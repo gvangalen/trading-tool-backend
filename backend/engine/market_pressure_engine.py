@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Optional
 
 from backend.engine.transition_detector import get_transition_risk_value
-from backend.ai_core.regime_memory import get_regime_memory  # 🔥 NEW
+from backend.ai_core.regime_memory import get_regime_memory
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -22,7 +22,10 @@ DEFAULT_WEIGHTS = {
 BASELINE_PRESSURE = 0.5
 
 
-# 🔥 REGIME MODIFIERS (institutional behavior)
+# =========================================================
+# REGIME MODIFIERS
+# =========================================================
+
 REGIME_PRESSURE_MAP = {
     "risk_off": 0.65,
     "distribution": 0.70,
@@ -40,8 +43,20 @@ def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
     return max(lo, min(v, hi))
 
 
-def _normalize_score(score: Optional[float]) -> float:
+def _safe_float(value, fallback: float = BASELINE_PRESSURE) -> float:
     try:
+        return float(value)
+    except Exception:
+        return fallback
+
+
+def _normalize_score(score: Optional[float]) -> float:
+    """
+    Normalize 0–100 score → 0–1 range
+    """
+
+    try:
+
         if score is None:
             return BASELINE_PRESSURE
 
@@ -64,17 +79,26 @@ def _get_regime_modifier(user_id: int) -> float:
     """
 
     try:
+
         regime = get_regime_memory(user_id)
 
         if not regime:
             return 1.0
 
-        label = (regime.get("label") or "").lower()
+        label = (
+            regime.get("label")
+            or regime.get("regime_label")
+            or "neutral"
+        )
+
+        label = str(label).lower()
 
         return REGIME_PRESSURE_MAP.get(label, 1.0)
 
     except Exception as e:
+
         logger.warning("Regime modifier fallback: %s", e)
+
         return 1.0
 
 
@@ -121,19 +145,21 @@ def calculate_market_pressure(
     # Transition overlay
     # -----------------------------------------------------
 
-    transition_risk = get_transition_risk_value(user_id)
-
-    if transition_risk is None:
+    try:
+        transition_risk = _safe_float(get_transition_risk_value(user_id), 0.5)
+    except Exception:
         transition_risk = 0.5
 
-    transition_risk = _clamp(float(transition_risk))
+    transition_risk = _clamp(transition_risk)
 
     stability = 1.0 - transition_risk
 
     if transition_risk > 0.7:
         penalty = transition_risk * 0.55
+
     elif transition_risk > 0.5:
         penalty = transition_risk * 0.35
+
     else:
         penalty = transition_risk * 0.20
 
@@ -141,7 +167,7 @@ def calculate_market_pressure(
     pressure -= penalty
 
     # -----------------------------------------------------
-    # 🔥 REGIME MODIFIER (NEW — BIG UPGRADE)
+    # REGIME MODIFIER
     # -----------------------------------------------------
 
     regime_modifier = _get_regime_modifier(user_id)
@@ -174,11 +200,14 @@ def get_market_pressure(
 ) -> float:
 
     try:
+
         return calculate_market_pressure(
             scores=scores,
             user_id=user_id,
         )
 
     except Exception as e:
+
         logger.warning("Market pressure fallback triggered: %s", e)
+
         return BASELINE_PRESSURE
