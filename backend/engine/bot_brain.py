@@ -9,10 +9,6 @@ from backend.engine.transition_detector import (
     get_transition_risk_value,
 )
 from backend.engine.market_pressure_engine import get_market_pressure
-from backend.engine.exposure_engine import (
-    compute_exposure_multiplier,
-    apply_exposure_to_amount,
-)
 from backend.engine.decision_engine import decide_amount
 from backend.ai_core.regime_memory import get_regime_memory
 
@@ -314,41 +310,51 @@ def run_bot_brain(
     risk_environment = ((1.0 - transition_risk) * 0.5) + (market_pressure * 0.5)
 
     # -------------------------------------------------
-    # 8️⃣ Exposure Multiplier
+    # 8️⃣ Position Sizing via Decision Engine
     # -------------------------------------------------
-
-    exposure_pack = compute_exposure_multiplier(
-        regime_memory=regime_memory,
-        transition_risk=transition_risk,
-    )
-
-    exposure_multiplier = _clamp(
-        _safe_float(exposure_pack.get("multiplier"), 1.0) or 1.0,
-        0.0,
-        EXPOSURE_CAP,
-    )
-
-    # -------------------------------------------------
-    # 9️⃣ Base Amount
-    # -------------------------------------------------
-
+    
     try:
-        decision_result = decide_amount(setup=setup, scores=scores)
+    
+        decision_result = decide_amount(
+            setup=setup,
+            scores=scores,
+            regime_memory=regime_memory,
+            transition_risk=transition_risk,
+        )
+    
         logger.info("DecisionEngine raw output: %s", decision_result)
-
-        base_amount, base_reason = _extract_decision_amount(decision_result)
-
+    
+        base_amount = _safe_float(
+            decision_result.get("base_amount"),
+            0.0,
+        ) or 0.0
+    
+        final_amount = _safe_float(
+            decision_result.get("final_amount"),
+            0.0,
+        ) or 0.0
+    
+        exposure_multiplier = _safe_float(
+            decision_result.get("exposure_multiplier"),
+            1.0,
+        ) or 1.0
+    
+        base_reason = str(
+            decision_result.get("exposure_reason")
+            or decision_result.get("reason")
+            or "DecisionEngine allocation"
+        )
+    
     except Exception as e:
-        base_amount = 0.0
-        base_reason = f"DecisionEngine fallback: {e}"
+    
+        logger.warning("DecisionEngine fallback triggered: %s", e)
+    
         decision_result = None
-
-    # -------------------------------------------------
-    # 🔟 Apply Exposure
-    # -------------------------------------------------
-
-    final_amount = apply_exposure_to_amount(base_amount, exposure_multiplier)
-
+        base_amount = 0.0
+        final_amount = 0.0
+        exposure_multiplier = 1.0
+        base_reason = f"DecisionEngine fallback: {e}"
+    
     # -------------------------------------------------
     # 11️⃣ Risk State
     # -------------------------------------------------
@@ -520,7 +526,6 @@ def run_bot_brain(
             "scores": scores,
             "transition_snapshot": transition_snapshot,
             "regime_memory": regime_memory,
-            "exposure": exposure_pack,
             "decision_result": decision_result,
             "base_amount": base_amount,
             "final_amount": final_amount,
