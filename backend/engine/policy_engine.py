@@ -14,11 +14,11 @@ logger.setLevel(logging.INFO)
 
 @dataclass
 class PolicyDecision:
-    risk_mode: str  # "risk_off" | "neutral" | "risk_on" | "no_data"
-    allowed_actions: List[str]  # e.g. ["buy", "hold"] or ["hold"]
-    max_exposure_multiplier: float  # hard cap for exposure engine
-    min_exposure_multiplier: float  # floor
-    max_position_eur: Optional[float]  # optional cap per decision
+    risk_mode: str
+    allowed_actions: List[str]
+    max_exposure_multiplier: float
+    min_exposure_multiplier: float
+    max_position_eur: Optional[float]
     cooldown_hours: int
     notes: List[str]
 
@@ -47,6 +47,12 @@ def _score(scores: Dict[str, Any], key: str) -> Optional[float]:
     return _safe_float(scores.get(key))
 
 
+def _normalize_label(label: Optional[str]) -> str:
+    if not label:
+        return "neutral"
+    return label.strip().lower().replace(" ", "_")
+
+
 # ============================================================
 # Core policy
 # ============================================================
@@ -58,20 +64,7 @@ def evaluate_policy(
     market_pressure: float,
     regime_label: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Policy Engine (rule-based)
 
-    Inputs:
-      - scores: {macro_score, market_score, technical_score, setup_score} 0..100
-      - transition_risk: 0..1 (0 stable, 1 unstable)
-      - market_pressure: 0..1 (0 defensive, 1 aggressive)
-      - regime_label: optional string
-
-    Output:
-      - PolicyDecision dict (safe for bot + report)
-    """
-
-    # Fail-safe normalization
     transition_risk = _clamp(_safe_float(transition_risk, 0.5) or 0.5, 0.0, 1.0)
     market_pressure = _clamp(_safe_float(market_pressure, 0.5) or 0.5, 0.0, 1.0)
 
@@ -81,12 +74,12 @@ def evaluate_policy(
     setup = _score(scores, "setup_score")
 
     notes: List[str] = []
-    label = (regime_label or "").strip().lower().replace(" ", "_")
+    label = _normalize_label(regime_label)
 
-    # ------------------------------------------------------------
-    # Determine baseline risk_mode
-    # ------------------------------------------------------------
     if not scores:
+
+        logger.warning("Policy engine: no scores provided")
+
         decision = PolicyDecision(
             risk_mode="no_data",
             allowed_actions=["hold"],
@@ -96,99 +89,130 @@ def evaluate_policy(
             cooldown_hours=24,
             notes=["No scores available → default HOLD."],
         )
+
         return decision.to_dict()
 
-    # Base regime from pressure
+    # ------------------------------------------------------------
+    # Base risk mode via pressure
+    # ------------------------------------------------------------
+
     if market_pressure >= 0.72:
         risk_mode = "risk_on"
+
     elif market_pressure <= 0.42:
         risk_mode = "risk_off"
+
     else:
         risk_mode = "neutral"
 
-    # Transition overrides (institutional: instability dominates)
+    # ------------------------------------------------------------
+    # Transition overrides
+    # ------------------------------------------------------------
+
     if transition_risk >= 0.80:
+
         risk_mode = "risk_off"
         notes.append("Transition risk extreme → forced risk-off posture.")
+
     elif transition_risk >= 0.65 and risk_mode == "risk_on":
+
         risk_mode = "neutral"
         notes.append("Transition risk elevated → de-risk from risk-on to neutral.")
 
-    # Regime label soft nudges (optional)
+    # ------------------------------------------------------------
+    # Regime hints
+    # ------------------------------------------------------------
+
     if label in ("distribution", "risk_off"):
+
         risk_mode = "risk_off"
-        notes.append(f"Regime label '{label}' → risk-off bias.")
+        notes.append(f"Regime '{label}' → risk-off bias.")
+
     elif label in ("accumulation",) and risk_mode == "risk_off" and transition_risk < 0.55:
+
         risk_mode = "neutral"
-        notes.append("Accumulation-like regime → relax from risk-off to neutral (if stability allows).")
+        notes.append("Accumulation regime → relax to neutral.")
 
     # ------------------------------------------------------------
-    # Hard filters (scores)
+    # Hard score filters
     # ------------------------------------------------------------
+
     if mkt is not None and mkt <= 30:
+
         risk_mode = "risk_off"
-        notes.append("Market score very low → risk-off.")
+        notes.append("Market score very low.")
+
     if tech is not None and tech <= 30 and transition_risk > 0.55:
+
         risk_mode = "risk_off"
-        notes.append("Weak technical + elevated transition → risk-off.")
+        notes.append("Weak technical + unstable regime.")
+
     if macro is not None and macro <= 25:
-        notes.append("Macro score very weak → cap exposure.")
+
+        notes.append("Macro extremely weak.")
 
     # ------------------------------------------------------------
     # Allowed actions
     # ------------------------------------------------------------
+
     allowed = ["hold"]
 
-    # Base rule: never force SELL here (sell policy is bot/exchange specific)
-    # We allow BUY only when risk_mode supports it.
-    if risk_mode == "risk_on":
+    if risk_mode in ("risk_on", "neutral"):
         allowed = ["buy", "hold"]
-    elif risk_mode == "neutral":
-        allowed = ["buy", "hold"]
-    else:
-        allowed = ["hold"]
 
-    # Setup gating: if setup_score is very weak, don't allow buy (even in neutral)
+    # Setup gate
     if setup is not None and setup < 40 and "buy" in allowed:
-        allowed = ["hold"]
-        notes.append("Setup score weak → no-buy gate.")
 
-    # Extra gate: if transition is high, only allow buy if setup is very strong
+        allowed = ["hold"]
+        notes.append("Setup score weak → buy blocked.")
+
+    # High instability gate
     if transition_risk >= 0.65 and "buy" in allowed:
+
         if setup is None or setup < 75:
+
             allowed = ["hold"]
-            notes.append("High transition risk → buy only allowed with strong setup (>=75).")
+            notes.append("High transition risk → only buy with strong setup.")
 
     # ------------------------------------------------------------
     # Exposure caps
     # ------------------------------------------------------------
-    # Default caps per risk_mode
+
     if risk_mode == "risk_on":
+
         max_mult = 1.35
         min_mult = 0.10
         cooldown = 6
+
     elif risk_mode == "neutral":
-        max_mult = 1.00
+
+        max_mult = 1.0
         min_mult = 0.08
         cooldown = 12
-    else:  # risk_off
+
+    else:
+
         max_mult = 0.55
         min_mult = 0.05
         cooldown = 24
 
-    # Transition risk tightens caps
+    # Transition tightening
     if transition_risk >= 0.80:
+
         max_mult = min(max_mult, 0.35)
         cooldown = max(cooldown, 36)
-        notes.append("Extreme transition → hard cap on exposure.")
-    elif transition_risk >= 0.65:
-        max_mult = min(max_mult, 0.60)
-        notes.append("Elevated transition → tighter exposure cap.")
+        notes.append("Extreme transition → exposure cap.")
 
-    # Macro weakness tightens further
+    elif transition_risk >= 0.65:
+
+        max_mult = min(max_mult, 0.60)
+        notes.append("Elevated transition → tighter cap.")
+
+    # Macro weakness tightening
     if macro is not None and macro <= 25:
+
         max_mult = min(max_mult, 0.50)
-        notes.append("Macro very weak → additional exposure cap.")
+        notes.append("Macro weakness → extra cap.")
 
     # Final clamps
     max_mult = _clamp(float(max_mult), 0.05, 2.0)
@@ -199,9 +223,16 @@ def evaluate_policy(
         allowed_actions=allowed,
         max_exposure_multiplier=max_mult,
         min_exposure_multiplier=min_mult,
-        max_position_eur=None,  # keep None unless you want a hard EUR cap
+        max_position_eur=None,
         cooldown_hours=int(cooldown),
         notes=notes,
+    )
+
+    logger.info(
+        "Policy decision | risk_mode=%s | allowed=%s | max_mult=%.2f",
+        risk_mode,
+        allowed,
+        max_mult,
     )
 
     return decision.to_dict()
