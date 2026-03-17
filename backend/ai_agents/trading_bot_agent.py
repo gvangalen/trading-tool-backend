@@ -5,8 +5,6 @@ from datetime import date
 from typing import Any, Dict, List, Optional
 
 from backend.utils.db import get_db_connection
-from backend.engine.guardrails_engine import apply_guardrails
-
 # ✅ Engine brain (single source of truth)
 from backend.engine.bot_brain import run_bot_brain
 
@@ -1247,9 +1245,9 @@ def run_trading_bot_agent(
 
         for bot in bots:
 
-            # =====================================================
-            # 📸 SNAPSHOT LOOKUP
-            # =====================================================
+            # ================================
+            # SNAPSHOT
+            # ================================
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -1257,50 +1255,18 @@ def run_trading_bot_agent(
                 report_date,
             )
 
-            # =====================================================
-            # 🔴 SELF HEALING FALLBACK
-            # =====================================================
-            if not snapshot:
-                logger.warning(
-                    "⚠️ No strategy snapshot found | strategy=%s | generating snapshot",
-                    bot["strategy_id"],
-                )
-
-                try:
-                    from backend.celery_task.strategy_task import run_daily_strategy_snapshot
-
-                    run_daily_strategy_snapshot(user_id=user_id)
-
-                    snapshot = _get_active_strategy_snapshot(
-                        conn,
-                        user_id,
-                        bot["strategy_id"],
-                        report_date,
-                    )
-
-                    if snapshot:
-                        logger.info(
-                            "✅ Snapshot generated successfully | strategy=%s",
-                            bot["strategy_id"],
-                        )
-                    else:
-                        logger.warning(
-                            "⚠️ Snapshot still missing after generation | strategy=%s",
-                            bot["strategy_id"],
-                        )
-
-                except Exception:
-                    logger.exception("❌ Failed to generate strategy snapshot")
-
-            # =====================================================
-            # SETUP MATCH
-            # =====================================================
+            # ================================
+            # SETUP MATCH (UI ONLY)
+            # ================================
             setup_match = _build_setup_match(
                 bot=bot,
                 scores=scores,
                 snapshot=snapshot,
             )
 
+            # ================================
+            # SETUP PAYLOAD → BRAIN
+            # ================================
             setup_payload = _get_strategy_setup_payload(
                 conn,
                 user_id=user_id,
@@ -1320,9 +1286,9 @@ def run_trading_bot_agent(
                 if snapshot.get("targets"):
                     setup_payload["targets"] = snapshot.get("targets")
 
-            # =====================================================
-            # BOT BRAIN
-            # =====================================================
+            # ================================
+            # 🧠 BOT BRAIN (ENIGE WAARHEID)
+            # ================================
             brain = run_bot_brain(
                 user_id=user_id,
                 setup=setup_payload,
@@ -1334,11 +1300,19 @@ def run_trading_bot_agent(
                 },
             )
 
-            engine_action = _normalize_action(brain.get("action"))
+            # ================================
+            # DIRECT GEBRUIK VAN BRAIN OUTPUT
+            # ================================
+            action = _normalize_action(brain.get("action"))
 
-            # =====================================================
-            # CONFIDENCE
-            # =====================================================
+            adjusted_amount = float(brain.get("amount_eur") or 0)
+
+            # originele sizing (voor inzicht/debug)
+            requested_amount = float(
+                brain.get("debug", {}).get("final_amount") or 0
+            )
+
+            # confidence mapping
             confidence_value = brain.get("confidence")
 
             if isinstance(confidence_value, (int, float)):
@@ -1351,169 +1325,68 @@ def run_trading_bot_agent(
             else:
                 confidence_label = "low"
 
-            # =====================================================
-            # POSITION SIZE
-            # =====================================================
-            metrics = brain.get("metrics") or {}
-
+            # position size
             position_size = float(
-                metrics.get("position_size")
-                or brain.get("position_size")
+                brain.get("metrics", {}).get("position_size")
                 or brain.get("exposure_multiplier")
                 or 1.0
             )
 
-            # =====================================================
-            # AMOUNT FROM BRAIN
-            # =====================================================
-            requested_amount = float(
-                brain.get("amount_eur")
-                or brain.get("final_amount")
-                or brain.get("sized_amount")
-                or brain.get("base_amount")
-                or 0
-            )
+            # trade plan → DIRECT UIT BRAIN
+            trade_plan = brain.get("trade_plan")
 
-            logger.info(
-                "💰 Requested amount resolved | amount=%s | brain_keys=%s",
-                requested_amount,
-                list(brain.keys()),
-            )
-
-            # =====================================================
-            # CURRENT PORTFOLIO STATE
-            # =====================================================
-            portfolio_value_eur = get_bot_balance(
-                conn,
-                user_id,
-                bot["bot_id"],
-            )
-
-            asset_value_eur = get_asset_position_value(
-                conn,
-                user_id,
-                bot["bot_id"],
-                bot["symbol"],
-            )
-
-            today_spent_eur = get_today_spent_eur(
-                conn,
-                user_id,
-                bot["bot_id"],
-                report_date,
-            )
-
-            # =====================================================
-            # GUARDRAILS
-            # =====================================================
-            guard = apply_guardrails(
-                proposed_amount_eur=requested_amount,
-                portfolio_value_eur=portfolio_value_eur,
-                current_asset_value_eur=asset_value_eur,
-                today_allocated_eur=today_spent_eur,
-                kill_switch=True,
-                max_trade_risk_eur=float(
-                    bot.get("budget", {}).get("max_order_eur") or 0
-                ),
-                daily_allocation_eur=float(
-                    bot.get("budget", {}).get("daily_limit_eur") or 0
-                ),
-                max_asset_exposure_pct=float(
-                    bot.get("budget", {}).get("max_asset_exposure_pct") or 40
-                ),
-            )
-
-            adjusted_amount = float(guard.get("adjusted_amount_eur") or 0)
-            warnings = guard.get("warnings") or []
-
-            if adjusted_amount <= 0:
-                logger.info("⚠️ Guardrails reduced allocation to zero → switching to HOLD")
-                engine_action = "hold"
-
-                guard = {
-                    "blocked": False,
-                    "warnings": ["allocation_zero"],
-                    "adjusted_amount_eur": 0,
-                }
-
-            # =====================================================
-            # TRADE PLAN
-            # =====================================================
-            trade_plan = None
-
-            if snapshot:
-                entry = snapshot.get("entry")
-                stop = snapshot.get("stop_loss")
-                targets = snapshot.get("targets") or []
-
-                if engine_action in ["buy", "sell"] and entry and stop:
-                    trade_plan = {
-                        "symbol": bot["symbol"],
-                        "side": engine_action,
-                        "entry_plan": [{"type": "limit", "price": entry}],
-                        "stop_loss": {"price": stop},
-                        "targets": [
-                            {"label": f"TP{i+1}", "price": t}
-                            for i, t in enumerate(targets)
-                        ],
-                        "risk": {"rr": brain.get("rr_ratio")},
-                    }
-
-            # 🔴 Ook bij HOLD / OBSERVE altijd levels tonen
             if not trade_plan:
                 trade_plan = _default_trade_plan(
                     bot["symbol"],
-                    engine_action,
-                    "engine_watch_mode",
+                    action,
+                    "fallback_plan",
                     watch_levels=brain.get("watch_levels"),
                     snapshot=snapshot,
                 )
 
-            logger.info("📊 Final trade plan built: %s", trade_plan)
-
-            market_health = round(
-                float(scores.get("macro", 10)) * 0.4
-                + float(scores.get("technical", 10)) * 0.3
-                + float(scores.get("market", 10)) * 0.3,
-                1,
-            )
-
+            # ================================
+            # DECISION OBJECT (1-op-1 met brain)
+            # ================================
             decision = {
                 "symbol": bot["symbol"],
-                "action": engine_action,
+                "action": action,
                 "confidence": confidence_label,
                 "score": _clamp_score(scores.get("market", 10)),
+
+                # amounts
                 "requested_amount_eur": round(requested_amount, 2),
                 "amount_eur": round(adjusted_amount, 2),
+
+                # sizing
                 "position_size": position_size,
                 "exposure_multiplier": position_size,
+
+                # UI
                 "setup_match": setup_match,
-                "strategy_reason": brain.get("reason") or "engine_decision",
+
+                # brain outputs
+                "strategy_reason": brain.get("reason"),
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
-                "market_health": market_health,
                 "market_pressure": float(brain.get("market_pressure") or 50),
                 "transition_risk": float(brain.get("transition_risk") or 50),
-                "max_risk_per_trade": float(
-                    bot.get("budget", {}).get("max_order_eur") or 0
-                ) or None,
-                "max_daily_allocation": float(
-                    bot.get("budget", {}).get("daily_limit_eur") or 0
-                ) or None,
-                "guardrails_result": guard,
-                "guardrail_reason": (
-                    "allocation_zero"
-                    if adjusted_amount <= 0
-                    else guard.get("blocked_by")
-                    or (guard.get("warnings")[0] if guard.get("warnings") else None)
-                ),
-                "warnings": warnings,
+
+                # guardrails → DIRECT UIT BRAIN
+                "guardrails_result": brain.get("guardrails_result"),
+                "guardrail_reason": brain.get("guardrail_reason"),
+
+                # trade plan
                 "trade_plan": trade_plan,
+
+                # monitoring
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring", False),
                 "alerts_active": brain.get("alerts_active", False),
             }
 
+            # ================================
+            # SAVE
+            # ================================
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -1529,7 +1402,7 @@ def run_trading_bot_agent(
                 {
                     "bot_id": bot["bot_id"],
                     "decision_id": decision_id,
-                    "action": engine_action,
+                    "action": action,
                 }
             )
 
@@ -1552,8 +1425,7 @@ def run_trading_bot_agent(
 
     finally:
         conn.close()
-
-
+        
 # =====================================================
 # 📊 Ledger delta calculator
 # =====================================================
