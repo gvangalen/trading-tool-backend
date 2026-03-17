@@ -192,6 +192,7 @@ def run_bot_brain(
     portfolio_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
+    setup = setup or {}
     scores = _normalize_scores(scores)
     portfolio_context = portfolio_context or {}
 
@@ -250,23 +251,23 @@ def run_bot_brain(
     # -------------------------------------------------
     # 4️⃣ Market Intelligence Engine
     # -------------------------------------------------
-    
+
     market_intelligence = {}
-    
+
     try:
         market_intelligence = get_market_intelligence(
             user_id=user_id,
             scores=scores,
         )
-    
+
         market_cycle = market_intelligence.get("cycle", "neutral")
         temperature = market_intelligence.get("temperature", "cool")
-    
+
         trend_block = market_intelligence.get("trend", {}) or {}
         short_trend = trend_block.get("short", "trading_range")
         mid_trend = trend_block.get("mid", "trading_range")
         long_trend = trend_block.get("long", "trading_range")
-    
+
         state_block = market_intelligence.get("state", {}) or {}
         volatility_state = state_block.get("volatility_state", "normal")
         structure_bias = state_block.get("structure_bias", "neutral")
@@ -274,51 +275,51 @@ def run_bot_brain(
             state_block.get("risk_environment"),
             0.5,
         ) or 0.5
-    
+
         metrics_block = market_intelligence.get("metrics", {}) or {}
-    
+
         trend_strength = (
             _safe_float(state_block.get("trend_strength"), None)
             if state_block.get("trend_strength") is not None
             else None
         )
-    
+
         if trend_strength is None:
             trend_strength = (
                 float(scores.get("technical_score", 10)) * 0.6
                 + float(scores.get("market_score", 10)) * 0.4
             ) / 100.0
-    
+
         trend_strength = _clamp(float(trend_strength), 0.0, 1.0)
-    
+
     except Exception as e:
         logger.warning("Market intelligence fallback: %s", e)
-    
+
         market_intelligence = {}
-    
+
         market_cycle = "neutral"
         temperature = "cool"
-    
+
         short_trend = "trading_range"
         mid_trend = "trading_range"
         long_trend = "trading_range"
-    
+
         volatility_state = "normal"
         structure_bias = "neutral"
         risk_environment = 0.5
-    
+
         trend_strength = (
             float(scores.get("technical_score", 10)) * 0.6
             + float(scores.get("market_score", 10)) * 0.4
         ) / 100.0
         trend_strength = _clamp(trend_strength, 0.0, 1.0)
-    
+
         metrics_block = {}
-        
+
     # -------------------------------------------------
     # 5️⃣ Position Sizing via Decision Engine
     # -------------------------------------------------
-    
+
     try:
         decision_result = decide_amount(
             setup=setup,
@@ -326,31 +327,30 @@ def run_bot_brain(
             regime_memory=regime_memory,
             transition_risk=transition_risk,
         )
-    
+
         logger.info("DecisionEngine raw output: %s", decision_result)
-    
+
         final_amount, base_reason = _extract_decision_amount(decision_result)
-    
-        # ✅ FIX: safe dict access
+
         base_amount = _safe_float(
             decision_result.get("base_amount") if isinstance(decision_result, dict) else 0.0,
             0.0,
         ) or 0.0
-    
+
         exposure_multiplier = _safe_float(
             decision_result.get("exposure_multiplier") if isinstance(decision_result, dict) else 1.0,
             1.0,
         ) or 1.0
-    
+
     except Exception as e:
         logger.warning("DecisionEngine fallback triggered: %s", e)
-    
+
         decision_result = None
         base_amount = 0.0
         final_amount = 0.0
         exposure_multiplier = 1.0
         base_reason = f"DecisionEngine fallback: {e}"
-    
+
     exposure_multiplier = _clamp(exposure_multiplier, 0.0, EXPOSURE_CAP)
 
     # -------------------------------------------------
@@ -496,6 +496,10 @@ def run_bot_brain(
 
     if adjusted_amount <= 0:
         action = "hold"
+        if guardrail_reason:
+            strategy_reason = f"{strategy_reason} Blocked by guardrails: {guardrail_reason}"
+        else:
+            strategy_reason = f"{strategy_reason} Blocked by guardrails."
 
     # -------------------------------------------------
     # 10️⃣ Confidence
@@ -535,44 +539,44 @@ def run_bot_brain(
     # -------------------------------------------------
     # 12️⃣ Dashboard-ready metrics
     # -------------------------------------------------
-    
+
     market_pressure_score = (
         metrics_block.get("market_pressure")
         or metrics_block.get("market_pressure_score")
     )
-    
+
     transition_risk_score = (
         metrics_block.get("transition_risk")
         or metrics_block.get("transition_risk_score")
     )
-    
+
     setup_quality_score = (
         metrics_block.get("setup_quality")
         or metrics_block.get("setup_quality_score")
     )
-    
+
     volatility_score = (
         metrics_block.get("volatility")
         or metrics_block.get("volatility_score")
     )
-    
+
     trend_strength_score = (
         metrics_block.get("trend_strength")
         or metrics_block.get("trend_strength_score")
     )
-    
+
     if market_pressure_score is None:
         market_pressure_score = round(_clamp(market_pressure, 0.0, 1.0) * 100)
-    
+
     if transition_risk_score is None:
         transition_risk_score = round(_clamp(transition_risk, 0.0, 1.0) * 100)
-    
+
     if setup_quality_score is None:
         setup_quality_score = round(trade_quality)
-    
+
     if volatility_score is None:
         volatility_score = 50
-    
+
     if trend_strength_score is None:
         trend_strength_score = round(_clamp(trend_strength, 0.0, 1.0) * 100)
 
