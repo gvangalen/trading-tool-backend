@@ -71,6 +71,24 @@ def decide_amount(
         )
 
     # =================================================
+    # 1.5️⃣ Setup Influence (Conviction Layer)
+    # =================================================
+    
+    setup_score = scores.get("setup_score", scores.get("setup", 10))
+    
+    if isinstance(setup_score, (int, float)):
+        if setup_score < 40:
+            sized_amount *= 0.5
+            setup_reason = "Weak setup → reduced size"
+        elif setup_score > 70:
+            sized_amount *= 1.2
+            setup_reason = "Strong setup → increased size"
+        else:
+            setup_reason = "Neutral setup"
+    else:
+        setup_reason = "No setup score"
+
+    # =================================================
     # 2️⃣ Exposure Layer (Regime Risk Control)
     # =================================================
 
@@ -96,4 +114,5 @@ def decide_amount(
         "risk_mode": exposure_data["risk_mode"],
         "exposure_reason": exposure_data["reason"],
         "exposure_components": exposure_data["components"],
+        "setup_reason": setup_reason,
     }
