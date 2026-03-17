@@ -34,6 +34,13 @@ def _table_exists(conn, table: str) -> bool:
         )
         return cur.fetchone() is not None
 
+def _map_confidence(v: float) -> str:
+    if v >= 0.7:
+        return "high"
+    elif v >= 0.4:
+        return "medium"
+    return "low"
+
 
 def _clamp_score(v: Any, *, default: float = 10.0, lo: float = 10.0, hi: float = 100.0) -> float:
     """
@@ -1245,9 +1252,9 @@ def run_trading_bot_agent(
 
         for bot in bots:
 
-            # ================================
-            # SNAPSHOT
-            # ================================
+            # -------------------------------------------------
+            # 1️⃣ Snapshot (context only)
+            # -------------------------------------------------
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -1255,18 +1262,9 @@ def run_trading_bot_agent(
                 report_date,
             )
 
-            # ================================
-            # SETUP MATCH (UI ONLY)
-            # ================================
-            setup_match = _build_setup_match(
-                bot=bot,
-                scores=scores,
-                snapshot=snapshot,
-            )
-
-            # ================================
-            # SETUP PAYLOAD → BRAIN
-            # ================================
+            # -------------------------------------------------
+            # 2️⃣ Setup payload → brain
+            # -------------------------------------------------
             setup_payload = _get_strategy_setup_payload(
                 conn,
                 user_id=user_id,
@@ -1277,18 +1275,15 @@ def run_trading_bot_agent(
             )
 
             if snapshot:
-                if snapshot.get("entry") is not None:
-                    setup_payload["entry"] = snapshot.get("entry")
+                setup_payload.update({
+                    "entry": snapshot.get("entry"),
+                    "stop_loss": snapshot.get("stop_loss"),
+                    "targets": snapshot.get("targets"),
+                })
 
-                if snapshot.get("stop_loss") is not None:
-                    setup_payload["stop_loss"] = snapshot.get("stop_loss")
-
-                if snapshot.get("targets"):
-                    setup_payload["targets"] = snapshot.get("targets")
-
-            # ================================
-            # 🧠 BOT BRAIN (ENIGE WAARHEID)
-            # ================================
+            # -------------------------------------------------
+            # 3️⃣ 🧠 BOT BRAIN (ENIGE WAARHEID)
+            # -------------------------------------------------
             brain = run_bot_brain(
                 user_id=user_id,
                 setup=setup_payload,
@@ -1300,93 +1295,61 @@ def run_trading_bot_agent(
                 },
             )
 
-            # ================================
-            # DIRECT GEBRUIK VAN BRAIN OUTPUT
-            # ================================
-            action = _normalize_action(brain.get("action"))
-
-            adjusted_amount = float(brain.get("amount_eur") or 0)
-
-            # originele sizing (voor inzicht/debug)
-            requested_amount = float(
-                brain.get("debug", {}).get("final_amount") or 0
+            # -------------------------------------------------
+            # 4️⃣ UI ONLY (GEEN invloed)
+            # -------------------------------------------------
+            setup_match = _build_setup_match(
+                bot=bot,
+                scores=scores,
+                snapshot=snapshot,
             )
 
-            # confidence mapping
-            confidence_value = brain.get("confidence")
-
-            if isinstance(confidence_value, (int, float)):
-                if confidence_value >= 0.7:
-                    confidence_label = "high"
-                elif confidence_value >= 0.4:
-                    confidence_label = "medium"
-                else:
-                    confidence_label = "low"
-            else:
-                confidence_label = "low"
-
-            # position size
-            position_size = float(
-                brain.get("metrics", {}).get("position_size")
-                or brain.get("exposure_multiplier")
-                or 1.0
-            )
-
-            # trade plan → DIRECT UIT BRAIN
-            trade_plan = brain.get("trade_plan")
-
-            if not trade_plan:
-                trade_plan = _default_trade_plan(
-                    bot["symbol"],
-                    action,
-                    "fallback_plan",
-                    watch_levels=brain.get("watch_levels"),
-                    snapshot=snapshot,
-                )
-
-            # ================================
-            # DECISION OBJECT (1-op-1 met brain)
-            # ================================
+            # -------------------------------------------------
+            # 5️⃣ Decision mapping (GEEN LOGICA)
+            # -------------------------------------------------
             decision = {
-                "symbol": bot["symbol"],
-                "action": action,
-                "confidence": confidence_label,
-                "score": _clamp_score(scores.get("market", 10)),
+                "symbol": brain.get("symbol") or bot["symbol"],
 
-                # amounts
-                "requested_amount_eur": round(requested_amount, 2),
-                "amount_eur": round(adjusted_amount, 2),
+                # 🔥 direct uit brain
+                "action": _normalize_action(brain.get("action")),
+                "confidence": _map_confidence(brain.get("confidence", 0.0)),
+                "amount_eur": round(float(brain.get("amount_eur") or 0), 2),
 
-                # sizing
-                "position_size": position_size,
-                "exposure_multiplier": position_size,
+                # debug / inzicht
+                "requested_amount_eur": round(
+                    float(brain.get("debug", {}).get("final_amount") or 0), 2
+                ),
 
-                # UI
-                "setup_match": setup_match,
+                # 🔥 GEEN eigen score meer
+                "score": brain.get("trade_quality"),
 
-                # brain outputs
+                # 🔥 brain outputs
                 "strategy_reason": brain.get("reason"),
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
-                "market_pressure": float(brain.get("market_pressure") or 50),
-                "transition_risk": float(brain.get("transition_risk") or 50),
 
-                # guardrails → DIRECT UIT BRAIN
+                "market_pressure": brain.get("market_pressure"),
+                "transition_risk": brain.get("transition_risk"),
+
+                # 🔥 guardrails direct
                 "guardrails_result": brain.get("guardrails_result"),
                 "guardrail_reason": brain.get("guardrail_reason"),
 
-                # trade plan
-                "trade_plan": trade_plan,
+                # 🔥 trade plan direct
+                "trade_plan": brain.get("trade_plan"),
 
-                # monitoring
+                # 🔥 monitoring direct
                 "watch_levels": brain.get("watch_levels"),
-                "monitoring": brain.get("monitoring", False),
-                "alerts_active": brain.get("alerts_active", False),
+                "monitoring": brain.get("monitoring"),
+                "alerts_active": brain.get("alerts_active"),
+
+                # UI only
+                "setup_match": setup_match,
             }
 
-            # ================================
-            # SAVE
-            # ================================
+            # -------------------------------------------------
+            # 6️⃣ Save
+            # -------------------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -1398,13 +1361,11 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            results.append(
-                {
-                    "bot_id": bot["bot_id"],
-                    "decision_id": decision_id,
-                    "action": action,
-                }
-            )
+            results.append({
+                "bot_id": bot["bot_id"],
+                "decision_id": decision_id,
+                "action": decision["action"],
+            })
 
         conn.commit()
 
