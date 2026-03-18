@@ -581,20 +581,20 @@ def run_bot_brain(
         trend_strength_score = round(_clamp(trend_strength, 0.0, 1.0) * 100)
 
     # -------------------------------------------------
-    # 13️⃣ Trade Plan Engine
+    # 13️⃣ Trade Plan Engine (FIXED)
     # -------------------------------------------------
-
+    
     snapshot_payload = {
         "entry": entry_value,
         "stop_loss": stop_value,
         "targets": clean_targets,
     }
-
+    
     decision_payload = {
         "action": action,
         "symbol": setup.get("symbol"),
     }
-
+    
     bot_payload = {
         "min_rr": _safe_float(setup.get("min_rr"), 1.5) or 1.5,
         "max_risk_per_trade": _safe_float(
@@ -603,23 +603,33 @@ def run_bot_brain(
             None,
         ),
     }
-
+    
     brain_context = {
         "regime": regime_label,
         "reason": strategy_reason,
     }
-
+    
+    trade_plan = None
+    
     try:
-        trade_plan = build_trade_plan(
-            snapshot=snapshot_payload,
-            brain=brain_context,
-            decision=decision_payload,
-            bot=bot_payload,
-        )
+        # 👉 ALLEEN echte trades → echte plan
+        if action in ("buy", "short", "sell"):
+            trade_plan = build_trade_plan(
+                snapshot=snapshot_payload,
+                brain=brain_context,
+                decision=decision_payload,
+                bot=bot_payload,
+            )
+    
     except Exception as e:
-        logger.warning("Trade plan engine fallback: %s", e)
+        logger.warning("Trade plan engine error: %s", e)
         trade_plan = None
-
+    
+    
+    # -------------------------------------------------
+    # 🔥 CRITICAL FIX: NOOIT None teruggeven
+    # -------------------------------------------------
+    
     if not trade_plan:
         trade_plan = _default_trade_plan(
             symbol=setup.get("symbol", "BTC"),
