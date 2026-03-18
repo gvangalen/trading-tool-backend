@@ -92,6 +92,29 @@ def _safe_json(v, fallback):
     except Exception:
         return fallback
 
+def _get_live_price(conn, symbol: str) -> Optional[float]:
+    symbol = (symbol or DEFAULT_SYMBOL).upper()
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT price
+            FROM market_data
+            WHERE symbol = %s
+              AND price IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (symbol,),
+        )
+        row = cur.fetchone()
+
+    if not row or row[0] is None:
+        return None
+
+    return float(row[0])
+
+
 # =====================================================
 # 📊 Asset position value (per symbol)
 # =====================================================
@@ -1022,36 +1045,24 @@ def _persist_decision_and_order(
 
     action = _normalize_action(decision.get("action"))
     confidence = _normalize_confidence(decision.get("confidence") or "low")
-
     symbol = decision.get("symbol", DEFAULT_SYMBOL)
 
     requested_amount = float(decision.get("requested_amount_eur") or 0.0)
     amount_eur = float(decision.get("amount_eur") or 0.0)
 
-    # -------------------------------------------------
-    # ✅ Reason handling (FIX)
-    # -------------------------------------------------
-
     strategy_reason = decision.get("strategy_reason")
     guardrail_reason = decision.get("guardrail_reason")
 
     reasons = []
-
     if guardrail_reason:
         reasons.append(guardrail_reason)
-
     elif strategy_reason:
         reasons.append(strategy_reason)
 
     setup_match = decision.get("setup_match") or {}
-
-    watch_levels = decision.get("watch_levels")
+    watch_levels = decision.get("watch_levels") or {}
     monitoring = bool(decision.get("monitoring", False))
     alerts_active = bool(decision.get("alerts_active", False))
-
-    # -------------------------------------------------
-    # POSITION SIZE
-    # -------------------------------------------------
 
     position_size = float(
         decision.get("position_size")
@@ -1059,23 +1070,20 @@ def _persist_decision_and_order(
         or 1.0
     )
 
-    # -------------------------------------------------
-    # GUARDRAILS RESULT
-    # -------------------------------------------------
+    exposure_multiplier = float(
+        decision.get("exposure_multiplier")
+        or decision.get("position_size")
+        or 1.0
+    )
 
     guardrails_result = decision.get("guardrails_result") or {}
 
     guardrails_payload = {
-
         "kill_switch": True,
-
         "max_trade_risk": decision.get("max_risk_per_trade"),
         "daily_allocation": decision.get("max_daily_allocation"),
-
         "btc_exposure": round(position_size * 100, 2),
-
         "position_size": position_size,
-
         "reason": (
             guardrail_reason
             or (guardrails_result.get("warnings")[0] if guardrails_result.get("warnings") else None)
@@ -1083,62 +1091,66 @@ def _persist_decision_and_order(
         ),
     }
 
-    # -------------------------------------------------
-    # SCORES PAYLOAD (FRONTEND)
-    # -------------------------------------------------
-
     scores_payload = {
-
+        # base scores
         "macro": _clamp_score(scores.get("macro", 10)),
         "technical": _clamp_score(scores.get("technical", 10)),
         "market": _clamp_score(scores.get("market", 10)),
         "setup": _clamp_score(scores.get("setup", 10)),
 
+        # main display score
         "combined": _clamp_score(decision.get("score", 10)),
+        "trade_quality": decision.get("trade_quality"),
 
+        # UI / setup
         "setup_match": setup_match,
 
-        # ⭐ BELANGRIJK VOOR UI
+        # reasoning
         "strategy_reason": strategy_reason,
         "guardrail_reason": guardrail_reason,
+        "regime": decision.get("regime"),
+        "risk_state": decision.get("risk_state"),
 
+        # market context
         "market_health": float(decision.get("market_health") or 50),
         "market_pressure": float(decision.get("market_pressure") or 50),
         "transition_risk": float(decision.get("transition_risk") or 50),
-
         "volatility_state": decision.get("volatility_state"),
         "structure_bias": decision.get("structure_bias"),
         "trend_strength": decision.get("trend_strength"),
 
+        # sizing
+        "base_amount": decision.get("base_amount"),
+        "execution_mode": decision.get("execution_mode"),
+        "decision_curve_name": decision.get("decision_curve_name"),
         "position_size": position_size,
-        "exposure_multiplier": position_size,
+        "exposure_multiplier": exposure_multiplier,
 
-        "regime": decision.get("regime"),
-        "risk_state": decision.get("risk_state"),
+        # amounts
+        "requested_amount_eur": requested_amount,
+        "amount_eur": amount_eur,
 
-        "trade_quality": decision.get("trade_quality"),
+        # trade plan / watch
+        "trade_plan": decision.get("trade_plan"),
+        "watch_levels": watch_levels,
+        "monitoring": monitoring,
+        "alerts_active": alerts_active,
 
+        # risk / guardrails
+        "guardrails": guardrails_payload,
+        "guardrails_result": guardrails_result,
         "warnings": decision.get("warnings")
         if isinstance(decision.get("warnings"), list)
         else [],
 
-        "guardrails": guardrails_payload,
-
-        "requested_amount_eur": requested_amount,
-        "amount_eur": amount_eur,
-
-        "guardrails_result": guardrails_result,
-
-        "watch_levels": watch_levels,
-        "monitoring": monitoring,
-        "alerts_active": alerts_active,
+        # misc useful UI fields
+        "live_price": decision.get("live_price"),
     }
 
     scores_json = json.dumps(scores_payload)
     reasons_json = json.dumps(reasons)
 
     with conn.cursor() as cur:
-
         cur.execute(
             """
             INSERT INTO bot_decisions (
@@ -1196,18 +1208,12 @@ def _persist_decision_and_order(
         )
 
         row = cur.fetchone()
-
         if not row:
             raise RuntimeError("Failed to persist bot decision")
 
         decision_id = int(row[0])
 
-    # -------------------------------------------------
-    # TRADE PLAN
-    # -------------------------------------------------
-
     plan = decision.get("trade_plan")
-
     if not plan:
         plan = _default_trade_plan(symbol, action, "fallback_plan")
 
@@ -1222,7 +1228,7 @@ def _persist_decision_and_order(
     )
 
     return decision_id
-
+    
 # =====================================================
 # 🚀 Run Trading Bot Agent
 # =====================================================
@@ -1251,9 +1257,8 @@ def run_trading_bot_agent(
         results = []
 
         for bot in bots:
-
             # -------------------------------------------------
-            # 1️⃣ Snapshot (context only)
+            # 1️⃣ Snapshot
             # -------------------------------------------------
             snapshot = _get_active_strategy_snapshot(
                 conn,
@@ -1282,7 +1287,7 @@ def run_trading_bot_agent(
                 })
 
             # -------------------------------------------------
-            # 3️⃣ 🧠 BOT BRAIN (ENIGE WAARHEID)
+            # 3️⃣ 🧠 Brain
             # -------------------------------------------------
             brain = run_bot_brain(
                 user_id=user_id,
@@ -1296,7 +1301,7 @@ def run_trading_bot_agent(
             )
 
             # -------------------------------------------------
-            # 4️⃣ UI ONLY (GEEN invloed)
+            # 4️⃣ Setup match (UI only)
             # -------------------------------------------------
             setup_match = _build_setup_match(
                 bot=bot,
@@ -1305,51 +1310,79 @@ def run_trading_bot_agent(
             )
 
             # -------------------------------------------------
-            # 5️⃣ Decision mapping (GEEN LOGICA)
+            # 5️⃣ Live price
             # -------------------------------------------------
+            live_price = _get_live_price(conn, bot["symbol"])
+
+            # -------------------------------------------------
+            # 6️⃣ Decision mapping
+            # -------------------------------------------------
+            action = _normalize_action(brain.get("action"))
+
             decision = {
+                # identity
+                "bot_id": bot["bot_id"],
                 "symbol": brain.get("symbol") or bot["symbol"],
 
-                # 🔥 direct uit brain
-                "action": _normalize_action(brain.get("action")),
-                "confidence": _map_confidence(brain.get("confidence", 0.0)),
-                "amount_eur": round(float(brain.get("amount_eur") or 0), 2),
+                # state
+                "action": action,
+                "confidence": _map_confidence(float(brain.get("confidence") or 0.0)),
+                "status": "planned",
 
-                # debug / inzicht
+                # amounts
+                "amount_eur": round(float(brain.get("amount_eur") or 0), 2),
                 "requested_amount_eur": round(
                     float(brain.get("debug", {}).get("final_amount") or 0), 2
                 ),
 
-                # 🔥 GEEN eigen score meer
-                "score": brain.get("trade_quality"),
+                # sizing / execution
+                "base_amount": brain.get("base_amount") or setup_payload.get("base_amount"),
+                "execution_mode": setup_payload.get("execution_mode"),
+                "decision_curve_name": (
+                    (setup_payload.get("decision_curve") or {}).get("name")
+                    if isinstance(setup_payload.get("decision_curve"), dict)
+                    else None
+                ),
+                "position_size": float(
+                    brain.get("metrics", {}).get("position_size")
+                    or brain.get("exposure_multiplier")
+                    or 1.0
+                ),
+                "exposure_multiplier": float(
+                    brain.get("exposure_multiplier") or 1.0
+                ),
 
-                # 🔥 brain outputs
+                # score / reasoning
+                "score": brain.get("trade_quality"),
+                "trade_quality": brain.get("trade_quality"),
                 "strategy_reason": brain.get("reason"),
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
 
+                # market context
                 "market_pressure": brain.get("market_pressure"),
                 "transition_risk": brain.get("transition_risk"),
+                "volatility_state": brain.get("volatility_state"),
+                "trend_strength": brain.get("trend_strength"),
+                "structure_bias": brain.get("structure_bias"),
 
-                # 🔥 guardrails direct
-                "guardrails_result": brain.get("guardrails_result"),
-                "guardrail_reason": brain.get("guardrail_reason"),
-
-                # 🔥 trade plan direct
+                # plan
                 "trade_plan": brain.get("trade_plan"),
-
-                # 🔥 monitoring direct
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring"),
                 "alerts_active": brain.get("alerts_active"),
 
-                # UI only
+                # guardrails
+                "guardrails_result": brain.get("guardrails_result"),
+                "guardrail_reason": brain.get("guardrail_reason"),
+
+                # ui only
                 "setup_match": setup_match,
+
+                # live market
+                "live_price": live_price,
             }
 
-            # -------------------------------------------------
-            # 6️⃣ Save
-            # -------------------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -1378,7 +1411,6 @@ def run_trading_bot_agent(
 
     except Exception as e:
         logger.exception("❌ trading_bot_agent failed")
-
         return {
             "ok": False,
             "error": str(e),
