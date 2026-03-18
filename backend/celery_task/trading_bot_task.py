@@ -24,7 +24,7 @@ logger.setLevel(logging.INFO)
 def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None):
 
     # -------------------------------------------------
-    # 🗓️ DATE NORMALIZATION (CRITICAL)
+    # 🗓️ DATE NORMALIZATION
     # -------------------------------------------------
     try:
         run_date = date.fromisoformat(report_date) if report_date else date.today()
@@ -37,17 +37,15 @@ def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None)
 
     try:
         # =====================================================
-        # 🔥 1️⃣ STRATEGY SNAPSHOT (ALTIJD EERST)
+        # 🔥 1️⃣ STRATEGY SNAPSHOT (FIXED)
         # =====================================================
         try:
             logger.info(
-                f"🧠 Strategy snapshot start | user_id={user_id} | date={run_date}"
+                f"🧠 Strategy snapshot start | user_id={user_id}"
             )
 
-            run_daily_strategy_snapshot(
-                user_id=user_id,
-                report_date=str(run_date),  # 🔥 FIX → zelfde datum
-            )
+            # 🔥 FIX → GEEN report_date meegeven
+            run_daily_strategy_snapshot(user_id=user_id)
 
             logger.info(
                 f"🧠 Strategy snapshot DONE | user_id={user_id}"
@@ -66,9 +64,6 @@ def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None)
             report_date=run_date,
         )
 
-        # -------------------------------------------------
-        # VALIDATION
-        # -------------------------------------------------
         if not isinstance(result, dict):
             logger.error(
                 f"❌ Invalid bot result type | user_id={user_id}"
@@ -85,7 +80,7 @@ def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None)
         bots_count = result.get("bots", 0)
 
         # =====================================================
-        # 📊 3️⃣ PORTFOLIO SNAPSHOT (NA BOT)
+        # 📊 3️⃣ PORTFOLIO SNAPSHOT
         # =====================================================
         try:
             logger.info(
@@ -104,9 +99,6 @@ def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None)
                 f"⚠️ Portfolio snapshot FAILED | user_id={user_id}"
             )
 
-        # =====================================================
-        # ✅ DONE
-        # =====================================================
         logger.info(
             f"✅ Trading Bot DONE | user_id={user_id} | bots={bots_count} | decisions={decisions_count}"
         )
