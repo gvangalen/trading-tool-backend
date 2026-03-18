@@ -233,10 +233,6 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
     finally:
         conn.close()
         
-
-# =====================================
-# 📄 BOT TODAY (decisions + orders + proposal)
-# =====================================
 # =====================================
 # 📄 BOT TODAY (decisions + orders + proposal)
 # =====================================
@@ -308,7 +304,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         }
 
         # =====================================================
-        # DECISIONS VAN VANDAAG
+        # DECISIONS
         # =====================================================
         cur.execute(
             """
@@ -335,7 +331,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
         )
 
         rows = cur.fetchall()
-
         decisions_by_bot = {}
 
         for r in rows:
@@ -368,13 +363,15 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             scores_payload = _safe_json(scores_json, {})
             reasons_payload = _safe_json(reason_json, [])
 
-            guard = scores_payload.get("guardrails_result", {})
-            guard_limits = guard.get("guardrails", {})
-
             # =====================================================
-            # TRADE PLAN OPHALEN
+            # 🔥 TRADE PLAN (FIXED)
             # =====================================================
-            trade_plan = None
+            trade_plan = {
+                "entry_plan": [],
+                "stop_loss": {},
+                "targets": [],
+                "risk": {},
+            }
 
             if _table_exists(conn, "bot_trade_plans"):
 
@@ -401,6 +398,10 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                             "risk": _safe_json(risk_json, {}),
                         }
 
+            # 🔥 FALLBACK → DIRECT BRAIN PLAN
+            if not trade_plan["entry_plan"] and scores_payload.get("trade_plan"):
+                trade_plan = scores_payload.get("trade_plan")
+
             # =====================================================
             # DECISION OBJECT
             # =====================================================
@@ -419,14 +420,13 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
                 "requested_amount_eur": scores_payload.get("requested_amount_eur"),
                 "amount_eur": scores_payload.get("amount_eur"),
-                "guardrails_result": guard,
+
+                "guardrails_result": scores_payload.get("guardrails_result"),
                 "guardrail_reason": scores_payload.get("guardrail_reason"),
 
                 "metrics": {
                     "position_size": scores_payload.get("position_size"),
                     "exposure_multiplier": scores_payload.get("exposure_multiplier"),
-                    "max_trade_risk_eur": guard_limits.get("max_trade_risk_eur"),
-                    "daily_allocation_eur": guard_limits.get("daily_allocation_eur"),
                 },
 
                 "reasons": reasons_payload,
@@ -435,10 +435,12 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "status": status,
                 "created_at": created_at,
                 "updated_at": updated_at,
+
                 "setup_match": scores_payload.get("setup_match"),
 
-                # ⭐ HIER ZIT DE FIX
+                # 🔥 FIXED OUTPUT
                 "trade_plan": trade_plan,
+                "watch_levels": scores_payload.get("watch_levels"),
             }
 
         return {
@@ -566,28 +568,16 @@ async def generate_bot_today(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
-    """
-    FORCE GENERATE BOT DECISION (TODAY)
-
-    CONTRACT:
-    - Triggert ALLEEN de bot-agent
-    - Stuurt GEEN decisions terug
-    - Frontend moet NA afloop altijd /bot/today ophalen
-    - executed = HARD LOCK
-    - skipped = MAG opnieuw gegenereerd worden
-    """
 
     from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
+    from backend.celery_task.strategy_task import run_daily_strategy_snapshot
 
     user_id = current_user["id"]
     body = await request.json()
 
     bot_id = body.get("bot_id")
     if not bot_id:
-        return {
-            "ok": False,
-            "error": "bot_id ontbreekt",
-        }
+        return {"ok": False, "error": "bot_id ontbreekt"}
 
     report_date = date.today()
     if body.get("report_date"):
@@ -595,68 +585,13 @@ async def generate_bot_today(
 
     conn = get_db_connection()
     if not conn:
-        return {
-            "ok": False,
-            "bot_id": bot_id,
-            "date": str(report_date),
-            "error": "DB niet beschikbaar",
-        }
+        return {"ok": False, "error": "DB niet beschikbaar"}
 
     try:
-        with conn.cursor() as cur:
-
-            # ==========================================
-            # Check bestaande decision vandaag
-            # ==========================================
-            cur.execute(
-                """
-                SELECT id, status
-                FROM bot_decisions
-                WHERE user_id=%s
-                  AND bot_id=%s
-                  AND decision_date=%s
-                ORDER BY id DESC
-                LIMIT 1
-                """,
-                (user_id, bot_id, report_date),
-            )
-
-            row = cur.fetchone()
-
-            if row:
-                decision_id, status = row
-
-                # ❌ Executed = definitief klaar
-                if status == "executed":
-                    return {
-                        "ok": False,
-                        "bot_id": bot_id,
-                        "date": str(report_date),
-                        "error": "Decision is al uitgevoerd",
-                    }
-
-                # 🔄 Skipped = reset naar planned
-                if status == "skipped":
-                    cur.execute(
-                        """
-                        UPDATE bot_decisions
-                        SET
-                            status = 'planned',
-                            updated_at = NOW()
-                        WHERE id = %s
-                          AND user_id = %s
-                        """,
-                        (decision_id, user_id),
-                    )
-
-        conn.commit()
-
-        # ==========================================
-        # 🚀 RUN TRADING BOT AGENT
-        # ==========================================
-
-        logger.info(
-            f"🤖 run_trading_bot_agent user_id={user_id} bot_id={bot_id}"
+        # 🔥 FORCE SNAPSHOT
+        run_daily_strategy_snapshot(
+            user_id=user_id,
+            report_date=str(report_date),
         )
 
         result = run_trading_bot_agent(
@@ -665,23 +600,8 @@ async def generate_bot_today(
             bot_id=bot_id,
         )
 
-        # ==========================================
-        # FAILSAFE RESPONSE
-        # ==========================================
-
         if not result or not result.get("ok"):
-            logger.warning(
-                f"⚠️ bot agent failed user_id={user_id} bot_id={bot_id}"
-            )
-            return {
-                "ok": False,
-                "bot_id": bot_id,
-                "date": str(report_date),
-            }
-
-        # ==========================================
-        # SUCCESS
-        # ==========================================
+            return {"ok": False}
 
         return {
             "ok": True,
@@ -691,15 +611,11 @@ async def generate_bot_today(
 
     except Exception:
         logger.error("❌ generate_bot_today error", exc_info=True)
-        return {
-            "ok": False,
-            "bot_id": bot_id,
-            "date": str(report_date),
-        }
+        return {"ok": False}
 
     finally:
         conn.close()
-
+        
 # =====================================
 # ✅ MARK EXECUTED (human-in-the-loop)
 # =====================================
@@ -780,7 +696,7 @@ async def create_manual_order(
 
     ✔ maakt bot_order
     ✔ maakt execution
-    ✔ update bot_ledger
+    ✔ update bot_ledger (FIXED: met symbol)
     ✔ portfolio wordt automatisch correct
     ✔ werkt voor paper trading
     ✔ future exchange ready
@@ -795,10 +711,28 @@ async def create_manual_order(
     quantity = body.get("quantity")
     price = body.get("price")
 
+    # =====================================================
+    # VALIDATION
+    # =====================================================
     if not bot_id or side not in ("buy", "sell") or not quantity or not price:
         raise HTTPException(
             status_code=400,
             detail="bot_id, side, quantity en price zijn verplicht",
+        )
+
+    try:
+        quantity = float(quantity)
+        price = float(price)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="quantity en price moeten numeriek zijn",
+        )
+
+    if quantity <= 0 or price <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="quantity en price moeten > 0 zijn",
         )
 
     conn = get_db_connection()
@@ -808,7 +742,9 @@ async def create_manual_order(
     try:
         with conn.cursor() as cur:
 
+            # =====================================================
             # 1️⃣ ORDER
+            # =====================================================
             cur.execute(
                 """
                 INSERT INTO bot_orders (
@@ -830,9 +766,12 @@ async def create_manual_order(
                 """,
                 (user_id, bot_id, symbol, side, quantity, price),
             )
+
             order_id = cur.fetchone()[0]
 
+            # =====================================================
             # 2️⃣ EXECUTION
+            # =====================================================
             cur.execute(
                 """
                 INSERT INTO bot_executions (
@@ -848,15 +787,16 @@ async def create_manual_order(
                 (user_id, order_id, quantity, price),
             )
 
-            # 3️⃣ LEDGER
-            quantity = float(quantity)
-            price = float(price)
+            # =====================================================
+            # 3️⃣ LEDGER (🔥 FIXED)
+            # =====================================================
+            notional = round(quantity * price, 2)
 
             if side == "buy":
-                cash_delta = -quantity * price
+                cash_delta = -notional
                 qty_delta = quantity
-            else:
-                cash_delta = quantity * price
+            else:  # sell
+                cash_delta = notional
                 qty_delta = -quantity
 
             cur.execute(
@@ -865,19 +805,29 @@ async def create_manual_order(
                     user_id,
                     bot_id,
                     order_id,
+                    symbol,
                     entry_type,
                     cash_delta_eur,
                     qty_delta,
                     ts
                 )
-                VALUES (%s,%s,%s,'execute',%s,%s,NOW())
+                VALUES (%s,%s,%s,%s,'execute',%s,%s,NOW())
                 """,
-                (user_id, bot_id, order_id, cash_delta, qty_delta),
+                (
+                    user_id,
+                    bot_id,
+                    order_id,
+                    symbol,
+                    cash_delta,
+                    qty_delta,
+                ),
             )
 
         conn.commit()
 
-        # 🔥 DIRECT SNAPSHOT NA TRADE
+        # =====================================================
+        # 📊 SNAPSHOT (NA TRADE)
+        # =====================================================
         try:
             snapshot_all_for_user(user_id, bucket="1h")
             snapshot_all_for_user(user_id, bucket="1d")
@@ -889,8 +839,17 @@ async def create_manual_order(
         return {
             "ok": True,
             "order_id": order_id,
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "price": price,
+            "notional_eur": notional,
             "mode": "manual",
         }
+
+    except HTTPException:
+        conn.rollback()
+        raise
 
     except Exception as e:
         conn.rollback()
