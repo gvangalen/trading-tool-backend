@@ -1358,6 +1358,11 @@ def run_trading_bot_agent(
                     "today_allocated_eur": today_spent_eur,
                     "portfolio_value_eur": max(total_balance_eur + current_asset_value_eur, 0.0),
                     "current_asset_value_eur": current_asset_value_eur,
+            
+                    # 🔥 DEZE WAS DE BUG
+                    "max_trade_risk_eur": bot["budget"].get("max_order_eur"),
+            
+                    # bestaande
                     "daily_allocation_eur": bot["budget"].get("daily_limit_eur"),
                     "max_asset_exposure_pct": bot["budget"].get("max_asset_exposure_pct"),
                     "kill_switch": True,
