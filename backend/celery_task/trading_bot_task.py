@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+from backend.db import get_db_connection  # pas aan naar jouw db helper
+
 @shared_task(
     name="backend.celery_task.trading_bot_task.run_daily_trading_bot",
     bind=True,
@@ -37,14 +39,13 @@ def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None)
 
     try:
         # =====================================================
-        # 🔥 1️⃣ STRATEGY SNAPSHOT (FIXED)
+        # 🔥 1️⃣ STRATEGY SNAPSHOT
         # =====================================================
         try:
             logger.info(
                 f"🧠 Strategy snapshot start | user_id={user_id}"
             )
 
-            # 🔥 FIX → GEEN report_date meegeven
             run_daily_strategy_snapshot(user_id=user_id)
 
             logger.info(
@@ -99,6 +100,38 @@ def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None)
                 f"⚠️ Portfolio snapshot FAILED | user_id={user_id}"
             )
 
+        # =====================================================
+        # 🔥 4️⃣ LAST RUN UPDATE (DIT MIS JE)
+        # =====================================================
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+
+            cur.execute(
+                """
+                UPDATE bots
+                SET last_run = NOW()
+                WHERE user_id = %s
+                """,
+                (user_id,),
+            )
+
+            conn.commit()
+            cur.close()
+            conn.close()
+
+            logger.info(
+                f"⏱️ Last run updated | user_id={user_id}"
+            )
+
+        except Exception:
+            logger.exception(
+                f"⚠️ Last run update FAILED | user_id={user_id}"
+            )
+
+        # =====================================================
+        # ✅ DONE
+        # =====================================================
         logger.info(
             f"✅ Trading Bot DONE | user_id={user_id} | bots={bots_count} | decisions={decisions_count}"
         )
