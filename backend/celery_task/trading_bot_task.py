@@ -9,8 +9,7 @@ from celery import shared_task
 from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 from backend.services.portfolio_snapshot_service import snapshot_all_for_user
 from backend.celery_task.strategy_task import run_daily_strategy_snapshot
-from backend.db import get_db_connection  # jouw db helper
-
+from backend.utils.db import get_db_connection
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
