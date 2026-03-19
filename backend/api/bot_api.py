@@ -591,7 +591,6 @@ async def generate_bot_today(
         # 🔥 FORCE SNAPSHOT
         run_daily_strategy_snapshot(
             user_id=user_id,
-            report_date=str(report_date),
         )
 
         result = run_trading_bot_agent(
