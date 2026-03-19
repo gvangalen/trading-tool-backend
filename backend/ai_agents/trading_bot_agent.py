@@ -539,7 +539,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
               b.mode,
               b.risk_profile,
               b.strategy_id,
-              b.updated_at,
+              b.last_run,
 
               COALESCE(b.budget_total_eur, 0),
               COALESCE(b.budget_daily_limit_eur, 0),
@@ -571,7 +571,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
             mode,
             risk_profile,
             strategy_id,
-            updated_at,
+            last_run,
             budget_total_eur,
             budget_daily_limit_eur,
             budget_min_order_eur,
@@ -594,7 +594,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
                 "setup_id": setup_id,
                 "symbol": (symbol or DEFAULT_SYMBOL).upper(),
                 "timeframe": timeframe,
-                "last_run": updated_at.isoformat() if updated_at else None,
+                "last_run": last_run.isoformat() if last_run else None,
                 "budget": {
                     "total_eur": float(budget_total_eur or 0),
                     "daily_limit_eur": float(budget_daily_limit_eur or 0),
@@ -1124,6 +1124,8 @@ def _persist_decision_and_order(
 
     watch_levels = decision.get("watch_levels") or {}
     trade_plan = decision.get("trade_plan") or {}
+    guardrails_result = decision.get("guardrails_result") or {}
+    setup_match = decision.get("setup_match") or {}
 
     position_size = float(
         decision.get("position_size")
@@ -1137,8 +1139,11 @@ def _persist_decision_and_order(
         or 1.0
     )
 
-    guardrails_result = decision.get("guardrails_result") or {}
-    setup_match = decision.get("setup_match") or {}
+    max_trade_risk_eur = (
+        guardrails_result.get("guardrails", {}).get("max_trade_risk_eur")
+        if isinstance(guardrails_result, dict)
+        else None
+    )
 
     scores_payload = {
         "macro": _clamp_score(scores.get("macro", 10)),
@@ -1177,6 +1182,7 @@ def _persist_decision_and_order(
         "alerts_active": bool(decision.get("alerts_active", False)),
 
         "guardrails_result": guardrails_result,
+        "max_trade_risk_eur": max_trade_risk_eur,
         "live_price": decision.get("live_price"),
     }
 
