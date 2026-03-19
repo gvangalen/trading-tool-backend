@@ -1127,15 +1127,19 @@ def _persist_decision_and_order(
     guardrails_result = decision.get("guardrails_result") or {}
     setup_match = decision.get("setup_match") or {}
 
+    # ✅ FIX: metrics veilig en consistent ophalen
+    metrics = decision.get("metrics") or {}
+
     position_size = float(
-        decision.get("position_size")
+        metrics.get("position_size")
+        or decision.get("position_size")
         or decision.get("exposure_multiplier")
         or 1.0
     )
 
     exposure_multiplier = float(
         decision.get("exposure_multiplier")
-        or decision.get("position_size")
+        or metrics.get("position_size")
         or 1.0
     )
 
@@ -1144,6 +1148,19 @@ def _persist_decision_and_order(
         if isinstance(guardrails_result, dict)
         else None
     )
+
+    # ✅ 🔥 HIER ZAT DE BUG → FIXED
+    market_pressure = float(
+        metrics.get("market_pressure")
+        or decision.get("market_pressure")
+        or 0
+    ) * 100
+
+    transition_risk = float(
+        metrics.get("transition_risk")
+        or decision.get("transition_risk")
+        or 0
+    ) * 100
 
     scores_payload = {
         "macro": _clamp_score(scores.get("macro", 10)),
@@ -1162,14 +1179,17 @@ def _persist_decision_and_order(
         "regime": decision.get("regime"),
         "risk_state": decision.get("risk_state"),
 
-        "market_pressure": float(decision.get("market_pressure") or 0),
-        "transition_risk": float(decision.get("transition_risk") or 0),
+        # ✅ FIXED VALUES
+        "market_pressure": market_pressure,
+        "transition_risk": transition_risk,
+
         "volatility_state": decision.get("volatility_state"),
         "trend_strength": decision.get("trend_strength"),
         "structure_bias": decision.get("structure_bias"),
 
         "base_amount": decision.get("base_amount"),
         "execution_mode": decision.get("execution_mode"),
+
         "position_size": position_size,
         "exposure_multiplier": exposure_multiplier,
 
