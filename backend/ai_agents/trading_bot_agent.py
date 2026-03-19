@@ -114,6 +114,69 @@ def _get_live_price(conn, symbol: str) -> Optional[float]:
 
     return float(row[0])
 
+def _clear_existing_pending_orders_for_day(
+    conn,
+    *,
+    user_id: int,
+    bot_id: int,
+    decision_id: int,
+):
+    """
+    Zorgt dat oude ready/pending orders niet blijven hangen
+    wanneer een decision opnieuw gegenereerd wordt.
+    """
+    if not _table_exists(conn, "bot_orders"):
+        return
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE bot_orders
+            SET status = 'cancelled',
+                updated_at = NOW()
+            WHERE user_id = %s
+              AND bot_id = %s
+              AND decision_id = %s
+              AND status IN ('ready', 'pending')
+            """,
+            (user_id, bot_id, decision_id),
+        )
+
+    if _table_exists(conn, "bot_executions"):
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE bot_executions
+                SET status = 'cancelled',
+                    updated_at = NOW()
+                WHERE user_id = %s
+                  AND bot_order_id IN (
+                      SELECT id
+                      FROM bot_orders
+                      WHERE user_id = %s
+                        AND bot_id = %s
+                        AND decision_id = %s
+                  )
+                  AND status = 'pending'
+                """,
+                (user_id, user_id, bot_id, decision_id),
+            )
+
+def _touch_bot_last_run(conn, *, user_id: int, bot_id: int) -> None:
+    """
+    Update echte last_run kolom (nieuwe kolom).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE bot_configs
+            SET last_run = NOW()
+            WHERE user_id = %s
+              AND id = %s
+            """,
+            (user_id, bot_id),
+        )
+
 
 # =====================================================
 # 📊 Asset position value (per symbol)
@@ -476,11 +539,13 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
               b.mode,
               b.risk_profile,
               b.strategy_id,
+              b.updated_at,
 
               COALESCE(b.budget_total_eur, 0),
               COALESCE(b.budget_daily_limit_eur, 0),
               COALESCE(b.budget_min_order_eur, 0),
               COALESCE(b.budget_max_order_eur, 0),
+              COALESCE(b.max_asset_exposure_pct, 100),
 
               s.strategy_type,
               st.id             AS setup_id,
@@ -506,10 +571,12 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
             mode,
             risk_profile,
             strategy_id,
+            updated_at,
             budget_total_eur,
             budget_daily_limit_eur,
             budget_min_order_eur,
             budget_max_order_eur,
+            max_asset_exposure_pct,
             strategy_type,
             setup_id,
             symbol,
@@ -518,26 +585,27 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
 
         bots.append(
             {
-                "bot_id": bot_id,
+                "bot_id": int(bot_id),
                 "bot_name": bot_name,
                 "mode": mode,
                 "risk_profile": risk_profile or "balanced",
-                "strategy_id": strategy_id,
+                "strategy_id": int(strategy_id),
                 "strategy_type": strategy_type,
                 "setup_id": setup_id,
                 "symbol": (symbol or DEFAULT_SYMBOL).upper(),
                 "timeframe": timeframe,
+                "last_run": updated_at.isoformat() if updated_at else None,
                 "budget": {
                     "total_eur": float(budget_total_eur or 0),
                     "daily_limit_eur": float(budget_daily_limit_eur or 0),
                     "min_order_eur": float(budget_min_order_eur or 0),
                     "max_order_eur": float(budget_max_order_eur or 0),
+                    "max_asset_exposure_pct": float(max_asset_exposure_pct or 100),
                 },
             }
         )
 
     return bots
-
 
 # =====================================================
 # 📦 Bot Proposal (MARKET_DATA FIXED)
@@ -886,7 +954,7 @@ def _persist_bot_order(
                 order["estimated_qty"],
             ),
         )
-        bot_order_id = cur.fetchone()[0]
+        bot_order_id = int(cur.fetchone()[0])
 
         cur.execute(
             """
@@ -902,7 +970,7 @@ def _persist_bot_order(
             (user_id, bot_order_id),
         )
 
-        return int(bot_order_id)
+        return bot_order_id
 
 # =====================================================
 # 🧱 Build Trade Plan from snapshot + brain
@@ -1038,10 +1106,9 @@ def _persist_decision_and_order(
     decision: Dict[str, Any],
     scores: Dict[str, float],
 ) -> int:
-
     action = _normalize_action(decision.get("action"))
     confidence = _normalize_confidence(decision.get("confidence") or "low")
-    symbol = decision.get("symbol", DEFAULT_SYMBOL)
+    symbol = (decision.get("symbol") or DEFAULT_SYMBOL).upper()
 
     requested_amount = float(decision.get("requested_amount_eur") or 0.0)
     amount_eur = float(decision.get("amount_eur") or 0.0)
@@ -1056,6 +1123,7 @@ def _persist_decision_and_order(
         reasons.append(strategy_reason)
 
     watch_levels = decision.get("watch_levels") or {}
+    trade_plan = decision.get("trade_plan") or {}
 
     position_size = float(
         decision.get("position_size")
@@ -1070,23 +1138,46 @@ def _persist_decision_and_order(
     )
 
     guardrails_result = decision.get("guardrails_result") or {}
+    setup_match = decision.get("setup_match") or {}
 
     scores_payload = {
         "macro": _clamp_score(scores.get("macro", 10)),
         "technical": _clamp_score(scores.get("technical", 10)),
         "market": _clamp_score(scores.get("market", 10)),
         "setup": _clamp_score(scores.get("setup", 10)),
+
         "combined": _clamp_score(decision.get("score", 10)),
         "trade_quality": decision.get("trade_quality"),
-        "trade_plan": decision.get("trade_plan"),
-        "watch_levels": watch_levels,
+
+        "setup_match": setup_match,
+
         "strategy_reason": strategy_reason,
         "guardrail_reason": guardrail_reason,
+
+        "regime": decision.get("regime"),
+        "risk_state": decision.get("risk_state"),
+
+        "market_pressure": float(decision.get("market_pressure") or 0),
+        "transition_risk": float(decision.get("transition_risk") or 0),
+        "volatility_state": decision.get("volatility_state"),
+        "trend_strength": decision.get("trend_strength"),
+        "structure_bias": decision.get("structure_bias"),
+
+        "base_amount": decision.get("base_amount"),
+        "execution_mode": decision.get("execution_mode"),
         "position_size": position_size,
         "exposure_multiplier": exposure_multiplier,
+
         "amount_eur": amount_eur,
         "requested_amount_eur": requested_amount,
+
+        "trade_plan": trade_plan,
+        "watch_levels": watch_levels,
+        "monitoring": bool(decision.get("monitoring", False)),
+        "alerts_active": bool(decision.get("alerts_active", False)),
+
         "guardrails_result": guardrails_result,
+        "live_price": decision.get("live_price"),
     }
 
     with conn.cursor() as cur:
@@ -1144,11 +1235,13 @@ def _persist_decision_and_order(
             ),
         )
 
-        decision_id = int(cur.fetchone()[0])
+        row = cur.fetchone()
+        if not row:
+            raise RuntimeError("Failed to persist bot decision")
 
-    # 🔥 CRITICAL FIX → trade_plan NOOIT None
-    plan = decision.get("trade_plan")
+        decision_id = int(row[0])
 
+    plan = trade_plan
     if not plan:
         plan = _default_trade_plan(
             symbol=symbol,
@@ -1177,7 +1270,6 @@ def run_trading_bot_agent(
     report_date: Optional[date] = None,
     bot_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-
     report_date = report_date or date.today()
 
     conn = get_db_connection()
@@ -1191,16 +1283,19 @@ def run_trading_bot_agent(
             bots = [b for b in bots if b["bot_id"] == bot_id]
 
         if not bots:
-            return {"ok": True, "date": str(report_date), "bots": 0, "decisions": []}
+            return {
+                "ok": True,
+                "date": str(report_date),
+                "bots": 0,
+                "decisions": [],
+                "bot_ids": [],
+            }
 
         scores = _get_daily_scores(conn, user_id, report_date)
         results = []
+        touched_bot_ids = []
 
         for bot in bots:
-
-            # -------------------------------------------------
-            # 1️⃣ Snapshot
-            # -------------------------------------------------
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -1208,9 +1303,6 @@ def run_trading_bot_agent(
                 report_date,
             )
 
-            # -------------------------------------------------
-            # 2️⃣ Setup payload
-            # -------------------------------------------------
             setup_payload = _get_strategy_setup_payload(
                 conn,
                 user_id=user_id,
@@ -1227,9 +1319,26 @@ def run_trading_bot_agent(
                     "targets": snapshot.get("targets"),
                 })
 
-            # -------------------------------------------------
-            # 3️⃣ 🧠 Brain
-            # -------------------------------------------------
+            today_spent_eur = get_today_spent_eur(
+                conn,
+                user_id,
+                bot["bot_id"],
+                report_date,
+            )
+
+            total_balance_eur = get_bot_balance(
+                conn,
+                user_id,
+                bot["bot_id"],
+            )
+
+            current_asset_value_eur = get_asset_position_value(
+                conn,
+                user_id,
+                bot["bot_id"],
+                bot["symbol"],
+            )
+
             brain = run_bot_brain(
                 user_id=user_id,
                 setup=setup_payload,
@@ -1239,49 +1348,36 @@ def run_trading_bot_agent(
                     "market_score": scores.get("market"),
                     "setup_score": scores.get("setup"),
                 },
+                portfolio_context={
+                    "today_allocated_eur": today_spent_eur,
+                    "portfolio_value_eur": max(total_balance_eur + current_asset_value_eur, 0.0),
+                    "current_asset_value_eur": current_asset_value_eur,
+                    "daily_allocation_eur": bot["budget"].get("daily_limit_eur"),
+                    "max_asset_exposure_pct": bot["budget"].get("max_asset_exposure_pct"),
+                    "kill_switch": True,
+                },
             )
 
-            # 🔥 FIX 1 — SYMBOL HARD SET
-            symbol = bot["symbol"]
-            if not brain.get("symbol"):
-                brain["symbol"] = symbol
+            symbol = (bot["symbol"] or DEFAULT_SYMBOL).upper()
+            action = _normalize_action(brain.get("action"))
+            live_price = _get_live_price(conn, symbol)
 
-            # -------------------------------------------------
-            # 4️⃣ Setup match (UI only)
-            # -------------------------------------------------
             setup_match = _build_setup_match(
                 bot=bot,
                 scores=scores,
                 snapshot=snapshot,
             )
 
-            # -------------------------------------------------
-            # 5️⃣ Live price
-            # -------------------------------------------------
-            live_price = _get_live_price(conn, symbol)
-            brain["live_price"] = live_price  # 🔥 FIX
-
-            # -------------------------------------------------
-            # 6️⃣ Action
-            # -------------------------------------------------
-            action = _normalize_action(brain.get("action"))
-
-            # -------------------------------------------------
-            # 🔥 FIX 2 — TRADE PLAN HARD CONTRACT
-            # -------------------------------------------------
             trade_plan = brain.get("trade_plan")
-
             if not trade_plan:
                 trade_plan = _default_trade_plan(
                     symbol=symbol,
                     action=action,
                     reason="agent_fallback",
                     watch_levels=brain.get("watch_levels"),
+                    snapshot=snapshot,
                 )
 
-            # -------------------------------------------------
-            # 7️⃣ Decision
-            # -------------------------------------------------
             decision = {
                 "bot_id": bot["bot_id"],
                 "symbol": symbol,
@@ -1303,7 +1399,6 @@ def run_trading_bot_agent(
                     or brain.get("exposure_multiplier")
                     or 1.0
                 ),
-
                 "exposure_multiplier": float(
                     brain.get("exposure_multiplier") or 1.0
                 ),
@@ -1317,13 +1412,11 @@ def run_trading_bot_agent(
 
                 "market_pressure": brain.get("market_pressure"),
                 "transition_risk": brain.get("transition_risk"),
-
                 "volatility_state": brain.get("volatility_state"),
                 "trend_strength": brain.get("trend_strength"),
                 "structure_bias": brain.get("structure_bias"),
 
-                "trade_plan": trade_plan,  # 🔥 FIXED
-
+                "trade_plan": trade_plan,
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring"),
                 "alerts_active": brain.get("alerts_active"),
@@ -1332,13 +1425,9 @@ def run_trading_bot_agent(
                 "guardrail_reason": brain.get("guardrail_reason"),
 
                 "setup_match": setup_match,
-
                 "live_price": live_price,
             }
 
-            # -------------------------------------------------
-            # 8️⃣ Persist decision
-            # -------------------------------------------------
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
@@ -1350,24 +1439,19 @@ def run_trading_bot_agent(
                 scores=scores,
             )
 
-            # -------------------------------------------------
-            # 🔥 FIX 3 — ORDER CREATION (CRITICAL)
-            # -------------------------------------------------
+            _clear_existing_pending_orders_for_day(
+                conn,
+                user_id=user_id,
+                bot_id=bot["bot_id"],
+                decision_id=decision_id,
+            )
+
             order = build_order_proposal(
                 conn=conn,
                 bot=bot,
                 decision=decision,
-                today_spent_eur=get_today_spent_eur(
-                    conn,
-                    user_id,
-                    bot["bot_id"],
-                    report_date,
-                ),
-                total_balance_eur=get_bot_balance(
-                    conn,
-                    user_id,
-                    bot["bot_id"],
-                ),
+                today_spent_eur=today_spent_eur,
+                total_balance_eur=total_balance_eur,
             )
 
             if order:
@@ -1379,6 +1463,13 @@ def run_trading_bot_agent(
                     order=order,
                 )
 
+            _touch_bot_last_run(
+                conn,
+                user_id=user_id,
+                bot_id=bot["bot_id"],
+            )
+
+            touched_bot_ids.append(bot["bot_id"])
             results.append({
                 "bot_id": bot["bot_id"],
                 "decision_id": decision_id,
@@ -1392,10 +1483,15 @@ def run_trading_bot_agent(
             "date": str(report_date),
             "bots": len(bots),
             "decisions": results,
+            "bot_ids": touched_bot_ids,
         }
 
     except Exception as e:
         logger.exception("❌ trading_bot_agent failed")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return {"ok": False, "error": str(e)}
 
     finally:
