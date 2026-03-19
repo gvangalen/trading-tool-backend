@@ -199,7 +199,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 1️⃣ Regime Memory
     # -------------------------------------------------
-
     regime_memory = None
     regime_label = None
     regime_confidence = None
@@ -218,9 +217,8 @@ def run_bot_brain(
         logger.warning("Regime memory unavailable: %s", e)
 
     # -------------------------------------------------
-    # 2️⃣ Transition Risk (single call)
+    # 2️⃣ Transition Risk (raw 0..1)
     # -------------------------------------------------
-
     try:
         transition_snapshot = compute_transition_detector(user_id)
         transition_risk = _safe_float(
@@ -235,9 +233,8 @@ def run_bot_brain(
         transition_snapshot = None
 
     # -------------------------------------------------
-    # 3️⃣ Market Pressure
+    # 3️⃣ Market Pressure (raw 0..1)
     # -------------------------------------------------
-
     try:
         market_pressure = float(
             get_market_pressure(user_id=user_id, scores=scores)
@@ -251,7 +248,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 4️⃣ Market Intelligence Engine
     # -------------------------------------------------
-
     market_intelligence = {}
 
     try:
@@ -319,7 +315,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 5️⃣ Position Sizing via Decision Engine
     # -------------------------------------------------
-
     try:
         decision_result = decide_amount(
             setup=setup,
@@ -356,13 +351,11 @@ def run_bot_brain(
     # -------------------------------------------------
     # 6️⃣ Risk State
     # -------------------------------------------------
-
     risk_state = _classify_risk_state(transition_risk, market_pressure)
 
     # -------------------------------------------------
     # 7️⃣ Watch levels
     # -------------------------------------------------
-
     entry_value = _safe_float(setup.get("entry"))
     stop_value = _safe_float(setup.get("stop_loss"))
 
@@ -400,7 +393,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 8️⃣ Action Logic
     # -------------------------------------------------
-
     market_score = _safe_float(scores.get("market_score"), 10) or 10.0
 
     action = "hold"
@@ -428,7 +420,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 9️⃣ Guardrails Engine
     # -------------------------------------------------
-
     try:
         guardrails_result = apply_guardrails(
             proposed_amount_eur=final_amount,
@@ -504,7 +495,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 10️⃣ Confidence
     # -------------------------------------------------
-
     confidence_components = []
 
     if isinstance(regime_confidence, (int, float)):
@@ -526,7 +516,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 11️⃣ Trade Quality
     # -------------------------------------------------
-
     trade_quality = round(
         (
             risk_environment * 0.4
@@ -537,32 +526,36 @@ def run_bot_brain(
     )
 
     # -------------------------------------------------
-    # 12️⃣ Dashboard-ready metrics
+    # 12️⃣ Dashboard-ready metrics (ALTIJD 0..100)
     # -------------------------------------------------
-
     market_pressure_score = (
         metrics_block.get("market_pressure")
-        or metrics_block.get("market_pressure_score")
+        if metrics_block.get("market_pressure") is not None
+        else metrics_block.get("market_pressure_score")
     )
 
     transition_risk_score = (
         metrics_block.get("transition_risk")
-        or metrics_block.get("transition_risk_score")
+        if metrics_block.get("transition_risk") is not None
+        else metrics_block.get("transition_risk_score")
     )
 
     setup_quality_score = (
         metrics_block.get("setup_quality")
-        or metrics_block.get("setup_quality_score")
+        if metrics_block.get("setup_quality") is not None
+        else metrics_block.get("setup_quality_score")
     )
 
     volatility_score = (
         metrics_block.get("volatility")
-        or metrics_block.get("volatility_score")
+        if metrics_block.get("volatility") is not None
+        else metrics_block.get("volatility_score")
     )
 
     trend_strength_score = (
         metrics_block.get("trend_strength")
-        or metrics_block.get("trend_strength_score")
+        if metrics_block.get("trend_strength") is not None
+        else metrics_block.get("trend_strength_score")
     )
 
     if market_pressure_score is None:
@@ -580,21 +573,26 @@ def run_bot_brain(
     if trend_strength_score is None:
         trend_strength_score = round(_clamp(trend_strength, 0.0, 1.0) * 100)
 
+    market_pressure_score = round(_clamp(_safe_float(market_pressure_score, 0.0) or 0.0, 0.0, 100.0), 2)
+    transition_risk_score = round(_clamp(_safe_float(transition_risk_score, 0.0) or 0.0, 0.0, 100.0), 2)
+    setup_quality_score = round(_clamp(_safe_float(setup_quality_score, 0.0) or 0.0, 0.0, 100.0), 2)
+    volatility_score = round(_clamp(_safe_float(volatility_score, 50.0) or 50.0, 0.0, 100.0), 2)
+    trend_strength_score = round(_clamp(_safe_float(trend_strength_score, 0.0) or 0.0, 0.0, 100.0), 2)
+
     # -------------------------------------------------
-    # 13️⃣ Trade Plan Engine (FIXED)
+    # 13️⃣ Trade Plan Engine
     # -------------------------------------------------
-    
     snapshot_payload = {
         "entry": entry_value,
         "stop_loss": stop_value,
         "targets": clean_targets,
     }
-    
+
     decision_payload = {
         "action": action,
         "symbol": setup.get("symbol"),
     }
-    
+
     bot_payload = {
         "min_rr": _safe_float(setup.get("min_rr"), 1.5) or 1.5,
         "max_risk_per_trade": _safe_float(
@@ -603,16 +601,15 @@ def run_bot_brain(
             None,
         ),
     }
-    
+
     brain_context = {
         "regime": regime_label,
         "reason": strategy_reason,
     }
-    
+
     trade_plan = None
-    
+
     try:
-        # 👉 ALLEEN echte trades → echte plan
         if action in ("buy", "short", "sell"):
             trade_plan = build_trade_plan(
                 snapshot=snapshot_payload,
@@ -620,16 +617,11 @@ def run_bot_brain(
                 decision=decision_payload,
                 bot=bot_payload,
             )
-    
+
     except Exception as e:
         logger.warning("Trade plan engine error: %s", e)
         trade_plan = None
-    
-    
-    # -------------------------------------------------
-    # 🔥 CRITICAL FIX: NOOIT None teruggeven
-    # -------------------------------------------------
-    
+
     if not trade_plan:
         trade_plan = _default_trade_plan(
             symbol=setup.get("symbol", "BTC"),
@@ -641,7 +633,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # Final output
     # -------------------------------------------------
-
     return {
         "date": date.today().isoformat(),
         "action": action,
@@ -649,55 +640,47 @@ def run_bot_brain(
         "confidence": confidence,
         "reason": strategy_reason,
 
-        # regime / market structure
         "regime": regime_label,
         "cycle": market_cycle,
         "temperature": temperature,
 
-        # trends
         "short_trend": short_trend,
         "mid_trend": mid_trend,
         "long_trend": long_trend,
 
-        # raw engine state
-        "market_pressure": market_pressure,
-        "transition_risk": transition_risk,
+        # raw values voor engine/debug
+        "market_pressure": round(_clamp(market_pressure, 0.0, 1.0), 4),
+        "transition_risk": round(_clamp(transition_risk, 0.0, 1.0), 4),
         "volatility_state": volatility_state,
-        "trend_strength": trend_strength,
+        "trend_strength": round(_clamp(trend_strength, 0.0, 1.0), 4),
         "structure_bias": structure_bias,
         "risk_environment": risk_environment,
         "risk_state": risk_state,
 
-        # sizing
         "base_amount": round(float(base_amount), 2),
         "exposure_multiplier": exposure_multiplier,
 
-        # scoring
         "trade_quality": trade_quality,
 
-        # watch / monitoring
         "watch_levels": watch_levels,
         "monitoring": monitoring,
         "alerts_active": alerts_active,
 
-        # guardrails
         "guardrails_result": guardrails_result,
         "guardrail_reason": guardrail_reason,
 
-        # trade plan
         "trade_plan": trade_plan,
 
-        # dashboard-ready metrics
+        # frontend/UI moet HIERUIT lezen
         "metrics": {
             "market_pressure": market_pressure_score,
             "transition_risk": transition_risk_score,
             "setup_quality": setup_quality_score,
             "volatility": volatility_score,
             "trend_strength": trend_strength_score,
-            "position_size": exposure_multiplier,
+            "position_size": round(_clamp(exposure_multiplier * 100.0, 0.0, 100.0), 2),
         },
 
-        # debug
         "debug": {
             "scores": scores,
             "transition_snapshot": transition_snapshot,
