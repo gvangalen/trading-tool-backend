@@ -9,12 +9,11 @@ from celery import shared_task
 from backend.ai_agents.trading_bot_agent import run_trading_bot_agent
 from backend.services.portfolio_snapshot_service import snapshot_all_for_user
 from backend.celery_task.strategy_task import run_daily_strategy_snapshot
+from backend.db import get_db_connection  # jouw db helper
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-
-from backend.db import get_db_connection  # pas aan naar jouw db helper
 
 @shared_task(
     name="backend.celery_task.trading_bot_task.run_daily_trading_bot",
@@ -80,6 +79,9 @@ def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None)
         decisions_count = len(result.get("decisions", []))
         bots_count = result.get("bots", 0)
 
+        # 🔥 BELANGRIJK: bot_ids ophalen (moet uit je agent komen)
+        bot_ids = result.get("bot_ids", [])
+
         # =====================================================
         # 📊 3️⃣ PORTFOLIO SNAPSHOT
         # =====================================================
@@ -101,27 +103,42 @@ def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None)
             )
 
         # =====================================================
-        # 🔥 4️⃣ LAST RUN UPDATE (DIT MIS JE)
+        # 🔥 4️⃣ LAST RUN UPDATE (CORRECT)
         # =====================================================
         try:
             conn = get_db_connection()
             cur = conn.cursor()
 
-            cur.execute(
-                """
-                UPDATE bots
-                SET last_run = NOW()
-                WHERE user_id = %s
-                """,
-                (user_id,),
-            )
+            if bot_ids:
+                # ✅ update per bot
+                for bot_id in bot_ids:
+                    cur.execute(
+                        """
+                        UPDATE bot_configs
+                        SET last_run = NOW(),
+                            updated_at = NOW()
+                        WHERE id = %s
+                        """,
+                        (bot_id,),
+                    )
+            else:
+                # ⚠️ fallback (als agent geen bot_ids terugstuurt)
+                cur.execute(
+                    """
+                    UPDATE bot_configs
+                    SET last_run = NOW(),
+                        updated_at = NOW()
+                    WHERE user_id = %s
+                    """,
+                    (user_id,),
+                )
 
             conn.commit()
             cur.close()
             conn.close()
 
             logger.info(
-                f"⏱️ Last run updated | user_id={user_id}"
+                f"⏱️ Last run updated | user_id={user_id} | bots={len(bot_ids)}"
             )
 
         except Exception:
