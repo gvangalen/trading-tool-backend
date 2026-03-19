@@ -1480,6 +1480,24 @@ def run_trading_bot_agent(
                 "bot_id": bot["bot_id"],
                 "decision_id": decision_id,
                 "action": decision["action"],
+            
+                # 🔥 CRUCIAAL
+                "decision": decision,
+            
+                # 🔥 EXTRA VOOR FRONTEND (direct beschikbaar)
+                "scores_json": {
+                    "macro": scores.get("macro"),
+                    "technical": scores.get("technical"),
+                    "market": scores.get("market"),
+                    "setup": scores.get("setup"),
+            
+                    "market_pressure": decision.get("market_pressure"),
+                    "transition_risk": decision.get("transition_risk"),
+                    "position_size": decision.get("position_size"),
+                },
+            
+                "guardrails_result": decision.get("guardrails_result"),
+                "trade_plan": decision.get("trade_plan"),
             })
 
         conn.commit()
