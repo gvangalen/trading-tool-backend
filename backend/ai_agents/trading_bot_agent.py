@@ -348,13 +348,6 @@ def _get_strategy_setup_payload(
     setup_name: Optional[str] = None,
     symbol: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Builds the 'setup' dict for run_bot_brain() from strategies table.
-    Expected by bot_brain/decision_engine:
-      - base_amount
-      - execution_mode
-      - decision_curve (optional)
-    """
 
     if not _table_exists(conn, "strategies"):
         return {
@@ -363,12 +356,13 @@ def _get_strategy_setup_payload(
             "symbol": (symbol or DEFAULT_SYMBOL).upper(),
             "base_amount": 0.0,
             "execution_mode": "none",
+            "strategy_type": "unknown",
         }
 
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT base_amount, execution_mode, decision_curve
+            SELECT base_amount, execution_mode, decision_curve, strategy_type
             FROM strategies
             WHERE id=%s AND user_id=%s
             LIMIT 1
@@ -384,9 +378,10 @@ def _get_strategy_setup_payload(
             "symbol": (symbol or DEFAULT_SYMBOL).upper(),
             "base_amount": 0.0,
             "execution_mode": "none",
+            "strategy_type": "unknown",
         }
 
-    base_amount, execution_mode, decision_curve = row
+    base_amount, execution_mode, decision_curve, strategy_type = row
 
     try:
         base_amount = float(base_amount or 0.0)
@@ -402,9 +397,11 @@ def _get_strategy_setup_payload(
         "symbol": (symbol or DEFAULT_SYMBOL).upper(),
         "base_amount": base_amount,
         "execution_mode": execution_mode,
+
+        # ✅ NU CORRECT
+        "strategy_type": (strategy_type or "").lower().strip(),
     }
 
-    # only include curve when custom
     if execution_mode == "custom":
         payload["decision_curve"] = curve or {}
 
