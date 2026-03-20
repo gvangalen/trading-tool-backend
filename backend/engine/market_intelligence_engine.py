@@ -172,21 +172,21 @@ def compute_market_intelligence(
     # -------------------------------------------------
     # Market pressure
     # -------------------------------------------------
-
+    
     try:
         raw_pressure = get_market_pressure(
-        user_id=user_id,
-        scores=scores,
-    )
+            user_id=user_id,
+            scores=scores,
+        )
     
-    market_pressure = _safe_float(raw_pressure, 0.5)
+        market_pressure = _safe_float(raw_pressure, 0.5)
     
-    # 🔥 EXTRA GUARD
-    if market_pressure is None:
-        market_pressure = 0.5
+        # 🔥 EXTRA GUARD
+        if market_pressure is None:
+            market_pressure = 0.5
     
-    market_pressure = _clamp(market_pressure, 0.0, 1.0)
-
+        market_pressure = _clamp(market_pressure, 0.0, 1.0)
+    
     except Exception as e:
         logger.warning("Market pressure fallback: %s", e)
         market_pressure = 0.5
