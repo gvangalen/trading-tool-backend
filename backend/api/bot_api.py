@@ -132,6 +132,8 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
               b.budget_max_order_eur,
               b.max_asset_exposure_pct,
 
+              b.last_run,  -- 🔥 FIX (toegevoegd)
+
               b.created_at,
               b.updated_at,
 
@@ -171,6 +173,8 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                 budget_max,
                 max_asset_exposure_pct,
 
+                last_run,  # 🔥 FIX
+
                 created_at,
                 updated_at,
 
@@ -189,11 +193,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                 strategy = {
                     "id": strategy_id,
                     "type": strategy_type,
-
-                    # 🔹 STRATEGY INFO
                     "name": strategy_name,
-
-                    # 🔹 SETUP INFO (nieuw)
                     "setup": {
                         "id": setup_id,
                         "name": setup_name,
@@ -210,6 +210,9 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                     "mode": mode,
                     "cadence": cadence,
                     "risk_profile": risk_profile or "balanced",
+
+                    # 🔥 FIX
+                    "last_run": last_run.isoformat() if last_run else None,
 
                     "budget": {
                         "total_eur": float(budget_total or 0),
