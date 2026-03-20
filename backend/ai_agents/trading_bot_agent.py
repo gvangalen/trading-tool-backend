@@ -1106,6 +1106,7 @@ def _persist_decision_and_order(
     decision: Dict[str, Any],
     scores: Dict[str, float],
 ) -> int:
+
     action = _normalize_action(decision.get("action"))
     confidence = _normalize_confidence(decision.get("confidence") or "low")
     symbol = (decision.get("symbol") or DEFAULT_SYMBOL).upper()
@@ -1127,40 +1128,23 @@ def _persist_decision_and_order(
     guardrails_result = decision.get("guardrails_result") or {}
     setup_match = decision.get("setup_match") or {}
 
-    # ✅ FIX: metrics veilig en consistent ophalen
     metrics = decision.get("metrics") or {}
 
-    position_size = float(
-        metrics.get("position_size")
-        or decision.get("position_size")
-        or decision.get("exposure_multiplier")
-        or 1.0
-    )
-
-    exposure_multiplier = float(
-        decision.get("exposure_multiplier")
-        or metrics.get("position_size")
-        or 1.0
-    )
-
-    max_trade_risk_eur = (
-        guardrails_result.get("guardrails", {}).get("max_trade_risk_eur")
-        if isinstance(guardrails_result, dict)
-        else None
-    )
-
-    # ✅ 🔥 HIER ZAT DE BUG → FIXED
+    # ✅ FIXED
     market_pressure = float(
         metrics.get("market_pressure")
         or decision.get("market_pressure")
         or 0
-    ) * 100
+    )
 
     transition_risk = float(
         metrics.get("transition_risk")
         or decision.get("transition_risk")
         or 0
-    ) * 100
+    )
+
+    position_size = float(metrics.get("position_size") or 50)
+    exposure_multiplier = float(decision.get("exposure_multiplier") or 1.0)
 
     scores_payload = {
         "macro": _clamp_score(scores.get("macro", 10)),
@@ -1179,7 +1163,7 @@ def _persist_decision_and_order(
         "regime": decision.get("regime"),
         "risk_state": decision.get("risk_state"),
 
-        # ✅ FIXED VALUES
+        # ✅ FIXED
         "market_pressure": market_pressure,
         "transition_risk": transition_risk,
 
@@ -1202,7 +1186,6 @@ def _persist_decision_and_order(
         "alerts_active": bool(decision.get("alerts_active", False)),
 
         "guardrails_result": guardrails_result,
-        "max_trade_risk_eur": max_trade_risk_eur,
         "live_price": decision.get("live_price"),
     }
 
@@ -1261,20 +1244,7 @@ def _persist_decision_and_order(
             ),
         )
 
-        row = cur.fetchone()
-        if not row:
-            raise RuntimeError("Failed to persist bot decision")
-
-        decision_id = int(row[0])
-
-    plan = trade_plan
-    if not plan:
-        plan = _default_trade_plan(
-            symbol=symbol,
-            action=action,
-            reason="persist_fallback",
-            watch_levels=watch_levels,
-        )
+        decision_id = int(cur.fetchone()[0])
 
     _persist_trade_plan(
         conn=conn,
@@ -1283,7 +1253,7 @@ def _persist_decision_and_order(
         decision_id=decision_id,
         symbol=symbol,
         side=action,
-        plan=plan,
+        plan=trade_plan,
     )
 
     return decision_id
@@ -1322,6 +1292,7 @@ def run_trading_bot_agent(
         touched_bot_ids = []
 
         for bot in bots:
+
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -1352,7 +1323,7 @@ def run_trading_bot_agent(
                 report_date,
             )
 
-            total_balance_eur = get_bot_balance(
+            cash_balance_eur = get_bot_balance(
                 conn,
                 user_id,
                 bot["bot_id"],
@@ -1363,6 +1334,13 @@ def run_trading_bot_agent(
                 user_id,
                 bot["bot_id"],
                 bot["symbol"],
+            )
+
+            # 🔥 FIX: correcte portfolio waarde
+            portfolio_value_eur = max(
+                abs(cash_balance_eur) + current_asset_value_eur,
+                current_asset_value_eur,
+                1.0,
             )
 
             brain = run_bot_brain(
@@ -1376,13 +1354,9 @@ def run_trading_bot_agent(
                 },
                 portfolio_context={
                     "today_allocated_eur": today_spent_eur,
-                    "portfolio_value_eur": max(total_balance_eur + current_asset_value_eur, 0.0),
+                    "portfolio_value_eur": portfolio_value_eur,
                     "current_asset_value_eur": current_asset_value_eur,
-            
-                    # 🔥 DEZE WAS DE BUG
                     "max_trade_risk_eur": bot["budget"].get("max_order_eur"),
-            
-                    # bestaande
                     "daily_allocation_eur": bot["budget"].get("daily_limit_eur"),
                     "max_asset_exposure_pct": bot["budget"].get("max_asset_exposure_pct"),
                     "kill_switch": True,
@@ -1409,6 +1383,8 @@ def run_trading_bot_agent(
                     snapshot=snapshot,
                 )
 
+            metrics = brain.get("metrics", {})
+
             decision = {
                 "bot_id": bot["bot_id"],
                 "symbol": symbol,
@@ -1425,14 +1401,9 @@ def run_trading_bot_agent(
                 "base_amount": brain.get("base_amount") or setup_payload.get("base_amount"),
                 "execution_mode": setup_payload.get("execution_mode"),
 
-                "position_size": float(
-                    brain.get("metrics", {}).get("position_size")
-                    or brain.get("exposure_multiplier")
-                    or 1.0
-                ),
-                "exposure_multiplier": float(
-                    brain.get("exposure_multiplier") or 1.0
-                ),
+                # ✅ FIXED
+                "position_size": float(metrics.get("position_size") or 50),
+                "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
 
                 "score": brain.get("trade_quality"),
                 "trade_quality": brain.get("trade_quality"),
@@ -1441,8 +1412,10 @@ def run_trading_bot_agent(
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
 
-                "market_pressure": brain.get("market_pressure"),
-                "transition_risk": brain.get("transition_risk"),
+                # ✅ FIXED (GEEN *100)
+                "market_pressure": metrics.get("market_pressure"),
+                "transition_risk": metrics.get("transition_risk"),
+
                 "volatility_state": brain.get("volatility_state"),
                 "trend_strength": brain.get("trend_strength"),
                 "structure_bias": brain.get("structure_bias"),
@@ -1482,7 +1455,7 @@ def run_trading_bot_agent(
                 bot=bot,
                 decision=decision,
                 today_spent_eur=today_spent_eur,
-                total_balance_eur=total_balance_eur,
+                total_balance_eur=cash_balance_eur,
             )
 
             if order:
@@ -1501,28 +1474,27 @@ def run_trading_bot_agent(
             )
 
             touched_bot_ids.append(bot["bot_id"])
+
             results.append({
                 "bot_id": bot["bot_id"],
                 "decision_id": decision_id,
                 "action": decision["action"],
-            
-                # 🔥 CRUCIAAL
                 "decision": decision,
-            
-                # 🔥 EXTRA VOOR FRONTEND (direct beschikbaar)
+
+                # ✅ FIXED
                 "scores_json": {
                     "macro": scores.get("macro"),
                     "technical": scores.get("technical"),
                     "market": scores.get("market"),
                     "setup": scores.get("setup"),
-            
-                    "market_pressure": decision.get("market_pressure"),
-                    "transition_risk": decision.get("transition_risk"),
-                    "position_size": decision.get("position_size"),
+
+                    "market_pressure": metrics.get("market_pressure"),
+                    "transition_risk": metrics.get("transition_risk"),
+                    "position_size": metrics.get("position_size"),
                 },
-            
+
                 "guardrails_result": decision.get("guardrails_result"),
-                "trade_plan": decision.get("trade_plan"),
+                "trade_plan": trade_plan,
             })
 
         conn.commit()
