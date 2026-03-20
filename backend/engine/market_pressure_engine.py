@@ -62,8 +62,9 @@ def _normalize_score(score: Optional[float]) -> float:
 
         score = float(score)
 
+        # 🔥 FIX → GEEN harde 0 meer
         if score <= 0:
-            return 0.0
+            return 0.1  # minimale activiteit
 
         return _clamp(score / 100.0)
 
@@ -72,12 +73,6 @@ def _normalize_score(score: Optional[float]) -> float:
 
 
 def _get_regime_modifier(user_id: int) -> float:
-    """
-    Pull regime from memory.
-
-    NEVER crashes the engine.
-    """
-
     try:
 
         regime = get_regime_memory(user_id)
@@ -154,14 +149,13 @@ def calculate_market_pressure(
 
     stability = 1.0 - transition_risk
 
+    # 🔥 FIX → minder agressieve penalty
     if transition_risk > 0.7:
-        penalty = transition_risk * 0.55
-
-    elif transition_risk > 0.5:
         penalty = transition_risk * 0.35
-
+    elif transition_risk > 0.5:
+        penalty = transition_risk * 0.25
     else:
-        penalty = transition_risk * 0.20
+        penalty = transition_risk * 0.15
 
     pressure = base_pressure * stability
     pressure -= penalty
@@ -171,7 +165,6 @@ def calculate_market_pressure(
     # -----------------------------------------------------
 
     regime_modifier = _get_regime_modifier(user_id)
-
     pressure *= regime_modifier
 
     # -----------------------------------------------------
@@ -182,10 +175,26 @@ def calculate_market_pressure(
         pressure += 0.08
 
     # -----------------------------------------------------
-    # Clamp
+    # Clamp + FLOOR
     # -----------------------------------------------------
 
     pressure = _clamp(pressure)
+
+    # 🔥 FIX → voorkom collapse naar 0
+    pressure = max(pressure, 0.05)
+
+    # -----------------------------------------------------
+    # DEBUG (SUPER HANDIG)
+    # -----------------------------------------------------
+
+    logger.info(f"""
+    MARKET PRESSURE DEBUG:
+    scores={scores}
+    base_pressure={round(base_pressure,4)}
+    transition_risk={round(transition_risk,4)}
+    penalty={round(penalty,4)}
+    final={round(pressure,4)}
+    """)
 
     return round(pressure, 4)
 
