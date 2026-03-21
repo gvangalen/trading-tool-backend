@@ -1,7 +1,17 @@
+from fastapi import APIRouter, Depends
+from datetime import date
+import logging
+
+from backend.utils.auth_utils import get_current_user
+from backend.utils.db import get_db_connection
+
 from backend.engine.market_intelligence_engine import get_market_intelligence
 from backend.engine.market_pressure_engine import get_market_pressure
 from backend.engine.transition_detector import compute_transition_detector
 
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
 
 @router.get("/market/intelligence")
 async def get_market_intelligence_api(
