@@ -191,6 +191,12 @@ def run_bot_brain(
     action_rules: Optional[Dict[str, float]] = None,
     portfolio_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+
+    # ✅ FIX HIER
+    portfolio_context = portfolio_context or {}
+    setup = setup or {}
+    scores = scores or {}
+
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
     # =================================================
     # 🔥 DCA MODE (V1 SIMPEL)
