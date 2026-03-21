@@ -203,170 +203,148 @@ def run_bot_brain(
     # 🔥 DCA MODE (V1 SIMPEL)
     # =================================================
     
+    strategy_type = str(setup.get("strategy_type") or "").lower().strip()
+    
     if strategy_type == "dca":
-
-    logger.info("🟢 DCA MODE ACTIVE")
-
-    base_amount = float(setup.get("base_amount") or 0.0)
-
-    action = "buy"
-    final_amount = base_amount
-
-    # 🔥 DCA watch levels netjes opbouwen
-    entry_value = _safe_float(setup.get("entry"))
-    stop_value = _safe_float(setup.get("stop_loss"))
-
-    raw_targets = setup.get("targets") or []
-    if not isinstance(raw_targets, list):
-        raw_targets = []
-
-    clean_targets = []
-    for t in raw_targets:
-        tv = _safe_float(t)
-        if tv is not None:
-            clean_targets.append(tv)
-
-    watch_levels = {
-        "entry": entry_value,
-        "stop_loss": stop_value,
-        "targets": clean_targets,
-        "pullback_zone": entry_value,
-        "breakout_trigger": clean_targets[0] if clean_targets else None,
-    }
-
-    monitoring = any(
-        v is not None and v != []
-        for v in [
-            watch_levels.get("entry"),
-            watch_levels.get("stop_loss"),
-            watch_levels.get("pullback_zone"),
-            watch_levels.get("breakout_trigger"),
-            watch_levels.get("targets"),
-        ]
-    )
-
-    alerts_active = monitoring
-
-    # guardrails blijven actief
-    try:
-        guardrails_result = apply_guardrails(
-            proposed_amount_eur=final_amount,
-            portfolio_value_eur=_safe_float(
-                portfolio_context.get("portfolio_value_eur"), 0.0
-            ) or 0.0,
-            current_asset_value_eur=_safe_float(
-                portfolio_context.get("current_asset_value_eur"), 0.0
-            ) or 0.0,
-            today_allocated_eur=_safe_float(
-                portfolio_context.get("today_allocated_eur"), 0.0
-            ) or 0.0,
-            kill_switch=portfolio_context.get("kill_switch", True),
-            max_trade_risk_eur=_safe_float(
-                portfolio_context.get("max_trade_risk_eur"), None
-            ),
-            daily_allocation_eur=_safe_float(
-                portfolio_context.get("daily_allocation_eur"), None
-            ),
-            max_asset_exposure_pct=_safe_float(
-                portfolio_context.get("max_asset_exposure_pct"), None
-            ),
+    
+        logger.info("🟢 DCA MODE ACTIVE")
+    
+        base_amount = float(setup.get("base_amount") or 0.0)
+    
+        action = "buy"
+        final_amount = base_amount
+    
+        # -----------------------------
+        # Watch levels
+        # -----------------------------
+        entry_value = _safe_float(setup.get("entry"))
+        stop_value = _safe_float(setup.get("stop_loss"))
+    
+        raw_targets = setup.get("targets") or []
+        if not isinstance(raw_targets, list):
+            raw_targets = []
+    
+        clean_targets = []
+        for t in raw_targets:
+            tv = _safe_float(t)
+            if tv is not None:
+                clean_targets.append(tv)
+    
+        watch_levels = {
+            "entry": entry_value,
+            "stop_loss": stop_value,
+            "targets": clean_targets,
+            "pullback_zone": entry_value,
+            "breakout_trigger": clean_targets[0] if clean_targets else None,
+        }
+    
+        monitoring = any(
+            v is not None and v != []
+            for v in [
+                watch_levels.get("entry"),
+                watch_levels.get("stop_loss"),
+                watch_levels.get("pullback_zone"),
+                watch_levels.get("breakout_trigger"),
+                watch_levels.get("targets"),
+            ]
         )
-    except Exception:
-        guardrails_result = {
-            "allowed": True,
-            "adjusted_amount_eur": final_amount,
-            "original_amount_eur": final_amount,
-            "warnings": [],
-            "blocked_by": None,
-            "reason": None,
-            "debug_code": "guardrails_fallback",
-            "guardrails": {
-                "kill_switch": portfolio_context.get("kill_switch", True),
-                "max_trade_risk_eur": portfolio_context.get("max_trade_risk_eur"),
-                "daily_allocation_eur": portfolio_context.get("daily_allocation_eur"),
-                "max_asset_exposure_pct": portfolio_context.get("max_asset_exposure_pct"),
-                "current_asset_exposure_pct": 0.0,
+    
+        alerts_active = monitoring
+    
+        # -----------------------------
+        # Guardrails
+        # -----------------------------
+        try:
+            guardrails_result = apply_guardrails(
+                proposed_amount_eur=final_amount,
+                portfolio_value_eur=_safe_float(
+                    portfolio_context.get("portfolio_value_eur"), 0.0
+                ) or 0.0,
+                current_asset_value_eur=_safe_float(
+                    portfolio_context.get("current_asset_value_eur"), 0.0
+                ) or 0.0,
+                today_allocated_eur=_safe_float(
+                    portfolio_context.get("today_allocated_eur"), 0.0
+                ) or 0.0,
+                kill_switch=portfolio_context.get("kill_switch", True),
+                max_trade_risk_eur=_safe_float(
+                    portfolio_context.get("max_trade_risk_eur"), None
+                ),
+                daily_allocation_eur=_safe_float(
+                    portfolio_context.get("daily_allocation_eur"), None
+                ),
+                max_asset_exposure_pct=_safe_float(
+                    portfolio_context.get("max_asset_exposure_pct"), None
+                ),
+            )
+        except Exception:
+            guardrails_result = {
+                "allowed": True,
+                "adjusted_amount_eur": final_amount,
+                "original_amount_eur": final_amount,
+                "warnings": [],
+                "blocked_by": None,
+            }
+    
+        adjusted_amount = guardrails_result.get("adjusted_amount_eur", final_amount)
+    
+        if adjusted_amount <= 0:
+            action = "hold"
+    
+        # -----------------------------
+        # 🔥 FIX: trade_plan NIET via default
+        # -----------------------------
+        trade_plan = {
+            "symbol": setup.get("symbol", "BTC"),
+            "side": action,
+            "entry_plan": [
+                {
+                    "type": "dca",
+                    "label": "DCA accumulation",
+                    "price": entry_value,
+                }
+            ] if entry_value else [],
+            "stop_loss": {"price": stop_value},
+            "targets": [
+                {"label": f"TP{i+1}", "price": t}
+                for i, t in enumerate(clean_targets)
+            ],
+            "risk": {"rr": None, "risk_eur": None},
+            "notes": ["dca_mode"],
+        }
+    
+        return {
+            "date": date.today().isoformat(),
+            "action": action,
+            "amount_eur": round(float(adjusted_amount), 2),
+            "confidence": 0.7,
+            "reason": "DCA strategy active",
+    
+            "base_amount": round(float(base_amount), 2),
+            "exposure_multiplier": 1.0,
+    
+            "watch_levels": watch_levels,
+            "monitoring": monitoring,
+            "alerts_active": alerts_active,
+    
+            "guardrails_result": guardrails_result,
+            "trade_plan": trade_plan,
+    
+            # 🔥 frontend = altijd 0–100
+            "metrics": {
+                "market_pressure": 50,
+                "transition_risk": 50,
+                "setup_quality": 50,
+                "volatility": 50,
+                "trend_strength": 50,
+                "position_size": 50,
+            },
+    
+            "debug": {
+                "mode": "dca",
+                "watch_levels": watch_levels,
             },
         }
-
-    adjusted_amount = guardrails_result.get("adjusted_amount_eur", final_amount)
-
-    guardrail_reason = (
-        guardrails_result.get("blocked_by")
-        or guardrails_result.get("reason")
-        or (
-            guardrails_result.get("warnings")[0]
-            if guardrails_result.get("warnings")
-            else None
-        )
-    )
-
-    if adjusted_amount <= 0:
-        action = "hold"
-
-    return {
-        "date": date.today().isoformat(),
-        "action": action,
-        "amount_eur": round(float(adjusted_amount), 2),
-        "confidence": 0.7,
-        "reason": "DCA strategy active",
-
-        "regime": None,
-        "cycle": None,
-        "temperature": None,
-
-        "short_trend": None,
-        "mid_trend": None,
-        "long_trend": None,
-
-        "market_pressure": 0.5,
-        "transition_risk": 0.5,
-        "volatility_state": None,
-        "trend_strength": None,
-        "structure_bias": None,
-        "risk_environment": None,
-        "risk_state": None,
-
-        "base_amount": round(float(base_amount), 2),
-        "exposure_multiplier": 1.0,
-
-        "trade_quality": None,
-
-        # 🔥 dit was het missende stuk
-        "watch_levels": watch_levels,
-        "monitoring": monitoring,
-        "alerts_active": alerts_active,
-
-        "guardrails_result": guardrails_result,
-        "guardrail_reason": guardrail_reason,
-
-        # 🔥 trade plan nu met watch levels
-        "trade_plan": _default_trade_plan(
-            symbol=setup.get("symbol", "BTC"),
-            action=action,
-            reason="dca_mode",
-            watch_levels=watch_levels,
-        ),
-
-        # frontend verwacht nu nog 0-100 voor market suggestion
-        "metrics": {
-            "market_pressure": 50,
-            "transition_risk": 50,
-            "setup_quality": 50,
-            "volatility": 50,
-            "trend_strength": 50,
-            "position_size": 50,
-        },
-
-        "debug": {
-            "mode": "dca",
-            "base_amount": base_amount,
-            "final_amount": final_amount,
-            "adjusted_amount": adjusted_amount,
-            "watch_levels": watch_levels,
-            "guardrails_result": guardrails_result,
-        },
-    }
 
     # -------------------------------------------------
     # 1️⃣ Regime Memory
