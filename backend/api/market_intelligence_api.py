@@ -6,15 +6,15 @@ from backend.utils.auth_utils import get_current_user
 from backend.utils.db import get_db_connection
 
 from backend.engine.market_intelligence_engine import get_market_intelligence
-from backend.engine.market_pressure_engine import get_market_pressure
-from backend.engine.transition_detector import compute_transition_detector
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-# 🔥 FIX 1: helper toevoegen (ontbrak)
+# =========================================================
+# Helper: daily scores
+# =========================================================
 def _get_daily_scores(conn, user_id: int):
     with conn.cursor() as cur:
         cur.execute(
@@ -47,6 +47,9 @@ def _get_daily_scores(conn, user_id: int):
     }
 
 
+# =========================================================
+# API: Market Intelligence
+# =========================================================
 @router.get("/market/intelligence")
 async def get_market_intelligence_api(
     current_user: dict = Depends(get_current_user)
@@ -57,41 +60,14 @@ async def get_market_intelligence_api(
     try:
         scores = _get_daily_scores(conn, user_id)
 
+        # 🔥 SINGLE SOURCE OF TRUTH (ENGINE)
         intelligence = get_market_intelligence(
             user_id=user_id,
             scores=scores,
         )
 
-        market_pressure = get_market_pressure(
-            user_id=user_id,
-            scores=scores,
-        )
-
-        transition = compute_transition_detector(user_id)
-
-        transition_risk = float(
-            (transition or {}).get("normalized_risk", 0.5)
-        )
-
-        return {
-            "cycle": intelligence.get("cycle"),
-            "temperature": intelligence.get("temperature"),
-
-            "trend": intelligence.get("trend", {}),
-
-            # 🔥 FIX 2: GEEN *100
-            "metrics": {
-                "market_pressure": round(market_pressure, 3),
-                "transition_risk": round(transition_risk, 3),
-                "setup_quality": 50,
-                "volatility": 50,
-                "trend_strength": 50,
-            },
-
-            "state": intelligence.get("state", {}),
-
-            "generated_at": date.today().isoformat(),
-        }
+        # 🔥 GEEN extra berekeningen
+        return intelligence
 
     except Exception:
         logger.exception("❌ market intelligence error")
