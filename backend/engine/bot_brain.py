@@ -461,65 +461,66 @@ def run_bot_brain(
         trend_strength = _clamp(float(trend_strength), 0.0, 1.0)
 
     except Exception as e:
-        logger.warning("Market intelligence fallback: %s", e)
+    logger.warning("Market intelligence fallback: %s", e)
 
-        market_intelligence = {}
+    market_intelligence = {}
 
-        market_cycle = "neutral"
-        temperature = "cool"
+    market_cycle = "neutral"
+    temperature = "cool"
 
-        short_trend = "trading_range"
-        mid_trend = "trading_range"
-        long_trend = "trading_range"
+    short_trend = "trading_range"
+    mid_trend = "trading_range"
+    long_trend = "trading_range"
 
-        volatility_state = "normal"
-        structure_bias = "neutral"
-        risk_environment = 0.5
+    volatility_state = "normal"
+    structure_bias = "neutral"
+    risk_environment = 0.5
 
-        trend_strength = (
-            float(scores.get("technical_score", 10)) * 0.6
-            + float(scores.get("market_score", 10)) * 0.4
-        ) / 100.0
-        trend_strength = _clamp(trend_strength, 0.0, 1.0)
+    trend_strength = (
+        float(scores.get("technical_score", 10)) * 0.6
+        + float(scores.get("market_score", 10)) * 0.4
+    ) / 100.0
+    trend_strength = _clamp(trend_strength, 0.0, 1.0)
 
-        metrics_block = {}
-        
-        # -------------------------------------------------
-        # 5️⃣ Position Sizing via Decision Engine
-        # -------------------------------------------------
-        try:
-            decision_result = decide_amount(
-                setup=setup,
-                scores=scores,
-                regime_memory=regime_memory,
-                transition_risk=transition_risk,
-            )
+    metrics_block = {}
+
+    # =========================================================
+    # 5️⃣ Position Sizing via Decision Engine (ALTIJD buiten except!)
+    # =========================================================
     
-            logger.info("DecisionEngine raw output: %s", decision_result)
+    try:
+        decision_result = decide_amount(
+            setup=setup,
+            scores=scores,
+            regime_memory=regime_memory,
+            transition_risk=transition_risk,
+        )
     
-            final_amount, base_reason = _extract_decision_amount(decision_result)
+        logger.info("DecisionEngine raw output: %s", decision_result)
     
-            base_amount = _safe_float(
-                decision_result.get("base_amount") if isinstance(decision_result, dict) else 0.0,
-                0.0,
-            ) or 0.0
+        final_amount, base_reason = _extract_decision_amount(decision_result)
     
-            exposure_multiplier = _safe_float(
-                decision_result.get("exposure_multiplier") if isinstance(decision_result, dict) else 1.0,
-                1.0,
-            ) or 1.0
+        base_amount = _safe_float(
+            decision_result.get("base_amount") if isinstance(decision_result, dict) else 0.0,
+            0.0,
+        ) or 0.0
     
-        except Exception as e:
-            logger.warning("DecisionEngine fallback triggered: %s", e)
+        exposure_multiplier = _safe_float(
+            decision_result.get("exposure_multiplier") if isinstance(decision_result, dict) else 1.0,
+            1.0,
+        ) or 1.0
     
-            decision_result = None
-            base_amount = 0.0
-            final_amount = 0.0
-            exposure_multiplier = 1.0
-            base_reason = f"DecisionEngine fallback: {e}"
+    except Exception as e:
+        logger.warning("DecisionEngine fallback triggered: %s", e)
     
-        # 🔥🔥🔥 HIER ZIT DE FIX (BELANGRIJKSTE REGEL)
-        exposure_multiplier = _clamp(exposure_multiplier, 0.0, 1.0)
+        decision_result = None
+        base_amount = 0.0
+        final_amount = 0.0
+        exposure_multiplier = 1.0
+        base_reason = f"DecisionEngine fallback: {e}"
+    
+    # 🔥 HARD CAP (BELANGRIJK)
+    exposure_multiplier = _clamp(exposure_multiplier, 0.0, 1.0)
 
     # -------------------------------------------------
     # 6️⃣ Risk State
