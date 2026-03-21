@@ -1401,47 +1401,55 @@ def run_trading_bot_agent(
 
             metrics = brain.get("metrics", {})
 
+            # 🔥 FIX: position_size moet 0–1 zijn (niet 0–100)
+            position_size = float(metrics.get("position_size") or 0.5)
+            
+            # extra safety (nooit >1 of <0)
+            position_size = max(0.0, min(position_size, 1.0))
+            
             decision = {
                 "bot_id": bot["bot_id"],
                 "symbol": symbol,
-
+            
                 "action": action,
                 "confidence": _map_confidence(float(brain.get("confidence") or 0.0)),
                 "status": "planned",
-
+            
                 "amount_eur": round(float(brain.get("amount_eur") or 0), 2),
                 "requested_amount_eur": round(
                     float(brain.get("debug", {}).get("final_amount") or 0), 2
                 ),
-
+            
                 "base_amount": brain.get("base_amount") or setup_payload.get("base_amount"),
                 "execution_mode": setup_payload.get("execution_mode"),
-
-                "position_size": float(metrics.get("position_size") or 50),
+            
+                # ✅ FIXED
+                "position_size": round(position_size, 2),
+            
                 "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
-
+            
                 "score": brain.get("trade_quality"),
                 "trade_quality": brain.get("trade_quality"),
-
+            
                 "strategy_reason": brain.get("reason"),
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
-
+            
                 "market_pressure": metrics.get("market_pressure"),
                 "transition_risk": metrics.get("transition_risk"),
-
+            
                 "volatility_state": brain.get("volatility_state"),
                 "trend_strength": brain.get("trend_strength"),
                 "structure_bias": brain.get("structure_bias"),
-
+            
                 "trade_plan": trade_plan,
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring"),
                 "alerts_active": brain.get("alerts_active"),
-
+            
                 "guardrails_result": brain.get("guardrails_result"),
                 "guardrail_reason": brain.get("guardrail_reason"),
-
+            
                 "setup_match": setup_match,
                 "live_price": live_price,
             }
