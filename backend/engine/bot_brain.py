@@ -774,9 +774,12 @@ def run_bot_brain(
             "volatility": volatility_score,
             "trend_strength": trend_strength_score,
         
-            # ✅ inline berekenen (GEEN losse variabele hier)
             "position_size": round(
-                _clamp(exposure_multiplier, 0.0, 1.0) * 100.0,
+                _clamp(
+                    (_safe_float(scores.get("market_score"), 10) or 10) / 100.0,
+                    0.0,
+                    1.0
+                ),
                 2
             ),
         },
