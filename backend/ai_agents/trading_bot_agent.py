@@ -1315,7 +1315,7 @@ def run_trading_bot_agent(
                 })
 
             # =====================================================
-            # 💰 Portfolio context (FIXED)
+            # 💰 Portfolio context (FIXED CORRECT)
             # =====================================================
 
             today_spent_eur = get_today_spent_eur(
@@ -1338,10 +1338,19 @@ def run_trading_bot_agent(
                 bot["symbol"],
             )
 
-            # ✅ FIX 1: GEEN abs() → correcte exposure
+            # 🔥 FIX: juiste exposure berekening
+            cash_available = max(0.0, cash_balance_eur)
+
             portfolio_value_eur = max(
-                cash_balance_eur + current_asset_value_eur,
+                current_asset_value_eur + cash_available,
                 1.0,
+            )
+
+            logger.info(
+                "📊 PORTFOLIO DEBUG | cash=%s | asset=%s | portfolio=%s",
+                cash_balance_eur,
+                current_asset_value_eur,
+                portfolio_value_eur,
             )
 
             # =====================================================
@@ -1356,7 +1365,7 @@ def run_trading_bot_agent(
                 "daily_allocation_eur": bot["budget"].get("daily_limit_eur"),
                 "max_asset_exposure_pct": bot["budget"].get("max_asset_exposure_pct"),
                 "kill_switch": True,
-            } or {}  # ✅ FIX 2: nooit None
+            }
 
             brain = run_bot_brain(
                 user_id=user_id,
