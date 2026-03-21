@@ -439,28 +439,29 @@ def run_bot_brain(
         trend_strength = _clamp(float(trend_strength), 0.0, 1.0)
 
     except Exception as e:
-    logger.warning("Market intelligence fallback: %s", e)
-
-    market_intelligence = {}
-
-    market_cycle = "neutral"
-    temperature = "cool"
-
-    short_trend = "trading_range"
-    mid_trend = "trading_range"
-    long_trend = "trading_range"
-
-    volatility_state = "normal"
-    structure_bias = "neutral"
-    risk_environment = 0.5
-
-    trend_strength = (
-        float(scores.get("technical_score", 10)) * 0.6
-        + float(scores.get("market_score", 10)) * 0.4
-    ) / 100.0
-    trend_strength = _clamp(trend_strength, 0.0, 1.0)
-
-    metrics_block = {}
+        logger.warning("Market intelligence fallback: %s", e)
+    
+        market_intelligence = {}
+    
+        market_cycle = "neutral"
+        temperature = "cool"
+    
+        short_trend = "trading_range"
+        mid_trend = "trading_range"
+        long_trend = "trading_range"
+    
+        volatility_state = "normal"
+        structure_bias = "neutral"
+        risk_environment = 0.5
+    
+        trend_strength = (
+            float(scores.get("technical_score", 10)) * 0.6
+            + float(scores.get("market_score", 10)) * 0.4
+        ) / 100.0
+    
+        trend_strength = _clamp(trend_strength, 0.0, 1.0)
+    
+        metrics_block = {}
 
     # =========================================================
     # 5️⃣ Position Sizing via Decision Engine (ALTIJD buiten except!)
