@@ -760,15 +760,18 @@ def run_bot_brain(
         "trade_plan": trade_plan,
 
         # 🔥 FIX — correcte UI percentage (0–100)
-        position_size_pct = round(exposure_multiplier * 100.0, 2)
-        
         "metrics": {
             "market_pressure": market_pressure_score,
             "transition_risk": transition_risk_score,
             "setup_quality": setup_quality_score,
             "volatility": volatility_score,
             "trend_strength": trend_strength_score,
-            "position_size": position_size_pct,
+        
+            # ✅ inline berekenen (GEEN losse variabele hier)
+            "position_size": round(
+                _clamp(exposure_multiplier, 0.0, 1.0) * 100.0,
+                2
+            ),
         },
 
         "debug": {
