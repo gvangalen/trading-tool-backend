@@ -1263,6 +1263,7 @@ def run_trading_bot_agent(
     report_date: Optional[date] = None,
     bot_id: Optional[int] = None,
 ) -> Dict[str, Any]:
+
     report_date = report_date or date.today()
 
     conn = get_db_connection()
@@ -1313,6 +1314,10 @@ def run_trading_bot_agent(
                     "targets": snapshot.get("targets"),
                 })
 
+            # =====================================================
+            # 💰 Portfolio context (FIXED)
+            # =====================================================
+
             today_spent_eur = get_today_spent_eur(
                 conn,
                 user_id,
@@ -1333,12 +1338,25 @@ def run_trading_bot_agent(
                 bot["symbol"],
             )
 
-            # 🔥 FIX: correcte portfolio waarde
+            # ✅ FIX 1: GEEN abs() → correcte exposure
             portfolio_value_eur = max(
-                abs(cash_balance_eur) + current_asset_value_eur,
-                current_asset_value_eur,
+                cash_balance_eur + current_asset_value_eur,
                 1.0,
             )
+
+            # =====================================================
+            # 🧠 Bot brain
+            # =====================================================
+
+            portfolio_context = {
+                "today_allocated_eur": today_spent_eur,
+                "portfolio_value_eur": portfolio_value_eur,
+                "current_asset_value_eur": current_asset_value_eur,
+                "max_trade_risk_eur": bot["budget"].get("max_order_eur"),
+                "daily_allocation_eur": bot["budget"].get("daily_limit_eur"),
+                "max_asset_exposure_pct": bot["budget"].get("max_asset_exposure_pct"),
+                "kill_switch": True,
+            } or {}  # ✅ FIX 2: nooit None
 
             brain = run_bot_brain(
                 user_id=user_id,
@@ -1349,15 +1367,7 @@ def run_trading_bot_agent(
                     "market_score": scores.get("market"),
                     "setup_score": scores.get("setup"),
                 },
-                portfolio_context={
-                    "today_allocated_eur": today_spent_eur,
-                    "portfolio_value_eur": portfolio_value_eur,
-                    "current_asset_value_eur": current_asset_value_eur,
-                    "max_trade_risk_eur": bot["budget"].get("max_order_eur"),
-                    "daily_allocation_eur": bot["budget"].get("daily_limit_eur"),
-                    "max_asset_exposure_pct": bot["budget"].get("max_asset_exposure_pct"),
-                    "kill_switch": True,
-                },
+                portfolio_context=portfolio_context,
             )
 
             symbol = (bot["symbol"] or DEFAULT_SYMBOL).upper()
@@ -1398,7 +1408,6 @@ def run_trading_bot_agent(
                 "base_amount": brain.get("base_amount") or setup_payload.get("base_amount"),
                 "execution_mode": setup_payload.get("execution_mode"),
 
-                # ✅ FIXED
                 "position_size": float(metrics.get("position_size") or 50),
                 "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
 
@@ -1409,7 +1418,6 @@ def run_trading_bot_agent(
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
 
-                # ✅ FIXED (GEEN *100)
                 "market_pressure": metrics.get("market_pressure"),
                 "transition_risk": metrics.get("transition_risk"),
 
@@ -1477,19 +1485,15 @@ def run_trading_bot_agent(
                 "decision_id": decision_id,
                 "action": decision["action"],
                 "decision": decision,
-
-                # ✅ FIXED
                 "scores_json": {
                     "macro": scores.get("macro"),
                     "technical": scores.get("technical"),
                     "market": scores.get("market"),
                     "setup": scores.get("setup"),
-
                     "market_pressure": metrics.get("market_pressure"),
                     "transition_risk": metrics.get("transition_risk"),
                     "position_size": metrics.get("position_size"),
                 },
-
                 "guardrails_result": decision.get("guardrails_result"),
                 "trade_plan": trade_plan,
             })
