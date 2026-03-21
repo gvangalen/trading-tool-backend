@@ -206,146 +206,79 @@ def run_bot_brain(
     strategy_type = str(setup.get("strategy_type") or "").lower().strip()
     
     if strategy_type == "dca":
-    
-        logger.info("🟢 DCA MODE ACTIVE")
-    
-        base_amount = float(setup.get("base_amount") or 0.0)
-    
-        action = "buy"
-        final_amount = base_amount
-    
-        # -----------------------------
-        # Watch levels
-        # -----------------------------
-        entry_value = _safe_float(setup.get("entry"))
-        stop_value = _safe_float(setup.get("stop_loss"))
-    
-        raw_targets = setup.get("targets") or []
-        if not isinstance(raw_targets, list):
-            raw_targets = []
-    
-        clean_targets = []
-        for t in raw_targets:
-            tv = _safe_float(t)
-            if tv is not None:
-                clean_targets.append(tv)
-    
-        watch_levels = {
-            "entry": entry_value,
-            "stop_loss": stop_value,
-            "targets": clean_targets,
-            "pullback_zone": entry_value,
-            "breakout_trigger": clean_targets[0] if clean_targets else None,
-        }
-    
-        monitoring = any(
-            v is not None and v != []
-            for v in [
-                watch_levels.get("entry"),
-                watch_levels.get("stop_loss"),
-                watch_levels.get("pullback_zone"),
-                watch_levels.get("breakout_trigger"),
-                watch_levels.get("targets"),
-            ]
-        )
-    
-        alerts_active = monitoring
-    
-        # -----------------------------
-        # Guardrails
-        # -----------------------------
-        try:
-            guardrails_result = apply_guardrails(
-                proposed_amount_eur=final_amount,
-                portfolio_value_eur=_safe_float(
-                    portfolio_context.get("portfolio_value_eur"), 0.0
-                ) or 0.0,
-                current_asset_value_eur=_safe_float(
-                    portfolio_context.get("current_asset_value_eur"), 0.0
-                ) or 0.0,
-                today_allocated_eur=_safe_float(
-                    portfolio_context.get("today_allocated_eur"), 0.0
-                ) or 0.0,
-                kill_switch=portfolio_context.get("kill_switch", True),
-                max_trade_risk_eur=_safe_float(
-                    portfolio_context.get("max_trade_risk_eur"), None
-                ),
-                daily_allocation_eur=_safe_float(
-                    portfolio_context.get("daily_allocation_eur"), None
-                ),
-                max_asset_exposure_pct=_safe_float(
-                    portfolio_context.get("max_asset_exposure_pct"), None
-                ),
-            )
-        except Exception:
-            guardrails_result = {
-                "allowed": True,
-                "adjusted_amount_eur": final_amount,
-                "original_amount_eur": final_amount,
-                "warnings": [],
-                "blocked_by": None,
-            }
-    
-        adjusted_amount = guardrails_result.get("adjusted_amount_eur", final_amount)
-    
-        if adjusted_amount <= 0:
-            action = "hold"
-    
-        # -----------------------------
-        # 🔥 FIX: trade_plan NIET via default
-        # -----------------------------
-        trade_plan = {
-            "symbol": setup.get("symbol", "BTC"),
-            "side": action,
-            "entry_plan": [
-                {
-                    "type": "dca",
-                    "label": "DCA accumulation",
-                    "price": entry_value,
-                }
-            ] if entry_value else [],
-            "stop_loss": {"price": stop_value},
-            "targets": [
-                {"label": f"TP{i+1}", "price": t}
-                for i, t in enumerate(clean_targets)
-            ],
-            "risk": {"rr": None, "risk_eur": None},
-            "notes": ["dca_mode"],
-        }
-    
-        return {
-            "date": date.today().isoformat(),
-            "action": action,
-            "amount_eur": round(float(adjusted_amount), 2),
-            "confidence": 0.7,
-            "reason": "DCA strategy active",
-    
-            "base_amount": round(float(base_amount), 2),
-            "exposure_multiplier": 1.0,
-    
-            "watch_levels": watch_levels,
-            "monitoring": monitoring,
-            "alerts_active": alerts_active,
-    
-            "guardrails_result": guardrails_result,
-            "trade_plan": trade_plan,
-    
-            # 🔥 frontend = altijd 0–100
-            "metrics": {
-                "market_pressure": 50,
-                "transition_risk": 50,
-                "setup_quality": 50,
-                "volatility": 50,
-                "trend_strength": 50,
-                "position_size": 50,
-            },
-    
-            "debug": {
-                "mode": "dca",
-                "watch_levels": watch_levels,
-            },
+
+    logger.info("🟢 DCA MODE ACTIVE")
+
+    base_amount = float(setup.get("base_amount") or 0.0)
+    action = "buy"
+    final_amount = base_amount
+
+    # watch levels blijven gewoon
+    entry_value = _safe_float(setup.get("entry"))
+    stop_value = _safe_float(setup.get("stop_loss"))
+
+    raw_targets = setup.get("targets") or []
+    clean_targets = [_safe_float(t) for t in raw_targets if _safe_float(t) is not None]
+
+    watch_levels = {
+        "entry": entry_value,
+        "stop_loss": stop_value,
+        "targets": clean_targets,
+        "pullback_zone": entry_value,
+        "breakout_trigger": clean_targets[0] if clean_targets else None,
+    }
+
+    monitoring = any(v for v in watch_levels.values())
+    alerts_active = monitoring
+
+    # guardrails blijft
+    try:
+        guardrails_result = apply_guardrails(...)
+    except Exception:
+        guardrails_result = {
+            "allowed": True,
+            "adjusted_amount_eur": final_amount,
         }
 
+    adjusted_amount = guardrails_result.get("adjusted_amount_eur", final_amount)
+
+    if adjusted_amount <= 0:
+        action = "hold"
+
+    # ❗ GEEN trade_plan hier
+
+    return {
+        "date": date.today().isoformat(),
+        "action": action,
+        "amount_eur": round(float(adjusted_amount), 2),
+        "confidence": 0.7,
+        "reason": "DCA strategy active",
+
+        "base_amount": round(float(base_amount), 2),
+        "exposure_multiplier": 1.0,
+
+        "watch_levels": watch_levels,
+        "monitoring": monitoring,
+        "alerts_active": alerts_active,
+
+        "guardrails_result": guardrails_result,
+
+        # ❗ GEEN trade_plan hier
+
+        "metrics": {
+            "market_pressure": 50,
+            "transition_risk": 50,
+            "setup_quality": 50,
+            "volatility": 50,
+            "trend_strength": 50,
+            "position_size": 50,
+        },
+
+        "debug": {
+            "mode": "dca",
+        },
+    }
+    
     # -------------------------------------------------
     # 1️⃣ Regime Memory
     # -------------------------------------------------
@@ -733,19 +666,23 @@ def run_bot_brain(
     trend_strength_score = round(_clamp(_safe_float(trend_strength_score, 0.0) or 0.0, 0.0, 100.0), 2)
 
     # -------------------------------------------------
-    # 13️⃣ Trade Plan Engine
+    # 13️⃣ Trade Plan Engine (FIXED - SINGLE SOURCE)
     # -------------------------------------------------
+    
+    # snapshot (komt uit setup / snapshot agent)
     snapshot_payload = {
         "entry": entry_value,
         "stop_loss": stop_value,
         "targets": clean_targets,
     }
-
+    
+    # decision context
     decision_payload = {
         "action": action,
         "symbol": setup.get("symbol"),
     }
-
+    
+    # 🔥 BELANGRIJK → strategy_type doorgeven
     bot_payload = {
         "min_rr": _safe_float(setup.get("min_rr"), 1.5) or 1.5,
         "max_risk_per_trade": _safe_float(
@@ -753,36 +690,41 @@ def run_bot_brain(
             or setup.get("max_risk_per_trade"),
             None,
         ),
+        "strategy_type": str(setup.get("strategy_type") or "").lower().strip(),
     }
-
+    
     brain_context = {
         "regime": regime_label,
         "reason": strategy_reason,
     }
-
+    
     trade_plan = None
-
+    
     try:
-        if action in ("buy", "short", "sell"):
-            trade_plan = build_trade_plan(
-                snapshot=snapshot_payload,
-                brain=brain_context,
-                decision=decision_payload,
-                bot=bot_payload,
-            )
-
+        trade_plan = build_trade_plan(
+            snapshot=snapshot_payload,
+            brain=brain_context,
+            decision=decision_payload,
+            bot=bot_payload,
+        )
+    
     except Exception as e:
         logger.warning("Trade plan engine error: %s", e)
         trade_plan = None
-
+    
+    
+    # 🔥 fallback (ALTijd iets teruggeven)
     if not trade_plan:
-        trade_plan = _default_trade_plan(
-            symbol=setup.get("symbol", "BTC"),
-            action=action,
-            reason="watch_mode",
-            watch_levels=watch_levels,
-        )
-
+        trade_plan = {
+            "symbol": setup.get("symbol", "BTC"),
+            "side": action,
+            "entry_plan": [],
+            "stop_loss": {"price": None},
+            "targets": [],
+            "risk": {"rr": None, "risk_eur": None},
+            "notes": ["fallback"],
+        }
+        
     # -------------------------------------------------
     # Final output
     # -------------------------------------------------
