@@ -25,7 +25,8 @@ DEFAULT_ACTION_RULES = {
     "min_market_pressure_to_buy": 0.52,
 }
 
-EXPOSURE_CAP = 2.0
+# 🔥 FIX — multiplier mag NOOIT boven 1.0
+EXPOSURE_CAP = 1.0
 
 
 # =========================================================
@@ -398,41 +399,42 @@ def run_bot_brain(
 
         metrics_block = {}
 
-    # -------------------------------------------------
-    # 5️⃣ Position Sizing via Decision Engine
-    # -------------------------------------------------
-    try:
-        decision_result = decide_amount(
-            setup=setup,
-            scores=scores,
-            regime_memory=regime_memory,
-            transition_risk=transition_risk,
-        )
-
-        logger.info("DecisionEngine raw output: %s", decision_result)
-
-        final_amount, base_reason = _extract_decision_amount(decision_result)
-
-        base_amount = _safe_float(
-            decision_result.get("base_amount") if isinstance(decision_result, dict) else 0.0,
-            0.0,
-        ) or 0.0
-
-        exposure_multiplier = _safe_float(
-            decision_result.get("exposure_multiplier") if isinstance(decision_result, dict) else 1.0,
-            1.0,
-        ) or 1.0
-
-    except Exception as e:
-        logger.warning("DecisionEngine fallback triggered: %s", e)
-
-        decision_result = None
-        base_amount = 0.0
-        final_amount = 0.0
-        exposure_multiplier = 1.0
-        base_reason = f"DecisionEngine fallback: {e}"
-
-    exposure_multiplier = _clamp(exposure_multiplier, 0.0, EXPOSURE_CAP)
+        # -------------------------------------------------
+        # 5️⃣ Position Sizing via Decision Engine
+        # -------------------------------------------------
+        try:
+            decision_result = decide_amount(
+                setup=setup,
+                scores=scores,
+                regime_memory=regime_memory,
+                transition_risk=transition_risk,
+            )
+    
+            logger.info("DecisionEngine raw output: %s", decision_result)
+    
+            final_amount, base_reason = _extract_decision_amount(decision_result)
+    
+            base_amount = _safe_float(
+                decision_result.get("base_amount") if isinstance(decision_result, dict) else 0.0,
+                0.0,
+            ) or 0.0
+    
+            exposure_multiplier = _safe_float(
+                decision_result.get("exposure_multiplier") if isinstance(decision_result, dict) else 1.0,
+                1.0,
+            ) or 1.0
+    
+        except Exception as e:
+            logger.warning("DecisionEngine fallback triggered: %s", e)
+    
+            decision_result = None
+            base_amount = 0.0
+            final_amount = 0.0
+            exposure_multiplier = 1.0
+            base_reason = f"DecisionEngine fallback: {e}"
+    
+        # 🔥🔥🔥 HIER ZIT DE FIX (BELANGRIJKSTE REGEL)
+        exposure_multiplier = _clamp(exposure_multiplier, 0.0, 1.0)
 
     # -------------------------------------------------
     # 6️⃣ Risk State
@@ -757,14 +759,16 @@ def run_bot_brain(
 
         "trade_plan": trade_plan,
 
-        # frontend/UI moet HIERUIT lezen
+        # 🔥 FIX — correcte UI percentage (0–100)
+        position_size_pct = round(exposure_multiplier * 100.0, 2)
+        
         "metrics": {
             "market_pressure": market_pressure_score,
             "transition_risk": transition_risk_score,
             "setup_quality": setup_quality_score,
             "volatility": volatility_score,
             "trend_strength": trend_strength_score,
-            "position_size": round(_clamp(exposure_multiplier * 100.0, 0.0, 100.0), 2),
+            "position_size": position_size_pct,
         },
 
         "debug": {
