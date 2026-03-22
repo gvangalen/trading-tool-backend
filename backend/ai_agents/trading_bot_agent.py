@@ -1396,16 +1396,14 @@ def run_trading_bot_agent(
             )
 
             # =========================
-            # 🔥 FIX: position_size correct (GEEN 'or')
+            # 🔥 FIX: position_size = DIRECT UIT BRAIN (SINGLE SOURCE)
             # =========================
-
-            metrics = brain.get("metrics") or {}
-
-            raw_position_size = metrics.get("position_size")
-
+            
+            raw_position_size = brain.get("position_size")
+            
             if raw_position_size is None:
-                raw_position_size = 0.5
-
+                raw_position_size = 0.0  # geen fallback naar 0.5 meer
+            
             position_size = float(raw_position_size)
             position_size = max(0.0, min(position_size, 1.0))
 
