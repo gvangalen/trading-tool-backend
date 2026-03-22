@@ -1125,7 +1125,7 @@ def _persist_decision_and_order(
     guardrails_result = decision.get("guardrails_result") or {}
     setup_match = decision.get("setup_match") or {}
 
-    # 🔥 FIX 1: metrics goed ophalen
+    # 🔥 metrics ophalen (single source vanuit brain)
     metrics = decision.get("metrics") or {}
 
     market_pressure = float(
@@ -1140,14 +1140,16 @@ def _persist_decision_and_order(
         or 0
     )
 
-    # 🔥 FIX 2: position_size correct (GEEN 50 fallback meer)
-    position_size = float(
-        decision.get("position_size")
-        or metrics.get("position_size")
-        or 0.5
-    )
+    # =====================================================
+    # 🔥 FIX: position_size correct ophalen (GEEN 'or' meer)
+    # =====================================================
+    raw_position_size = decision.get("position_size")
+    if raw_position_size is None:
+        raw_position_size = metrics.get("position_size")
+    if raw_position_size is None:
+        raw_position_size = 0.5
 
-    # safety clamp (0–1)
+    position_size = float(raw_position_size)
     position_size = max(0.0, min(position_size, 1.0))
 
     exposure_multiplier = float(decision.get("exposure_multiplier") or 1.0)
@@ -1179,7 +1181,7 @@ def _persist_decision_and_order(
         "base_amount": decision.get("base_amount"),
         "execution_mode": decision.get("execution_mode"),
 
-        # 🔥 FIX 3: correcte position_size opslaan
+        # 🔥 FIXED position_size
         "position_size": position_size,
         "exposure_multiplier": exposure_multiplier,
 
