@@ -4,8 +4,6 @@ import logging
 from datetime import date
 from typing import Any, Dict, Optional
 
-from backend.engine.transition_detector import compute_transition_detector
-from backend.engine.market_pressure_engine import get_market_pressure
 from backend.engine.market_intelligence_engine import get_market_intelligence
 from backend.engine.decision_engine import decide_amount
 from backend.engine.guardrails_engine import apply_guardrails
@@ -394,105 +392,46 @@ def run_bot_brain(
     except Exception as e:
         logger.warning("Regime memory unavailable: %s", e)
 
+    
     # -------------------------------------------------
-    # 2️⃣ Transition Risk (raw 0..1)
+    # 2 Market Intelligence Engine (V2 CORRECT)
     # -------------------------------------------------
-    try:
-        transition_snapshot = compute_transition_detector(user_id)
-        transition_risk = _safe_float(
-            transition_snapshot.get("normalized_risk"),
-            0.5,
-        ) or 0.5
-        transition_risk = _clamp(transition_risk, 0.0, 1.0)
-
-    except Exception as e:
-        logger.warning("Transition detector fallback: %s", e)
-        transition_risk = 0.5
-        transition_snapshot = None
-
-    # -------------------------------------------------
-    # 3️⃣ Market Pressure (raw 0..1)
-    # -------------------------------------------------
-    try:
-        market_pressure = float(
-            get_market_pressure(user_id=user_id, scores=scores)
-        )
-        market_pressure = _clamp(market_pressure, 0.0, 1.0)
-
-    except Exception as e:
-        logger.warning("Market pressure fallback: %s", e)
-        market_pressure = 0.5
-
-    # -------------------------------------------------
-    # 4️⃣ Market Intelligence Engine
-    # -------------------------------------------------
-    market_intelligence = {}
-
-    try:
-        market_intelligence = get_market_intelligence(
-            user_id=user_id,
-            scores=scores,
-        )
-
-        market_cycle = market_intelligence.get("cycle", "neutral")
-        temperature = market_intelligence.get("temperature", "cool")
-
-        trend_block = market_intelligence.get("trend", {}) or {}
-        short_trend = trend_block.get("short", "trading_range")
-        mid_trend = trend_block.get("mid", "trading_range")
-        long_trend = trend_block.get("long", "trading_range")
-
-        state_block = market_intelligence.get("state", {}) or {}
-        volatility_state = state_block.get("volatility_state", "normal")
-        structure_bias = state_block.get("structure_bias", "neutral")
-        risk_environment = _safe_float(
-            state_block.get("risk_environment"),
-            0.5,
-        ) or 0.5
-
-        metrics_block = market_intelligence.get("metrics", {}) or {}
-
-        trend_strength = (
-            _safe_float(state_block.get("trend_strength"), None)
-            if state_block.get("trend_strength") is not None
-            else None
-        )
-
-        if trend_strength is None:
-            trend_strength = (
-                float(scores.get("technical_score", 10)) * 0.6
-                + float(scores.get("market_score", 10)) * 0.4
-            ) / 100.0
-
-        trend_strength = _clamp(float(trend_strength), 0.0, 1.0)
-
-    except Exception as e:
-        logger.warning("Market intelligence fallback: %s", e)
     
-        market_intelligence = {}
+    market_intelligence = get_market_intelligence(
+        user_id=user_id,
+        scores=scores,
+    )
     
-        market_cycle = "neutral"
-        temperature = "cool"
+    if not market_intelligence:
+        raise RuntimeError("market_intelligence_empty")
     
-        short_trend = "trading_range"
-        mid_trend = "trading_range"
-        long_trend = "trading_range"
+    trend_block = market_intelligence.get("trend") or {}
+    state_block = market_intelligence.get("state") or {}
+    metrics_block = market_intelligence.get("metrics") or {}
     
-        volatility_state = "normal"
-        structure_bias = "neutral"
-        risk_environment = 0.5
+    market_cycle = market_intelligence.get("cycle")
+    temperature = market_intelligence.get("temperature")
     
-        trend_strength = (
-            float(scores.get("technical_score", 10)) * 0.6
-            + float(scores.get("market_score", 10)) * 0.4
-        ) / 100.0
+    short_trend = trend_block.get("short")
+    mid_trend = trend_block.get("mid")
+    long_trend = trend_block.get("long")
     
-        trend_strength = _clamp(trend_strength, 0.0, 1.0)
+    volatility_state = state_block.get("volatility_state")
+    structure_bias = state_block.get("structure_bias")
+    risk_environment = _safe_float(state_block.get("risk_environment"), 0.5)
     
-        metrics_block = {}
+    trend_strength = _safe_float(state_block.get("trend_strength"), 0.5)
+    
+    # 🔥 BELANGRIJK → raw waardes uit state
+    market_pressure = _safe_float(state_block.get("market_pressure"), 0.5)
+    transition_risk = _safe_float(state_block.get("transition_risk"), 0.5)
+    
+    # 🔥 GEEN compute_transition_detector meer
+    # 🔥 GEEN get_market_pressure meer
+    # 🔥 GEEN fallback meer
 
     # =========================================================
-    # 5️⃣ Position Sizing via Decision Engine (ALTIJD buiten except!)
+    # 3 Position Sizing via Decision Engine (ALTIJD buiten except!)
     # =========================================================
     
     try:
@@ -530,12 +469,12 @@ def run_bot_brain(
     exposure_multiplier = _clamp(exposure_multiplier, 0.0, 1.0)
 
     # -------------------------------------------------
-    # 6️⃣ Risk State
+    # 4 Risk State
     # -------------------------------------------------
     risk_state = _classify_risk_state(transition_risk, market_pressure)
 
     # -------------------------------------------------
-    # 7️⃣ Watch levels
+    # 5 Watch levels
     # -------------------------------------------------
     entry_value = _safe_float(setup.get("entry"))
     stop_value = _safe_float(setup.get("stop_loss"))
@@ -572,7 +511,7 @@ def run_bot_brain(
     alerts_active = monitoring
 
     # -------------------------------------------------
-    # 8️⃣ Action Logic
+    # 6 Action Logic
     # -------------------------------------------------
     market_score = _safe_float(scores.get("market_score"), 10) or 10.0
 
@@ -599,7 +538,7 @@ def run_bot_brain(
     strategy_reason = " ".join(reason_parts).strip() or "Engine decision"
 
     # -------------------------------------------------
-    # 9️⃣ Guardrails Engine
+    # 7 Guardrails Engine
     # -------------------------------------------------
     try:
         guardrails_result = apply_guardrails(
@@ -674,7 +613,7 @@ def run_bot_brain(
             strategy_reason = f"{strategy_reason} Blocked by guardrails."
 
     # -------------------------------------------------
-    # 10️⃣ Confidence
+    # 8 Confidence
     # -------------------------------------------------
     confidence_components = []
 
@@ -695,7 +634,7 @@ def run_bot_brain(
     )
 
     # -------------------------------------------------
-    # 11️⃣ Trade Quality
+    # 9 Trade Quality
     # -------------------------------------------------
     trade_quality = round(
         (
@@ -707,7 +646,7 @@ def run_bot_brain(
     )
 
     # -------------------------------------------------
-    # 12 Trade Plan Engine (FIXED - SINGLE SOURCE)
+    # 10 Trade Plan Engine (FIXED - SINGLE SOURCE)
     # -------------------------------------------------
     
     # snapshot (komt uit setup / snapshot agent)
@@ -808,21 +747,13 @@ def run_bot_brain(
         "trade_plan": trade_plan,
 
         "metrics": {
-            **metrics_block,  # ✅ juiste source
-        
-            "position_size": round(
-                _clamp(
-                    (_safe_float(scores.get("market_score"), 10) or 10) / 100.0,
-                    0.0,
-                    1.0
-                ),
-                2
-            ),
+            **metrics_block,
+            "position_size": exposure_multiplier,
         },
         
         "debug": {
             "scores": scores,
-            "transition_snapshot": transition_snapshot,
+            "market_intelligence": market_intelligence,
             "market_intelligence": market_intelligence,
             "regime_memory": regime_memory,
             "decision_result": decision_result,
