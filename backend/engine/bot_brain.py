@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional
 
 from backend.engine.position_engine import calculate_position
 from backend.engine.market_intelligence_engine import get_market_intelligence
-from backend.engine.decision_engine import decide_amount
 from backend.engine.guardrails_engine import apply_guardrails
 from backend.engine.trade_plan_engine import build_trade_plan
 from backend.ai_core.regime_memory import get_regime_memory
@@ -192,198 +191,15 @@ def run_bot_brain(
     portfolio_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
 
-    # ✅ FIX HIER
     portfolio_context = portfolio_context or {}
     setup = setup or {}
     scores = scores or {}
 
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
-    
-    # =================================================
-    # 🔥 DCA MODE (V1 FIXED - MET MARKET INTELLIGENCE)
-    # =================================================
+    normalized_scores = _normalize_scores(scores)
+
     strategy_type = str(setup.get("strategy_type") or "").lower().strip()
-    
-    if strategy_type == "dca":
-        logger.info("🟢 DCA MODE ACTIVE")
-    
-        # -----------------------------
-        # Position Engine (OOK VOOR DCA)
-        # -----------------------------
-        position = calculate_position(
-            setup=setup,
-            scores=normalized_scores,
-            regime_memory=None,
-            transition_risk=transition_risk_raw,
-        )
-        
-        base_amount = position["base_amount"]
-        final_amount = position["final_amount"]
-        position_size = position["position_size"]
-        exposure_multiplier = position["exposure_multiplier"]
-        
-        # DCA blijft buy, maar sizing is nu dynamisch
-        action = "buy"
-    
-        # -----------------------------
-        # Watch levels
-        # -----------------------------
-        entry_value = _safe_float(setup.get("entry"))
-        stop_value = _safe_float(setup.get("stop_loss"))
-    
-        raw_targets = setup.get("targets") or []
-        clean_targets = [_safe_float(t) for t in raw_targets if _safe_float(t) is not None]
-    
-        watch_levels = {
-            "entry": entry_value,
-            "stop_loss": stop_value,
-            "targets": clean_targets,
-            "pullback_zone": entry_value,
-            "breakout_trigger": clean_targets[0] if clean_targets else None,
-        }
-    
-        monitoring = any(v for v in watch_levels.values())
-        alerts_active = monitoring
-    
-        # -----------------------------
-        # Market Intelligence (GEEN fallback)
-        # -----------------------------
-        normalized_scores = _normalize_scores(scores)
-    
-        market_intelligence = get_market_intelligence(
-            user_id=user_id,
-            scores=normalized_scores,
-        )
-    
-        if not market_intelligence:
-            logger.error("❌ Market intelligence missing in DCA mode")
-            raise RuntimeError("market_intelligence_empty")
-    
-        trend_block = market_intelligence.get("trend") or {}
-        state_block = market_intelligence.get("state") or {}
-        metrics_block = market_intelligence.get("metrics") or {}
-    
-        market_cycle = market_intelligence.get("cycle")
-        temperature = market_intelligence.get("temperature")
-    
-        short_trend = trend_block.get("short")
-        mid_trend = trend_block.get("mid")
-        long_trend = trend_block.get("long")
-    
-        volatility_state = state_block.get("volatility_state")
-        structure_bias = state_block.get("structure_bias")
-        risk_environment = _safe_float(state_block.get("risk_environment"), 0.5)
-    
-        trend_strength = _safe_float(state_block.get("trend_strength"), 0.5)
-    
-        market_pressure_raw = _safe_float(state_block.get("market_pressure"), 0.5)
-        transition_risk_raw = _safe_float(state_block.get("transition_risk"), 0.5)
-    
-        # -----------------------------
-        # Guardrails
-        # -----------------------------
-        try:
-            guardrails_result = apply_guardrails(
-                proposed_amount_eur=final_amount,
-                portfolio_value_eur=_safe_float(
-                    portfolio_context.get("portfolio_value_eur"), 0.0
-                ) or 0.0,
-                current_asset_value_eur=_safe_float(
-                    portfolio_context.get("current_asset_value_eur"), 0.0
-                ) or 0.0,
-                today_allocated_eur=_safe_float(
-                    portfolio_context.get("today_allocated_eur"), 0.0
-                ) or 0.0,
-                kill_switch=portfolio_context.get("kill_switch", True),
-                max_trade_risk_eur=_safe_float(
-                    portfolio_context.get("max_trade_risk_eur"), None
-                ),
-                daily_allocation_eur=_safe_float(
-                    portfolio_context.get("daily_allocation_eur"), None
-                ),
-                max_asset_exposure_pct=_safe_float(
-                    portfolio_context.get("max_asset_exposure_pct"), None
-                ),
-            )
-        except Exception as e:
-            logger.error("❌ Guardrails error in DCA mode: %s", e)
-            raise
-    
-        adjusted_amount = guardrails_result.get("adjusted_amount_eur", final_amount)
-    
-        if adjusted_amount <= 0:
-            action = "hold"
-    
-        # -----------------------------
-        # Position size (market suggestion)
-        # -----------------------------
-        position_size = round(
-            _clamp(
-                (_safe_float(normalized_scores.get("market_score"), 10) or 10) / 100.0,
-                0.0,
-                1.0
-            ),
-            2
-        )
-    
-        # -----------------------------
-        # Output
-        # -----------------------------
-        return {
-            "date": date.today().isoformat(),
-            "action": action,
-            "amount_eur": round(float(adjusted_amount), 2),
-            "confidence": 0.7,
-            "reason": "DCA strategy active",
-        
-            "regime": None,
-            "cycle": market_cycle,
-            "temperature": temperature,
-        
-            "trend": {
-                "short": short_trend,
-                "mid": mid_trend,
-                "long": long_trend,
-            },
-        
-            "market_pressure": round(_clamp(market_pressure_raw, 0.0, 1.0), 4),
-            "transition_risk": round(_clamp(transition_risk_raw, 0.0, 1.0), 4),
-            "volatility_state": volatility_state,
-            "trend_strength": round(_clamp(trend_strength, 0.0, 1.0), 4),
-            "structure_bias": structure_bias,
-            "risk_environment": risk_environment,
-        
-            "base_amount": round(float(base_amount), 2),
-            "exposure_multiplier": 1.0,
-        
-            # ✅ FIX → NIET IN METRICS
-            "position_size": 1.0,
-        
-            "watch_levels": watch_levels,
-            "monitoring": monitoring,
-            "alerts_active": alerts_active,
-        
-            "guardrails_result": guardrails_result,
-            "guardrail_reason": None,
-        
-            "trade_plan": _default_trade_plan(
-                symbol=setup.get("symbol", "BTC"),
-                action=action,
-                reason="dca_mode",
-                watch_levels=watch_levels,
-            ),
-        
-            # ✅ CLEAN
-            "metrics": {
-                **metrics_block,
-            },
-        
-            "debug": {
-                "mode": "dca",
-                "market_intelligence": market_intelligence,
-            },
-        }
-    
+
     # -------------------------------------------------
     # 1️⃣ Regime Memory
     # -------------------------------------------------
@@ -404,74 +220,67 @@ def run_bot_brain(
     except Exception as e:
         logger.warning("Regime memory unavailable: %s", e)
 
-    
     # -------------------------------------------------
-    # 2 Market Intelligence Engine (V2 CORRECT)
+    # 2️⃣ Market Intelligence (single source)
     # -------------------------------------------------
-    
     market_intelligence = get_market_intelligence(
         user_id=user_id,
-        scores=scores,
+        scores=normalized_scores,
     )
-    
+
     if not market_intelligence:
         raise RuntimeError("market_intelligence_empty")
-    
+
     trend_block = market_intelligence.get("trend") or {}
     state_block = market_intelligence.get("state") or {}
     metrics_block = market_intelligence.get("metrics") or {}
-    
+
     market_cycle = market_intelligence.get("cycle")
     temperature = market_intelligence.get("temperature")
-    
+
     short_trend = trend_block.get("short")
     mid_trend = trend_block.get("mid")
     long_trend = trend_block.get("long")
-    
+
     volatility_state = state_block.get("volatility_state")
     structure_bias = state_block.get("structure_bias")
-    risk_environment = _safe_float(state_block.get("risk_environment"), 0.5)
-    
-    trend_strength = _safe_float(state_block.get("trend_strength"), 0.5)
-    
-    # 🔥 BELANGRIJK → raw waardes uit state
-    market_pressure = _safe_float(state_block.get("market_pressure"), 0.5)
-    transition_risk = _safe_float(state_block.get("transition_risk"), 0.5)
-    
-    # 🔥 GEEN compute_transition_detector meer
-    # 🔥 GEEN get_market_pressure meer
-    # 🔥 GEEN fallback meer
+    risk_environment = _safe_float(state_block.get("risk_environment"), 0.5) or 0.5
 
-    # =========================================================
-    # 3 Position Engine (NEW SINGLE SOURCE OF TRUTH)
-    # =========================================================
-    
+    trend_strength = _safe_float(state_block.get("trend_strength"), 0.5) or 0.5
+    market_pressure = _safe_float(state_block.get("market_pressure"), 0.5) or 0.5
+    transition_risk = _safe_float(state_block.get("transition_risk"), 0.5) or 0.5
+
+    # -------------------------------------------------
+    # 3️⃣ Position Engine (OOK VOOR DCA)
+    # -------------------------------------------------
     try:
         position = calculate_position(
             setup=setup,
-            scores=scores,
-            regime_memory=regime_memory,
+            scores=normalized_scores,
+            regime_memory=None if strategy_type == "dca" else regime_memory,
             transition_risk=transition_risk,
         )
-    
+
         base_amount = position["base_amount"]
         final_amount = position["final_amount"]
         position_size = position["position_size"]
         exposure_multiplier = position["exposure_multiplier"]
-    
+
         decision_result = position["decision"]
         base_reason = decision_result.get("setup_reason") or "Position engine result"
-    
+
         logger.info(
-            "📊 PositionEngine result | base=%.2f final=%.2f size=%.2f",
+            "📊 PositionEngine result | strategy=%s | base=%.2f final=%.2f size=%.3f exposure=%.2f",
+            strategy_type or "unknown",
             base_amount,
             final_amount,
             position_size,
+            exposure_multiplier,
         )
-    
+
     except Exception as e:
         logger.warning("PositionEngine fallback triggered: %s", e)
-    
+
         base_amount = 0.0
         final_amount = 0.0
         position_size = 0.0
@@ -480,12 +289,7 @@ def run_bot_brain(
         base_reason = f"PositionEngine fallback: {e}"
 
     # -------------------------------------------------
-    # 4 Risk State
-    # -------------------------------------------------
-    risk_state = _classify_risk_state(transition_risk, market_pressure)
-
-    # -------------------------------------------------
-    # 5 Watch levels
+    # 4️⃣ Watch levels
     # -------------------------------------------------
     entry_value = _safe_float(setup.get("entry"))
     stop_value = _safe_float(setup.get("stop_loss"))
@@ -522,34 +326,44 @@ def run_bot_brain(
     alerts_active = monitoring
 
     # -------------------------------------------------
-    # 6 Action Logic
+    # 5️⃣ Risk State
     # -------------------------------------------------
-    market_score = _safe_float(scores.get("market_score"), 10) or 10.0
+    risk_state = _classify_risk_state(transition_risk, market_pressure)
 
-    action = "hold"
-    reason_parts = []
+    # -------------------------------------------------
+    # 6️⃣ Action Logic
+    # -------------------------------------------------
+    market_score = _safe_float(normalized_scores.get("market_score"), 10) or 10.0
 
-    if base_amount <= 0 or final_amount <= 0:
-        reason_parts.append("No executable size.")
-        reason_parts.append(base_reason)
-
-    elif transition_risk > float(rules["max_transition_risk_to_buy"]):
-        reason_parts.append("Transition risk too high.")
-
-    elif market_pressure < float(rules["min_market_pressure_to_buy"]):
-        reason_parts.append("Market pressure too low.")
-
-    elif market_score < float(rules["min_market_score_to_buy"]):
-        reason_parts.append("Market score below threshold.")
-
-    else:
+    # DCA blijft conceptueel buy-first, maar guardrails mogen hem nog hold maken
+    if strategy_type == "dca":
         action = "buy"
-        reason_parts.append("All allocator conditions satisfied.")
+        strategy_reason = "DCA strategy active"
+    else:
+        action = "hold"
+        reason_parts = []
 
-    strategy_reason = " ".join(reason_parts).strip() or "Engine decision"
+        if base_amount <= 0 or final_amount <= 0:
+            reason_parts.append("No executable size.")
+            reason_parts.append(base_reason)
+
+        elif transition_risk > float(rules["max_transition_risk_to_buy"]):
+            reason_parts.append("Transition risk too high.")
+
+        elif market_pressure < float(rules["min_market_pressure_to_buy"]):
+            reason_parts.append("Market pressure too low.")
+
+        elif market_score < float(rules["min_market_score_to_buy"]):
+            reason_parts.append("Market score below threshold.")
+
+        else:
+            action = "buy"
+            reason_parts.append("All allocator conditions satisfied.")
+
+        strategy_reason = " ".join(reason_parts).strip() or "Engine decision"
 
     # -------------------------------------------------
-    # 7 Guardrails Engine
+    # 7️⃣ Guardrails
     # -------------------------------------------------
     try:
         guardrails_result = apply_guardrails(
@@ -624,7 +438,17 @@ def run_bot_brain(
             strategy_reason = f"{strategy_reason} Blocked by guardrails."
 
     # -------------------------------------------------
-    # 8 Confidence
+    # 8️⃣ Adjusted position size (NA guardrails)
+    # -------------------------------------------------
+    adjusted_position_size = 0.0
+    if base_amount > 0:
+        adjusted_position_size = round(
+            _clamp(adjusted_amount / base_amount, 0.0, 1.0),
+            3,
+        )
+
+    # -------------------------------------------------
+    # 9️⃣ Confidence
     # -------------------------------------------------
     confidence_components = []
 
@@ -645,35 +469,31 @@ def run_bot_brain(
     )
 
     # -------------------------------------------------
-    # 9 Trade Quality
+    # 🔟 Trade Quality
     # -------------------------------------------------
     trade_quality = round(
         (
             risk_environment * 0.4
             + trend_strength * 0.3
-            + (float(scores.get("setup_score", 10)) / 100.0) * 0.3
+            + (float(normalized_scores.get("setup_score", 10)) / 100.0) * 0.3
         ) * 100.0,
         1,
     )
 
     # -------------------------------------------------
-    # 10 Trade Plan Engine (FIXED - SINGLE SOURCE)
+    # 11️⃣ Trade Plan Engine
     # -------------------------------------------------
-    
-    # snapshot (komt uit setup / snapshot agent)
     snapshot_payload = {
         "entry": entry_value,
         "stop_loss": stop_value,
         "targets": clean_targets,
     }
-    
-    # decision context
+
     decision_payload = {
         "action": action,
         "symbol": setup.get("symbol"),
     }
-    
-    # 🔥 BELANGRIJK → strategy_type doorgeven
+
     bot_payload = {
         "min_rr": _safe_float(setup.get("min_rr"), 1.5) or 1.5,
         "max_risk_per_trade": _safe_float(
@@ -681,16 +501,16 @@ def run_bot_brain(
             or setup.get("max_risk_per_trade"),
             None,
         ),
-        "strategy_type": str(setup.get("strategy_type") or "").lower().strip(),
+        "strategy_type": strategy_type,
     }
-    
+
     brain_context = {
         "regime": regime_label,
         "reason": strategy_reason,
     }
-    
+
     trade_plan = None
-    
+
     try:
         trade_plan = build_trade_plan(
             snapshot=snapshot_payload,
@@ -698,13 +518,11 @@ def run_bot_brain(
             decision=decision_payload,
             bot=bot_payload,
         )
-    
+
     except Exception as e:
         logger.warning("Trade plan engine error: %s", e)
         trade_plan = None
-    
-    
-    # 🔥 fallback (ALTijd iets teruggeven)
+
     if not trade_plan:
         trade_plan = {
             "symbol": setup.get("symbol", "BTC"),
@@ -715,7 +533,7 @@ def run_bot_brain(
             "risk": {"rr": None, "risk_eur": None},
             "notes": ["fallback"],
         }
-        
+
     # -------------------------------------------------
     # Final output
     # -------------------------------------------------
@@ -725,16 +543,17 @@ def run_bot_brain(
         "amount_eur": round(float(adjusted_amount), 2),
         "confidence": confidence,
         "reason": strategy_reason,
-    
+
         "regime": regime_label,
         "cycle": market_cycle,
         "temperature": temperature,
-    
-        "short_trend": short_trend,
-        "mid_trend": mid_trend,
-        "long_trend": long_trend,
-    
-        # raw values
+
+        "trend": {
+            "short": short_trend,
+            "mid": mid_trend,
+            "long": long_trend,
+        },
+
         "market_pressure": round(_clamp(market_pressure, 0.0, 1.0), 4),
         "transition_risk": round(_clamp(transition_risk, 0.0, 1.0), 4),
         "volatility_state": volatility_state,
@@ -742,31 +561,29 @@ def run_bot_brain(
         "structure_bias": structure_bias,
         "risk_environment": risk_environment,
         "risk_state": risk_state,
-    
+
         "base_amount": round(float(base_amount), 2),
         "exposure_multiplier": exposure_multiplier,
-    
-        # ✅ FIX → HIER HOORT HIJ
-        "position_size": exposure_multiplier,
-    
+        "position_size": adjusted_position_size,
+
         "trade_quality": trade_quality,
-    
+
         "watch_levels": watch_levels,
         "monitoring": monitoring,
         "alerts_active": alerts_active,
-    
+
         "guardrails_result": guardrails_result,
         "guardrail_reason": guardrail_reason,
-    
+
         "trade_plan": trade_plan,
-    
-        # ✅ CLEAN
+
         "metrics": {
             **metrics_block,
+            "position_size": adjusted_position_size,
         },
-    
+
         "debug": {
-            "scores": scores,
+            "scores": normalized_scores,
             "market_intelligence": market_intelligence,
             "regime_memory": regime_memory,
             "decision_result": decision_result,
