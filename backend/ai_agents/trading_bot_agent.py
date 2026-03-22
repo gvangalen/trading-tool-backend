@@ -1125,27 +1125,21 @@ def _persist_decision_and_order(
     guardrails_result = decision.get("guardrails_result") or {}
     setup_match = decision.get("setup_match") or {}
 
-    # 🔥 metrics ophalen (single source vanuit brain)
+    # 🔥 SINGLE SOURCE: metrics
     metrics = decision.get("metrics") or {}
 
-    market_pressure = float(
-        metrics.get("market_pressure")
-        or decision.get("market_pressure")
-        or 0
-    )
-
-    transition_risk = float(
-        metrics.get("transition_risk")
-        or decision.get("transition_risk")
-        or 0
-    )
+    # 🔥 GEEN dubbele fallback chaos meer
+    market_pressure = float(metrics.get("market_pressure") or 0)
+    transition_risk = float(metrics.get("transition_risk") or 0)
 
     # =====================================================
-    # 🔥 FIX: position_size correct ophalen (GEEN 'or' meer)
+    # 🔥 FIX: position_size (GEEN 'or' bug)
     # =====================================================
     raw_position_size = decision.get("position_size")
+
     if raw_position_size is None:
         raw_position_size = metrics.get("position_size")
+
     if raw_position_size is None:
         raw_position_size = 0.5
 
@@ -1171,6 +1165,7 @@ def _persist_decision_and_order(
         "regime": decision.get("regime"),
         "risk_state": decision.get("risk_state"),
 
+        # 🔥 alleen metrics gebruiken
         "market_pressure": market_pressure,
         "transition_risk": transition_risk,
 
@@ -1181,7 +1176,7 @@ def _persist_decision_and_order(
         "base_amount": decision.get("base_amount"),
         "execution_mode": decision.get("execution_mode"),
 
-        # 🔥 FIXED position_size
+        # 🔥 FIXED
         "position_size": position_size,
         "exposure_multiplier": exposure_multiplier,
 
@@ -1401,15 +1396,17 @@ def run_trading_bot_agent(
             )
 
             # =========================
-            # 🔥 FIX: metrics + position_size
+            # 🔥 FIX: position_size correct (GEEN 'or')
             # =========================
 
             metrics = brain.get("metrics") or {}
 
-            position_size = float(
-                metrics.get("position_size") or 0.5
-            )
+            raw_position_size = metrics.get("position_size")
 
+            if raw_position_size is None:
+                raw_position_size = 0.5
+
+            position_size = float(raw_position_size)
             position_size = max(0.0, min(position_size, 1.0))
 
             # =========================
@@ -1444,6 +1441,7 @@ def run_trading_bot_agent(
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
 
+                # 🔥 ALLEEN metrics gebruiken
                 "market_pressure": metrics.get("market_pressure"),
                 "transition_risk": metrics.get("transition_risk"),
 
@@ -1462,7 +1460,7 @@ def run_trading_bot_agent(
                 "setup_match": setup_match,
                 "live_price": live_price,
 
-                # 🔥 CRUCIAAL
+                # 🔥 SINGLE SOURCE
                 "metrics": metrics,
             }
 
