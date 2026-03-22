@@ -741,7 +741,7 @@ def run_bot_brain(
         "trade_plan": trade_plan,
 
         "metrics": {
-            **metrics,  # 🔥 komt uit market_intelligence
+            **metrics_block,  # ✅ juiste source
         
             "position_size": round(
                 _clamp(
@@ -751,8 +751,8 @@ def run_bot_brain(
                 ),
                 2
             ),
-        }
-
+        },
+        
         "debug": {
             "scores": scores,
             "transition_snapshot": transition_snapshot,
