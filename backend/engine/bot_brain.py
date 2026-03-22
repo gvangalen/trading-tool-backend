@@ -257,7 +257,7 @@ def run_bot_brain(
         position = calculate_position(
             setup=setup,
             scores=normalized_scores,
-            regime_memory=None if strategy_type == "dca" else regime_memory,
+            regime_memory=regime_memory
             transition_risk=transition_risk,
         )
 
@@ -266,7 +266,7 @@ def run_bot_brain(
         position_size = position["position_size"]
         exposure_multiplier = position["exposure_multiplier"]
 
-        decision_result = position["decision"]
+        decision_result = position["raw"]
         base_reason = decision_result.get("setup_reason") or "Position engine result"
 
         logger.info(
