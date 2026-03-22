@@ -199,20 +199,25 @@ def run_bot_brain(
     scores = scores or {}
 
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
-    # =================================================
-    # 🔥 DCA MODE (V1 SIMPEL)
-    # =================================================
     
+    # =================================================
+    # 🔥 DCA MODE (V1 FIXED - MET MARKET INTELLIGENCE)
+    # =================================================
     strategy_type = str(setup.get("strategy_type") or "").lower().strip()
     
     if strategy_type == "dca":
         logger.info("🟢 DCA MODE ACTIVE")
     
+        # -----------------------------
+        # Base amount
+        # -----------------------------
         base_amount = float(setup.get("base_amount") or 0.0)
         action = "buy"
         final_amount = base_amount
     
-        # watch levels blijven gewoon
+        # -----------------------------
+        # Watch levels
+        # -----------------------------
         entry_value = _safe_float(setup.get("entry"))
         stop_value = _safe_float(setup.get("stop_loss"))
     
@@ -230,7 +235,43 @@ def run_bot_brain(
         monitoring = any(v for v in watch_levels.values())
         alerts_active = monitoring
     
-        # guardrails blijft
+        # -----------------------------
+        # Market Intelligence (GEEN fallback)
+        # -----------------------------
+        normalized_scores = _normalize_scores(scores)
+    
+        market_intelligence = get_market_intelligence(
+            user_id=user_id,
+            scores=normalized_scores,
+        )
+    
+        if not market_intelligence:
+            logger.error("❌ Market intelligence missing in DCA mode")
+            raise RuntimeError("market_intelligence_empty")
+    
+        trend_block = market_intelligence.get("trend") or {}
+        state_block = market_intelligence.get("state") or {}
+        metrics_block = market_intelligence.get("metrics") or {}
+    
+        market_cycle = market_intelligence.get("cycle")
+        temperature = market_intelligence.get("temperature")
+    
+        short_trend = trend_block.get("short")
+        mid_trend = trend_block.get("mid")
+        long_trend = trend_block.get("long")
+    
+        volatility_state = state_block.get("volatility_state")
+        structure_bias = state_block.get("structure_bias")
+        risk_environment = _safe_float(state_block.get("risk_environment"), 0.5)
+    
+        trend_strength = _safe_float(state_block.get("trend_strength"), 0.5)
+    
+        market_pressure_raw = _safe_float(state_block.get("market_pressure"), 0.5)
+        transition_risk_raw = _safe_float(state_block.get("transition_risk"), 0.5)
+    
+        # -----------------------------
+        # Guardrails
+        # -----------------------------
         try:
             guardrails_result = apply_guardrails(
                 proposed_amount_eur=final_amount,
@@ -254,26 +295,53 @@ def run_bot_brain(
                     portfolio_context.get("max_asset_exposure_pct"), None
                 ),
             )
-        except Exception:
-            guardrails_result = {
-                "allowed": True,
-                "adjusted_amount_eur": final_amount,
-                "original_amount_eur": final_amount,
-                "warnings": [],
-                "blocked_by": None,
-            }
+        except Exception as e:
+            logger.error("❌ Guardrails error in DCA mode: %s", e)
+            raise
     
         adjusted_amount = guardrails_result.get("adjusted_amount_eur", final_amount)
     
         if adjusted_amount <= 0:
             action = "hold"
     
+        # -----------------------------
+        # Position size (market suggestion)
+        # -----------------------------
+        position_size = round(
+            _clamp(
+                (_safe_float(normalized_scores.get("market_score"), 10) or 10) / 100.0,
+                0.0,
+                1.0
+            ),
+            2
+        )
+    
+        # -----------------------------
+        # Output
+        # -----------------------------
         return {
             "date": date.today().isoformat(),
             "action": action,
             "amount_eur": round(float(adjusted_amount), 2),
             "confidence": 0.7,
             "reason": "DCA strategy active",
+    
+            "regime": None,
+            "cycle": market_cycle,
+            "temperature": temperature,
+    
+            "trend": {
+                "short": short_trend,
+                "mid": mid_trend,
+                "long": long_trend,
+            },
+    
+            "market_pressure": round(_clamp(market_pressure_raw, 0.0, 1.0), 4),
+            "transition_risk": round(_clamp(transition_risk_raw, 0.0, 1.0), 4),
+            "volatility_state": volatility_state,
+            "trend_strength": round(_clamp(trend_strength, 0.0, 1.0), 4),
+            "structure_bias": structure_bias,
+            "risk_environment": risk_environment,
     
             "base_amount": round(float(base_amount), 2),
             "exposure_multiplier": 1.0,
@@ -283,27 +351,26 @@ def run_bot_brain(
             "alerts_active": alerts_active,
     
             "guardrails_result": guardrails_result,
+            "guardrail_reason": None,
+    
+            "trade_plan": _default_trade_plan(
+                symbol=setup.get("symbol", "BTC"),
+                action=action,
+                reason="dca_mode",
+                watch_levels=watch_levels,
+            ),
     
             "metrics": {
-                "market_pressure": 50,
-                "transition_risk": 50,
-                "setup_quality": 50,
-                "volatility": 50,
-                "trend_strength": 50,
-    
-                # market suggestion voor jouw frontend
-                "position_size": round(
-                    _clamp(
-                        (_safe_float(scores.get("market_score"), 10) or 10) / 100.0,
-                        0.0,
-                        1.0
-                    ),
-                    2
-                ),
+                **metrics_block,
+                "market_pressure": round(_clamp(market_pressure_raw, 0.0, 1.0) * 100, 1),
+                "transition_risk": round(_clamp(transition_risk_raw, 0.0, 1.0) * 100, 1),
+                "trend_strength": round(_clamp(trend_strength, 0.0, 1.0) * 100, 1),
+                "position_size": position_size,
             },
     
             "debug": {
                 "mode": "dca",
+                "market_intelligence": market_intelligence,
             },
         }
     
