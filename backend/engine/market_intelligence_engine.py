@@ -263,6 +263,45 @@ def compute_market_intelligence(
     # -------------------------------------------------
     # Final output
     # -------------------------------------------------
+    logger.info(
+    """
+    🧠 MARKET INTELLIGENCE DEBUG
+    --------------------------------
+    INPUT:
+    scores=%s
+
+    RAW:
+    market_pressure=%.4f
+    transition_risk=%.4f
+    trend_strength=%.4f
+
+    DERIVED:
+    cycle=%s
+    temperature=%s
+    volatility_state=%s
+    risk_state=%s
+
+    OUTPUT METRICS:
+    market_pressure_score=%s
+    transition_risk_score=%s
+    trend_strength_score=%s
+    volatility_score=%s
+    setup_score=%s
+    """,
+    scores,
+    market_pressure,
+    transition_risk,
+    trend_strength,
+    market_cycle,
+    temperature,
+    volatility_state,
+    risk_state,
+    market_pressure_score,
+    transition_risk_score,
+    trend_strength_score,
+    volatility_score,
+    setup_score,
+)
 
     return {
         "cycle": market_cycle,
