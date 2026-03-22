@@ -323,49 +323,49 @@ def run_bot_brain(
             "amount_eur": round(float(adjusted_amount), 2),
             "confidence": 0.7,
             "reason": "DCA strategy active",
-    
+        
             "regime": None,
             "cycle": market_cycle,
             "temperature": temperature,
-    
+        
             "trend": {
                 "short": short_trend,
                 "mid": mid_trend,
                 "long": long_trend,
             },
-    
+        
             "market_pressure": round(_clamp(market_pressure_raw, 0.0, 1.0), 4),
             "transition_risk": round(_clamp(transition_risk_raw, 0.0, 1.0), 4),
             "volatility_state": volatility_state,
             "trend_strength": round(_clamp(trend_strength, 0.0, 1.0), 4),
             "structure_bias": structure_bias,
             "risk_environment": risk_environment,
-    
+        
             "base_amount": round(float(base_amount), 2),
             "exposure_multiplier": 1.0,
-    
+        
+            # ✅ FIX → NIET IN METRICS
+            "position_size": 1.0,
+        
             "watch_levels": watch_levels,
             "monitoring": monitoring,
             "alerts_active": alerts_active,
-    
+        
             "guardrails_result": guardrails_result,
             "guardrail_reason": None,
-    
+        
             "trade_plan": _default_trade_plan(
                 symbol=setup.get("symbol", "BTC"),
                 action=action,
                 reason="dca_mode",
                 watch_levels=watch_levels,
             ),
-    
+        
+            # ✅ CLEAN
             "metrics": {
                 **metrics_block,
-                "market_pressure": round(_clamp(market_pressure_raw, 0.0, 1.0) * 100, 1),
-                "transition_risk": round(_clamp(transition_risk_raw, 0.0, 1.0) * 100, 1),
-                "trend_strength": round(_clamp(trend_strength, 0.0, 1.0) * 100, 1),
-                "position_size": position_size,
             },
-    
+        
             "debug": {
                 "mode": "dca",
                 "market_intelligence": market_intelligence,
@@ -714,16 +714,16 @@ def run_bot_brain(
         "amount_eur": round(float(adjusted_amount), 2),
         "confidence": confidence,
         "reason": strategy_reason,
-
+    
         "regime": regime_label,
         "cycle": market_cycle,
         "temperature": temperature,
-
+    
         "short_trend": short_trend,
         "mid_trend": mid_trend,
         "long_trend": long_trend,
-
-        # raw values voor engine/debug
+    
+        # raw values
         "market_pressure": round(_clamp(market_pressure, 0.0, 1.0), 4),
         "transition_risk": round(_clamp(transition_risk, 0.0, 1.0), 4),
         "volatility_state": volatility_state,
@@ -731,29 +731,31 @@ def run_bot_brain(
         "structure_bias": structure_bias,
         "risk_environment": risk_environment,
         "risk_state": risk_state,
-
+    
         "base_amount": round(float(base_amount), 2),
         "exposure_multiplier": exposure_multiplier,
-
+    
+        # ✅ FIX → HIER HOORT HIJ
+        "position_size": exposure_multiplier,
+    
         "trade_quality": trade_quality,
-
+    
         "watch_levels": watch_levels,
         "monitoring": monitoring,
         "alerts_active": alerts_active,
-
+    
         "guardrails_result": guardrails_result,
         "guardrail_reason": guardrail_reason,
-
+    
         "trade_plan": trade_plan,
-
+    
+        # ✅ CLEAN
         "metrics": {
             **metrics_block,
-            "position_size": exposure_multiplier,
         },
-        
+    
         "debug": {
             "scores": scores,
-            "market_intelligence": market_intelligence,
             "market_intelligence": market_intelligence,
             "regime_memory": regime_memory,
             "decision_result": decision_result,
