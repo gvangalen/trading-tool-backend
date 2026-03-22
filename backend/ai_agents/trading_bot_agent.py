@@ -1125,9 +1125,9 @@ def _persist_decision_and_order(
     guardrails_result = decision.get("guardrails_result") or {}
     setup_match = decision.get("setup_match") or {}
 
+    # 🔥 FIX 1: metrics goed ophalen
     metrics = decision.get("metrics") or {}
 
-    # ✅ FIXED
     market_pressure = float(
         metrics.get("market_pressure")
         or decision.get("market_pressure")
@@ -1140,7 +1140,16 @@ def _persist_decision_and_order(
         or 0
     )
 
-    position_size = float(metrics.get("position_size") or 50)
+    # 🔥 FIX 2: position_size correct (GEEN 50 fallback meer)
+    position_size = float(
+        decision.get("position_size")
+        or metrics.get("position_size")
+        or 0.5
+    )
+
+    # safety clamp (0–1)
+    position_size = max(0.0, min(position_size, 1.0))
+
     exposure_multiplier = float(decision.get("exposure_multiplier") or 1.0)
 
     scores_payload = {
@@ -1160,7 +1169,6 @@ def _persist_decision_and_order(
         "regime": decision.get("regime"),
         "risk_state": decision.get("risk_state"),
 
-        # ✅ FIXED
         "market_pressure": market_pressure,
         "transition_risk": transition_risk,
 
@@ -1171,6 +1179,7 @@ def _persist_decision_and_order(
         "base_amount": decision.get("base_amount"),
         "execution_mode": decision.get("execution_mode"),
 
+        # 🔥 FIX 3: correcte position_size opslaan
         "position_size": position_size,
         "exposure_multiplier": exposure_multiplier,
 
@@ -1314,9 +1323,9 @@ def run_trading_bot_agent(
                     "targets": snapshot.get("targets"),
                 })
 
-            # =====================================================
-            # 💰 Portfolio context (FIXED CORRECT)
-            # =====================================================
+            # =========================
+            # Portfolio
+            # =========================
 
             today_spent_eur = get_today_spent_eur(
                 conn,
@@ -1338,7 +1347,6 @@ def run_trading_bot_agent(
                 bot["symbol"],
             )
 
-            # 🔥 FIX: juiste exposure berekening
             cash_available = max(0.0, cash_balance_eur)
 
             portfolio_value_eur = max(
@@ -1346,16 +1354,9 @@ def run_trading_bot_agent(
                 1.0,
             )
 
-            logger.info(
-                "📊 PORTFOLIO DEBUG | cash=%s | asset=%s | portfolio=%s",
-                cash_balance_eur,
-                current_asset_value_eur,
-                portfolio_value_eur,
-            )
-
-            # =====================================================
-            # 🧠 Bot brain
-            # =====================================================
+            # =========================
+            # Bot brain
+            # =========================
 
             portfolio_context = {
                 "today_allocated_eur": today_spent_eur,
@@ -1389,69 +1390,78 @@ def run_trading_bot_agent(
                 snapshot=snapshot,
             )
 
-            trade_plan = brain.get("trade_plan")
-            if not trade_plan:
-                trade_plan = _default_trade_plan(
-                    symbol=symbol,
-                    action=action,
-                    reason="agent_fallback",
-                    watch_levels=brain.get("watch_levels"),
-                    snapshot=snapshot,
-                )
+            trade_plan = brain.get("trade_plan") or _default_trade_plan(
+                symbol=symbol,
+                action=action,
+                reason="fallback",
+                watch_levels=brain.get("watch_levels"),
+                snapshot=snapshot,
+            )
 
-            metrics = brain.get("metrics", {})
+            # =========================
+            # 🔥 FIX: metrics + position_size
+            # =========================
 
-            # 🔥 FIX: position_size moet 0–1 zijn (niet 0–100)
-            position_size = float(metrics.get("position_size") or 0.5)
-            
-            # extra safety (nooit >1 of <0)
+            metrics = brain.get("metrics") or {}
+
+            position_size = float(
+                metrics.get("position_size") or 0.5
+            )
+
             position_size = max(0.0, min(position_size, 1.0))
-            
+
+            # =========================
+            # Decision
+            # =========================
+
             decision = {
                 "bot_id": bot["bot_id"],
                 "symbol": symbol,
-            
+
                 "action": action,
                 "confidence": _map_confidence(float(brain.get("confidence") or 0.0)),
                 "status": "planned",
-            
+
                 "amount_eur": round(float(brain.get("amount_eur") or 0), 2),
                 "requested_amount_eur": round(
                     float(brain.get("debug", {}).get("final_amount") or 0), 2
                 ),
-            
+
                 "base_amount": brain.get("base_amount") or setup_payload.get("base_amount"),
                 "execution_mode": setup_payload.get("execution_mode"),
-            
+
                 # ✅ FIXED
                 "position_size": round(position_size, 2),
-            
+
                 "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
-            
+
                 "score": brain.get("trade_quality"),
                 "trade_quality": brain.get("trade_quality"),
-            
+
                 "strategy_reason": brain.get("reason"),
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
-            
+
                 "market_pressure": metrics.get("market_pressure"),
                 "transition_risk": metrics.get("transition_risk"),
-            
+
                 "volatility_state": brain.get("volatility_state"),
                 "trend_strength": brain.get("trend_strength"),
                 "structure_bias": brain.get("structure_bias"),
-            
+
                 "trade_plan": trade_plan,
                 "watch_levels": brain.get("watch_levels"),
                 "monitoring": brain.get("monitoring"),
                 "alerts_active": brain.get("alerts_active"),
-            
+
                 "guardrails_result": brain.get("guardrails_result"),
                 "guardrail_reason": brain.get("guardrail_reason"),
-            
+
                 "setup_match": setup_match,
                 "live_price": live_price,
+
+                # 🔥 CRUCIAAL
+                "metrics": metrics,
             }
 
             decision_id = _persist_decision_and_order(
@@ -1509,7 +1519,9 @@ def run_trading_bot_agent(
                     "setup": scores.get("setup"),
                     "market_pressure": metrics.get("market_pressure"),
                     "transition_risk": metrics.get("transition_risk"),
-                    "position_size": metrics.get("position_size"),
+
+                    # ✅ FIXED
+                    "position_size": position_size,
                 },
                 "guardrails_result": decision.get("guardrails_result"),
                 "trade_plan": trade_plan,
