@@ -22,10 +22,11 @@ def decide_amount(
 
     Flow:
         1) Base sizing via curve_engine
-        2) Exposure adjustment via exposure_engine
-        3) Return structured result (no silent numbers)
+        2) Setup conviction adjustment
+        3) Exposure adjustment via exposure_engine
+        4) Return structured result
 
-    Decision engine rekent NOOIT zelf.
+    Decision engine rekent NOOIT zelf (alleen orkestratie).
     """
 
     if not setup:
@@ -43,7 +44,7 @@ def decide_amount(
 
     if execution_mode == "fixed":
 
-        sized_amount = round(float(base_amount), 2)
+        sized_amount = float(base_amount)
 
     elif execution_mode == "custom":
 
@@ -73,9 +74,9 @@ def decide_amount(
     # =================================================
     # 1.5️⃣ Setup Influence (Conviction Layer)
     # =================================================
-    
+
     setup_score = scores.get("setup_score", scores.get("setup", 10))
-    
+
     if isinstance(setup_score, (int, float)):
         if setup_score < 40:
             sized_amount *= 0.5
@@ -88,6 +89,9 @@ def decide_amount(
     else:
         setup_reason = "No setup score"
 
+    # 🔥 FIX: clamp sized_amount (voorkomt extremes)
+    sized_amount = max(0.0, min(float(sized_amount), float(base_amount) * 2))
+
     # =================================================
     # 2️⃣ Exposure Layer (Regime Risk Control)
     # =================================================
@@ -97,10 +101,24 @@ def decide_amount(
         transition_risk=transition_risk,
     )
 
+    # 🔥 FIX: veilige multiplier
+    multiplier = exposure_data.get("multiplier", 1.0)
+
+    if not isinstance(multiplier, (int, float)):
+        multiplier = 1.0
+
+    # HARD SAFETY RANGE
+    multiplier = max(0.0, min(multiplier, 2.0))
+
     final_amount = apply_exposure_to_amount(
         amount=sized_amount,
-        exposure_multiplier=exposure_data["multiplier"],
+        exposure_multiplier=multiplier,
     )
+
+    # 🔥 FIX: afronden
+    final_amount = round(float(final_amount), 2)
+
+    sized_amount = round(float(sized_amount), 2)
 
     # =================================================
     # 3️⃣ Structured Output (VERY IMPORTANT)
@@ -109,10 +127,10 @@ def decide_amount(
     return {
         "base_amount": round(float(base_amount), 2),
         "sized_amount": sized_amount,
-        "exposure_multiplier": exposure_data["multiplier"],
+        "exposure_multiplier": multiplier,
         "final_amount": final_amount,
-        "risk_mode": exposure_data["risk_mode"],
-        "exposure_reason": exposure_data["reason"],
-        "exposure_components": exposure_data["components"],
+        "risk_mode": exposure_data.get("risk_mode"),
+        "exposure_reason": exposure_data.get("reason"),
+        "exposure_components": exposure_data.get("components"),
         "setup_reason": setup_reason,
     }
