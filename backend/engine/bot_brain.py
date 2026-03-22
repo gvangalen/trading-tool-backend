@@ -257,7 +257,7 @@ def run_bot_brain(
         position = calculate_position(
             setup=setup,
             scores=normalized_scores,
-            regime_memory=regime_memory
+            regime_memory=regime_memory,
             transition_risk=transition_risk,
         )
 
