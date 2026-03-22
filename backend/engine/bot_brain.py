@@ -640,61 +640,7 @@ def run_bot_brain(
     )
 
     # -------------------------------------------------
-    # 12️⃣ Dashboard-ready metrics (ALTIJD 0..100)
-    # -------------------------------------------------
-    market_pressure_score = (
-        metrics_block.get("market_pressure")
-        if metrics_block.get("market_pressure") is not None
-        else metrics_block.get("market_pressure_score")
-    )
-
-    transition_risk_score = (
-        metrics_block.get("transition_risk")
-        if metrics_block.get("transition_risk") is not None
-        else metrics_block.get("transition_risk_score")
-    )
-
-    setup_quality_score = (
-        metrics_block.get("setup_quality")
-        if metrics_block.get("setup_quality") is not None
-        else metrics_block.get("setup_quality_score")
-    )
-
-    volatility_score = (
-        metrics_block.get("volatility")
-        if metrics_block.get("volatility") is not None
-        else metrics_block.get("volatility_score")
-    )
-
-    trend_strength_score = (
-        metrics_block.get("trend_strength")
-        if metrics_block.get("trend_strength") is not None
-        else metrics_block.get("trend_strength_score")
-    )
-
-    if market_pressure_score is None:
-        market_pressure_score = round(_clamp(market_pressure, 0.0, 1.0) * 100)
-
-    if transition_risk_score is None:
-        transition_risk_score = round(_clamp(transition_risk, 0.0, 1.0) * 100)
-
-    if setup_quality_score is None:
-        setup_quality_score = round(trade_quality)
-
-    if volatility_score is None:
-        volatility_score = 50
-
-    if trend_strength_score is None:
-        trend_strength_score = round(_clamp(trend_strength, 0.0, 1.0) * 100)
-
-    market_pressure_score = round(_clamp(_safe_float(market_pressure_score, 0.0) or 0.0, 0.0, 100.0), 2)
-    transition_risk_score = round(_clamp(_safe_float(transition_risk_score, 0.0) or 0.0, 0.0, 100.0), 2)
-    setup_quality_score = round(_clamp(_safe_float(setup_quality_score, 0.0) or 0.0, 0.0, 100.0), 2)
-    volatility_score = round(_clamp(_safe_float(volatility_score, 50.0) or 50.0, 0.0, 100.0), 2)
-    trend_strength_score = round(_clamp(_safe_float(trend_strength_score, 0.0) or 0.0, 0.0, 100.0), 2)
-
-    # -------------------------------------------------
-    # 13️⃣ Trade Plan Engine (FIXED - SINGLE SOURCE)
+    # 12 Trade Plan Engine (FIXED - SINGLE SOURCE)
     # -------------------------------------------------
     
     # snapshot (komt uit setup / snapshot agent)
@@ -794,13 +740,8 @@ def run_bot_brain(
 
         "trade_plan": trade_plan,
 
-        # 🔥 FIX — correcte UI percentage (0–100)
         "metrics": {
-            "market_pressure": market_pressure_score,
-            "transition_risk": transition_risk_score,
-            "setup_quality": setup_quality_score,
-            "volatility": volatility_score,
-            "trend_strength": trend_strength_score,
+            **metrics,  # 🔥 komt uit market_intelligence
         
             "position_size": round(
                 _clamp(
@@ -810,7 +751,7 @@ def run_bot_brain(
                 ),
                 2
             ),
-        },
+        }
 
         "debug": {
             "scores": scores,
