@@ -4,6 +4,7 @@ import logging
 from datetime import date
 from typing import Any, Dict, Optional
 
+from backend.engine.position_engine import calculate_position
 from backend.engine.market_intelligence_engine import get_market_intelligence
 from backend.engine.decision_engine import decide_amount
 from backend.engine.guardrails_engine import apply_guardrails
@@ -207,11 +208,22 @@ def run_bot_brain(
         logger.info("🟢 DCA MODE ACTIVE")
     
         # -----------------------------
-        # Base amount
+        # Position Engine (OOK VOOR DCA)
         # -----------------------------
-        base_amount = float(setup.get("base_amount") or 0.0)
+        position = calculate_position(
+            setup=setup,
+            scores=normalized_scores,
+            regime_memory=None,
+            transition_risk=transition_risk_raw,
+        )
+        
+        base_amount = position["base_amount"]
+        final_amount = position["final_amount"]
+        position_size = position["position_size"]
+        exposure_multiplier = position["exposure_multiplier"]
+        
+        # DCA blijft buy, maar sizing is nu dynamisch
         action = "buy"
-        final_amount = base_amount
     
         # -----------------------------
         # Watch levels
@@ -431,42 +443,41 @@ def run_bot_brain(
     # 🔥 GEEN fallback meer
 
     # =========================================================
-    # 3 Position Sizing via Decision Engine (ALTIJD buiten except!)
+    # 3 Position Engine (NEW SINGLE SOURCE OF TRUTH)
     # =========================================================
     
     try:
-        decision_result = decide_amount(
+        position = calculate_position(
             setup=setup,
             scores=scores,
             regime_memory=regime_memory,
             transition_risk=transition_risk,
         )
     
-        logger.info("DecisionEngine raw output: %s", decision_result)
+        base_amount = position["base_amount"]
+        final_amount = position["final_amount"]
+        position_size = position["position_size"]
+        exposure_multiplier = position["exposure_multiplier"]
     
-        final_amount, base_reason = _extract_decision_amount(decision_result)
+        decision_result = position["decision"]
+        base_reason = decision_result.get("setup_reason") or "Position engine result"
     
-        base_amount = _safe_float(
-            decision_result.get("base_amount") if isinstance(decision_result, dict) else 0.0,
-            0.0,
-        ) or 0.0
-    
-        exposure_multiplier = _safe_float(
-            decision_result.get("exposure_multiplier") if isinstance(decision_result, dict) else 1.0,
-            1.0,
-        ) or 1.0
+        logger.info(
+            "📊 PositionEngine result | base=%.2f final=%.2f size=%.2f",
+            base_amount,
+            final_amount,
+            position_size,
+        )
     
     except Exception as e:
-        logger.warning("DecisionEngine fallback triggered: %s", e)
+        logger.warning("PositionEngine fallback triggered: %s", e)
     
-        decision_result = None
         base_amount = 0.0
         final_amount = 0.0
+        position_size = 0.0
         exposure_multiplier = 1.0
-        base_reason = f"DecisionEngine fallback: {e}"
-    
-    # 🔥 HARD CAP (BELANGRIJK)
-    exposure_multiplier = _clamp(exposure_multiplier, 0.0, 1.0)
+        decision_result = {}
+        base_reason = f"PositionEngine fallback: {e}"
 
     # -------------------------------------------------
     # 4 Risk State
