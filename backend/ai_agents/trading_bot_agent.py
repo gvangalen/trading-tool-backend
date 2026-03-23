@@ -1330,15 +1330,15 @@ def run_trading_bot_agent(
             # =========================
             # Portfolio
             # =========================
-
+            
             today_spent_eur = get_today_spent_eur(
                 conn,
                 user_id,
                 bot["bot_id"],
                 report_date,
             )
-
-                cash_balance_eur = get_bot_balance(
+            
+            cash_balance_eur = get_bot_balance(
                 conn,
                 user_id,
                 bot["bot_id"],
