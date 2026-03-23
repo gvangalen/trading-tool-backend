@@ -492,6 +492,7 @@ def run_bot_brain(
     decision_payload = {
         "action": action,
         "symbol": setup.get("symbol"),
+        "live_price": portfolio_context.get("live_price"),
     }
 
     bot_payload = {
