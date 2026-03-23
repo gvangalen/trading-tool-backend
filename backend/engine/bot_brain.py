@@ -481,11 +481,19 @@ def run_bot_brain(
     # -------------------------------------------------
     # 11️⃣ Trade Plan Engine
     # -------------------------------------------------
-    snapshot_payload = {
-        "entry": entry_value,
-        "stop_loss": stop_value,
-        "targets": clean_targets,
-    }
+    
+    if strategy_type == "dca":
+        snapshot_payload = {
+            "entry": entry_value,
+            "stop_loss": None,
+            "targets": [],
+        }
+    else:
+        snapshot_payload = {
+            "entry": entry_value,
+            "stop_loss": stop_value,
+            "targets": clean_targets,
+        }
 
     decision_payload = {
         "action": action,
