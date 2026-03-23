@@ -1368,9 +1368,8 @@ def run_trading_bot_agent(
                 "max_trade_risk_eur": bot["budget"].get("max_order_eur"),
                 "daily_allocation_eur": bot["budget"].get("daily_limit_eur"),
                 "max_asset_exposure_pct": bot["budget"].get("max_asset_exposure_pct"),
+                "total_budget_eur": bot["budget"].get("total_eur"),
                 "kill_switch": True,
-
-                # 🔥 NIEUW
                 "live_price": live_price,
             }
 
