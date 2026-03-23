@@ -2,7 +2,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
     symbol = (decision.get("symbol") or "BTC").upper()
     action = (decision.get("action") or "hold").lower()
     strategy_type = (bot.get("strategy_type") or "").lower()
-    live_price = decision.get("live_price")  # 🔥 SINGLE SOURCE
+    live_price = decision.get("live_price")
 
     def empty_plan(reason="no_data"):
         return {
@@ -30,27 +30,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
     raw_targets = snapshot.get("targets") or []
 
     # =====================================================
-    # 🔥 DCA MODE (FINAL CLEAN VERSION)
-    # =====================================================
-    if strategy_type == "dca":
-        return {
-            "symbol": symbol,
-            "side": action,
-            "entry_plan": [
-                {
-                    "type": "watch",
-                    "label": "Observe accumulation zone",
-                    "price": round(float(entry), 2) if entry else None,
-                }
-            ] if entry else [],
-            "stop_loss": None,   # ❌ NIET tonen
-            "targets": [],       # ❌ NIET tonen
-            "position": {"units": None},
-            "risk": None,        # ❌ NIET tonen
-        }
-
-    # =====================================================
-    # HOLD / OBSERVE = WATCH MODE
+    # 1️⃣ HOLD / OBSERVE → WATCH MODE
     # =====================================================
     if action in ("hold", "observe"):
         entry_plan = []
@@ -95,7 +75,41 @@ def build_trade_plan(snapshot, brain, decision, bot):
         }
 
     # =====================================================
-    # SELL
+    # 2️⃣ DCA (alleen relevant bij BUY)
+    # =====================================================
+    if strategy_type == "dca":
+        price = None
+        if entry:
+            if isinstance(entry, list):
+                price = entry[0]
+            else:
+                price = entry
+
+        return {
+            "symbol": symbol,
+            "side": action,
+            "entry_plan": [
+                {
+                    "type": "watch",
+                    "label": "Observe accumulation zone",
+                    "price": round(float(price), 2) if price else None,
+                }
+            ] if price else [],
+            "stop_loss": {"price": None},
+            "targets": [],
+            "position": {"units": None},
+            "risk": {
+                "risk_per_unit": None,
+                "reward_per_unit": None,
+                "risk_eur": None,
+                "rr": None,
+                "regime": brain.get("regime"),
+                "note": "dca_mode",
+            },
+        }
+
+    # =====================================================
+    # 3️⃣ SELL
     # =====================================================
     if action == "sell":
         return {
@@ -116,7 +130,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
         }
 
     # =====================================================
-    # BUY / SHORT
+    # 4️⃣ BUY / NORMAL TRADE
     # =====================================================
     if entry is None or stop is None:
         return empty_plan("missing_entry_or_stop")
@@ -133,14 +147,11 @@ def build_trade_plan(snapshot, brain, decision, bot):
     if not entry:
         return empty_plan("empty_entry")
 
-    # =====================================================
-    # 🔥 ENTRY (DYNAMIC MET LIVE PRICE)
-    # =====================================================
     entry_price = sum(entry) / len(entry)
 
-    if live_price:
-        if action == "buy" and live_price > entry_price:
-            entry_price = live_price
+    # 🔥 Live price override (realistisch entry gedrag)
+    if live_price and action == "buy" and live_price > entry_price:
+        entry_price = live_price
 
     regime = brain.get("regime") or "neutral"
 
@@ -159,18 +170,12 @@ def build_trade_plan(snapshot, brain, decision, bot):
     if risk_per_unit <= 0:
         return empty_plan("invalid_risk_distance")
 
-    # =====================================================
-    # 🔥 TARGETS = ECHTE TARGETS (GEEN FAKE)
-    # =====================================================
     targets_plan = [
         {"label": f"TP{i+1}", "price": round(float(t), 2)}
         for i, t in enumerate(raw_targets)
         if t is not None
     ]
 
-    # =====================================================
-    # 🔥 REAL RR (GEBASEERD OP TARGET)
-    # =====================================================
     reward_per_unit = None
     rr = None
 
