@@ -1297,6 +1297,13 @@ def run_trading_bot_agent(
 
         for bot in bots:
 
+            symbol = (bot["symbol"] or DEFAULT_SYMBOL).upper()
+
+            # =====================================================
+            # 🔥 FIX 1: LIVE PRICE EERST OPHALEN
+            # =====================================================
+            live_price = _get_live_price(conn, symbol)
+
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -1310,7 +1317,7 @@ def run_trading_bot_agent(
                 strategy_id=bot["strategy_id"],
                 setup_id=bot.get("setup_id"),
                 setup_name=bot.get("strategy_type"),
-                symbol=bot.get("symbol"),
+                symbol=symbol,
             )
 
             if snapshot:
@@ -1341,7 +1348,7 @@ def run_trading_bot_agent(
                 conn,
                 user_id,
                 bot["bot_id"],
-                bot["symbol"],
+                symbol,
             )
 
             cash_available = max(0.0, cash_balance_eur)
@@ -1351,10 +1358,9 @@ def run_trading_bot_agent(
                 1.0,
             )
 
-            # =========================
-            # Bot brain
-            # =========================
-
+            # =====================================================
+            # 🔥 FIX 2: LIVE PRICE NAAR BRAIN STUREN
+            # =====================================================
             portfolio_context = {
                 "today_allocated_eur": today_spent_eur,
                 "portfolio_value_eur": portfolio_value_eur,
@@ -1363,8 +1369,14 @@ def run_trading_bot_agent(
                 "daily_allocation_eur": bot["budget"].get("daily_limit_eur"),
                 "max_asset_exposure_pct": bot["budget"].get("max_asset_exposure_pct"),
                 "kill_switch": True,
+
+                # 🔥 NIEUW
+                "live_price": live_price,
             }
 
+            # =====================================================
+            # Bot brain
+            # =====================================================
             brain = run_bot_brain(
                 user_id=user_id,
                 setup=setup_payload,
@@ -1377,9 +1389,7 @@ def run_trading_bot_agent(
                 portfolio_context=portfolio_context,
             )
 
-            symbol = (bot["symbol"] or DEFAULT_SYMBOL).upper()
             action = _normalize_action(brain.get("action"))
-            live_price = _get_live_price(conn, symbol)
 
             setup_match = _build_setup_match(
                 bot=bot,
@@ -1395,22 +1405,25 @@ def run_trading_bot_agent(
                 snapshot=snapshot,
             )
 
-            # =========================
-            # 🔥 FIX: position_size = DIRECT UIT BRAIN (SINGLE SOURCE)
-            # =========================
-            
+            # =====================================================
+            # Position size
+            # =====================================================
             raw_position_size = brain.get("position_size")
-            
+
             if raw_position_size is None:
-                raw_position_size = 0.0  # geen fallback naar 0.5 meer
-            
+                raw_position_size = 0.0
+
             position_size = float(raw_position_size)
             position_size = max(0.0, min(position_size, 1.0))
 
-            # =========================
-            # Decision
-            # =========================
+            # =====================================================
+            # 🔥 FIX 3: METRICS (BUG FIX)
+            # =====================================================
+            metrics = brain.get("metrics") or {}
 
+            # =====================================================
+            # Decision
+            # =====================================================
             decision = {
                 "bot_id": bot["bot_id"],
                 "symbol": symbol,
@@ -1427,9 +1440,7 @@ def run_trading_bot_agent(
                 "base_amount": brain.get("base_amount") or setup_payload.get("base_amount"),
                 "execution_mode": setup_payload.get("execution_mode"),
 
-                # ✅ FIXED
                 "position_size": round(position_size, 2),
-
                 "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
 
                 "score": brain.get("trade_quality"),
@@ -1439,7 +1450,7 @@ def run_trading_bot_agent(
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
 
-                # 🔥 ALLEEN metrics gebruiken
+                # 🔥 FIXED
                 "market_pressure": metrics.get("market_pressure"),
                 "transition_risk": metrics.get("transition_risk"),
 
@@ -1458,7 +1469,6 @@ def run_trading_bot_agent(
                 "setup_match": setup_match,
                 "live_price": live_price,
 
-                # 🔥 SINGLE SOURCE
                 "metrics": metrics,
             }
 
@@ -1517,8 +1527,6 @@ def run_trading_bot_agent(
                     "setup": scores.get("setup"),
                     "market_pressure": metrics.get("market_pressure"),
                     "transition_risk": metrics.get("transition_risk"),
-
-                    # ✅ FIXED
                     "position_size": position_size,
                 },
                 "guardrails_result": decision.get("guardrails_result"),
