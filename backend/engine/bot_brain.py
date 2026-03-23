@@ -362,59 +362,64 @@ def run_bot_brain(
 
         strategy_reason = " ".join(reason_parts).strip() or "Engine decision"
 
-    # -------------------------------------------------
-    # 7️⃣ Guardrails
-    # -------------------------------------------------
-    try:
-        guardrails_result = apply_guardrails(
-            proposed_amount_eur=final_amount,
-            portfolio_value_eur=_safe_float(
-                portfolio_context.get("portfolio_value_eur"),
-                0.0,
-            ) or 0.0,
-            current_asset_value_eur=_safe_float(
-                portfolio_context.get("current_asset_value_eur"),
-                0.0,
-            ) or 0.0,
-            today_allocated_eur=_safe_float(
-                portfolio_context.get("today_allocated_eur"),
-                0.0,
-            ) or 0.0,
-            kill_switch=portfolio_context.get("kill_switch", True),
-            max_trade_risk_eur=_safe_float(
-                portfolio_context.get("max_trade_risk_eur")
-                or setup.get("max_risk_per_trade"),
-                None,
-            ),
-            daily_allocation_eur=_safe_float(
-                portfolio_context.get("daily_allocation_eur"),
-                None,
-            ),
-            max_asset_exposure_pct=_safe_float(
-                portfolio_context.get("max_asset_exposure_pct"),
-                None,
-            ),
-        )
-
-    except Exception as e:
-        logger.warning("Guardrails fallback triggered: %s", e)
-        guardrails_result = {
-            "allowed": final_amount > 0,
-            "adjusted_amount_eur": round(float(final_amount), 2),
-            "original_amount_eur": round(float(final_amount), 2),
-            "warnings": [],
-            "blocked_by": None,
-            "reason": None,
-            "debug_code": "guardrails_fallback",
-            "guardrails": {
-                "kill_switch": portfolio_context.get("kill_switch", True),
-                "max_trade_risk_eur": portfolio_context.get("max_trade_risk_eur"),
-                "daily_allocation_eur": portfolio_context.get("daily_allocation_eur"),
-                "max_asset_exposure_pct": portfolio_context.get("max_asset_exposure_pct"),
-                "current_asset_exposure_pct": 0.0,
-            },
-        }
-
+        # -------------------------------------------------
+        # 7️⃣ Guardrails
+        # -------------------------------------------------
+        try:
+            guardrails_result = apply_guardrails(
+                proposed_amount_eur=final_amount,
+                portfolio_value_eur=_safe_float(
+                    portfolio_context.get("portfolio_value_eur"),
+                    0.0,
+                ) or 0.0,
+                current_asset_value_eur=_safe_float(
+                    portfolio_context.get("current_asset_value_eur"),
+                    0.0,
+                ) or 0.0,
+                today_allocated_eur=_safe_float(
+                    portfolio_context.get("today_allocated_eur"),
+                    0.0,
+                ) or 0.0,
+                kill_switch=portfolio_context.get("kill_switch", True),
+                max_trade_risk_eur=_safe_float(
+                    portfolio_context.get("max_trade_risk_eur")
+                    or setup.get("max_risk_per_trade"),
+                    None,
+                ),
+                daily_allocation_eur=_safe_float(
+                    portfolio_context.get("daily_allocation_eur"),
+                    None,
+                ),
+                max_asset_exposure_pct=_safe_float(
+                    portfolio_context.get("max_asset_exposure_pct"),
+                    None,
+                ),
+                total_budget_eur=_safe_float(   # 🔥 NIEUW
+                    portfolio_context.get("total_budget_eur"),
+                    None,
+                ),
+            )
+    
+        except Exception as e:
+            logger.warning("Guardrails fallback triggered: %s", e)
+            guardrails_result = {
+                "allowed": final_amount > 0,
+                "adjusted_amount_eur": round(float(final_amount), 2),
+                "original_amount_eur": round(float(final_amount), 2),
+                "warnings": [],
+                "blocked_by": None,
+                "reason": None,
+                "debug_code": "guardrails_fallback",
+                "guardrails": {
+                    "kill_switch": portfolio_context.get("kill_switch", True),
+                    "max_trade_risk_eur": portfolio_context.get("max_trade_risk_eur"),
+                    "daily_allocation_eur": portfolio_context.get("daily_allocation_eur"),
+                    "max_asset_exposure_pct": portfolio_context.get("max_asset_exposure_pct"),
+                    "total_budget_eur": portfolio_context.get("total_budget_eur"),  # 🔥 NIEUW
+                    "current_asset_exposure_pct": 0.0,
+                },
+            }
+        
     adjusted_amount = _safe_float(
         guardrails_result.get("adjusted_amount_eur"),
         final_amount,
