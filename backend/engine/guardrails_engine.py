@@ -63,6 +63,7 @@ def apply_guardrails(
     max_trade_risk_eur: Optional[float] = None,
     daily_allocation_eur: Optional[float] = None,
     max_asset_exposure_pct: Optional[float] = None,
+    total_budget_eur: Optional[float] = None,  # 🔥 NIEUW
 ) -> Dict[str, Any]:
 
     original_amount = max(_safe_float(proposed_amount_eur, 0.0), 0.0)
@@ -78,8 +79,9 @@ def apply_guardrails(
 
     max_trade_risk = _safe_float(max_trade_risk_eur, 0.0)
     daily_allocation = _safe_float(daily_allocation_eur, 0.0)
-
     max_asset_exposure = _safe_float(max_asset_exposure_pct, 100.0)
+    total_budget = _safe_float(total_budget_eur, 0.0)  # 🔥 NIEUW
+
 
     logger.info(
         "Guardrails input | proposed=%s portfolio=%s asset_value=%s daily_allocated=%s max_trade_risk=%s daily_limit=%s max_exposure=%s",
@@ -120,6 +122,42 @@ def apply_guardrails(
             },
         }
 
+
+    # -----------------------------------------------------
+    # 🔥 2. TOTAL BUDGET (NIEUW - HARD LIMIT)
+    # -----------------------------------------------------
+
+    if total_budget > 0:
+
+        remaining_budget = max(total_budget - portfolio_value, 0.0)
+
+        logger.info(
+            "Budget check | portfolio=%s total_budget=%s remaining=%s",
+            portfolio_value,
+            total_budget,
+            remaining_budget,
+        )
+
+        if remaining_budget <= 0:
+            blocked_by = "total_budget"
+
+            return {
+                "allowed": False,
+                "adjusted_amount_eur": 0.0,
+                "original_amount_eur": _round_money(original_amount),
+                "warnings": ["total_budget_reached"],
+                "blocked_by": blocked_by,
+                "reason": BLOCK_REASON_LABELS.get(blocked_by),
+                "debug_code": blocked_by,
+                "guardrails": {
+                    "remaining_budget_eur": 0.0,
+                },
+            }
+
+        if adjusted_amount > remaining_budget:
+            adjusted_amount = remaining_budget
+            warnings.append("total_budget_trimmed")
+            
     # -----------------------------------------------------
     # 2. Max trade risk
     # -----------------------------------------------------
