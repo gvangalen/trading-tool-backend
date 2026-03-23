@@ -1,7 +1,7 @@
 def build_trade_plan(snapshot, brain, decision, bot):
     symbol = (decision.get("symbol") or "BTC").upper()
     action = (decision.get("action") or "hold").lower()
-    strategy_type = (bot.get("strategy_type") or "").lower()
+    strategy_type = (bot.get("strategy_type") or "").lower().strip()
     live_price = decision.get("live_price")
 
     def empty_plan(reason="no_data"):
@@ -30,7 +30,41 @@ def build_trade_plan(snapshot, brain, decision, bot):
     raw_targets = snapshot.get("targets") or []
 
     # =====================================================
-    # 1️⃣ HOLD / OBSERVE → WATCH MODE
+    # 1️⃣ DCA → ALTIJD EIGEN PLAN, OOK ALS ACTION = HOLD
+    # =====================================================
+    if strategy_type == "dca":
+        price = None
+
+        try:
+            if entry is not None:
+                if isinstance(entry, list):
+                    first_valid = next((p for p in entry if p is not None), None)
+                    price = float(first_valid) if first_valid is not None else None
+                else:
+                    price = float(entry)
+            elif live_price is not None:
+                price = float(live_price)
+        except Exception:
+            price = None
+
+        return {
+            "symbol": symbol,
+            "side": action,
+            "entry_plan": [
+                {
+                    "type": "watch",
+                    "label": "Observe accumulation zone",
+                    "price": round(price, 2),
+                }
+            ] if price is not None else [],
+            "stop_loss": None,
+            "targets": [],
+            "position": {"units": None},
+            "risk": None,
+        }
+
+    # =====================================================
+    # 2️⃣ HOLD / OBSERVE → WATCH MODE
     # =====================================================
     if action in ("hold", "observe"):
         entry_plan = []
@@ -61,7 +95,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
             "symbol": symbol,
             "side": action,
             "entry_plan": entry_plan,
-            "stop_loss": {"price": round(float(stop), 2) if stop else None},
+            "stop_loss": {"price": round(float(stop), 2)} if stop is not None else {"price": None},
             "targets": targets,
             "position": {"units": None},
             "risk": {
@@ -71,40 +105,6 @@ def build_trade_plan(snapshot, brain, decision, bot):
                 "rr": None,
                 "regime": brain.get("regime"),
                 "note": "watch_mode",
-            },
-        }
-
-    # =====================================================
-    # 2️⃣ DCA (alleen relevant bij BUY)
-    # =====================================================
-    if strategy_type == "dca":
-        price = None
-        if entry:
-            if isinstance(entry, list):
-                price = entry[0]
-            else:
-                price = entry
-
-        return {
-            "symbol": symbol,
-            "side": action,
-            "entry_plan": [
-                {
-                    "type": "watch",
-                    "label": "Observe accumulation zone",
-                    "price": round(float(price), 2) if price else None,
-                }
-            ] if price else [],
-            "stop_loss": {"price": None},
-            "targets": [],
-            "position": {"units": None},
-            "risk": {
-                "risk_per_unit": None,
-                "reward_per_unit": None,
-                "risk_eur": None,
-                "rr": None,
-                "regime": brain.get("regime"),
-                "note": "dca_mode",
             },
         }
 
@@ -149,9 +149,13 @@ def build_trade_plan(snapshot, brain, decision, bot):
 
     entry_price = sum(entry) / len(entry)
 
-    # 🔥 Live price override (realistisch entry gedrag)
-    if live_price and action == "buy" and live_price > entry_price:
-        entry_price = live_price
+    if live_price is not None:
+        try:
+            live_price = float(live_price)
+            if action == "buy" and live_price > entry_price:
+                entry_price = live_price
+        except Exception:
+            pass
 
     regime = brain.get("regime") or "neutral"
 
