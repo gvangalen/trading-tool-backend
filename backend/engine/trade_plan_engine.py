@@ -30,7 +30,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
     raw_targets = snapshot.get("targets") or []
 
     # =====================================================
-    # 🔥 DCA MODE (FIXED)
+    # 🔥 DCA MODE (FINAL CLEAN VERSION)
     # =====================================================
     if strategy_type == "dca":
         return {
@@ -43,17 +43,10 @@ def build_trade_plan(snapshot, brain, decision, bot):
                     "price": round(float(entry), 2) if entry else None,
                 }
             ] if entry else [],
-            "stop_loss": {"price": None},
-            "targets": [],
+            "stop_loss": None,   # ❌ NIET tonen
+            "targets": [],       # ❌ NIET tonen
             "position": {"units": None},
-            "risk": {
-                "risk_per_unit": None,
-                "reward_per_unit": None,
-                "risk_eur": None,
-                "rr": None,
-                "regime": brain.get("regime"),
-                "note": "dca_mode",
-            },
+            "risk": None,        # ❌ NIET tonen
         }
 
     # =====================================================
