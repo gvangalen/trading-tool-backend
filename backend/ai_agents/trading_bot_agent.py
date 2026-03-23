@@ -1338,21 +1338,23 @@ def run_trading_bot_agent(
                 report_date,
             )
 
-            cash_balance_eur = get_bot_balance(
+                cash_balance_eur = get_bot_balance(
                 conn,
                 user_id,
                 bot["bot_id"],
             )
-
+            
             current_asset_value_eur = get_asset_position_value(
                 conn,
                 user_id,
                 bot["bot_id"],
                 symbol,
             )
-
+            
+            # 🔥 FIX: correcte cash & investering berekening
             cash_available = max(0.0, cash_balance_eur)
-
+            total_invested = max(0.0, -cash_balance_eur)
+            
             portfolio_value_eur = max(
                 current_asset_value_eur + cash_available,
                 1.0,
