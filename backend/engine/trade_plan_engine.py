@@ -2,6 +2,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
     symbol = (decision.get("symbol") or "BTC").upper()
     action = (decision.get("action") or "hold").lower()
     strategy_type = (bot.get("strategy_type") or "").lower()
+    live_price = decision.get("live_price")  # 🔥 SINGLE SOURCE
 
     def empty_plan(reason="no_data"):
         return {
@@ -29,24 +30,21 @@ def build_trade_plan(snapshot, brain, decision, bot):
     raw_targets = snapshot.get("targets") or []
 
     # =====================================================
-    # 🔥 DCA MODE (SUPER SIMPEL)
+    # 🔥 DCA MODE (FIXED)
     # =====================================================
     if strategy_type == "dca":
         return {
             "symbol": symbol,
-            "side": "buy",
+            "side": action,
             "entry_plan": [
                 {
-                    "type": "dca",
-                    "label": "DCA accumulation",
+                    "type": "watch",
+                    "label": "Observe accumulation zone",
                     "price": round(float(entry), 2) if entry else None,
                 }
             ] if entry else [],
-            "stop_loss": {"price": round(float(stop), 2) if stop else None},
-            "targets": [
-                {"label": f"TP{i+1}", "price": round(float(t), 2)}
-                for i, t in enumerate(raw_targets) if t is not None
-            ],
+            "stop_loss": {"price": None},
+            "targets": [],
             "position": {"units": None},
             "risk": {
                 "risk_per_unit": None,
@@ -82,7 +80,8 @@ def build_trade_plan(snapshot, brain, decision, bot):
 
         targets = [
             {"label": f"TP{i+1}", "price": round(float(t), 2)}
-            for i, t in enumerate(raw_targets) if t is not None
+            for i, t in enumerate(raw_targets)
+            if t is not None
         ]
 
         return {
@@ -141,7 +140,15 @@ def build_trade_plan(snapshot, brain, decision, bot):
     if not entry:
         return empty_plan("empty_entry")
 
+    # =====================================================
+    # 🔥 ENTRY (DYNAMIC MET LIVE PRICE)
+    # =====================================================
     entry_price = sum(entry) / len(entry)
+
+    if live_price:
+        if action == "buy" and live_price > entry_price:
+            entry_price = live_price
+
     regime = brain.get("regime") or "neutral"
 
     risk_distance = abs(entry_price - stop)
@@ -159,17 +166,30 @@ def build_trade_plan(snapshot, brain, decision, bot):
     if risk_per_unit <= 0:
         return empty_plan("invalid_risk_distance")
 
-    targets_plan = []
-    for i, r in enumerate([0.6, 1.5, 2.5]):
-        price = entry_price + (risk_per_unit * r) if action == "buy" else entry_price - (risk_per_unit * r)
-        targets_plan.append({
-            "label": f"TP{i+1}",
-            "price": round(price, 2),
-            "r_multiple": r,
-        })
+    # =====================================================
+    # 🔥 TARGETS = ECHTE TARGETS (GEEN FAKE)
+    # =====================================================
+    targets_plan = [
+        {"label": f"TP{i+1}", "price": round(float(t), 2)}
+        for i, t in enumerate(raw_targets)
+        if t is not None
+    ]
 
-    reward_per_unit = risk_per_unit * 2.5
-    rr = round(reward_per_unit / risk_per_unit, 2)
+    # =====================================================
+    # 🔥 REAL RR (GEBASEERD OP TARGET)
+    # =====================================================
+    reward_per_unit = None
+    rr = None
+
+    if raw_targets:
+        try:
+            first_target = float(raw_targets[0])
+            reward_per_unit = abs(first_target - entry_price)
+
+            if risk_per_unit > 0:
+                rr = round(reward_per_unit / risk_per_unit, 2)
+        except Exception:
+            pass
 
     return {
         "symbol": symbol,
@@ -180,7 +200,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
         "position": {"units": None},
         "risk": {
             "risk_per_unit": round(risk_per_unit, 2),
-            "reward_per_unit": round(reward_per_unit, 2),
+            "reward_per_unit": round(reward_per_unit, 2) if reward_per_unit else None,
             "risk_eur": None,
             "rr": rr,
             "regime": regime,
