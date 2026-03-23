@@ -1398,13 +1398,46 @@ def run_trading_bot_agent(
                 snapshot=snapshot,
             )
 
-            trade_plan = brain.get("trade_plan") or _default_trade_plan(
-                symbol=symbol,
-                action=action,
-                reason="fallback",
-                watch_levels=brain.get("watch_levels"),
-                snapshot=snapshot,
-            )
+            # =====================================================
+            # 🔥 FIX: Trade plan handling (NO SILENT FALLBACK)
+            # =====================================================
+            trade_plan = brain.get("trade_plan")
+            
+            # 🔴 HARD DEBUG — zie direct waarom plan ontbreekt
+            if not trade_plan:
+                logger.error(
+                    "❌ Trade plan missing | bot=%s | action=%s | strategy=%s | snapshot=%s | watch_levels=%s",
+                    bot["bot_id"],
+                    action,
+                    bot.get("strategy_type"),
+                    bool(snapshot),
+                    bool(brain.get("watch_levels")),
+                )
+            
+                trade_plan = _default_trade_plan(
+                    symbol=symbol,
+                    action=action,
+                    reason="fallback_missing_trade_plan",
+                    watch_levels=brain.get("watch_levels"),
+                    snapshot=snapshot,
+                )
+            
+            # 🔴 EXTRA VALIDATIE (voorkomt silent bugs)
+            elif not isinstance(trade_plan, dict):
+                logger.error(
+                    "❌ Trade plan invalid format | bot=%s | type=%s | value=%s",
+                    bot["bot_id"],
+                    type(trade_plan),
+                    trade_plan,
+                )
+            
+                trade_plan = _default_trade_plan(
+                    symbol=symbol,
+                    action=action,
+                    reason="fallback_invalid_trade_plan",
+                    watch_levels=brain.get("watch_levels"),
+                    snapshot=snapshot,
+                )
 
             # =====================================================
             # Position size
