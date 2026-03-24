@@ -261,12 +261,12 @@ def run_bot_brain(
             transition_risk=transition_risk,
         )
 
-        base_amount = position["base_amount"]
-        final_amount = position["final_amount"]
-        position_size = position["position_size"]
-        exposure_multiplier = position["exposure_multiplier"]
+        base_amount = _safe_float(position.get("base_amount"), 0.0) or 0.0
+        final_amount = _safe_float(position.get("final_amount"), 0.0) or 0.0
+        position_size = _safe_float(position.get("position_size"), 0.0) or 0.0
+        exposure_multiplier = _safe_float(position.get("exposure_multiplier"), 1.0) or 1.0
 
-        decision_result = position["raw"]
+        decision_result = position.get("raw") or {}
         base_reason = decision_result.get("setup_reason") or "Position engine result"
 
         logger.info(
@@ -334,34 +334,33 @@ def run_bot_brain(
     # 6️⃣ Action Logic
     # -------------------------------------------------
     market_score = _safe_float(normalized_scores.get("market_score"), 10) or 10.0
-    
+
     if strategy_type == "dca":
         action = "buy" if final_amount > 0 else "hold"
         strategy_reason = "DCA strategy active"
     else:
         action = "hold"
         reason_parts = []
-    
+
         if base_amount <= 0 or final_amount <= 0:
             reason_parts.append("No executable size.")
             reason_parts.append(base_reason)
-    
+
         elif transition_risk > float(rules["max_transition_risk_to_buy"]):
             reason_parts.append("Transition risk too high.")
-    
+
         elif market_pressure < float(rules["min_market_pressure_to_buy"]):
             reason_parts.append("Market pressure too low.")
-    
+
         elif market_score < float(rules["min_market_score_to_buy"]):
             reason_parts.append("Market score below threshold.")
-    
+
         else:
             action = "buy"
             reason_parts.append("All allocator conditions satisfied.")
-    
+
         strategy_reason = " ".join(reason_parts).strip() or "Engine decision"
-    
-    
+
     # -------------------------------------------------
     # 7️⃣ Guardrails (ALTIJD!)
     # -------------------------------------------------
@@ -399,7 +398,7 @@ def run_bot_brain(
                 None,
             ),
         )
-    
+
     except Exception as e:
         logger.warning("Guardrails fallback triggered: %s", e)
         guardrails_result = {
@@ -412,7 +411,7 @@ def run_bot_brain(
             "debug_code": "guardrails_fallback",
             "guardrails": {},
         }
-            
+
     adjusted_amount = _safe_float(
         guardrails_result.get("adjusted_amount_eur"),
         final_amount,
@@ -436,11 +435,16 @@ def run_bot_brain(
             strategy_reason = f"{strategy_reason} Blocked by guardrails."
 
     # -------------------------------------------------
-    # 8️⃣ Adjusted position size (NA guardrails)
+    # 8️⃣ Position size split
     # -------------------------------------------------
-    adjusted_position_size = 0.0
+    # 🔥 BELANGRIJK:
+    # position_size = engine intent (voor UI / market suggestion)
+    # execution_position_size = na guardrails
+    intent_position_size = round(_clamp(position_size, 0.0, 1.0), 3)
+
+    execution_position_size = 0.0
     if base_amount > 0:
-        adjusted_position_size = round(
+        execution_position_size = round(
             _clamp(adjusted_amount / base_amount, 0.0, 1.0),
             3,
         )
@@ -481,7 +485,6 @@ def run_bot_brain(
     # -------------------------------------------------
     # 11️⃣ Trade Plan Engine
     # -------------------------------------------------
-    
     if strategy_type == "dca":
         snapshot_payload = {
             "entry": entry_value,
@@ -571,7 +574,12 @@ def run_bot_brain(
 
         "base_amount": round(float(base_amount), 2),
         "exposure_multiplier": exposure_multiplier,
-        "position_size": adjusted_position_size,
+
+        # 🔥 UI moet deze gebruiken
+        "position_size": intent_position_size,
+
+        # 🔥 execution na guardrails
+        "execution_position_size": execution_position_size,
 
         "trade_quality": trade_quality,
 
@@ -586,7 +594,10 @@ def run_bot_brain(
 
         "metrics": {
             **metrics_block,
-            "position_size": adjusted_position_size,
+            # 🔥 market suggestion / UI intent
+            "position_size": intent_position_size,
+            # 🔥 echte uitvoerbare size
+            "execution_position_size": execution_position_size,
         },
 
         "debug": {
@@ -600,5 +611,7 @@ def run_bot_brain(
             "base_reason": base_reason,
             "watch_levels": watch_levels,
             "guardrails_result": guardrails_result,
+            "intent_position_size": intent_position_size,
+            "execution_position_size": execution_position_size,
         },
     }
