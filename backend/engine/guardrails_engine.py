@@ -136,21 +136,22 @@ def apply_guardrails(
     # -----------------------------------------------------
     # 🔥 2. TOTAL BUDGET (NIEUW - HARD LIMIT)
     # -----------------------------------------------------
-
-    if total_budget > 0:
-
+    
+    if total_budget and total_budget > 0:
+    
         remaining_budget = max(total_budget - portfolio_value, 0.0)
-
+    
         logger.info(
             "Budget check | portfolio=%s total_budget=%s remaining=%s",
             portfolio_value,
             total_budget,
             remaining_budget,
         )
-
+    
+        # ❌ HARD BLOCK
         if remaining_budget <= 0:
             blocked_by = "total_budget"
-
+    
             return {
                 "allowed": False,
                 "adjusted_amount_eur": 0.0,
@@ -160,10 +161,30 @@ def apply_guardrails(
                 "reason": BLOCK_REASON_LABELS.get(blocked_by),
                 "debug_code": blocked_by,
                 "guardrails": {
+                    "kill_switch": True,
+                    "max_trade_risk_eur": _round_money(max_trade_risk),
+                    "daily_allocation_eur": _round_money(daily_allocation),
+                    "remaining_daily_eur": _round_money(
+                        max(daily_allocation - today_allocated, 0.0)
+                    ) if daily_allocation > 0 else None,
+                    "max_asset_exposure_pct": max_asset_exposure,
+                    "current_asset_exposure_pct": _calculate_exposure_pct(
+                        current_asset_value_eur=current_asset_value,
+                        portfolio_value_eur=portfolio_value,
+                    ),
+                    "remaining_asset_capacity_eur": _round_money(
+                        _calculate_remaining_asset_capacity(
+                            portfolio_value_eur=portfolio_value,
+                            current_asset_value_eur=current_asset_value,
+                            max_asset_exposure_pct=max_asset_exposure,
+                        )
+                    ) if max_asset_exposure > 0 and portfolio_value > 0 else None,
+                    "total_budget_eur": _round_money(total_budget),
                     "remaining_budget_eur": 0.0,
                 },
             }
-
+    
+        # ⚠️ TRIM (niet blokkeren)
         if adjusted_amount > remaining_budget:
             adjusted_amount = remaining_budget
             warnings.append("total_budget_trimmed")
