@@ -15,6 +15,7 @@ BLOCK_REASON_LABELS = {
     "daily_allocation": "Daily allocation reached",
     "asset_exposure": "Asset exposure limit reached",
     "no_allocatable_size": "No valid trade setup",
+    "total_budget": "Total budget reached",  # ✅ FIX
 }
 
 
@@ -83,8 +84,16 @@ def apply_guardrails(
     total_budget = _safe_float(total_budget_eur, 0.0)  # 🔥 NIEUW
 
 
+    # ✅ FIX: total_budget correct behandelen
+    total_budget = None
+    if total_budget_eur is not None:
+        try:
+            total_budget = float(total_budget_eur)
+        except Exception:
+            total_budget = None
+
     logger.info(
-        "Guardrails input | proposed=%s portfolio=%s asset_value=%s daily_allocated=%s max_trade_risk=%s daily_limit=%s max_exposure=%s",
+        "Guardrails input | proposed=%s portfolio=%s asset=%s daily=%s max_trade=%s daily_limit=%s max_exposure=%s total_budget=%s",
         original_amount,
         portfolio_value,
         current_asset_value,
@@ -92,8 +101,9 @@ def apply_guardrails(
         max_trade_risk,
         daily_allocation,
         max_asset_exposure,
+        total_budget,
     )
-
+    
     # -----------------------------------------------------
     # 1. Kill switch
     # -----------------------------------------------------
