@@ -9,6 +9,7 @@ from backend.engine.market_intelligence_engine import get_market_intelligence
 from backend.engine.guardrails_engine import apply_guardrails
 from backend.engine.trade_plan_engine import build_trade_plan
 from backend.ai_core.regime_memory import get_regime_memory
+from backend.engine.setup_engine import run_setup_logic
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -198,7 +199,21 @@ def run_bot_brain(
     rules = {**DEFAULT_ACTION_RULES, **(action_rules or {})}
     normalized_scores = _normalize_scores(scores)
 
-    strategy_type = str(setup.get("strategy_type") or "").lower().strip()
+    # -------------------------------------------------
+    # Setup / Strategy type normalisatie
+    # -------------------------------------------------
+    raw_setup_type = setup.get("setup_type")
+    raw_strategy_type = setup.get("strategy_type")
+    
+    if raw_setup_type:
+        setup_type = str(raw_setup_type).lower().strip()
+    elif raw_strategy_type:
+        setup_type = str(raw_strategy_type).lower().strip()
+    else:
+        setup_type = "unknown"
+    
+    # backward compat
+    strategy_type = setup_type
 
     # -------------------------------------------------
     # 1️⃣ Regime Memory
@@ -331,35 +346,25 @@ def run_bot_brain(
     risk_state = _classify_risk_state(transition_risk, market_pressure)
 
     # -------------------------------------------------
-    # 6️⃣ Action Logic
+    # 6️⃣ Setup Engine (NEW CORE LOGIC)
     # -------------------------------------------------
-    market_score = _safe_float(normalized_scores.get("market_score"), 10) or 10.0
-
-    if strategy_type == "dca":
-        action = "buy" if final_amount > 0 else "hold"
-        strategy_reason = "DCA strategy active"
-    else:
-        action = "hold"
-        reason_parts = []
-
-        if base_amount <= 0 or final_amount <= 0:
-            reason_parts.append("No executable size.")
-            reason_parts.append(base_reason)
-
-        elif transition_risk > float(rules["max_transition_risk_to_buy"]):
-            reason_parts.append("Transition risk too high.")
-
-        elif market_pressure < float(rules["min_market_pressure_to_buy"]):
-            reason_parts.append("Market pressure too low.")
-
-        elif market_score < float(rules["min_market_score_to_buy"]):
-            reason_parts.append("Market score below threshold.")
-
-        else:
-            action = "buy"
-            reason_parts.append("All allocator conditions satisfied.")
-
-        strategy_reason = " ".join(reason_parts).strip() or "Engine decision"
+    
+    setup_result = run_setup_logic(
+        setup=setup,
+        scores=normalized_scores,
+        market_pressure=market_pressure,
+        transition_risk=transition_risk,
+        trend_strength=trend_strength,
+        risk_environment=risk_environment,
+        final_amount=final_amount,
+        watch_levels=watch_levels,
+        portfolio_context=portfolio_context,
+    )
+    
+    action = setup_result.get("action", "hold")
+    strategy_reason = setup_result.get("reason", "No setup reason")
+    setup_type = setup_result.get("setup_type")
+    setup_intent_note = setup_result.get("intent_note")
 
     # -------------------------------------------------
     # 7️⃣ Guardrails (ALTIJD!)
@@ -485,7 +490,7 @@ def run_bot_brain(
     # -------------------------------------------------
     # 11️⃣ Trade Plan Engine
     # -------------------------------------------------
-    if strategy_type == "dca":
+    if setup_type and setup_type.startswith("dca"):
         snapshot_payload = {
             "entry": entry_value,
             "stop_loss": None,
@@ -553,17 +558,21 @@ def run_bot_brain(
         "amount_eur": round(float(adjusted_amount), 2),
         "confidence": confidence,
         "reason": strategy_reason,
-
+    
+        # 🔥 NIEUW — setup info (BELANGRIJK)
+        "setup_type": setup_type,
+        "setup_intent_note": setup_intent_note,
+    
         "regime": regime_label,
         "cycle": market_cycle,
         "temperature": temperature,
-
+    
         "trend": {
             "short": short_trend,
             "mid": mid_trend,
             "long": long_trend,
         },
-
+    
         "market_pressure": round(_clamp(market_pressure, 0.0, 1.0), 4),
         "transition_risk": round(_clamp(transition_risk, 0.0, 1.0), 4),
         "volatility_state": volatility_state,
@@ -571,35 +580,33 @@ def run_bot_brain(
         "structure_bias": structure_bias,
         "risk_environment": risk_environment,
         "risk_state": risk_state,
-
+    
         "base_amount": round(float(base_amount), 2),
         "exposure_multiplier": exposure_multiplier,
-
+    
         # 🔥 UI moet deze gebruiken
         "position_size": intent_position_size,
-
+    
         # 🔥 execution na guardrails
         "execution_position_size": execution_position_size,
-
+    
         "trade_quality": trade_quality,
-
+    
         "watch_levels": watch_levels,
         "monitoring": monitoring,
         "alerts_active": alerts_active,
-
+    
         "guardrails_result": guardrails_result,
         "guardrail_reason": guardrail_reason,
-
+    
         "trade_plan": trade_plan,
-
+    
         "metrics": {
             **metrics_block,
-            # 🔥 market suggestion / UI intent
             "position_size": intent_position_size,
-            # 🔥 echte uitvoerbare size
             "execution_position_size": execution_position_size,
         },
-
+    
         "debug": {
             "scores": normalized_scores,
             "market_intelligence": market_intelligence,
@@ -613,5 +620,9 @@ def run_bot_brain(
             "guardrails_result": guardrails_result,
             "intent_position_size": intent_position_size,
             "execution_position_size": execution_position_size,
+    
+            # 🔥 EXTRA DEBUG (SUPER HANDIG)
+            "setup_type": setup_type,
+            "setup_intent_note": setup_intent_note,
         },
     }
