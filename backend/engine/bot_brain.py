@@ -361,10 +361,18 @@ def run_bot_brain(
         portfolio_context=portfolio_context,
     )
     
+    # 🔥 SAFE extraction (no crashes)
     action = setup_result.get("action", "hold")
     strategy_reason = setup_result.get("reason", "No setup reason")
-    setup_type = setup_result.get("setup_type")
-    setup_intent_note = setup_result.get("intent_note")
+    
+    setup_type = setup_result.get("setup_type") or setup_type or "unknown"
+    setup_intent_note = setup_result.get("intent_note") or ""
+    
+    # 🔥 BELANGRIJK — amount override vanuit setup_engine
+    final_amount = _safe_float(
+        setup_result.get("amount_override"),
+        final_amount
+    ) or 0.0
 
     # -------------------------------------------------
     # 7️⃣ Guardrails (ALTIJD!)
@@ -490,7 +498,8 @@ def run_bot_brain(
     # -------------------------------------------------
     # 11️⃣ Trade Plan Engine
     # -------------------------------------------------
-    if setup_type and setup_type.startswith("dca"):
+    
+    if setup_type.startswith("dca"):
         snapshot_payload = {
             "entry": entry_value,
             "stop_loss": None,
@@ -502,13 +511,13 @@ def run_bot_brain(
             "stop_loss": stop_value,
             "targets": clean_targets,
         }
-
+    
     decision_payload = {
         "action": action,
         "symbol": setup.get("symbol"),
         "live_price": portfolio_context.get("live_price"),
     }
-
+    
     bot_payload = {
         "min_rr": _safe_float(setup.get("min_rr"), 1.5) or 1.5,
         "max_risk_per_trade": _safe_float(
@@ -516,16 +525,17 @@ def run_bot_brain(
             or setup.get("max_risk_per_trade"),
             None,
         ),
-        "strategy_type": strategy_type,
+        # 🔥 FIX — gebruik setup_type (niet oude strategy_type)
+        "strategy_type": setup_type,
     }
-
+    
     brain_context = {
         "regime": regime_label,
         "reason": strategy_reason,
     }
-
+    
     trade_plan = None
-
+    
     try:
         trade_plan = build_trade_plan(
             snapshot=snapshot_payload,
@@ -533,11 +543,11 @@ def run_bot_brain(
             decision=decision_payload,
             bot=bot_payload,
         )
-
+    
     except Exception as e:
         logger.warning("Trade plan engine error: %s", e)
         trade_plan = None
-
+    
     if not trade_plan:
         trade_plan = {
             "symbol": setup.get("symbol", "BTC"),
@@ -548,7 +558,7 @@ def run_bot_brain(
             "risk": {"rr": None, "risk_eur": None},
             "notes": ["fallback"],
         }
-
+    
     # -------------------------------------------------
     # Final output
     # -------------------------------------------------
