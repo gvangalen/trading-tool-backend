@@ -33,8 +33,17 @@ def format_setup_rows(rows, cursor=None):
             "name": item.get("name"),
             "symbol": item.get("symbol"),
             "timeframe": item.get("timeframe"),
+
+            # 🔥 NIEUW MODEL
+            "setup_type": item.get("setup_type"),
+
+            # 🔥 DCA velden
+            "dca_frequency": item.get("dca_frequency"),
+            "dca_day": item.get("dca_day"),
+            "dca_month_day": item.get("dca_month_day"),
+
+            # overige
             "account_type": item.get("account_type"),
-            "strategy_type": item.get("strategy_type"),
             "min_investment": item.get("min_investment"),
             "tags": item.get("tags") or [],
             "trend": item.get("trend"),
@@ -44,18 +53,20 @@ def format_setup_rows(rows, cursor=None):
             "description": item.get("description"),
             "action": item.get("action"),
             "category": item.get("category"),
+
+            # scores
             "min_macro_score": item.get("min_macro_score"),
             "max_macro_score": item.get("max_macro_score"),
             "min_technical_score": item.get("min_technical_score"),
             "max_technical_score": item.get("max_technical_score"),
             "min_market_score": item.get("min_market_score"),
             "max_market_score": item.get("max_market_score"),
+
             "created_at": created_at,
             "user_id": item.get("user_id"),
         })
 
     return formatted
-
 
 # ============================================================
 # 1️⃣ Setup aanmaken
@@ -65,12 +76,13 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
     user_id = current_user["id"]
     data = await request.json()
 
-    required_fields = ["name", "symbol", "strategy_type"]
+    # 🔥 NIEUWE REQUIRED FIELDS
+    required_fields = ["name", "symbol", "setup_type"]
     for f in required_fields:
         if not data.get(f):
             raise HTTPException(400, f"'{f}' is verplicht")
 
-    # ✅ Validatie score ranges
+    # score validatie
     for cat in ["macro", "technical", "market"]:
         mn = data.get(f"min_{cat}_score")
         mx = data.get(f"max_{cat}_score")
@@ -81,6 +93,7 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
 
     try:
         with conn.cursor() as cur:
+
             cur.execute(
                 """
                 SELECT id FROM setups
@@ -99,23 +112,46 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
             cur.execute(
                 """
                 INSERT INTO setups (
-                    name, symbol, timeframe, account_type, strategy_type,
-                    min_investment, tags, trend,
-                    score_logic, favorite, explanation, description, action,
+                    name, symbol, timeframe,
+
+                    setup_type,
+
+                    dca_frequency,
+                    dca_day,
+                    dca_month_day,
+
+                    account_type,
+                    min_investment,
+                    tags,
+                    trend,
+                    score_logic,
+                    favorite,
+                    explanation,
+                    description,
+                    action,
                     category,
+
                     min_macro_score, max_macro_score,
                     min_technical_score, max_technical_score,
                     min_market_score, max_market_score,
-                    created_at, user_id
+
+                    created_at,
+                    user_id
                 )
                 VALUES (
-                    %s,%s,%s,%s,%s,
                     %s,%s,%s,
-                    %s,%s,%s,%s,%s,
+
                     %s,
+
+                    %s,%s,%s,
+
+                    %s,
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,
+
                     %s,%s,
                     %s,%s,
                     %s,%s,
+
                     %s,%s
                 )
                 """,
@@ -123,8 +159,14 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
                     data["name"],
                     data["symbol"],
                     data.get("timeframe"),
+
+                    data.get("setup_type"),
+
+                    data.get("dca_frequency"),
+                    data.get("dca_day"),
+                    data.get("dca_month_day"),
+
                     data.get("account_type"),
-                    data.get("strategy_type"),
                     data.get("min_investment"),
                     tags,
                     data.get("trend"),
@@ -134,12 +176,14 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
                     data.get("description"),
                     data.get("action"),
                     data.get("category"),
+
                     data.get("min_macro_score"),
                     data.get("max_macro_score"),
                     data.get("min_technical_score"),
                     data.get("max_technical_score"),
                     data.get("min_market_score"),
                     data.get("max_market_score"),
+
                     datetime.utcnow(),
                     user_id,
                 ),
@@ -196,8 +240,7 @@ async def last_setup(
 # ============================================================
 @router.get("/setups")
 async def get_setups(
-    strategy_type: Optional[str] = Query(None),
-    exclude_strategy_type: Optional[str] = Query(None),
+    setup_type: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
     user_id = current_user["id"]
@@ -208,13 +251,9 @@ async def get_setups(
             query = "SELECT * FROM setups WHERE user_id=%s"
             params = [user_id]
 
-            if strategy_type:
-                query += " AND LOWER(strategy_type)=LOWER(%s)"
-                params.append(strategy_type)
-
-            if exclude_strategy_type:
-                query += " AND LOWER(strategy_type)!=LOWER(%s)"
-                params.append(exclude_strategy_type)
+            if setup_type:
+                query += " AND LOWER(setup_type)=LOWER(%s)"
+                params.append(setup_type)
 
             query += " ORDER BY created_at DESC LIMIT 200"
             cur.execute(query, tuple(params))
@@ -223,7 +262,6 @@ async def get_setups(
 
     finally:
         conn.close()
-
 
 # ============================================================
 # 3️⃣ DCA setups
@@ -238,7 +276,7 @@ async def get_dca_setups(current_user: dict = Depends(get_current_user)):
             cur.execute(
                 """
                 SELECT * FROM setups
-                WHERE LOWER(strategy_type)='dca'
+                WHERE setup_type IN ('dca_basic', 'dca_smart')
                   AND user_id=%s
                 ORDER BY created_at DESC
                 """,
@@ -307,7 +345,6 @@ async def update_setup(
     user_id = current_user["id"]
     data = await request.json()
 
-    # Validatie score ranges
     for cat in ["macro", "technical", "market"]:
         mn = data.get(f"min_{cat}_score")
         mx = data.get(f"max_{cat}_score")
@@ -318,6 +355,7 @@ async def update_setup(
 
     try:
         with conn.cursor() as cur:
+
             cur.execute(
                 "SELECT id FROM setups WHERE id=%s AND user_id=%s",
                 (setup_id, user_id),
@@ -337,9 +375,22 @@ async def update_setup(
                 values.append(value)
 
             for field in [
-                "name", "symbol", "timeframe", "account_type", "strategy_type",
-                "min_investment", "trend", "score_logic",
-                "favorite", "description", "action", "category",
+                "name", "symbol", "timeframe",
+                "setup_type",
+
+                "dca_frequency",
+                "dca_day",
+                "dca_month_day",
+
+                "account_type",
+                "min_investment",
+                "trend",
+                "score_logic",
+                "favorite",
+                "description",
+                "action",
+                "category",
+
                 "min_macro_score", "max_macro_score",
                 "min_technical_score", "max_technical_score",
                 "min_market_score", "max_market_score",
