@@ -58,18 +58,7 @@ def score_overlap(value, min_v, max_v) -> int:
 # ======================================================
 # 🤖 SETUP AI AGENT — MET GEHEUGEN
 # ======================================================
-
 def run_setup_agent(*, user_id: int, asset: str = "BTC"):
-    """
-    - daily_setup_scores
-    - beste setup bepalen
-    - ai_category_insights (setup)
-    - setup_score → daily_scores
-
-    ✔ context van gisteren
-    ✔ setup-rotatie / continuatie
-    ✔ beslisgerichte AI-uitleg
-    """
 
     if not user_id:
         raise ValueError("❌ Setup agent vereist user_id")
@@ -102,13 +91,17 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         macro, technical, market = map(to_float, row)
 
         # ==================================================
-        # 2️⃣ SETUPS OPHALEN
+        # 2️⃣ SETUPS OPHALEN (🔥 NIEUWE STRUCTUUR)
         # ==================================================
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
                     id,
                     name,
+                    setup_type,
+                    dca_frequency,
+                    dca_day,
+                    dca_month_day,
                     min_macro_score,
                     max_macro_score,
                     min_technical_score,
@@ -140,7 +133,7 @@ def run_setup_agent(*, user_id: int, asset: str = "BTC"):
         evaluations = []
 
         # ==================================================
-        # 4️⃣ SETUP AI TASK
+        # 4️⃣ AI TASK
         # ==================================================
         SETUP_TASK = """
 Je bent een trading decision agent.
@@ -148,28 +141,41 @@ Je bent een trading decision agent.
 Gebruik:
 - macro / technical / market scores
 - overlap-scores per setup
+- setup_type (belangrijk!)
 - context t.o.v. gisteren
 
 Leg uit:
-- of deze setup sterker / zwakker / gelijk is t.o.v. gisteren
-- of dit een voortzetting of rotatie is
-- waarom deze setup NU logisch is (of niet)
+- of deze setup sterker / zwakker / gelijk is
+- of dit rotatie is of continuatie
+- waarom deze setup NU logisch is
 
 GEEN:
 - voorspellingen
 - educatie
-- algemene tradingtips
 
-Output: 2–3 zinnen, beslisgericht.
+Output: 2–3 zinnen.
 """
 
         system_prompt = build_system_prompt(agent="setup", task=SETUP_TASK)
 
         # ==================================================
-        # 5️⃣ PER SETUP: SCORE + AI-UITLEG
+        # 5️⃣ PER SETUP
         # ==================================================
         for row in setups:
-            setup_id, name, min_macro, max_macro, min_tech, max_tech, min_market, max_market = row
+            (
+                setup_id,
+                name,
+                setup_type,
+                dca_frequency,
+                dca_day,
+                dca_month_day,
+                min_macro,
+                max_macro,
+                min_tech,
+                max_tech,
+                min_market,
+                max_market
+            ) = row
 
             m  = score_overlap(macro, min_macro, max_macro)
             t  = score_overlap(technical, min_tech, max_tech)
@@ -181,6 +187,12 @@ Output: 2–3 zinnen, beslisgericht.
             explanation = ask_gpt_text(
                 prompt=json.dumps({
                     "setup": name,
+                    "setup_type": setup_type,
+                    "dca_config": {
+                        "frequency": dca_frequency,
+                        "day": dca_day,
+                        "month_day": dca_month_day
+                    },
                     "macro_score": macro,
                     "technical_score": technical,
                     "market_score": market,
@@ -196,6 +208,7 @@ Output: 2–3 zinnen, beslisgericht.
             evaluations.append({
                 "setup_id": setup_id,
                 "name": name,
+                "setup_type": setup_type,
                 "score": score,
             })
 
@@ -213,7 +226,7 @@ Output: 2–3 zinnen, beslisgericht.
                 """, (setup_id, user_id, score, explanation))
 
         # ==================================================
-        # 6️⃣ BESTE SETUP + CONTEXT
+        # 6️⃣ BESTE SETUP
         # ==================================================
         ranked = sorted(evaluations, key=lambda x: x["score"], reverse=True)
         best = ranked[0]
@@ -236,7 +249,7 @@ Output: 2–3 zinnen, beslisgericht.
             """, (best["setup_id"], user_id))
 
         # ==================================================
-        # 7️⃣ SETUP SCORE → DAILY_SCORES
+        # 7️⃣ SCORE OPSLAAN
         # ==================================================
         with conn.cursor() as cur:
             cur.execute("""
@@ -247,18 +260,9 @@ Output: 2–3 zinnen, beslisgericht.
             """, (best["score"], user_id))
 
         # ==================================================
-        # 8️⃣ AI CATEGORY INSIGHT (SETUP)
+        # 8️⃣ INSIGHT
         # ==================================================
-        summary = (
-            f"Beste {asset}-setup vandaag: {best['name']}. "
-            f"{'Ongewijzigd t.o.v. gisteren' if agent_context.get('delta') == 0 else 'Nieuwe voorkeur op basis van scoreverandering.'}"
-        )
-
-        top_signals = [
-            f"{best['name']} sluit het best aan bij huidige marktscores",
-            f"Setup-score verandering: {agent_context.get('delta')}",
-            "Setup past binnen huidige risico-context",
-        ]
+        summary = f"Beste {asset}-setup: {best['name']} ({best['setup_type']})"
 
         with conn.cursor() as cur:
             cur.execute("""
@@ -268,10 +272,7 @@ Output: 2–3 zinnen, beslisgericht.
                 ON CONFLICT (user_id, category, date)
                 DO UPDATE SET
                     avg_score = EXCLUDED.avg_score,
-                    trend = EXCLUDED.trend,
-                    bias = EXCLUDED.bias,
                     summary = EXCLUDED.summary,
-                    top_signals = EXCLUDED.top_signals,
                     created_at = NOW()
             """, (
                 user_id,
@@ -280,11 +281,14 @@ Output: 2–3 zinnen, beslisgericht.
                 "Kansrijk" if best["score"] >= 60 else "Afwachten",
                 "Gemiddeld",
                 summary,
-                json.dumps(top_signals, ensure_ascii=False),
+                json.dumps([
+                    f"{best['name']} beste match",
+                    f"Type: {best['setup_type']}"
+                ])
             ))
 
         conn.commit()
-        logger.info(f"✅ [Setup-Agent] Klaar (user_id={user_id})")
+        logger.info("✅ Setup agent klaar")
 
     except Exception:
         conn.rollback()
@@ -293,16 +297,10 @@ Output: 2–3 zinnen, beslisgericht.
     finally:
         conn.close()
 
-
 # ======================================================
 # 🧠 UITLEG PER SETUP (API)
 # ======================================================
-
 def generate_setup_explanation(setup_id: int, user_id: int) -> str:
-    """
-    Wordt gebruikt door frontend / setup-detail view.
-    Los van daily scores.
-    """
 
     conn = get_db_connection()
     if not conn:
@@ -311,7 +309,15 @@ def generate_setup_explanation(setup_id: int, user_id: int) -> str:
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT name, symbol, strategy_type, description, action
+                SELECT
+                    name,
+                    symbol,
+                    setup_type,
+                    dca_frequency,
+                    dca_day,
+                    dca_month_day,
+                    description,
+                    action
                 FROM setups
                 WHERE id = %s AND user_id = %s
             """, (setup_id, user_id))
@@ -320,22 +326,38 @@ def generate_setup_explanation(setup_id: int, user_id: int) -> str:
         if not row:
             return ""
 
-        name, symbol, strategy_type, description, action = row
+        (
+            name,
+            symbol,
+            setup_type,
+            dca_frequency,
+            dca_day,
+            dca_month_day,
+            description,
+            action
+        ) = row
 
         TASK = """
-Leg beknopt uit waarom deze setup logisch is.
-Geen educatie, geen hype, geen voorspellingen.
+Leg kort uit waarom deze setup logisch is.
+Gebruik setup_type en gedrag.
+Geen educatie of voorspellingen.
 """
 
         system_prompt = build_system_prompt(agent="setup", task=TASK)
 
         return ask_gpt_text(
-            prompt=(
-                f"Setup: {name} ({symbol})\n"
-                f"Strategie: {strategy_type}\n"
-                f"Beschrijving: {description}\n"
-                f"Actie: {action}"
-            ),
+            prompt=json.dumps({
+                "setup": name,
+                "symbol": symbol,
+                "setup_type": setup_type,
+                "dca_config": {
+                    "frequency": dca_frequency,
+                    "day": dca_day,
+                    "month_day": dca_month_day
+                },
+                "description": description,
+                "action": action
+            }, ensure_ascii=False, indent=2),
             system_role=system_prompt
         )
 
