@@ -631,8 +631,9 @@ def run_bot_brain(
             "intent_position_size": intent_position_size,
             "execution_position_size": execution_position_size,
     
-            # 🔥 EXTRA DEBUG (SUPER HANDIG)
+            # 🔥 EXTRA DEBUG
             "setup_type": setup_type,
             "setup_intent_note": setup_intent_note,
+            "setup_result": setup_result,
         },
     }
