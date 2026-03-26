@@ -172,8 +172,17 @@ def adjust_strategy_for_today(
         f"🟡 Strategy adjustment | setup={setup.get('id')} | date={date.today()}"
     )
 
-    strategy_type = (setup.get("strategy_type") or "").lower()
+    # ======================================================
+    # 🔥 NIEUWE LOGICA (BELANGRIJK)
+    # ======================================================
+    setup_type = (setup.get("setup_type") or "").lower()
 
+    is_dca = setup_type in ["dca_basic", "dca_smart"]
+    is_breakout = setup_type == "breakout"
+
+    # ======================================================
+    # 🧠 CONTEXT
+    # ======================================================
     agent_context = build_agent_context(
         user_id=user_id,
         category="strategy",
@@ -182,6 +191,9 @@ def adjust_strategy_for_today(
         lookback_days=3,
     )
 
+    # ======================================================
+    # 🎯 AI TASK
+    # ======================================================
     TASK = """
 Je past een BESTAANDE tradingstrategie licht aan.
 
@@ -224,6 +236,9 @@ OUTPUT — ALLEEN GELDIGE JSON:
         system_role=system_prompt,
     )
 
+    # ======================================================
+    # VALIDATIE
+    # ======================================================
     if not isinstance(result, dict):
         logger.error("❌ Ongeldige JSON van AI bij strategy-adjustment")
         return None
@@ -233,11 +248,15 @@ OUTPUT — ALLEEN GELDIGE JSON:
         logger.error("❌ Strategy-adjustment mist verplichte velden")
         return None
 
-    # DCA afdwingen
-    if strategy_type == "dca":
+    # ======================================================
+    # 🔥 DCA FIX (BELANGRIJK)
+    # ======================================================
+    if is_dca:
         result["entry_type"] = "reference"
 
-    # Snapshot contract
+    # ======================================================
+    # DEFAULTS
+    # ======================================================
     result.setdefault("entry", None)
     result.setdefault("targets", [])
     result.setdefault("stop_loss", None)
