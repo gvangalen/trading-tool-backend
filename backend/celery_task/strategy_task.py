@@ -106,7 +106,7 @@ def load_setup_from_db(setup_id: int, user_id: int) -> dict:
                     name,
                     symbol,
                     timeframe,
-                    strategy_type,
+                    setup_type,
                     description,
                     filters
                 FROM setups
@@ -125,7 +125,7 @@ def load_setup_from_db(setup_id: int, user_id: int) -> dict:
                 "name": row[1],
                 "symbol": row[2],
                 "timeframe": row[3],
-                "strategy_type": row[4],
+                "setup_type": row[4],  # ✅ NIEUW
                 "description": row[5],
                 "filters": row[6],
             }
@@ -216,13 +216,13 @@ def generate_for_setup(user_id: int, setup_id: int):
         cols = _get_strategy_columns(conn)
         has_risk_reward = "risk_reward" in cols
 
+        # ❌ strategy_type volledig weg
         insert_cols = [
             "setup_id",
             "entry",
             "targets",
             "stop_loss",
             "explanation",
-            "strategy_type",
             "data",
             "user_id",
         ]
@@ -234,6 +234,12 @@ def generate_for_setup(user_id: int, setup_id: int):
 
         targets = strategy.get("targets") or []
         targets = [safe_numeric(t) for t in targets if safe_numeric(t) is not None]
+
+        # 🔥 setup_type opslaan in data (BELANGRIJK)
+        enriched_data = {
+            **strategy,
+            "setup_type": setup.get("setup_type"),
+        }
 
         values = [
             setup_id,
@@ -247,8 +253,7 @@ def generate_for_setup(user_id: int, setup_id: int):
             values.append(strategy.get("risk_reward"))
 
         values.extend([
-            setup.get("strategy_type"),
-            json.dumps(strategy),
+            json.dumps(enriched_data),  # ✅ FIX
             user_id,
         ])
 
@@ -403,7 +408,7 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
     today = date.today()
 
     try:
-        # 1️⃣ Scores van vandaag ophalen
+        # 1️⃣ Scores ophalen
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -427,13 +432,11 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
             "market_score": float(scores[2]) if scores[2] is not None else None,
         }
 
-        # 2️⃣ Laatste bestaande strategy laden
         base_strategy = load_latest_strategy(setup["id"], user_id)
         if not base_strategy:
-            logger.warning("⚠️ Geen base strategy gevonden voor DCA setup")
+            logger.warning("⚠️ Geen base strategy gevonden")
             return
 
-        # 3️⃣ Subtiele AI-aanpassing
         adjustment = adjust_strategy_for_today(
             user_id=user_id,
             base_strategy=base_strategy,
@@ -442,7 +445,7 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
         )
 
         if not adjustment:
-            logger.warning("⚠️ Geen AI adjustment ontvangen")
+            logger.warning("⚠️ Geen AI adjustment")
             return
 
         confidence = safe_confidence(
@@ -450,14 +453,15 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
             fallback=50,
         )
 
-        # 4️⃣ Strategy AI analyse
+        # ❌ strategy_type eruit
+        # ✅ setup_type erin
         analysis = analyze_strategies(
             user_id=user_id,
             strategies=[
                 {
                     "strategy_id": base_strategy["strategy_id"],
                     "setup_id": setup["id"],
-                    "strategy_type": "dca",
+                    "setup_type": setup.get("setup_type"),  # 🔥 FIX
                     "confidence_score": confidence,
                     "market_context": market_context,
                     "adjustment_reason": adjustment.get("adjustment_reason"),
@@ -466,16 +470,13 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
         )
 
         if not analysis:
-            logger.warning("⚠️ Geen AI analyse-resultaat")
+            logger.warning("⚠️ Geen AI analyse")
             return
 
-        # 5️⃣ Strategy snapshot opslaan voor trading bot
         with conn.cursor() as cur:
             entry = safe_numeric(base_strategy.get("entry"))
             stop = safe_numeric(base_strategy.get("stop_loss"))
             targets = base_strategy.get("targets") or []
-
-            # DB kolom is TEXT, dus bewust als JSON-string opslaan
             targets_text = json.dumps(targets) if targets else None
 
             cur.execute(
@@ -530,57 +531,8 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
                 ),
             )
 
-        logger.info("✅ Strategy snapshot opgeslagen voor bot")
-
-        # 6️⃣ AI Category Insight opslaan
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO ai_category_insights (
-                    category,
-                    user_id,
-                    avg_score,
-                    trend,
-                    bias,
-                    risk,
-                    summary,
-                    top_signals,
-                    date
-                )
-                VALUES (
-                    'strategy',
-                    %s, %s,
-                    %s, %s, %s,
-                    %s,
-                    %s::jsonb,
-                    CURRENT_DATE
-                )
-                ON CONFLICT (user_id, category, date)
-                DO UPDATE SET
-                    avg_score = EXCLUDED.avg_score,
-                    trend = EXCLUDED.trend,
-                    bias = EXCLUDED.bias,
-                    risk = EXCLUDED.risk,
-                    summary = EXCLUDED.summary,
-                    top_signals = EXCLUDED.top_signals,
-                    created_at = NOW();
-                """,
-                (
-                    user_id,
-                    confidence,
-                    "Actief" if confidence >= 60 else "Neutraal",
-                    "Accumuleer" if confidence >= 60 else "Rustig",
-                    "Laag",
-                    analysis.get("comment", ""),
-                    json.dumps(
-                        [analysis.get("recommendation", "")],
-                        ensure_ascii=False,
-                    ),
-                ),
-            )
-
         conn.commit()
-        logger.info("✅ DCA strategy snapshot + AI insight opgeslagen")
+        logger.info("✅ DCA snapshot opgeslagen")
 
     except Exception:
         logger.error("❌ DCA snapshot fout", exc_info=True)
@@ -590,7 +542,6 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
             pass
     finally:
         conn.close()
-
 
 # ============================================================
 # 🟡 DAGELIJKSE STRATEGY SNAPSHOT + DASHBOARD INSIGHT
