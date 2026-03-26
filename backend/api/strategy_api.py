@@ -35,17 +35,21 @@ def format_strategy_row(row: dict):
     entry = normalize_number(row.get("entry") or data.get("entry"))
     stop_loss = normalize_number(row.get("stop_loss") or data.get("stop_loss"))
     base_amount = normalize_number(row.get("base_amount"))
-
     targets = normalize_targets(row.get("targets") or data.get("targets"))
 
     name = normalize_string(row.get("name") or data.get("name"))
-
-    symbol = normalize_string(data.get("symbol"))
-    timeframe = normalize_string(data.get("timeframe"))
-    frequency = normalize_string(row.get("frequency"))
-
-    explanation = normalize_string(row.get("explanation") or data.get("explanation"))
-    risk_profile = normalize_string(row.get("risk_profile") or data.get("risk_profile"))
+    symbol = normalize_string(
+        row.get("setup_symbol") or data.get("symbol")
+    )
+    timeframe = normalize_string(
+        row.get("setup_timeframe") or data.get("timeframe")
+    )
+    explanation = normalize_string(
+        row.get("explanation") or data.get("explanation")
+    )
+    risk_profile = normalize_string(
+        row.get("risk_profile") or data.get("risk_profile")
+    )
 
     tags = normalize_array(data.get("tags"))
     favorite = bool(data.get("favorite", False))
@@ -59,20 +63,17 @@ def format_strategy_row(row: dict):
     return {
         "id": row.get("id"),
         "setup_id": row.get("setup_id"),
+        "setup_name": row.get("setup_name"),
 
         "name": name,
-
-        # 🔥 NIEUW
         "setup_type": row.get("setup_type"),
 
         "execution_mode": row.get("execution_mode"),
-
         "base_amount": base_amount,
-        "frequency": frequency,
 
         "decision_curve": row.get("decision_curve"),
         "decision_curve_name": data.get("decision_curve_name"),
-        "decision_curve_id": data.get("decision_curve_id"),
+        "decision_curve_id": row.get("decision_curve_id") or data.get("decision_curve_id"),
 
         "symbol": symbol,
         "timeframe": timeframe,
@@ -104,74 +105,73 @@ async def save_strategy(
     user_id = current_user["id"]
     data = await request.json()
 
-    setup_type = (data.get("setup_type") or "").lower()
-
-    # 🔥 VALIDATIE
-    if setup_type not in ["dca_basic", "dca_smart", "breakout"]:
-        raise HTTPException(400, "Ongeldig setup_type")
-
-    execution_mode = data.get("execution_mode", "none")
-    if execution_mode not in ["none", "fixed", "custom"]:
+    execution_mode = (data.get("execution_mode") or "").lower()
+    if execution_mode not in ["fixed", "custom"]:
         raise HTTPException(400, "Ongeldige execution_mode")
 
     if not data.get("setup_id"):
         raise HTTPException(400, "setup_id is verplicht")
 
-    if execution_mode in ["fixed", "custom"] and not data.get("base_amount"):
+    if not data.get("base_amount"):
         raise HTTPException(400, "base_amount is verplicht")
 
     if execution_mode == "custom" and not data.get("decision_curve"):
-        raise HTTPException(400, "decision_curve verplicht bij custom")
-
-    # 🔥 BREAKOUT VALIDATIE
-    if setup_type == "breakout":
-        if not data.get("entry") or not data.get("stop_loss"):
-            raise HTTPException(400, "entry en stop_loss verplicht voor breakout")
-
-        if not data.get("targets"):
-            raise HTTPException(400, "targets verplicht voor breakout")
+        raise HTTPException(400, "decision_curve is verplicht bij custom execution")
 
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
+            # --------------------------------------------------
+            # VERIFY OWNERSHIP + SETUP SOURCE OF TRUTH
+            # --------------------------------------------------
+            cur.execute("""
+                SELECT id, name, symbol, timeframe, setup_type
+                FROM setups
+                WHERE id=%s AND user_id=%s
+            """, (data["setup_id"], user_id))
+            setup_row = cur.fetchone()
 
-            # -------------------------------
-            # OWNERSHIP CHECK
-            # -------------------------------
-            cur.execute(
-                "SELECT id FROM setups WHERE id=%s AND user_id=%s",
-                (data["setup_id"], user_id)
-            )
-            if not cur.fetchone():
+            if not setup_row:
                 raise HTTPException(403, "Setup niet van gebruiker")
 
-            # -------------------------------
-            # DUPLICATE PREVENT (1 setup = 1 strategy)
-            # -------------------------------
+            setup_id, setup_name, setup_symbol, setup_timeframe, setup_type = setup_row
+
+            if setup_type not in ["dca_basic", "dca_smart", "breakout"]:
+                raise HTTPException(400, "Ongeldig setup_type op setup")
+
+            # --------------------------------------------------
+            # BREAKOUT VALIDATIE
+            # --------------------------------------------------
+            if setup_type == "breakout":
+                if not data.get("entry") or not data.get("stop_loss"):
+                    raise HTTPException(400, "entry en stop_loss zijn verplicht voor breakout")
+                if not data.get("targets"):
+                    raise HTTPException(400, "targets zijn verplicht voor breakout")
+
+            # --------------------------------------------------
+            # PREVENT DUPLICATE (1 setup = 1 strategy)
+            # --------------------------------------------------
             cur.execute("""
-                SELECT id FROM strategies
+                SELECT id
+                FROM strategies
                 WHERE setup_id=%s AND user_id=%s
-            """, (data["setup_id"], user_id))
+            """, (setup_id, user_id))
 
             if cur.fetchone():
-                raise HTTPException(409, "Strategie bestaat al")
+                raise HTTPException(409, "Strategie bestaat al voor deze setup")
 
-            # -------------------------------
-            # NAME
-            # -------------------------------
+            # --------------------------------------------------
+            # STRATEGY NAME
+            # --------------------------------------------------
             strategy_name = (data.get("name") or "").strip()
-
             if not strategy_name:
-                symbol = data.get("symbol", "")
-                tf = data.get("timeframe", "")
-                strategy_name = f"{setup_type.upper()} {symbol} {tf}".strip()
+                strategy_name = f"{setup_type.upper()} {setup_symbol} {setup_timeframe}".strip()
 
-            # -------------------------------
-            # CURVE OPSLAAN
-            # -------------------------------
+            # --------------------------------------------------
+            # SAVE CUSTOM CURVE
+            # --------------------------------------------------
             curve_id = None
-
             if execution_mode == "custom":
                 curve_name = (
                     data.get("decision_curve_name")
@@ -201,9 +201,17 @@ async def save_strategy(
                 data["decision_curve_id"] = curve_id
                 data["decision_curve_name"] = curve_name
 
-            # -------------------------------
-            # INSERT
-            # -------------------------------
+            # --------------------------------------------------
+            # FINAL DATA JSON
+            # --------------------------------------------------
+            data["setup_type"] = setup_type
+            data["symbol"] = setup_symbol
+            data["timeframe"] = setup_timeframe
+            data["setup_name"] = setup_name
+
+            # --------------------------------------------------
+            # INSERT STRATEGY
+            # --------------------------------------------------
             cur.execute("""
                 INSERT INTO strategies (
                     setup_id,
@@ -213,7 +221,6 @@ async def save_strategy(
                     base_amount,
                     decision_curve,
                     decision_curve_id,
-                    frequency,
                     entry,
                     targets,
                     stop_loss,
@@ -225,7 +232,7 @@ async def save_strategy(
                 )
                 VALUES (
                     %s,%s,%s,%s,%s,
-                    %s,%s,%s,
+                    %s,%s,
                     %s,%s,%s,
                     %s,%s,%s,
                     NOW(),
@@ -233,17 +240,16 @@ async def save_strategy(
                 )
                 RETURNING id
             """, (
-                data["setup_id"],
+                setup_id,
                 strategy_name,
                 setup_type,
                 execution_mode,
                 data.get("base_amount"),
                 json.dumps(data.get("decision_curve")) if data.get("decision_curve") else None,
                 curve_id,
-                data.get("frequency"),
-                str(data.get("entry")) if data.get("entry") else None,
-                json.dumps(data.get("targets")) if data.get("targets") else None,
-                str(data.get("stop_loss")) if data.get("stop_loss") else None,
+                str(data.get("entry")) if data.get("entry") is not None else None,
+                data.get("targets") if data.get("targets") else None,
+                str(data.get("stop_loss")) if data.get("stop_loss") is not None else None,
                 data.get("explanation"),
                 data.get("risk_profile"),
                 json.dumps(data),
@@ -280,7 +286,6 @@ async def query_strategies(
 
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-
             q = """
                 SELECT
                     s.*,
@@ -294,9 +299,6 @@ async def query_strategies(
             """
             p = [user_id]
 
-            # ----------------------------------
-            # Filters
-            # ----------------------------------
             if filters.get("symbol"):
                 q += " AND st.symbol=%s"
                 p.append(filters["symbol"])
@@ -310,49 +312,11 @@ async def query_strategies(
             cur.execute(q, tuple(p))
             rows = cur.fetchall()
 
-        out = []
-
-        for r in rows:
-
-            strategy = format_strategy_row(r)
-
-            # -------------------------------------------------
-            # 🔥 FIX SYMBOL / TIMEFRAME
-            # -------------------------------------------------
-            strategy["symbol"] = (
-                r.get("setup_symbol")
-                or strategy.get("symbol")
-            )
-
-            strategy["timeframe"] = (
-                r.get("setup_timeframe")
-                or strategy.get("timeframe")
-            )
-
-            # -------------------------------------------------
-            # 🔥 FIX NAME (NO MORE UNDEFINED)
-            # -------------------------------------------------
-            if not strategy.get("name"):
-                strategy["name"] = (
-                    r.get("setup_name")
-                    or f"Strategy {strategy.get('id')}"
-                )
-
-            # -------------------------------------------------
-            # 🔥 OPTIONAL UI LABEL (HANDIG VOOR BOT DROPDOWN)
-            # -------------------------------------------------
-            strategy["display_name"] = (
-                f"{strategy['name']} · "
-                f"{strategy.get('symbol','')} · "
-                f"{strategy.get('timeframe','')}"
-            )
-
-            out.append(strategy)
-
-        return out
+        return [format_strategy_row(r) for r in rows]
 
     finally:
         conn.close()
+        
 # ==========================================================
 # 3️⃣ GENERATE STRATEGY (AI)
 # ==========================================================
@@ -380,39 +344,72 @@ async def update_strategy(
 ):
     data = await request.json()
 
+    execution_mode = (data.get("execution_mode") or "").lower()
+    if execution_mode not in ["fixed", "custom"]:
+        raise HTTPException(400, "Ongeldige execution_mode")
+
+    if not data.get("base_amount"):
+        raise HTTPException(400, "base_amount is verplicht")
+
+    if execution_mode == "custom" and not data.get("decision_curve"):
+        raise HTTPException(400, "decision_curve is verplicht bij custom execution")
+
     conn = get_db_connection()
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT s.*, st.name AS setup_name, st.symbol AS setup_symbol, st.timeframe AS setup_timeframe, st.setup_type AS real_setup_type
+                FROM strategies s
+                JOIN setups st ON st.id = s.setup_id
+                WHERE s.id=%s AND s.user_id=%s
+            """, (strategy_id, current_user["id"]))
+            existing = cur.fetchone()
 
-            # check ownership
-            cur.execute(
-                "SELECT id FROM strategies WHERE id=%s AND user_id=%s",
-                (strategy_id, current_user["id"])
-            )
-            if not cur.fetchone():
+            if not existing:
                 raise HTTPException(404, "Strategie niet gevonden")
 
-            # ⭐ naam aanpassen
+            setup_type = existing["real_setup_type"]
+
+            if setup_type == "breakout":
+                if not data.get("entry") or not data.get("stop_loss"):
+                    raise HTTPException(400, "entry en stop_loss zijn verplicht voor breakout")
+                if not data.get("targets"):
+                    raise HTTPException(400, "targets zijn verplicht voor breakout")
+
+            data["setup_type"] = setup_type
+            data["symbol"] = existing["setup_symbol"]
+            data["timeframe"] = existing["setup_timeframe"]
+            data["setup_name"] = existing["setup_name"]
+
             cur.execute("""
-                UPDATE strategies SET
+                UPDATE strategies
+                SET
                     name=%s,
+                    setup_type=%s,
                     execution_mode=%s,
                     base_amount=%s,
                     decision_curve=%s,
-                    frequency=%s,
-                    data=%s,
+                    decision_curve_id=%s,
+                    entry=%s,
+                    targets=%s,
+                    stop_loss=%s,
                     explanation=%s,
-                    risk_profile=%s
+                    risk_profile=%s,
+                    data=%s
                 WHERE id=%s AND user_id=%s
             """, (
                 data.get("name"),
-                data.get("execution_mode"),
+                setup_type,
+                execution_mode,
                 data.get("base_amount"),
                 json.dumps(data.get("decision_curve")) if data.get("decision_curve") else None,
-                data.get("frequency"),
-                json.dumps(data),
+                data.get("decision_curve_id"),
+                str(data.get("entry")) if data.get("entry") is not None else None,
+                data.get("targets") if data.get("targets") else None,
+                str(data.get("stop_loss")) if data.get("stop_loss") is not None else None,
                 data.get("explanation"),
                 data.get("risk_profile"),
+                json.dumps(data),
                 strategy_id,
                 current_user["id"]
             ))
@@ -642,47 +639,54 @@ async def get_execution_curves(
 async def get_active_strategy_today(
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Geeft exact 1 strategie terug die vandaag uitgevoerd moet worden.
-    Deterministisch — geen AI — pure execution logica.
-    """
     user_id = current_user["id"]
-    today = datetime.utcnow().date()
+    now = datetime.utcnow()
+    today = now.date()
+    weekday = now.strftime("%A").lower()
+    month_day = now.day
 
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT *
-                FROM strategies
-                WHERE user_id = %s
-                  AND execution_mode IN ('fixed', 'custom')
-                ORDER BY created_at DESC
+                SELECT
+                    s.*,
+                    st.name AS setup_name,
+                    st.symbol AS setup_symbol,
+                    st.timeframe AS setup_timeframe,
+                    st.dca_frequency,
+                    st.dca_day,
+                    st.dca_month_day
+                FROM strategies s
+                JOIN setups st ON st.id = s.setup_id
+                WHERE s.user_id = %s
+                  AND s.execution_mode IN ('fixed', 'custom')
+                ORDER BY s.created_at DESC
             """, (user_id,))
             rows = cur.fetchall()
 
         if not rows:
             return {"active": False}
 
-        # ----------------------------
-        # Execution filter (simpel & robuust)
-        # ----------------------------
         for row in rows:
-            frequency = row.get("frequency")
+            setup_type = (row.get("setup_type") or "").lower()
 
-            if frequency == "daily":
-                return {
-                    "active": True,
-                    "strategy": format_strategy_row(row)
-                }
+            # Breakout heeft geen vaste planning
+            if setup_type == "breakout":
+                continue
 
-            if frequency == "weekly":
-                created = row.get("created_at")
-                if created and created.date().weekday() == today.weekday():
-                    return {
-                        "active": True,
-                        "strategy": format_strategy_row(row)
-                    }
+            dca_frequency = (row.get("dca_frequency") or "").lower()
+            dca_day = (row.get("dca_day") or "").lower()
+            dca_month_day = row.get("dca_month_day")
+
+            if dca_frequency == "daily":
+                return {"active": True, "strategy": format_strategy_row(row)}
+
+            if dca_frequency == "weekly" and dca_day == weekday:
+                return {"active": True, "strategy": format_strategy_row(row)}
+
+            if dca_frequency == "monthly" and dca_month_day == month_day:
+                return {"active": True, "strategy": format_strategy_row(row)}
 
         return {"active": False}
 
