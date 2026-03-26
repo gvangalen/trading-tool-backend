@@ -27,87 +27,28 @@ from backend.api.onboarding_api import mark_step_completed
 # 🧩 FORMATTER — ÉÉN waarheid voor strategy cards & edit
 # ==========================================================
 def format_strategy_row(row: dict):
-    """
-    Centrale formatter voor strategy responses.
-
-    Zorgt dat alle data die naar frontend gaat
-    consistente types heeft (float, list, string).
-    """
-
     if not row:
         return None
 
     data = row.get("data") or {}
 
-    # --------------------------------------------------
-    # NUMERIC VALUES
-    # --------------------------------------------------
+    entry = normalize_number(row.get("entry") or data.get("entry"))
+    stop_loss = normalize_number(row.get("stop_loss") or data.get("stop_loss"))
+    base_amount = normalize_number(row.get("base_amount"))
 
-    entry = normalize_number(
-        row.get("entry") or data.get("entry")
-    )
+    targets = normalize_targets(row.get("targets") or data.get("targets"))
 
-    stop_loss = normalize_number(
-        row.get("stop_loss") or data.get("stop_loss")
-    )
+    name = normalize_string(row.get("name") or data.get("name"))
 
-    base_amount = normalize_number(
-        row.get("base_amount")
-    )
+    symbol = normalize_string(data.get("symbol"))
+    timeframe = normalize_string(data.get("timeframe"))
+    frequency = normalize_string(row.get("frequency"))
 
-    # --------------------------------------------------
-    # TARGETS
-    # --------------------------------------------------
+    explanation = normalize_string(row.get("explanation") or data.get("explanation"))
+    risk_profile = normalize_string(row.get("risk_profile") or data.get("risk_profile"))
 
-    targets = normalize_targets(
-        row.get("targets") or data.get("targets")
-    )
-
-    # --------------------------------------------------
-    # STRINGS
-    # --------------------------------------------------
-
-    name = normalize_string(
-        row.get("name") or data.get("name")
-    )
-
-    symbol = normalize_string(
-        data.get("symbol")
-    )
-
-    timeframe = normalize_string(
-        data.get("timeframe")
-    )
-
-    frequency = normalize_string(
-        row.get("frequency")
-    )
-
-    explanation = normalize_string(
-        row.get("explanation") or data.get("explanation")
-    )
-
-    risk_profile = normalize_string(
-        row.get("risk_profile") or data.get("risk_profile")
-    )
-
-    # --------------------------------------------------
-    # ARRAYS
-    # --------------------------------------------------
-
-    tags = normalize_array(
-        data.get("tags")
-    )
-
-    # --------------------------------------------------
-    # FAVORITE FLAG
-    # --------------------------------------------------
-
+    tags = normalize_array(data.get("tags"))
     favorite = bool(data.get("favorite", False))
-
-    # --------------------------------------------------
-    # DATE FORMAT
-    # --------------------------------------------------
 
     created_at = (
         row.get("created_at").isoformat()
@@ -115,16 +56,14 @@ def format_strategy_row(row: dict):
         else None
     )
 
-    # --------------------------------------------------
-    # OUTPUT
-    # --------------------------------------------------
-
     return {
         "id": row.get("id"),
         "setup_id": row.get("setup_id"),
 
         "name": name,
-        "strategy_type": row.get("strategy_type"),
+
+        # 🔥 NIEUW
+        "setup_type": row.get("setup_type"),
 
         "execution_mode": row.get("execution_mode"),
 
@@ -132,7 +71,6 @@ def format_strategy_row(row: dict):
         "frequency": frequency,
 
         "decision_curve": row.get("decision_curve"),
-
         "decision_curve_name": data.get("decision_curve_name"),
         "decision_curve_id": data.get("decision_curve_id"),
 
@@ -166,9 +104,11 @@ async def save_strategy(
     user_id = current_user["id"]
     data = await request.json()
 
-    strategy_type = (data.get("strategy_type") or "").lower()
-    if strategy_type not in ["manual", "trading", "dca"]:
-        raise HTTPException(400, "Ongeldig strategy_type")
+    setup_type = (data.get("setup_type") or "").lower()
+
+    # 🔥 VALIDATIE
+    if setup_type not in ["dca_basic", "dca_smart", "breakout"]:
+        raise HTTPException(400, "Ongeldig setup_type")
 
     execution_mode = data.get("execution_mode", "none")
     if execution_mode not in ["none", "fixed", "custom"]:
@@ -178,23 +118,27 @@ async def save_strategy(
         raise HTTPException(400, "setup_id is verplicht")
 
     if execution_mode in ["fixed", "custom"] and not data.get("base_amount"):
-        raise HTTPException(400, "base_amount is verplicht bij execution")
+        raise HTTPException(400, "base_amount is verplicht")
 
     if execution_mode == "custom" and not data.get("decision_curve"):
-        raise HTTPException(400, "decision_curve is verplicht bij custom execution")
+        raise HTTPException(400, "decision_curve verplicht bij custom")
 
-    if strategy_type != "dca":
+    # 🔥 BREAKOUT VALIDATIE
+    if setup_type == "breakout":
         if not data.get("entry") or not data.get("stop_loss"):
-            raise HTTPException(400, "entry en stop_loss zijn verplicht")
+            raise HTTPException(400, "entry en stop_loss verplicht voor breakout")
+
+        if not data.get("targets"):
+            raise HTTPException(400, "targets verplicht voor breakout")
 
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
 
-            # --------------------------------------------------
-            # VERIFY OWNERSHIP
-            # --------------------------------------------------
+            # -------------------------------
+            # OWNERSHIP CHECK
+            # -------------------------------
             cur.execute(
                 "SELECT id FROM setups WHERE id=%s AND user_id=%s",
                 (data["setup_id"], user_id)
@@ -202,36 +146,36 @@ async def save_strategy(
             if not cur.fetchone():
                 raise HTTPException(403, "Setup niet van gebruiker")
 
-            # --------------------------------------------------
-            # PREVENT DUPLICATE
-            # --------------------------------------------------
+            # -------------------------------
+            # DUPLICATE PREVENT (1 setup = 1 strategy)
+            # -------------------------------
             cur.execute("""
                 SELECT id FROM strategies
-                WHERE setup_id=%s AND strategy_type=%s AND user_id=%s
-            """, (data["setup_id"], strategy_type, user_id))
+                WHERE setup_id=%s AND user_id=%s
+            """, (data["setup_id"], user_id))
 
             if cur.fetchone():
                 raise HTTPException(409, "Strategie bestaat al")
 
-            # --------------------------------------------------
-            # STRATEGY NAME
-            # --------------------------------------------------
+            # -------------------------------
+            # NAME
+            # -------------------------------
             strategy_name = (data.get("name") or "").strip()
 
             if not strategy_name:
                 symbol = data.get("symbol", "")
                 tf = data.get("timeframe", "")
-                strategy_name = f"{strategy_type.upper()} {symbol} {tf}".strip()
+                strategy_name = f"{setup_type.upper()} {symbol} {tf}".strip()
 
-            # --------------------------------------------------
-            # SAVE CUSTOM CURVE
-            # --------------------------------------------------
+            # -------------------------------
+            # CURVE OPSLAAN
+            # -------------------------------
             curve_id = None
 
             if execution_mode == "custom":
                 curve_name = (
                     data.get("decision_curve_name")
-                    or f"Custom Curve {datetime.utcnow():%Y%m%d-%H%M}"
+                    or f"Curve {datetime.utcnow():%Y%m%d-%H%M}"
                 )
 
                 cur.execute("""
@@ -257,14 +201,14 @@ async def save_strategy(
                 data["decision_curve_id"] = curve_id
                 data["decision_curve_name"] = curve_name
 
-            # --------------------------------------------------
-            # INSERT STRATEGY
-            # --------------------------------------------------
+            # -------------------------------
+            # INSERT
+            # -------------------------------
             cur.execute("""
                 INSERT INTO strategies (
                     setup_id,
                     name,
-                    strategy_type,
+                    setup_type,
                     execution_mode,
                     base_amount,
                     decision_curve,
@@ -291,7 +235,7 @@ async def save_strategy(
             """, (
                 data["setup_id"],
                 strategy_name,
-                strategy_type,
+                setup_type,
                 execution_mode,
                 data.get("base_amount"),
                 json.dumps(data.get("decision_curve")) if data.get("decision_curve") else None,
