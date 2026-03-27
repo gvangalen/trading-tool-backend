@@ -417,35 +417,49 @@ async def delete_strategy(
 # ==========================================================
 # 6️⃣ AI STRATEGY ANALYSE
 # ==========================================================
+# ==========================================================
+# 6️⃣ AI STRATEGY ANALYSE
+# ==========================================================
 @router.post("/strategies/analyze/{strategy_id}")
 async def analyze_strategy(
     strategy_id: int,
     current_user: dict = Depends(get_current_user)
 ):
+    user_id = current_user["id"]
+
     conn = get_db_connection()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT data FROM strategies WHERE id=%s AND user_id=%s",
-                (strategy_id, current_user["id"])
-            )
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # strategy ophalen
+            cur.execute("""
+                SELECT s.*, st.*
+                FROM strategies s
+                JOIN setups st ON st.id = s.setup_id
+                WHERE s.id=%s AND s.user_id=%s
+            """, (strategy_id, user_id))
             row = cur.fetchone()
 
         if not row:
             raise HTTPException(404, "Strategie niet gevonden")
 
-        strategy_data = row[0]
-
     finally:
         conn.close()
 
     from backend.ai_agents.strategy_ai_agent import analyze_and_store_strategy
-    analyze_and_store_strategy(
+
+    result = analyze_and_store_strategy(
+        user_id=user_id,
         strategy_id=strategy_id,
-        strategies=[strategy_data]
+        strategies=[row],
+        base_strategy=row,
+        setup=row,
+        market_context={},  # V1 → simpel houden
     )
 
-    return {"message": "🧠 Strategy AI analyse uitgevoerd"}
+    return {
+        "message": "🧠 Strategy AI analyse uitgevoerd",
+        "result": result
+    }
 
 
 # ==========================================================
