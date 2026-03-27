@@ -154,8 +154,15 @@ def _build_fallback_trade_plan(
         "entry_plan": entry_plan,
         "stop_loss": {"price": stop},
         "targets": formatted_targets,
-        "risk": {"rr": None, "risk_eur": None},
-        "notes": [reason],
+        "position": {"units": None},
+        "risk": {
+            "risk_per_unit": None,
+            "reward_per_unit": None,
+            "risk_eur": None,
+            "rr": None,
+            "regime": None,
+            "note": reason,
+        },
     }
 
 
@@ -548,18 +555,24 @@ def run_bot_brain(
     # -------------------------------------------------
     # 🔟 Trade Plan
     # -------------------------------------------------
+    
     snapshot_payload = {
         "entry": entry_value,
         "stop_loss": stop_value,
         "targets": clean_targets,
     }
-
+    
     decision_payload = {
         "action": action,
-        "symbol": setup.get("symbol"),
+        "symbol": (
+            setup.get("symbol")
+            or snapshot.get("symbol")
+            or portfolio_context.get("symbol")
+            or "BTC"
+        ),
         "live_price": live_price,
     }
-
+    
     bot_payload = {
         "min_rr": _safe_float(setup.get("min_rr"), 1.5) or 1.5,
         "max_risk_per_trade": _safe_float(
@@ -569,12 +582,12 @@ def run_bot_brain(
         ),
         "strategy_type": setup_type,
     }
-
+    
     brain_context = {
         "regime": regime_label,
         "reason": strategy_reason,
     }
-
+    
     try:
         trade_plan = build_trade_plan(
             snapshot=snapshot_payload,
@@ -585,15 +598,7 @@ def run_bot_brain(
     except Exception as e:
         logger.warning("Trade plan engine error: %s", e)
         trade_plan = None
-
-    if not trade_plan:
-        trade_plan = _build_fallback_trade_plan(
-            symbol=setup.get("symbol", "BTC"),
-            action=action,
-            levels=levels,
-            reason=strategy_reason,
-        )
-
+    
     # -------------------------------------------------
     # Final output
     # -------------------------------------------------
