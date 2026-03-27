@@ -97,6 +97,9 @@ def format_strategy_row(row: dict):
 # ==========================================================
 # 1️⃣ CREATE STRATEGY
 # ==========================================================
+# ==========================================================
+# 1️⃣ CREATE STRATEGY
+# ==========================================================
 @router.post("/strategies")
 async def save_strategy(
     request: Request,
@@ -236,11 +239,15 @@ async def save_strategy(
             ))
 
             strategy_id = cur.fetchone()[0]
+
+            # ✅ BELANGRIJK — HIER MOET HIJ STAAN
             conn.commit()
+            mark_step_completed(conn, user_id, "strategy")
 
-        mark_step_completed(conn, user_id, "strategy")
-
-        return {"id": strategy_id, "message": "✅ Strategie opgeslagen"}
+        return {
+            "id": strategy_id,
+            "message": "✅ Strategie opgeslagen"
+        }
 
     finally:
         conn.close()
