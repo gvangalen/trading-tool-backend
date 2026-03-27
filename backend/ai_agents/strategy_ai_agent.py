@@ -154,7 +154,6 @@ REGELS:
 # ===================================================================
 # 🟡 DAGELIJKSE STRATEGY-AANPASSING (DETAILS, GEEN NIEUWE STRATEGIE)
 # ===================================================================
-
 def adjust_strategy_for_today(
     *,
     user_id: int,
@@ -162,26 +161,18 @@ def adjust_strategy_for_today(
     setup: Dict[str, Any],
     market_context: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    """
-    Past execution-details aan.
-    ❌ GEEN scoring
-    ❌ GEEN trade-beslissing
-    """
 
     logger.info(
         f"🟡 Strategy adjustment | setup={setup.get('id')} | date={date.today()}"
     )
 
-    # ======================================================
-    # 🔥 NIEUWE LOGICA (BELANGRIJK)
-    # ======================================================
+    # 🔥 NIEUW MODEL
     setup_type = (setup.get("setup_type") or "").lower()
-
-    is_dca = setup_type in ["dca_basic", "dca_smart"]
-    is_breakout = setup_type == "breakout"
+    is_dca = setup_type == "dca"
+    is_trade = setup_type == "trade"
 
     # ======================================================
-    # 🧠 CONTEXT
+    # CONTEXT
     # ======================================================
     agent_context = build_agent_context(
         user_id=user_id,
@@ -192,32 +183,32 @@ def adjust_strategy_for_today(
     )
 
     # ======================================================
-    # 🎯 AI TASK
+    # AI TASK
     # ======================================================
     TASK = """
 Je past een BESTAANDE tradingstrategie licht aan.
 
 BELANGRIJK:
-- Je BEREKENT GEEN score
-- Je NEEMT GEEN trade-beslissing
-- Je doet GEEN marktanalyse
+- GEEN score
+- GEEN trade beslissing
+- GEEN marktanalyse
 
-Je mag ALLEEN:
-- execution-logica verduidelijken
-- discipline aanscherpen
+Je mag:
+- execution verbeteren
+- discipline verbeteren
 - consistentie bewaken
 
-OUTPUT — ALLEEN GELDIGE JSON:
+OUTPUT JSON:
 {
-  "entry": null | number | string,
-  "entry_type": "reference" | "action",
+  "entry": null,
+  "entry_type": "reference",
   "targets": [],
-  "stop_loss": null | number | string,
+  "stop_loss": null,
   "adjustment_reason": "",
   "changes": {
-    "entry": "unchanged | refined | reference",
-    "targets": "raised | lowered | unchanged",
-    "stop_loss": "tightened | loosened | unchanged"
+    "entry": "",
+    "targets": "",
+    "stop_loss": ""
   }
 }
 """
@@ -236,30 +227,20 @@ OUTPUT — ALLEEN GELDIGE JSON:
         system_role=system_prompt,
     )
 
-    # ======================================================
-    # VALIDATIE
-    # ======================================================
     if not isinstance(result, dict):
-        logger.error("❌ Ongeldige JSON van AI bij strategy-adjustment")
         return None
 
     required = {"entry", "targets", "stop_loss", "changes", "entry_type"}
     if not required.issubset(result.keys()):
-        logger.error("❌ Strategy-adjustment mist verplichte velden")
         return None
 
-    # ======================================================
-    # 🔥 DCA FIX (BELANGRIJK)
-    # ======================================================
+    # 🔥 DCA FIX
     if is_dca:
         result["entry_type"] = "reference"
+        result["entry"] = None
+        result["stop_loss"] = None
+        result["targets"] = []
 
-    # ======================================================
-    # DEFAULTS
-    # ======================================================
-    result.setdefault("entry", None)
-    result.setdefault("targets", [])
-    result.setdefault("stop_loss", None)
     result.setdefault("adjustment_reason", "Execution unchanged")
 
     return result
@@ -303,46 +284,42 @@ def fetch_strategy_score_for_today(
 # ⚠️ Alleen hier mag AI iets "maken"
 # ===================================================================
 def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Genereert een initiële tradingstrategie op basis van een setup.
-
-    Flow:
-    1️⃣ AI probeert levels te genereren
-    2️⃣ Levels worden gevalideerd
-    3️⃣ Als AI faalt → fallback met market helper
-    """
 
     logger.info(f"⚙️ AI strategy generatie | setup={setup.get('id')}")
 
+    setup_type = (setup.get("setup_type") or "").lower()
     symbol = setup.get("symbol", "BTC")
 
-    # -------------------------------------------------
-    # ⭐ Live market price ophalen
-    # -------------------------------------------------
+    # 🔥 DCA = GEEN LEVELS
+    if setup_type == "dca":
+        return {
+            "entry": None,
+            "targets": [],
+            "stop_loss": None,
+            "risk_reward": None,
+            "explanation": "DCA strategie — vaste accumulatie zonder vaste entry levels"
+        }
 
+    # -------------------------------------------------
+    # MARKET PRICE
+    # -------------------------------------------------
     try:
         live_price = float(_get_latest_market_price(symbol))
-        logger.info("📊 Live market price | %s = %s", symbol, live_price)
-    except Exception as e:
-        logger.warning(f"⚠️ Market price ophalen mislukt: {e}")
+    except Exception:
         live_price = None
 
     # -------------------------------------------------
-    # 🎯 AI TASK
+    # AI TASK
     # -------------------------------------------------
-
     TASK = """
-Genereer een CONCRETE tradingstrategie op basis van een setup.
+Genereer trading levels.
 
 Regels:
-- Gebruik de huidige marktprijs als referentiepunt
-- Entry moet dicht bij current_price liggen
-- Stop loss onder entry
-- Targets boven entry
-- Gebruik alleen numerieke waarden
+- entry rond current_price
+- stop_loss onder entry
+- targets boven entry
 
-Output ALLEEN GELDIGE JSON:
-
+Output JSON:
 {
   "entry": number,
   "targets": [number, number, number],
@@ -352,14 +329,7 @@ Output ALLEEN GELDIGE JSON:
 }
 """
 
-    system_prompt = build_system_prompt(
-        agent="strategy",
-        task=TASK
-    )
-
-    # -------------------------------------------------
-    # 📦 AI PAYLOAD
-    # -------------------------------------------------
+    system_prompt = build_system_prompt(agent="strategy", task=TASK)
 
     payload = {
         "setup": setup,
@@ -369,122 +339,49 @@ Output ALLEEN GELDIGE JSON:
         }
     }
 
-    prompt = json.dumps(payload, ensure_ascii=False, indent=2)
-
-    logger.info("🧠 AI STRATEGY PAYLOAD:\n%s", prompt)
-
-    # -------------------------------------------------
-    # 🤖 AI GENERATIE
-    # -------------------------------------------------
-
-    try:
-        result = ask_gpt(prompt, system_role=system_prompt)
-        logger.info(
-            "🤖 AI RAW RESPONSE:\n%s",
-            json.dumps(result, indent=2, ensure_ascii=False)
-        )
-    except Exception as e:
-        logger.warning(f"⚠️ AI error tijdens strategy generatie: {e}")
-        result = {}
+    result = ask_gpt(
+        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
+        system_role=system_prompt
+    )
 
     if not isinstance(result, dict):
-        logger.warning("⚠️ AI gaf geen geldige JSON — fallback gebruikt")
         result = {}
-
-    result.setdefault("entry", None)
-    result.setdefault("targets", [])
-    result.setdefault("stop_loss", None)
-    result.setdefault("risk_reward", None)
-    result.setdefault("explanation", "")
-
-    # -------------------------------------------------
-    # 🔢 NUMERIC PARSING
-    # -------------------------------------------------
 
     def to_float(v):
         try:
             return float(v)
-        except Exception:
+        except:
             return None
 
     entry = to_float(result.get("entry"))
     stop = to_float(result.get("stop_loss"))
 
-    raw_targets = result.get("targets") or []
     targets = []
-
-    for t in raw_targets:
+    for t in result.get("targets", []):
         try:
             targets.append(float(t))
-        except Exception:
+        except:
             continue
 
-    logger.info(
-        "🔎 PARSED LEVELS | entry=%s stop=%s targets=%s",
-        entry,
-        stop,
-        targets
-    )
-
-    # -------------------------------------------------
-    # ⚠️ FALLBACK LOGIC (AI gaf geen valide levels)
-    # -------------------------------------------------
-
+    # 🔥 FALLBACK
     if entry is None or stop is None or not targets:
-
-        logger.warning(
-            "⚠️ AI INVALID LEVELS | entry=%s stop=%s targets=%s",
-            entry,
-            stop,
-            targets
-        )
-
-        logger.warning("⚠️ Deterministic fallback gebruikt")
-
-        try:
-            price = float(live_price) if live_price else float(_get_latest_market_price(symbol))
-        except Exception as e:
-            logger.warning(f"⚠️ Market helper faalde: {e}")
-            price = 50000  # absolute fallback
+        price = live_price or 50000
 
         entry = round(price, 2)
-
-        # stop loss 8% onder entry
         stop = round(price * 0.92, 2)
-
-        # targets met logische RR ladder
         targets = [
             round(price * 1.05, 2),
             round(price * 1.12, 2),
             round(price * 1.20, 2),
         ]
 
-        result["risk_reward"] = round((targets[-1] - entry) / (entry - stop), 2)
-
-        logger.info(
-            "🧮 FALLBACK LEVELS | entry=%s stop=%s targets=%s",
-            entry,
-            stop,
-            targets
-        )
-
-    # -------------------------------------------------
-    # 🧾 FINAL RESULT
-    # -------------------------------------------------
-
-    result["entry"] = entry
-    result["stop_loss"] = stop
-    result["targets"] = targets
-
-    logger.info(
-        "✅ FINAL STRATEGY LEVELS | entry=%s stop=%s targets=%s rr=%s",
-        entry,
-        stop,
-        targets,
-        result.get("risk_reward")
-    )
-
-    return result
+    return {
+        "entry": entry,
+        "stop_loss": stop,
+        "targets": targets,
+        "risk_reward": result.get("risk_reward"),
+        "explanation": result.get("explanation", "")
+    }
 
 # ===================================================================
 # 💾 OPSLAAN AI-UITLEG IN STRATEGY.DATA
@@ -533,70 +430,55 @@ def analyze_and_store_strategy(
     market_context: Dict[str, Any],
 ):
     today = date.today()
-    logger.info(f"🧠 Strategy AI dagrun | strategy_id={strategy_id} | {today}")
 
     conn = get_db_connection()
     if not conn:
-        raise RuntimeError("Geen databaseverbinding")
+        raise RuntimeError("Geen DB")
 
     try:
-        # 1️⃣ Als base strategy nog geen levels heeft → eerst genereren
-        has_entry = base_strategy.get("entry") is not None
-        has_stop = base_strategy.get("stop_loss") is not None
-        has_targets = bool(base_strategy.get("targets"))
+        setup_type = (setup.get("setup_type") or "").lower()
 
+        # 🔥 FIX → DCA hoeft geen levels
+        if setup_type == "dca":
+            has_entry = True
+            has_stop = True
+            has_targets = True
+        else:
+            has_entry = base_strategy.get("entry") is not None
+            has_stop = base_strategy.get("stop_loss") is not None
+            has_targets = bool(base_strategy.get("targets"))
+
+        # --------------------------------------------------
+        # BOOTSTRAP
+        # --------------------------------------------------
         if not has_entry or not has_stop or not has_targets:
-            logger.warning(
-                "⚠️ Base strategy heeft geen levels | strategy_id=%s | bootstrap generator gestart",
-                strategy_id,
-            )
 
             generated = generate_strategy_from_setup(setup)
 
             base_strategy["entry"] = generated.get("entry")
             base_strategy["stop_loss"] = generated.get("stop_loss")
-            base_strategy["targets"] = generated.get("targets") or []
-            base_strategy["risk_reward"] = generated.get("risk_reward")
-            base_strategy["explanation"] = generated.get("explanation", "")
+            base_strategy["targets"] = generated.get("targets")
 
             with conn.cursor() as cur:
-                cur.execute(
-                    """
+                cur.execute("""
                     UPDATE strategies
                     SET
                         entry = %s,
                         stop_loss = %s,
-                        targets = %s,
-                        explanation = COALESCE(NULLIF(%s, ''), explanation),
-                        data = COALESCE(data, '{}'::jsonb) || %s::jsonb
+                        targets = %s
                     WHERE id = %s
-                    """,
-                    (
-                        base_strategy["entry"],
-                        base_strategy["stop_loss"],
-                        base_strategy["targets"],
-                        base_strategy.get("explanation", ""),
-                        json.dumps(
-                            {
-                                "risk_reward": base_strategy.get("risk_reward"),
-                                "bootstrap_generated": True,
-                                "bootstrap_date": str(today),
-                            }
-                        ),
-                        strategy_id,
-                    ),
-                )
+                """, (
+                    base_strategy["entry"],
+                    base_strategy["stop_loss"],
+                    base_strategy["targets"],
+                    strategy_id,
+                ))
+
             conn.commit()
 
-            logger.info(
-                "✅ Strategy bootstrap opgeslagen | strategy_id=%s | entry=%s | stop=%s | targets=%s",
-                strategy_id,
-                base_strategy["entry"],
-                base_strategy["stop_loss"],
-                base_strategy["targets"],
-            )
-
-        # 2️⃣ AI reflectie
+        # --------------------------------------------------
+        # AI ANALYSE
+        # --------------------------------------------------
         ai_result = analyze_strategies(
             user_id=user_id,
             strategies=strategies,
@@ -608,7 +490,9 @@ def analyze_and_store_strategy(
                 ai_result=ai_result,
             )
 
-        # 3️⃣ AI adjustment
+        # --------------------------------------------------
+        # ADJUSTMENT
+        # --------------------------------------------------
         snapshot = adjust_strategy_for_today(
             user_id=user_id,
             base_strategy=base_strategy,
@@ -616,7 +500,7 @@ def analyze_and_store_strategy(
             market_context=market_context,
         ) or {}
 
-        # 4️⃣ Snapshot mag levels NOOIT verliezen
+        # 🔥 fallback naar base
         if snapshot.get("entry") is None:
             snapshot["entry"] = base_strategy.get("entry")
 
@@ -626,33 +510,25 @@ def analyze_and_store_strategy(
         if not snapshot.get("targets"):
             snapshot["targets"] = base_strategy.get("targets") or []
 
-        # 5️⃣ Score ophalen
-        strategy_score = fetch_strategy_score_for_today(
+        # --------------------------------------------------
+        # SCORE
+        # --------------------------------------------------
+        score = fetch_strategy_score_for_today(
             conn=conn,
             user_id=user_id,
-        )
+        ) or 0.0
 
-        if strategy_score is None:
-            logger.warning("⚠️ Geen strategy_score gevonden — default 0")
-            strategy_score = 0.0
+        snapshot["confidence_score"] = score
 
-        snapshot["confidence_score"] = strategy_score
-
-        logger.info("📊 SNAPSHOT FINAL: %s", snapshot)
-
-        # 6️⃣ Snapshot opslaan
+        # --------------------------------------------------
+        # SAVE SNAPSHOT
+        # --------------------------------------------------
         persist_active_strategy_snapshot(
             user_id=user_id,
             strategy_id=strategy_id,
             setup_id=setup["id"],
             snapshot_date=today,
             snapshot=snapshot,
-        )
-
-        logger.info(
-            "✅ Strategy snapshot opgeslagen | strategy_id=%s | score=%s",
-            strategy_id,
-            strategy_score,
         )
 
         return {
