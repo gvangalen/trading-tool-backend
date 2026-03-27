@@ -33,6 +33,17 @@ def safe_json(value: Any) -> Dict[str, Any]:
             return {}
     return {}
 
+def convert_decimals(obj):
+    from decimal import Decimal
+
+    if isinstance(obj, list):
+        return [convert_decimals(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_decimals(v) for k, v in obj.items()}
+    elif isinstance(obj, Decimal):
+        return float(obj)
+    return obj
+
 
 def safe_numeric(value: Any) -> Optional[float]:
     """
@@ -312,6 +323,18 @@ def analyze_strategy(user_id: int, strategy_id: int):
     if not conn:
         raise RuntimeError("Geen databaseverbinding")
 
+    # 🔥 helper lokaal (simpel houden)
+    def convert_decimals(obj):
+        from decimal import Decimal
+
+        if isinstance(obj, list):
+            return [convert_decimals(i) for i in obj]
+        elif isinstance(obj, dict):
+            return {k: convert_decimals(v) for k, v in obj.items()}
+        elif isinstance(obj, Decimal):
+            return float(obj)
+        return obj
+
     try:
         cols = _get_strategy_columns(conn)
 
@@ -366,6 +389,9 @@ def analyze_strategy(user_id: int, strategy_id: int):
 
         if not analysis:
             raise RuntimeError("AI analyse gaf None terug")
+
+        # 🔥 CRUCIALE FIX
+        analysis = convert_decimals(analysis)
 
         explanation_text = (
             f"{analysis.get('comment', '')}\n\n"
@@ -565,10 +591,20 @@ def run_daily_strategy_snapshot(user_id: int):
         logger.error("❌ Geen databaseverbinding")
         return
 
+    # 🔥 helper
+    def convert_decimals(obj):
+        from decimal import Decimal
+
+        if isinstance(obj, list):
+            return [convert_decimals(i) for i in obj]
+        elif isinstance(obj, dict):
+            return {k: convert_decimals(v) for k, v in obj.items()}
+        elif isinstance(obj, Decimal):
+            return float(obj)
+        return obj
+
     try:
-        # ----------------------------------------------------
         # 1️⃣ BEST SETUP
-        # ----------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -592,26 +628,20 @@ def run_daily_strategy_snapshot(user_id: int):
 
         logger.info("📌 Best setup gevonden | id=%s type=%s", setup_id, setup.get("setup_type"))
 
-        # ----------------------------------------------------
         # 2️⃣ STRATEGY
-        # ----------------------------------------------------
         base_strategy = load_latest_strategy(setup_id, user_id)
-
         setup_type = (setup.get("setup_type") or "").lower()
 
-        if setup_type == "dca":
-            needs_bootstrap = False
-        else:
-            needs_bootstrap = (
+        needs_bootstrap = (
+            setup_type != "dca" and (
                 not base_strategy
                 or base_strategy.get("entry") is None
                 or base_strategy.get("stop_loss") is None
                 or not base_strategy.get("targets")
             )
+        )
 
-        # ----------------------------------------------------
         # 3️⃣ BOOTSTRAP
-        # ----------------------------------------------------
         if needs_bootstrap:
 
             logger.warning("⚠️ Strategy ontbreekt → bootstrap")
@@ -620,59 +650,35 @@ def run_daily_strategy_snapshot(user_id: int):
 
             entry = safe_numeric(strategy.get("entry"))
             stop = safe_numeric(strategy.get("stop_loss"))
-
-            targets = strategy.get("targets") or []
-            targets = [safe_numeric(t) for t in targets if safe_numeric(t) is not None]
+            targets = [safe_numeric(t) for t in strategy.get("targets") or [] if safe_numeric(t) is not None]
 
             base_amount = safe_numeric(strategy.get("base_amount"))
             if base_amount is None:
-                logger.error("❌ base_amount ontbreekt in AI response: %s", strategy)
                 raise RuntimeError("base_amount ontbreekt")
 
             with conn.cursor() as cur:
-
-                if not base_strategy:
-                    cur.execute(
-                        """
-                        INSERT INTO strategies (
-                            setup_id,
-                            entry,
-                            targets,
-                            stop_loss,
-                            explanation,
-                            setup_type,
-                            base_amount,
-                            data,
-                            user_id
-                        )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                        RETURNING id
-                        """,
-                        (
-                            setup_id,
-                            entry,
-                            targets,
-                            stop,
-                            strategy.get("explanation"),
-                            setup_type,
-                            base_amount,
-                            json.dumps(strategy),
-                            user_id,
-                        ),
+                cur.execute(
+                    """
+                    INSERT INTO strategies (
+                        setup_id, entry, targets, stop_loss,
+                        explanation, setup_type, base_amount, data, user_id
                     )
-                    strategy_id = cur.fetchone()[0]
-
-                else:
-                    strategy_id = base_strategy["strategy_id"]
-
-                    cur.execute(
-                        """
-                        UPDATE strategies
-                        SET entry=%s, stop_loss=%s, targets=%s
-                        WHERE id=%s
-                        """,
-                        (entry, stop, targets, strategy_id),
-                    )
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
+                    """,
+                    (
+                        setup_id,
+                        entry,
+                        targets,
+                        stop,
+                        strategy.get("explanation"),
+                        setup_type,
+                        base_amount,
+                        json.dumps(strategy),
+                        user_id,
+                    ),
+                )
+                strategy_id = cur.fetchone()[0]
 
             conn.commit()
 
@@ -683,14 +689,7 @@ def run_daily_strategy_snapshot(user_id: int):
                 "targets": targets,
             }
 
-            logger.info(
-                "✅ Bootstrap gedaan | entry=%s stop=%s targets=%s base_amount=%s",
-                entry, stop, targets, base_amount
-            )
-
-        # ----------------------------------------------------
         # 4️⃣ MARKET CONTEXT
-        # ----------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -705,7 +704,6 @@ def run_daily_strategy_snapshot(user_id: int):
             scores = cur.fetchone()
 
         if not scores:
-            logger.warning("⚠️ Geen daily_scores")
             return
 
         market_context = {
@@ -714,74 +712,42 @@ def run_daily_strategy_snapshot(user_id: int):
             "market_score": float(scores[2]) if scores[2] else None,
         }
 
-        logger.info("📊 Market context: %s", market_context)
-
-        # ----------------------------------------------------
-        # 5️⃣ AI ANALYSE (INLINE VOOR SNAPSHOT)
-        # ----------------------------------------------------
+        # 5️⃣ AI ANALYSE
         analysis = analyze_strategies(
             user_id=user_id,
-            strategies=[
-                {
-                    "strategy_id": base_strategy["strategy_id"],
-                    "setup_id": setup_id,
-                    "setup_type": setup_type,
-                    "entry": base_strategy.get("entry"),
-                    "targets": base_strategy.get("targets"),
-                    "stop_loss": base_strategy.get("stop_loss"),
-                    "market_context": market_context,
-                }
-            ],
+            strategies=[{
+                "strategy_id": base_strategy["strategy_id"],
+                "setup_id": setup_id,
+                "setup_type": setup_type,
+                "entry": base_strategy.get("entry"),
+                "targets": base_strategy.get("targets"),
+                "stop_loss": base_strategy.get("stop_loss"),
+                "market_context": market_context,
+            }],
         )
 
         if not analysis:
-            logger.error("❌ AI analyse None")
             raise RuntimeError("AI analyse failed")
 
-        logger.info("🧠 AI analyse OK")
+        # 🔥 FIX
+        analysis = convert_decimals(analysis)
+        market_context = convert_decimals(market_context)
 
-        # ----------------------------------------------------
-        # 🔥 NIEUWE FIX → LINKER CARD UPDATE
-        # ----------------------------------------------------
-        from backend.celery_task.strategy_task import analyze_strategy
-
+        # 🔥 LINKER CARD TRIGGER
         analyze_strategy.delay(
             user_id=user_id,
             strategy_id=base_strategy["strategy_id"]
         )
 
-        logger.info("📨 analyze_strategy task getriggerd")
-
-        # ----------------------------------------------------
         # 6️⃣ SNAPSHOT
-        # ----------------------------------------------------
         with conn.cursor() as cur:
-
-            entry = safe_numeric(base_strategy.get("entry"))
-            stop = safe_numeric(base_strategy.get("stop_loss"))
-
-            targets = base_strategy.get("targets") or []
-            targets_text = json.dumps(targets) if targets else None
-
-            confidence = safe_confidence(
-                analysis.get("confidence_score"),
-                fallback=50,
-            )
-
             cur.execute(
                 """
                 INSERT INTO active_strategy_snapshot (
-                    user_id,
-                    strategy_id,
-                    setup_id,
-                    entry,
-                    stop_loss,
-                    targets,
-                    confidence_score,
-                    adjustment_reason,
-                    market_context,
-                    changes,
-                    snapshot_date
+                    user_id, strategy_id, setup_id,
+                    entry, stop_loss, targets,
+                    confidence_score, adjustment_reason,
+                    market_context, changes, snapshot_date
                 )
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s)
                 ON CONFLICT (user_id, setup_id, snapshot_date)
@@ -800,10 +766,10 @@ def run_daily_strategy_snapshot(user_id: int):
                     user_id,
                     base_strategy["strategy_id"],
                     setup_id,
-                    entry,
-                    stop,
-                    targets_text,
-                    confidence,
+                    safe_numeric(base_strategy.get("entry")),
+                    safe_numeric(base_strategy.get("stop_loss")),
+                    json.dumps(base_strategy.get("targets") or []),
+                    safe_confidence(analysis.get("confidence_score")),
                     analysis.get("recommendation"),
                     json.dumps(market_context),
                     json.dumps(analysis),
