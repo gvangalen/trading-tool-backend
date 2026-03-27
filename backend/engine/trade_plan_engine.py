@@ -4,6 +4,17 @@ def build_trade_plan(snapshot, brain, decision, bot):
     strategy_type = (bot.get("strategy_type") or "").lower().strip()
     live_price = decision.get("live_price")
 
+    # =====================================================
+    # 🔧 Helpers
+    # =====================================================
+    def safe_float(v):
+        try:
+            if v is None:
+                return None
+            return float(v)
+        except Exception:
+            return None
+
     def empty_plan(reason="no_data"):
         return {
             "symbol": symbol,
@@ -30,33 +41,26 @@ def build_trade_plan(snapshot, brain, decision, bot):
     raw_targets = snapshot.get("targets") or []
 
     # =====================================================
-    # 1️⃣ DCA → ALTIJD EIGEN PLAN, OOK ALS ACTION = HOLD
+    # 1️⃣ DCA (altijd eigen gedrag)
     # =====================================================
-    if strategy_type == "dca":
-        price = None
+    if strategy_type.startswith("dca"):
+        price = safe_float(entry)
 
-        try:
-            if entry is not None:
-                if isinstance(entry, list):
-                    first_valid = next((p for p in entry if p is not None), None)
-                    price = float(first_valid) if first_valid is not None else None
-                else:
-                    price = float(entry)
-            elif live_price is not None:
-                price = float(live_price)
-        except Exception:
-            price = None
+        if price is None:
+            price = safe_float(live_price)
+
+        entry_plan = []
+        if price:
+            entry_plan.append({
+                "type": "watch",
+                "label": "Observe accumulation zone",
+                "price": round(price, 2),
+            })
 
         return {
             "symbol": symbol,
             "side": action,
-            "entry_plan": [
-                {
-                    "type": "watch",
-                    "label": "Observe accumulation zone",
-                    "price": round(price, 2),
-                }
-            ] if price is not None else [],
+            "entry_plan": entry_plan,
             "stop_loss": None,
             "targets": [],
             "position": {"units": None},
@@ -64,38 +68,52 @@ def build_trade_plan(snapshot, brain, decision, bot):
         }
 
     # =====================================================
-    # 2️⃣ HOLD / OBSERVE → WATCH MODE
+    # 2️⃣ HOLD / OBSERVE → 🔥 PRO WATCH MODE
     # =====================================================
     if action in ("hold", "observe"):
+
         entry_plan = []
 
-        if entry is not None:
-            if isinstance(entry, list):
-                for p in entry:
-                    if p is not None:
-                        entry_plan.append({
-                            "type": "watch",
-                            "label": "Observe entry zone",
-                            "price": round(float(p), 2),
-                        })
-            else:
+        entry_price = safe_float(entry)
+        breakout = safe_float(raw_targets[0]) if raw_targets else None
+
+        # 🔥 Pullback zone
+        if entry_price:
+            entry_plan.append({
+                "type": "watch",
+                "label": "Watch pullback zone",
+                "price": round(entry_price, 2),
+            })
+
+        # 🔥 Breakout level
+        if breakout:
+            entry_plan.append({
+                "type": "watch",
+                "label": "Watch breakout",
+                "price": round(breakout, 2),
+            })
+
+        # fallback → live price
+        if not entry_plan and live_price:
+            lp = safe_float(live_price)
+            if lp:
                 entry_plan.append({
                     "type": "watch",
-                    "label": "Observe entry zone",
-                    "price": round(float(entry), 2),
+                    "label": "Watch current price",
+                    "price": round(lp, 2),
                 })
 
         targets = [
             {"label": f"TP{i+1}", "price": round(float(t), 2)}
             for i, t in enumerate(raw_targets)
-            if t is not None
+            if safe_float(t) is not None
         ]
 
         return {
             "symbol": symbol,
             "side": action,
             "entry_plan": entry_plan,
-            "stop_loss": {"price": round(float(stop), 2)} if stop is not None else {"price": None},
+            "stop_loss": {"price": safe_float(stop)},
             "targets": targets,
             "position": {"units": None},
             "risk": {
@@ -104,7 +122,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
                 "risk_eur": None,
                 "rr": None,
                 "regime": brain.get("regime"),
-                "note": "watch_mode",
+                "note": "waiting_for_setup",
             },
         }
 
@@ -130,7 +148,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
         }
 
     # =====================================================
-    # 4️⃣ BUY / NORMAL TRADE
+    # 4️⃣ BUY (echte trade)
     # =====================================================
     if entry is None or stop is None:
         return empty_plan("missing_entry_or_stop")
@@ -139,7 +157,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
         entry = [entry]
 
     try:
-        entry = [float(p) for p in entry if p is not None]
+        entry = [float(p) for p in entry if safe_float(p) is not None]
         stop = float(stop)
     except Exception:
         return empty_plan("invalid_price_format")
@@ -149,16 +167,17 @@ def build_trade_plan(snapshot, brain, decision, bot):
 
     entry_price = sum(entry) / len(entry)
 
+    # 🔥 live price override (realistisch gedrag)
     if live_price is not None:
-        try:
-            live_price = float(live_price)
-            if action == "buy" and live_price > entry_price:
-                entry_price = live_price
-        except Exception:
-            pass
+        lp = safe_float(live_price)
+        if lp and action == "buy" and lp > entry_price:
+            entry_price = lp
 
     regime = brain.get("regime") or "neutral"
 
+    # =====================================================
+    # Risk aanpassen op regime
+    # =====================================================
     risk_distance = abs(entry_price - stop)
 
     if regime == "risk_off":
@@ -177,7 +196,7 @@ def build_trade_plan(snapshot, brain, decision, bot):
     targets_plan = [
         {"label": f"TP{i+1}", "price": round(float(t), 2)}
         for i, t in enumerate(raw_targets)
-        if t is not None
+        if safe_float(t) is not None
     ]
 
     reward_per_unit = None
