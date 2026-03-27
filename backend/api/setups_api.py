@@ -76,11 +76,27 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
     user_id = current_user["id"]
     data = await request.json()
 
-    # 🔥 NIEUWE REQUIRED FIELDS
+    # 🔥 REQUIRED
     required_fields = ["name", "symbol", "setup_type"]
     for f in required_fields:
         if not data.get(f):
             raise HTTPException(400, f"'{f}' is verplicht")
+
+    setup_type = data.get("setup_type")
+
+    if setup_type not in ["dca", "trade"]:
+        raise HTTPException(400, "Ongeldig setup_type")
+
+    # 🔥 DCA LOGIC
+    if setup_type == "dca":
+        if not data.get("dca_frequency"):
+            raise HTTPException(400, "dca_frequency is verplicht voor DCA setup")
+
+    # 🔥 TRADE LOGIC (cleanup)
+    if setup_type == "trade":
+        data["dca_frequency"] = None
+        data["dca_day"] = None
+        data["dca_month_day"] = None
 
     # score validatie
     for cat in ["macro", "technical", "market"]:
@@ -160,7 +176,7 @@ async def save_setup(request: Request, current_user: dict = Depends(get_current_
                     data["symbol"],
                     data.get("timeframe"),
 
-                    data.get("setup_type"),
+                    setup_type,
 
                     data.get("dca_frequency"),
                     data.get("dca_day"),
@@ -276,7 +292,7 @@ async def get_dca_setups(current_user: dict = Depends(get_current_user)):
             cur.execute(
                 """
                 SELECT * FROM setups
-                WHERE setup_type IN ('dca_basic', 'dca_smart')
+                WHERE setup_type = 'dca'
                   AND user_id=%s
                 ORDER BY created_at DESC
                 """,
@@ -574,7 +590,7 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
                     s.symbol,
                     s.timeframe,
                     s.trend,
-                    s.strategy_type,
+                    s.setup_type,
                     s.min_investment,
                     s.tags,
                     s.favorite,
@@ -596,7 +612,7 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
 
         (
             setup_id, score, ai_exp, name, symbol, timeframe,
-            trend, strategy_type, min_inv,
+            trend, setup_type, min_inv,
             tags, favorite, action, setup_exp
         ) = row
 
@@ -609,7 +625,7 @@ async def get_active_setup(current_user: dict = Depends(get_current_user)):
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "trend": trend,
-                "strategy_type": strategy_type,
+                "setup_type": setup_type,
                 "min_investment": min_inv,
                 "tags": tags,
                 "favorite": favorite,
