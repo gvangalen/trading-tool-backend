@@ -323,7 +323,6 @@ def analyze_strategy(user_id: int, strategy_id: int):
     if not conn:
         raise RuntimeError("Geen databaseverbinding")
 
-    # 🔥 helper lokaal (simpel houden)
     def convert_decimals(obj):
         from decimal import Decimal
 
@@ -367,20 +366,26 @@ def analyze_strategy(user_id: int, strategy_id: int):
 
         row_map = dict(zip(select_fields, row))
 
+        # 🔥 CRUCIALE FIX → ALLES NUMERIC MAKEN VOOR JSON
         payload = [
             {
                 "strategy_id": row_map["id"],
                 "setup_id": row_map["setup_id"],
-                "entry": row_map["entry"],
-                "targets": row_map.get("targets") or [],
-                "stop_loss": row_map["stop_loss"],
-                "risk_reward": row_map.get("risk_reward"),
+                "entry": safe_numeric(row_map["entry"]),
+                "targets": [
+                    safe_numeric(t) for t in (row_map.get("targets") or [])
+                ],
+                "stop_loss": safe_numeric(row_map["stop_loss"]),
+                "risk_reward": safe_numeric(row_map.get("risk_reward")),
                 "explanation": row_map["explanation"],
-                "data": safe_json(row_map["data"]),
+                "data": convert_decimals(safe_json(row_map["data"])),
                 "created_at": row_map["created_at"].isoformat()
                 if row_map["created_at"] else None,
             }
         ]
+
+        # 🔥 EXTRA SAFETY (voor nested Decimal)
+        payload = convert_decimals(payload)
 
         analysis = analyze_strategies(
             user_id=user_id,
@@ -390,7 +395,7 @@ def analyze_strategy(user_id: int, strategy_id: int):
         if not analysis:
             raise RuntimeError("AI analyse gaf None terug")
 
-        # 🔥 CRUCIALE FIX
+        # 🔥 FIX → Decimal uit AI response halen
         analysis = convert_decimals(analysis)
 
         explanation_text = (
