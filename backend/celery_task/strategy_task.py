@@ -610,7 +610,7 @@ def run_daily_strategy_snapshot(user_id: int):
             )
 
         # ----------------------------------------------------
-        # 3️⃣ BOOTSTRAP (🔥 FIX HIER)
+        # 3️⃣ BOOTSTRAP
         # ----------------------------------------------------
         if needs_bootstrap:
 
@@ -624,8 +624,10 @@ def run_daily_strategy_snapshot(user_id: int):
             targets = strategy.get("targets") or []
             targets = [safe_numeric(t) for t in targets if safe_numeric(t) is not None]
 
-            # 🔥 FIX: BASE AMOUNT VERPLICHT
-            base_amount = safe_numeric(strategy.get("base_amount")) or 50
+            base_amount = safe_numeric(strategy.get("base_amount"))
+            if base_amount is None:
+                logger.error("❌ base_amount ontbreekt in AI response: %s", strategy)
+                raise RuntimeError("base_amount ontbreekt")
 
             with conn.cursor() as cur:
 
@@ -653,7 +655,7 @@ def run_daily_strategy_snapshot(user_id: int):
                             stop,
                             strategy.get("explanation"),
                             setup_type,
-                            base_amount,  # ✅ FIX
+                            base_amount,
                             json.dumps(strategy),
                             user_id,
                         ),
@@ -715,7 +717,7 @@ def run_daily_strategy_snapshot(user_id: int):
         logger.info("📊 Market context: %s", market_context)
 
         # ----------------------------------------------------
-        # 5️⃣ AI ANALYSE
+        # 5️⃣ AI ANALYSE (INLINE VOOR SNAPSHOT)
         # ----------------------------------------------------
         analysis = analyze_strategies(
             user_id=user_id,
@@ -733,10 +735,22 @@ def run_daily_strategy_snapshot(user_id: int):
         )
 
         if not analysis:
-            logger.warning("⚠️ AI analyse None")
-            return
+            logger.error("❌ AI analyse None")
+            raise RuntimeError("AI analyse failed")
 
         logger.info("🧠 AI analyse OK")
+
+        # ----------------------------------------------------
+        # 🔥 NIEUWE FIX → LINKER CARD UPDATE
+        # ----------------------------------------------------
+        from backend.celery_task.strategy_task import analyze_strategy
+
+        analyze_strategy.delay(
+            user_id=user_id,
+            strategy_id=base_strategy["strategy_id"]
+        )
+
+        logger.info("📨 analyze_strategy task getriggerd")
 
         # ----------------------------------------------------
         # 6️⃣ SNAPSHOT
