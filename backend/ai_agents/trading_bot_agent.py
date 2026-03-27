@@ -362,7 +362,7 @@ def _get_strategy_setup_payload(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT base_amount, execution_mode, decision_curve, strategy_type
+            SELECT base_amount, execution_mode, decision_curve, setup_type
             FROM strategies
             WHERE id=%s AND user_id=%s
             LIMIT 1
@@ -381,8 +381,11 @@ def _get_strategy_setup_payload(
             "setup_type": "unknown",
         }
 
-    base_amount, execution_mode, decision_curve, strategy_type = row
+    base_amount, execution_mode, decision_curve, setup_type = row
 
+    # =====================================================
+    # NORMALIZE VALUES
+    # =====================================================
     try:
         base_amount = float(base_amount or 0.0)
     except Exception:
@@ -391,11 +394,14 @@ def _get_strategy_setup_payload(
     execution_mode = (execution_mode or "fixed").lower().strip()
     curve = _safe_json(decision_curve, {}) if decision_curve is not None else {}
 
-    raw_type = (strategy_type or "").lower().strip()
+    raw_type = (setup_type or "").lower().strip()
 
+    # =====================================================
+    # NORMALIZE TYPE → BOT BRAIN CONTRACT
+    # =====================================================
     if raw_type in {"dca", "dca_basic", "dca_smart"}:
         normalized_type = "dca"
-    elif raw_type in {"breakout", "manual", "trading"}:
+    elif raw_type in {"trade", "trading", "manual", "breakout"}:
         normalized_type = "trade"
     else:
         normalized_type = "unknown"
@@ -406,8 +412,6 @@ def _get_strategy_setup_payload(
         "symbol": (symbol or DEFAULT_SYMBOL).upper(),
         "base_amount": base_amount,
         "execution_mode": execution_mode,
-
-        # ✅ ENIGE JUISTE KEY
         "setup_type": normalized_type,
     }
 
@@ -415,7 +419,6 @@ def _get_strategy_setup_payload(
         payload["decision_curve"] = curve or {}
 
     return payload
-
 
 # =====================================================
 # 📦 Risk profiles
