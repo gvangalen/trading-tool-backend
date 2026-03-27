@@ -123,7 +123,7 @@ async def save_strategy(
     try:
         with conn.cursor() as cur:
             # --------------------------------------------------
-            # VERIFY OWNERSHIP + SETUP SOURCE OF TRUTH
+            # VERIFY SETUP
             # --------------------------------------------------
             cur.execute("""
                 SELECT id, name, symbol, timeframe, setup_type
@@ -136,25 +136,25 @@ async def save_strategy(
                 raise HTTPException(403, "Setup niet van gebruiker")
 
             setup_id, setup_name, setup_symbol, setup_timeframe, setup_type = setup_row
+            setup_type = (setup_type or "").lower()
 
-            if setup_type not in ["dca_basic", "dca_smart", "breakout"]:
-                raise HTTPException(400, "Ongeldig setup_type op setup")
+            if setup_type not in ["dca", "trade"]:
+                raise HTTPException(400, "Ongeldig setup_type")
 
             # --------------------------------------------------
-            # BREAKOUT VALIDATIE
+            # TRADE VALIDATIE
             # --------------------------------------------------
-            if setup_type == "breakout":
-                if not data.get("entry") or not data.get("stop_loss"):
-                    raise HTTPException(400, "entry en stop_loss zijn verplicht voor breakout")
+            if setup_type == "trade":
+                if data.get("entry") is None or data.get("stop_loss") is None:
+                    raise HTTPException(400, "entry en stop_loss verplicht voor trade")
                 if not data.get("targets"):
-                    raise HTTPException(400, "targets zijn verplicht voor breakout")
+                    raise HTTPException(400, "targets verplicht voor trade")
 
             # --------------------------------------------------
-            # PREVENT DUPLICATE (1 setup = 1 strategy)
+            # DUPLICATE CHECK
             # --------------------------------------------------
             cur.execute("""
-                SELECT id
-                FROM strategies
+                SELECT id FROM strategies
                 WHERE setup_id=%s AND user_id=%s
             """, (setup_id, user_id))
 
@@ -162,32 +162,23 @@ async def save_strategy(
                 raise HTTPException(409, "Strategie bestaat al voor deze setup")
 
             # --------------------------------------------------
-            # STRATEGY NAME
+            # NAME
             # --------------------------------------------------
             strategy_name = (data.get("name") or "").strip()
             if not strategy_name:
-                strategy_name = f"{setup_type.upper()} {setup_symbol} {setup_timeframe}".strip()
+                strategy_name = f"{setup_type.upper()} {setup_symbol} {setup_timeframe}"
 
             # --------------------------------------------------
-            # SAVE CUSTOM CURVE
+            # CURVE SAVE
             # --------------------------------------------------
             curve_id = None
             if execution_mode == "custom":
-                curve_name = (
-                    data.get("decision_curve_name")
-                    or f"Curve {datetime.utcnow():%Y%m%d-%H%M}"
-                )
+                curve_name = data.get("decision_curve_name") or f"Curve {datetime.utcnow():%Y%m%d-%H%M}"
 
                 cur.execute("""
                     INSERT INTO indicator_curves (
-                        user_id,
-                        domain,
-                        indicator,
-                        curve,
-                        name,
-                        is_active,
-                        is_preset,
-                        created_at
+                        user_id, domain, indicator, curve, name,
+                        is_active, is_preset, created_at
                     )
                     VALUES (%s,'execution','position_size',%s,%s,true,false,NOW())
                     RETURNING id
@@ -198,11 +189,9 @@ async def save_strategy(
                 ))
 
                 curve_id = cur.fetchone()[0]
-                data["decision_curve_id"] = curve_id
-                data["decision_curve_name"] = curve_name
 
             # --------------------------------------------------
-            # FINAL DATA JSON
+            # FINAL DATA
             # --------------------------------------------------
             data["setup_type"] = setup_type
             data["symbol"] = setup_symbol
@@ -210,33 +199,23 @@ async def save_strategy(
             data["setup_name"] = setup_name
 
             # --------------------------------------------------
-            # INSERT STRATEGY
+            # INSERT
             # --------------------------------------------------
             cur.execute("""
                 INSERT INTO strategies (
-                    setup_id,
-                    name,
-                    setup_type,
-                    execution_mode,
-                    base_amount,
-                    decision_curve,
-                    decision_curve_id,
-                    entry,
-                    targets,
-                    stop_loss,
-                    explanation,
-                    risk_profile,
-                    data,
-                    created_at,
-                    user_id
+                    setup_id, name, setup_type,
+                    execution_mode, base_amount,
+                    decision_curve, decision_curve_id,
+                    entry, targets, stop_loss,
+                    explanation, risk_profile,
+                    data, created_at, user_id
                 )
                 VALUES (
                     %s,%s,%s,%s,%s,
                     %s,%s,
                     %s,%s,%s,
                     %s,%s,%s,
-                    NOW(),
-                    %s
+                    NOW(),%s
                 )
                 RETURNING id
             """, (
@@ -248,7 +227,7 @@ async def save_strategy(
                 json.dumps(data.get("decision_curve")) if data.get("decision_curve") else None,
                 curve_id,
                 str(data.get("entry")) if data.get("entry") is not None else None,
-                data.get("targets") if data.get("targets") else None,
+                data.get("targets"),
                 str(data.get("stop_loss")) if data.get("stop_loss") is not None else None,
                 data.get("explanation"),
                 data.get("risk_profile"),
@@ -261,12 +240,7 @@ async def save_strategy(
 
         mark_step_completed(conn, user_id, "strategy")
 
-        return {
-            "id": strategy_id,
-            "name": strategy_name,
-            "curve_id": curve_id,
-            "message": "✅ Strategie opgeslagen"
-        }
+        return {"id": strategy_id, "message": "✅ Strategie opgeslagen"}
 
     finally:
         conn.close()
@@ -352,13 +326,13 @@ async def update_strategy(
         raise HTTPException(400, "base_amount is verplicht")
 
     if execution_mode == "custom" and not data.get("decision_curve"):
-        raise HTTPException(400, "decision_curve is verplicht bij custom execution")
+        raise HTTPException(400, "decision_curve verplicht")
 
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
-                SELECT s.*, st.name AS setup_name, st.symbol AS setup_symbol, st.timeframe AS setup_timeframe, st.setup_type AS real_setup_type
+                SELECT s.*, st.symbol, st.timeframe, st.setup_type
                 FROM strategies s
                 JOIN setups st ON st.id = s.setup_id
                 WHERE s.id=%s AND s.user_id=%s
@@ -366,20 +340,15 @@ async def update_strategy(
             existing = cur.fetchone()
 
             if not existing:
-                raise HTTPException(404, "Strategie niet gevonden")
+                raise HTTPException(404, "Niet gevonden")
 
-            setup_type = existing["real_setup_type"]
+            setup_type = (existing["setup_type"] or "").lower()
 
-            if setup_type == "breakout":
-                if not data.get("entry") or not data.get("stop_loss"):
-                    raise HTTPException(400, "entry en stop_loss zijn verplicht voor breakout")
+            if setup_type == "trade":
+                if data.get("entry") is None or data.get("stop_loss") is None:
+                    raise HTTPException(400, "entry en stop_loss verplicht")
                 if not data.get("targets"):
-                    raise HTTPException(400, "targets zijn verplicht voor breakout")
-
-            data["setup_type"] = setup_type
-            data["symbol"] = existing["setup_symbol"]
-            data["timeframe"] = existing["setup_timeframe"]
-            data["setup_name"] = existing["setup_name"]
+                    raise HTTPException(400, "targets verplicht")
 
             cur.execute("""
                 UPDATE strategies
@@ -405,7 +374,7 @@ async def update_strategy(
                 json.dumps(data.get("decision_curve")) if data.get("decision_curve") else None,
                 data.get("decision_curve_id"),
                 str(data.get("entry")) if data.get("entry") is not None else None,
-                data.get("targets") if data.get("targets") else None,
+                data.get("targets"),
                 str(data.get("stop_loss")) if data.get("stop_loss") is not None else None,
                 data.get("explanation"),
                 data.get("risk_profile"),
@@ -420,7 +389,6 @@ async def update_strategy(
 
     finally:
         conn.close()
-
 
 # ==========================================================
 # 5️⃣ DELETE STRATEGY
@@ -641,7 +609,6 @@ async def get_active_strategy_today(
 ):
     user_id = current_user["id"]
     now = datetime.utcnow()
-    today = now.date()
     weekday = now.strftime("%A").lower()
     month_day = now.day
 
@@ -651,41 +618,34 @@ async def get_active_strategy_today(
             cur.execute("""
                 SELECT
                     s.*,
-                    st.name AS setup_name,
-                    st.symbol AS setup_symbol,
-                    st.timeframe AS setup_timeframe,
                     st.dca_frequency,
                     st.dca_day,
                     st.dca_month_day
                 FROM strategies s
                 JOIN setups st ON st.id = s.setup_id
-                WHERE s.user_id = %s
-                  AND s.execution_mode IN ('fixed', 'custom')
+                WHERE s.user_id=%s
                 ORDER BY s.created_at DESC
             """, (user_id,))
             rows = cur.fetchall()
 
-        if not rows:
-            return {"active": False}
-
         for row in rows:
             setup_type = (row.get("setup_type") or "").lower()
 
-            # Breakout heeft geen vaste planning
-            if setup_type == "breakout":
+            # 🔥 TRADE = geen timing → skip
+            if setup_type == "trade":
                 continue
 
-            dca_frequency = (row.get("dca_frequency") or "").lower()
-            dca_day = (row.get("dca_day") or "").lower()
-            dca_month_day = row.get("dca_month_day")
+            freq = (row.get("dca_frequency") or "").lower()
+            day = (row.get("dca_day") or "").lower()
+            md = row.get("dca_month_day")
 
-            if dca_frequency == "daily":
+            if freq == "daily":
                 return {"active": True, "strategy": format_strategy_row(row)}
 
-            if dca_frequency == "weekly" and dca_day == weekday:
+            if freq == "weekly" and day == weekday:
                 return {"active": True, "strategy": format_strategy_row(row)}
 
-            if dca_frequency == "monthly" and dca_month_day == month_day:
+            if freq == "monthly" and md == month_day:
                 return {"active": True, "strategy": format_strategy_row(row)}
 
         return {"active": False}
