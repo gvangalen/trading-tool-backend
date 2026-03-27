@@ -391,15 +391,23 @@ def _get_strategy_setup_payload(
     execution_mode = (execution_mode or "fixed").lower().strip()
     curve = _safe_json(decision_curve, {}) if decision_curve is not None else {}
 
+    # 🔥 FIX: normalize strategy_type → setup_type
+    raw_type = (strategy_type or "").lower().strip()
+
+    if raw_type in {"dca", "dca_basic", "dca_smart"}:
+        normalized_type = "dca"
+    elif raw_type in {"breakout", "manual", "trading"}:
+        normalized_type = "trade"
+    else:
+        normalized_type = "unknown"
+
     payload = {
         "id": setup_id,
         "name": setup_name or "Strategy",
         "symbol": (symbol or DEFAULT_SYMBOL).upper(),
         "base_amount": base_amount,
         "execution_mode": execution_mode,
-
-        # ✅ NU CORRECT
-        "strategy_type": (strategy_type or "").lower().strip(),
+        "strategy_type": normalized_type,  # ✅ BELANGRIJK
     }
 
     if execution_mode == "custom":
@@ -1297,13 +1305,23 @@ def run_trading_bot_agent(
 
         for bot in bots:
 
-            symbol = (bot["symbol"] or DEFAULT_SYMBOL).upper()
+            # =====================================================
+            # 🔥 FIX 1: symbol altijd consistent (bot → setup → brain)
+            # =====================================================
+            symbol = (
+                bot.get("symbol")
+                or DEFAULT_SYMBOL
+            )
+            symbol = symbol.upper()
 
             # =====================================================
-            # 🔥 FIX 1: LIVE PRICE EERST OPHALEN
+            # 🔥 LIVE PRICE
             # =====================================================
             live_price = _get_live_price(conn, symbol)
 
+            # =====================================================
+            # SNAPSHOT
+            # =====================================================
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -1311,6 +1329,9 @@ def run_trading_bot_agent(
                 report_date,
             )
 
+            # =====================================================
+            # SETUP PAYLOAD
+            # =====================================================
             setup_payload = _get_strategy_setup_payload(
                 conn,
                 user_id=user_id,
@@ -1320,6 +1341,10 @@ def run_trading_bot_agent(
                 symbol=symbol,
             )
 
+            # 🔥 FIX 2: symbol sync met setup (belangrijk voor trade_plan)
+            if setup_payload.get("symbol"):
+                symbol = setup_payload.get("symbol").upper()
+
             if snapshot:
                 setup_payload.update({
                     "entry": snapshot.get("entry"),
@@ -1327,42 +1352,37 @@ def run_trading_bot_agent(
                     "targets": snapshot.get("targets"),
                 })
 
-            # =========================
-            # Portfolio
-            # =========================
-            
+            # =====================================================
+            # PORTFOLIO
+            # =====================================================
             today_spent_eur = get_today_spent_eur(
                 conn,
                 user_id,
                 bot["bot_id"],
                 report_date,
             )
-            
+
             cash_balance_eur = get_bot_balance(
                 conn,
                 user_id,
                 bot["bot_id"],
             )
-            
+
             current_asset_value_eur = get_asset_position_value(
                 conn,
                 user_id,
                 bot["bot_id"],
                 symbol,
             )
-            
-            # 🔥 FIX: correcte cash & investering berekening
+
             cash_available = max(0.0, cash_balance_eur)
             total_invested = max(0.0, -cash_balance_eur)
-            
+
             portfolio_value_eur = max(
                 current_asset_value_eur + cash_available,
                 1.0,
             )
 
-            # =====================================================
-            # 🔥 FIX 2: LIVE PRICE NAAR BRAIN STUREN
-            # =====================================================
             portfolio_context = {
                 "today_allocated_eur": today_spent_eur,
                 "portfolio_value_eur": portfolio_value_eur,
@@ -1376,7 +1396,7 @@ def run_trading_bot_agent(
             }
 
             # =====================================================
-            # Bot brain
+            # BOT BRAIN
             # =====================================================
             brain = run_bot_brain(
                 user_id=user_id,
@@ -1392,6 +1412,9 @@ def run_trading_bot_agent(
 
             action = _normalize_action(brain.get("action"))
 
+            # =====================================================
+            # SETUP MATCH
+            # =====================================================
             setup_match = _build_setup_match(
                 bot=bot,
                 scores=scores,
@@ -1399,68 +1422,61 @@ def run_trading_bot_agent(
             )
 
             # =====================================================
-            # 🔥 FIX: Trade plan handling (NO SILENT FALLBACK)
+            # TRADE PLAN (GEEN SILENT FAIL)
             # =====================================================
             trade_plan = brain.get("trade_plan")
-            
-            # 🔴 HARD DEBUG — zie direct waarom plan ontbreekt
+
             if not trade_plan:
                 logger.error(
-                    "❌ Trade plan missing | bot=%s | action=%s | strategy=%s | snapshot=%s | watch_levels=%s",
+                    "❌ Trade plan missing | bot=%s | action=%s | strategy=%s | snapshot=%s",
                     bot["bot_id"],
                     action,
                     bot.get("strategy_type"),
                     bool(snapshot),
-                    bool(brain.get("watch_levels")),
                 )
-            
+
                 trade_plan = _default_trade_plan(
                     symbol=symbol,
                     action=action,
                     reason="fallback_missing_trade_plan",
-                    watch_levels=brain.get("watch_levels"),
                     snapshot=snapshot,
                 )
-            
-            # 🔴 EXTRA VALIDATIE (voorkomt silent bugs)
+
             elif not isinstance(trade_plan, dict):
                 logger.error(
-                    "❌ Trade plan invalid format | bot=%s | type=%s | value=%s",
+                    "❌ Trade plan invalid format | bot=%s | type=%s",
                     bot["bot_id"],
                     type(trade_plan),
-                    trade_plan,
                 )
-            
+
                 trade_plan = _default_trade_plan(
                     symbol=symbol,
                     action=action,
                     reason="fallback_invalid_trade_plan",
-                    watch_levels=brain.get("watch_levels"),
                     snapshot=snapshot,
                 )
 
             # =====================================================
-            # Position size
+            # POSITION SIZE
             # =====================================================
-            # 🔥 FIX: gebruik ALTIJD intent position size (niet execution)
             raw_position_size = brain.get("position_size")
-            
+
             if raw_position_size is None:
                 raw_position_size = brain.get("metrics", {}).get("position_size")
-            
+
             if raw_position_size is None:
                 raw_position_size = 0.0
-            
+
             position_size = float(raw_position_size)
             position_size = max(0.0, min(position_size, 1.0))
 
             # =====================================================
-            # 🔥 FIX 3: METRICS (BUG FIX)
+            # METRICS
             # =====================================================
             metrics = brain.get("metrics") or {}
 
             # =====================================================
-            # Decision
+            # DECISION
             # =====================================================
             decision = {
                 "bot_id": bot["bot_id"],
@@ -1488,7 +1504,6 @@ def run_trading_bot_agent(
                 "regime": brain.get("regime"),
                 "risk_state": brain.get("risk_state"),
 
-                # 🔥 FIXED
                 "market_pressure": metrics.get("market_pressure"),
                 "transition_risk": metrics.get("transition_risk"),
 
@@ -1558,16 +1573,6 @@ def run_trading_bot_agent(
                 "decision_id": decision_id,
                 "action": decision["action"],
                 "decision": decision,
-                "scores_json": {
-                    "macro": scores.get("macro"),
-                    "technical": scores.get("technical"),
-                    "market": scores.get("market"),
-                    "setup": scores.get("setup"),
-                    "market_pressure": metrics.get("market_pressure"),
-                    "transition_risk": metrics.get("transition_risk"),
-                    "position_size": position_size,
-                },
-                "guardrails_result": decision.get("guardrails_result"),
                 "trade_plan": trade_plan,
             })
 
