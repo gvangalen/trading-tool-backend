@@ -290,13 +290,14 @@ def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
     setup_type = (setup.get("setup_type") or "").lower()
     symbol = setup.get("symbol", "BTC")
 
-    # 🔥 DCA = GEEN LEVELS
+    # 🔥 DCA = GEEN LEVELS MAAR WEL BASE_AMOUNT VERPLICHT
     if setup_type == "dca":
         return {
             "entry": None,
             "targets": [],
             "stop_loss": None,
             "risk_reward": None,
+            "base_amount": 50,  # of uit setup halen later
             "explanation": "DCA strategie — vaste accumulatie zonder vaste entry levels"
         }
 
@@ -305,8 +306,9 @@ def generate_strategy_from_setup(setup: Dict[str, Any]) -> Dict[str, Any]:
     # -------------------------------------------------
     try:
         live_price = float(_get_latest_market_price(symbol))
-    except Exception:
-        live_price = None
+    except Exception as e:
+        logger.error("❌ Geen market price beschikbaar: %s", e)
+        raise
 
     # -------------------------------------------------
     # AI TASK
@@ -325,6 +327,7 @@ Output JSON:
   "targets": [number, number, number],
   "stop_loss": number,
   "risk_reward": number,
+  "base_amount": number,
   "explanation": ""
 }
 """
@@ -344,8 +347,10 @@ Output JSON:
         system_role=system_prompt
     )
 
+    # 🔥 HARD VALIDATIE (DIT IS WAT JE WILT)
     if not isinstance(result, dict):
-        result = {}
+        logger.error("❌ AI gaf geen dict terug: %s", result)
+        raise RuntimeError("AI response invalid")
 
     def to_float(v):
         try:
@@ -355,31 +360,37 @@ Output JSON:
 
     entry = to_float(result.get("entry"))
     stop = to_float(result.get("stop_loss"))
+    base_amount = to_float(result.get("base_amount"))
 
     targets = []
     for t in result.get("targets", []):
-        try:
-            targets.append(float(t))
-        except:
-            continue
+        tv = to_float(t)
+        if tv is not None:
+            targets.append(tv)
 
-    # 🔥 FALLBACK
-    if entry is None or stop is None or not targets:
-        price = live_price or 50000
+    # 🔥 GEEN FALLBACK → HARD FAIL + LOG
+    if entry is None:
+        logger.error("❌ Strategy mist entry: %s", result)
+        raise RuntimeError("Strategy invalid: entry missing")
 
-        entry = round(price, 2)
-        stop = round(price * 0.92, 2)
-        targets = [
-            round(price * 1.05, 2),
-            round(price * 1.12, 2),
-            round(price * 1.20, 2),
-        ]
+    if stop is None:
+        logger.error("❌ Strategy mist stop_loss: %s", result)
+        raise RuntimeError("Strategy invalid: stop_loss missing")
+
+    if not targets:
+        logger.error("❌ Strategy mist targets: %s", result)
+        raise RuntimeError("Strategy invalid: targets missing")
+
+    if base_amount is None:
+        logger.error("❌ Strategy mist base_amount: %s", result)
+        raise RuntimeError("Strategy invalid: base_amount missing")
 
     return {
         "entry": entry,
         "stop_loss": stop,
         "targets": targets,
         "risk_reward": result.get("risk_reward"),
+        "base_amount": base_amount,
         "explanation": result.get("explanation", "")
     }
 
