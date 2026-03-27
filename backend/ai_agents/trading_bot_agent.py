@@ -356,7 +356,7 @@ def _get_strategy_setup_payload(
             "symbol": (symbol or DEFAULT_SYMBOL).upper(),
             "base_amount": 0.0,
             "execution_mode": "none",
-            "strategy_type": "unknown",
+            "setup_type": "unknown",
         }
 
     with conn.cursor() as cur:
@@ -378,7 +378,7 @@ def _get_strategy_setup_payload(
             "symbol": (symbol or DEFAULT_SYMBOL).upper(),
             "base_amount": 0.0,
             "execution_mode": "none",
-            "strategy_type": "unknown",
+            "setup_type": "unknown",
         }
 
     base_amount, execution_mode, decision_curve, strategy_type = row
@@ -391,7 +391,6 @@ def _get_strategy_setup_payload(
     execution_mode = (execution_mode or "fixed").lower().strip()
     curve = _safe_json(decision_curve, {}) if decision_curve is not None else {}
 
-    # 🔥 FIX: normalize strategy_type → setup_type
     raw_type = (strategy_type or "").lower().strip()
 
     if raw_type in {"dca", "dca_basic", "dca_smart"}:
@@ -407,7 +406,9 @@ def _get_strategy_setup_payload(
         "symbol": (symbol or DEFAULT_SYMBOL).upper(),
         "base_amount": base_amount,
         "execution_mode": execution_mode,
-        "strategy_type": normalized_type,  # ✅ BELANGRIJK
+
+        # ✅ ENIGE JUISTE KEY
+        "setup_type": normalized_type,
     }
 
     if execution_mode == "custom":
@@ -510,7 +511,7 @@ def _build_setup_match(
         reason = "below_hold_threshold"
 
     return {
-        "name": bot.get("strategy_type") or bot.get("bot_name") or "Strategy",
+        "name": bot.get("setup_type") or bot.get("bot_name") or "Strategy",
         "symbol": bot.get("symbol", DEFAULT_SYMBOL),
         "timeframe": bot.get("timeframe") or "—",
         "score": combined_score,
@@ -552,8 +553,8 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
               COALESCE(b.budget_max_order_eur, 0),
               COALESCE(b.max_asset_exposure_pct, 100),
 
-              s.strategy_type,
-              st.id             AS setup_id,
+              s.setup_type,   -- ✅ FIX
+              st.id           AS setup_id,
               st.symbol,
               st.timeframe
 
@@ -582,7 +583,7 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
             budget_min_order_eur,
             budget_max_order_eur,
             max_asset_exposure_pct,
-            strategy_type,
+            setup_type,
             setup_id,
             symbol,
             timeframe,
@@ -595,7 +596,10 @@ def _get_active_bots(conn, user_id: int) -> List[Dict[str, Any]]:
                 "mode": mode,
                 "risk_profile": risk_profile or "balanced",
                 "strategy_id": int(strategy_id),
-                "strategy_type": strategy_type,
+
+                # ✅ CONSISTENT
+                "setup_type": setup_type,
+
                 "setup_id": setup_id,
                 "symbol": (symbol or DEFAULT_SYMBOL).upper(),
                 "timeframe": timeframe,
@@ -1337,7 +1341,7 @@ def run_trading_bot_agent(
                 user_id=user_id,
                 strategy_id=bot["strategy_id"],
                 setup_id=bot.get("setup_id"),
-                setup_name=bot.get("strategy_type"),
+                setup_name=bot.get("setup_type"),
                 symbol=symbol,
             )
 
