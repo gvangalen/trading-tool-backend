@@ -132,19 +132,19 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
               b.budget_max_order_eur,
               b.max_asset_exposure_pct,
 
-              b.last_run,  -- 🔥 FIX (toegevoegd)
+              b.last_run,
 
               b.created_at,
               b.updated_at,
 
-              s.id            AS strategy_id,
-              s.name          AS strategy_name,
-              s.strategy_type AS strategy_type,
+              s.id         AS strategy_id,
+              s.name       AS strategy_name,
+              s.setup_type AS setup_type,   -- ✅ FIX
 
-              st.id           AS setup_id,
-              st.name         AS setup_name,
-              st.symbol       AS symbol,
-              st.timeframe    AS timeframe
+              st.id        AS setup_id,
+              st.name      AS setup_name,
+              st.symbol    AS symbol,
+              st.timeframe AS timeframe
 
             FROM bot_configs b
             LEFT JOIN strategies s ON s.id = b.strategy_id
@@ -173,14 +173,14 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                 budget_max,
                 max_asset_exposure_pct,
 
-                last_run,  # 🔥 FIX
+                last_run,
 
                 created_at,
                 updated_at,
 
                 strategy_id,
                 strategy_name,
-                strategy_type,
+                setup_type,   # ✅ FIX
 
                 setup_id,
                 setup_name,
@@ -192,7 +192,7 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
             if strategy_id:
                 strategy = {
                     "id": strategy_id,
-                    "type": strategy_type,
+                    "setup_type": setup_type,   # ✅ FIX
                     "name": strategy_name,
                     "setup": {
                         "id": setup_id,
@@ -211,7 +211,6 @@ async def get_bot_configs(current_user: dict = Depends(get_current_user)):
                     "cadence": cadence,
                     "risk_profile": risk_profile or "balanced",
 
-                    # 🔥 FIX
                     "last_run": last_run.isoformat() if last_run else None,
 
                     "budget": {
@@ -271,7 +270,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
               b.name,
               COALESCE(st.symbol,'BTC')  AS symbol,
               COALESCE(st.timeframe,'—') AS timeframe,
-              s.strategy_type,
+              s.setup_type,              -- ✅ FIX
               st.name AS setup_name
             FROM bot_configs b
             LEFT JOIN strategies s ON s.id = b.strategy_id
@@ -300,7 +299,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                 "bot_name": r[1],
                 "symbol": r[2],
                 "timeframe": r[3],
-                "strategy_type": r[4],
+                "setup_type": r[4],   # ✅ FIX
                 "setup_name": r[5],
             }
             for r in bot_rows
@@ -367,7 +366,7 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             reasons_payload = _safe_json(reason_json, [])
 
             # =====================================================
-            # 🔥 TRADE PLAN (FIXED)
+            # TRADE PLAN
             # =====================================================
             trade_plan = {
                 "entry_plan": [],
@@ -377,7 +376,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
             }
 
             if _table_exists(conn, "bot_trade_plans"):
-
                 with conn.cursor() as tp_cur:
                     tp_cur.execute(
                         """
@@ -393,7 +391,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
                     if tp_row:
                         entry_plan, stop_loss, targets, risk_json = tp_row
-
                         trade_plan = {
                             "entry_plan": _safe_json(entry_plan, []),
                             "stop_loss": _safe_json(stop_loss, {}),
@@ -401,19 +398,17 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
                             "risk": _safe_json(risk_json, {}),
                         }
 
-            # 🔥 FALLBACK → DIRECT BRAIN PLAN
             if not trade_plan["entry_plan"] and scores_payload.get("trade_plan"):
                 trade_plan = scores_payload.get("trade_plan")
 
             # =====================================================
-            # DECISION OBJECT
+            # OUTPUT
             # =====================================================
             decisions_by_bot[bot_id] = {
                 "id": decision_id,
                 "bot_id": bot_id,
                 "bot_name": bot["bot_name"],
                 "symbol": symbol,
-
                 "setup_name": bot.get("setup_name"),
 
                 "action": action,
@@ -441,7 +436,6 @@ async def get_bot_today(current_user: dict = Depends(get_current_user)):
 
                 "setup_match": scores_payload.get("setup_match"),
 
-                # 🔥 FIXED OUTPUT
                 "trade_plan": trade_plan,
                 "watch_levels": scores_payload.get("watch_levels"),
             }
