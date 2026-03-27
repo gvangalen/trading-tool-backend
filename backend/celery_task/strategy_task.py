@@ -549,7 +549,7 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
 @shared_task(name="backend.celery_task.strategy_task.run_daily_strategy_snapshot")
 def run_daily_strategy_snapshot(user_id: int):
 
-    logger.info("🟡 Daily strategy snapshot (BEST-SETUP driven) | user=%s", user_id)
+    logger.info("🟡 Daily strategy snapshot | user=%s", user_id)
     today = date.today()
 
     conn = get_db_connection()
@@ -559,7 +559,7 @@ def run_daily_strategy_snapshot(user_id: int):
 
     try:
         # ----------------------------------------------------
-        # 1️⃣ Beste setup van vandaag
+        # 1️⃣ BEST SETUP
         # ----------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
@@ -582,26 +582,32 @@ def run_daily_strategy_snapshot(user_id: int):
         setup_id = row[0]
         setup = load_setup_from_db(setup_id, user_id)
 
+        logger.info("📌 Best setup gevonden | id=%s type=%s", setup_id, setup.get("setup_type"))
+
         # ----------------------------------------------------
-        # 2️⃣ Strategy ophalen
+        # 2️⃣ STRATEGY
         # ----------------------------------------------------
         base_strategy = load_latest_strategy(setup_id, user_id)
 
-        needs_bootstrap = (
-            not base_strategy
-            or base_strategy.get("entry") is None
-            or base_strategy.get("stop_loss") is None
-            or not base_strategy.get("targets")
-        )
+        setup_type = (setup.get("setup_type") or "").lower()
+
+        # 🔥 FIX → DCA hoeft geen levels
+        if setup_type == "dca":
+            needs_bootstrap = False
+        else:
+            needs_bootstrap = (
+                not base_strategy
+                or base_strategy.get("entry") is None
+                or base_strategy.get("stop_loss") is None
+                or not base_strategy.get("targets")
+            )
 
         # ----------------------------------------------------
-        # 3️⃣ BOOTSTRAP strategy indien nodig
+        # 3️⃣ BOOTSTRAP
         # ----------------------------------------------------
         if needs_bootstrap:
 
-            logger.warning(
-                "⚠️ Strategy ontbreekt of heeft geen levels → bootstrap"
-            )
+            logger.warning("⚠️ Strategy ontbreekt → bootstrap")
 
             strategy = generate_strategy_from_setup(setup)
 
@@ -614,7 +620,6 @@ def run_daily_strategy_snapshot(user_id: int):
             with conn.cursor() as cur:
 
                 if not base_strategy:
-
                     cur.execute(
                         """
                         INSERT INTO strategies (
@@ -623,7 +628,7 @@ def run_daily_strategy_snapshot(user_id: int):
                             targets,
                             stop_loss,
                             explanation,
-                            strategy_type,
+                            setup_type,
                             data,
                             user_id
                         )
@@ -636,33 +641,23 @@ def run_daily_strategy_snapshot(user_id: int):
                             targets,
                             stop,
                             strategy.get("explanation"),
-                            setup.get("strategy_type"),
+                            setup_type,  # 🔥 FIX
                             json.dumps(strategy),
                             user_id,
                         ),
                     )
-
                     strategy_id = cur.fetchone()[0]
 
                 else:
-
                     strategy_id = base_strategy["strategy_id"]
 
                     cur.execute(
                         """
                         UPDATE strategies
-                        SET
-                            entry=%s,
-                            stop_loss=%s,
-                            targets=%s
+                        SET entry=%s, stop_loss=%s, targets=%s
                         WHERE id=%s
                         """,
-                        (
-                            entry,
-                            stop,
-                            targets,
-                            strategy_id,
-                        ),
+                        (entry, stop, targets, strategy_id),
                     )
 
             conn.commit()
@@ -675,14 +670,12 @@ def run_daily_strategy_snapshot(user_id: int):
             }
 
             logger.info(
-                "✅ Strategy bootstrap gedaan | entry=%s stop=%s targets=%s",
-                entry,
-                stop,
-                targets,
+                "✅ Bootstrap gedaan | entry=%s stop=%s targets=%s",
+                entry, stop, targets
             )
 
         # ----------------------------------------------------
-        # 4️⃣ Market context
+        # 4️⃣ MARKET CONTEXT
         # ----------------------------------------------------
         with conn.cursor() as cur:
             cur.execute(
@@ -698,17 +691,19 @@ def run_daily_strategy_snapshot(user_id: int):
             scores = cur.fetchone()
 
         if not scores:
-            logger.warning("⚠️ Geen daily_scores gevonden")
+            logger.warning("⚠️ Geen daily_scores")
             return
 
         market_context = {
-            "macro_score": float(scores[0]) if scores[0] is not None else None,
-            "technical_score": float(scores[1]) if scores[1] is not None else None,
-            "market_score": float(scores[2]) if scores[2] is not None else None,
+            "macro_score": float(scores[0]) if scores[0] else None,
+            "technical_score": float(scores[1]) if scores[1] else None,
+            "market_score": float(scores[2]) if scores[2] else None,
         }
 
+        logger.info("📊 Market context: %s", market_context)
+
         # ----------------------------------------------------
-        # 5️⃣ AI analyse
+        # 5️⃣ AI ANALYSE
         # ----------------------------------------------------
         analysis = analyze_strategies(
             user_id=user_id,
@@ -716,6 +711,7 @@ def run_daily_strategy_snapshot(user_id: int):
                 {
                     "strategy_id": base_strategy["strategy_id"],
                     "setup_id": setup_id,
+                    "setup_type": setup_type,  # 🔥 FIX
                     "entry": base_strategy.get("entry"),
                     "targets": base_strategy.get("targets"),
                     "stop_loss": base_strategy.get("stop_loss"),
@@ -725,11 +721,13 @@ def run_daily_strategy_snapshot(user_id: int):
         )
 
         if not analysis:
-            logger.warning("⚠️ AI analyse gaf None terug")
+            logger.warning("⚠️ AI analyse None")
             return
 
+        logger.info("🧠 AI analyse OK")
+
         # ----------------------------------------------------
-        # 6️⃣ Snapshot opslaan
+        # 6️⃣ SNAPSHOT
         # ----------------------------------------------------
         with conn.cursor() as cur:
 
@@ -759,16 +757,7 @@ def run_daily_strategy_snapshot(user_id: int):
                     changes,
                     snapshot_date
                 )
-                VALUES (
-                    %s, %s, %s,
-                    %s, %s,
-                    %s,
-                    %s,
-                    %s,
-                    %s::jsonb,
-                    %s::jsonb,
-                    %s
-                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s)
                 ON CONFLICT (user_id, setup_id, snapshot_date)
                 DO UPDATE SET
                     strategy_id = EXCLUDED.strategy_id,
@@ -798,7 +787,7 @@ def run_daily_strategy_snapshot(user_id: int):
 
         conn.commit()
 
-        logger.info("✅ Strategy snapshot opgeslagen voor bot")
+        logger.info("✅ Snapshot opgeslagen (strategy_id=%s)", base_strategy["strategy_id"])
 
     except Exception:
         logger.exception("❌ Daily strategy snapshot crash")
