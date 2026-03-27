@@ -75,21 +75,25 @@ def _classify_risk_state(transition_risk: float, pressure: float) -> str:
 
 
 def _normalize_setup_type(setup: Dict[str, Any], snapshot: Dict[str, Any]) -> str:
-    setup_type = _safe_str(
+    """
+    SINGLE SOURCE OF TRUTH:
+    - Alleen setup_type gebruiken (komt uit strategies tabel)
+    - NOOIT fallback naar oude velden (strategy_type etc.)
+    - Output altijd: 'dca', 'trade' of 'unknown'
+    """
+
+    raw = (
         snapshot.get("setup_type")
         or setup.get("setup_type")
-        or setup.get("strategy_type")
-    ).lower()
+    )
 
+    setup_type = _safe_str(raw).lower()
+
+    # 🔒 harde validatie (DB constraint aligned)
     if setup_type in {"dca", "trade"}:
         return setup_type
 
-    # backward compatibility
-    if setup_type in {"dca_basic", "dca_smart"}:
-        return "dca"
-    if setup_type in {"breakout", "manual", "trading"}:
-        return "trade"
-
+    # fallback = unknown (nooit silent misinterpretatie)
     return "unknown"
 
 
