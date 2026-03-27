@@ -591,7 +591,6 @@ def run_daily_strategy_snapshot(user_id: int):
 
         setup_type = (setup.get("setup_type") or "").lower()
 
-        # 🔥 FIX → DCA hoeft geen levels
         if setup_type == "dca":
             needs_bootstrap = False
         else:
@@ -603,7 +602,7 @@ def run_daily_strategy_snapshot(user_id: int):
             )
 
         # ----------------------------------------------------
-        # 3️⃣ BOOTSTRAP
+        # 3️⃣ BOOTSTRAP (🔥 FIX HIER)
         # ----------------------------------------------------
         if needs_bootstrap:
 
@@ -617,6 +616,9 @@ def run_daily_strategy_snapshot(user_id: int):
             targets = strategy.get("targets") or []
             targets = [safe_numeric(t) for t in targets if safe_numeric(t) is not None]
 
+            # 🔥 FIX: BASE AMOUNT VERPLICHT
+            base_amount = safe_numeric(strategy.get("base_amount")) or 50
+
             with conn.cursor() as cur:
 
                 if not base_strategy:
@@ -629,10 +631,11 @@ def run_daily_strategy_snapshot(user_id: int):
                             stop_loss,
                             explanation,
                             setup_type,
+                            base_amount,
                             data,
                             user_id
                         )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
                         RETURNING id
                         """,
                         (
@@ -641,7 +644,8 @@ def run_daily_strategy_snapshot(user_id: int):
                             targets,
                             stop,
                             strategy.get("explanation"),
-                            setup_type,  # 🔥 FIX
+                            setup_type,
+                            base_amount,  # ✅ FIX
                             json.dumps(strategy),
                             user_id,
                         ),
@@ -670,8 +674,8 @@ def run_daily_strategy_snapshot(user_id: int):
             }
 
             logger.info(
-                "✅ Bootstrap gedaan | entry=%s stop=%s targets=%s",
-                entry, stop, targets
+                "✅ Bootstrap gedaan | entry=%s stop=%s targets=%s base_amount=%s",
+                entry, stop, targets, base_amount
             )
 
         # ----------------------------------------------------
@@ -711,7 +715,7 @@ def run_daily_strategy_snapshot(user_id: int):
                 {
                     "strategy_id": base_strategy["strategy_id"],
                     "setup_id": setup_id,
-                    "setup_type": setup_type,  # 🔥 FIX
+                    "setup_type": setup_type,
                     "entry": base_strategy.get("entry"),
                     "targets": base_strategy.get("targets"),
                     "stop_loss": base_strategy.get("stop_loss"),
