@@ -17,12 +17,11 @@ def run_setup_agent_daily(user_id: int):
 
     Flow:
     1. Haalt unieke assets uit setups
-    2. Sluit DB-verbinding
-    3. Roept Setup AI Agent aan per asset
+    2. Roept Setup AI Agent aan per asset
 
-    De AI-agent schrijft zelf:
+    Output:
     - daily_setup_scores
-    - ai_category_insights (category='setup')
+    - ai_category_insights
     """
 
     logger.info(f"🤖 [Setup-Task] Start Setup-Agent voor user_id={user_id}")
@@ -34,16 +33,19 @@ def run_setup_agent_daily(user_id: int):
 
     try:
         # ----------------------------------------------------
-        # 1️⃣ Unieke assets ophalen
+        # 1️⃣ Unieke assets ophalen (clean)
         # ----------------------------------------------------
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT DISTINCT symbol
                 FROM setups
                 WHERE user_id = %s
-                  AND symbol IS NOT NULL;
+                  AND symbol IS NOT NULL
+                  AND TRIM(symbol) <> '';
             """, (user_id,))
-            assets = [row[0] for row in cur.fetchall()]
+            rows = cur.fetchall()
+
+        assets = [r[0].strip() for r in rows if r[0]]
 
     except Exception:
         logger.error("❌ Fout bij ophalen assets in Setup-Task", exc_info=True)
@@ -55,16 +57,19 @@ def run_setup_agent_daily(user_id: int):
         except Exception:
             pass
 
+    # ----------------------------------------------------
+    # ⚠️ Geen setups → skip
+    # ----------------------------------------------------
     if not assets:
         logger.info(f"ℹ️ Geen setups/assets gevonden voor user_id={user_id}")
         return
+
+    logger.info(f"📊 [Setup-Task] Assets gevonden: {assets}")
 
     # ----------------------------------------------------
     # 2️⃣ Per asset Setup AI Agent draaien
     # ----------------------------------------------------
     for asset in assets:
-        if not asset or not asset.strip():
-            continue
 
         logger.info(
             f"🔄 [Setup-Task] Run Setup-Agent user_id={user_id}, asset={asset}"
@@ -72,9 +77,11 @@ def run_setup_agent_daily(user_id: int):
 
         try:
             run_setup_agent(user_id=user_id, asset=asset)
+
             logger.info(
                 f"✅ [Setup-Task] Setup-Agent voltooid user_id={user_id}, asset={asset}"
             )
+
         except Exception:
             logger.error(
                 f"❌ [Setup-Task] Fout in Setup-Agent user_id={user_id}, asset={asset}",
