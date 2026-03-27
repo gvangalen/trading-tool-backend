@@ -216,13 +216,14 @@ def generate_for_setup(user_id: int, setup_id: int):
         cols = _get_strategy_columns(conn)
         has_risk_reward = "risk_reward" in cols
 
-        # ❌ strategy_type volledig weg
+        # 🔥 FIX: base_amount toegevoegd
         insert_cols = [
             "setup_id",
             "entry",
             "targets",
             "stop_loss",
             "explanation",
+            "base_amount",   # ✅ FIX
             "data",
             "user_id",
         ]
@@ -235,7 +236,9 @@ def generate_for_setup(user_id: int, setup_id: int):
         targets = strategy.get("targets") or []
         targets = [safe_numeric(t) for t in targets if safe_numeric(t) is not None]
 
-        # 🔥 setup_type opslaan in data (BELANGRIJK)
+        # 🔥 FIX: base_amount altijd vullen
+        base_amount = safe_numeric(strategy.get("base_amount")) or 50
+
         enriched_data = {
             **strategy,
             "setup_type": setup.get("setup_type"),
@@ -252,8 +255,11 @@ def generate_for_setup(user_id: int, setup_id: int):
         if has_risk_reward:
             values.append(strategy.get("risk_reward"))
 
+        # 🔥 base_amount op juiste plek
+        values.append(base_amount)
+
         values.extend([
-            json.dumps(enriched_data),  # ✅ FIX
+            json.dumps(enriched_data),
             user_id,
         ])
 
@@ -269,7 +275,11 @@ def generate_for_setup(user_id: int, setup_id: int):
             strategy_id = cur.fetchone()[0]
             conn.commit()
 
-        logger.info("✅ Strategy opgeslagen (id=%s)", strategy_id)
+        logger.info(
+            "✅ Strategy opgeslagen (id=%s, base_amount=%s)",
+            strategy_id,
+            base_amount
+        )
 
         return {
             "success": True,
@@ -290,8 +300,6 @@ def generate_for_setup(user_id: int, setup_id: int):
     finally:
         if conn:
             conn.close()
-
-
 # ============================================================
 # 🧠 ANALYSE BESTAANDE STRATEGY (AI)
 # ============================================================
