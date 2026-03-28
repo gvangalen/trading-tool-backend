@@ -582,6 +582,63 @@ def run_dca_strategy_snapshot(user_id: int, setup: dict):
     finally:
         conn.close()
 
+
+# ============================================================
+# 🟡 DAGELIJKSE STRATEGY INSIGHT
+# ============================================================
+def update_strategy_insight(user_id: int, analysis: dict):
+    conn = get_db_connection()
+    if not conn:
+        return
+
+    try:
+        summary = (
+            f"{analysis.get('comment', '')}\n\n"
+            f"{analysis.get('recommendation', '')}"
+        ).strip()
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO ai_category_insights (
+                    user_id,
+                    category,
+                    avg_score,
+                    trend,
+                    bias,
+                    risk,
+                    summary,
+                    top_signals,
+                    date,
+                    created_at
+                )
+                VALUES (
+                    %s,
+                    'strategy',
+                    NULL,
+                    'actief',
+                    'plan actief',
+                    'gemiddeld',
+                    %s,
+                    %s,
+                    CURRENT_DATE,
+                    NOW()
+                )
+                ON CONFLICT (user_id, category, date)
+                DO UPDATE SET
+                    summary = EXCLUDED.summary,
+                    created_at = NOW();
+            """, (
+                user_id,
+                summary,
+                json.dumps([]),
+            ))
+
+        conn.commit()
+        logger.info("✅ Strategy insight opgeslagen")
+
+    finally:
+        conn.close()
+
 # ============================================================
 # 🟡 DAGELIJKSE STRATEGY SNAPSHOT + DASHBOARD INSIGHT
 # ============================================================
@@ -607,7 +664,9 @@ def run_daily_strategy_snapshot(user_id: int):
         return obj
 
     try:
+        # =====================================================
         # 1️⃣ BEST SETUP
+        # =====================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -629,9 +688,9 @@ def run_daily_strategy_snapshot(user_id: int):
         setup_id = row[0]
         setup = load_setup_from_db(setup_id, user_id)
 
-        logger.info("📌 Best setup gevonden | id=%s type=%s", setup_id, setup.get("setup_type"))
-
+        # =====================================================
         # 2️⃣ STRATEGY
+        # =====================================================
         base_strategy = load_latest_strategy(setup_id, user_id)
         setup_type = (setup.get("setup_type") or "").lower()
 
@@ -644,9 +703,7 @@ def run_daily_strategy_snapshot(user_id: int):
             )
         )
 
-        # 3️⃣ BOOTSTRAP
         if needs_bootstrap:
-
             logger.warning("⚠️ Strategy ontbreekt → bootstrap")
 
             strategy = generate_strategy_from_setup(setup)
@@ -696,7 +753,9 @@ def run_daily_strategy_snapshot(user_id: int):
                 "targets": targets,
             }
 
-        # 4️⃣ MARKET CONTEXT
+        # =====================================================
+        # 3️⃣ MARKET CONTEXT
+        # =====================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -719,7 +778,9 @@ def run_daily_strategy_snapshot(user_id: int):
             "market_score": float(scores[2]) if scores[2] else None,
         }
 
-        # 5️⃣ AI ANALYSE
+        # =====================================================
+        # 4️⃣ AI ANALYSE
+        # =====================================================
         analysis = analyze_strategies(
             user_id=user_id,
             strategies=[{
@@ -737,15 +798,18 @@ def run_daily_strategy_snapshot(user_id: int):
             raise RuntimeError("AI analyse failed")
 
         analysis = convert_decimals(analysis)
-        market_context = convert_decimals(market_context)
 
-        # 🔹 Strategy AI explanation (bestaand)
+        # =====================================================
+        # 5️⃣ AI EXPLANATION (rechter blok)
+        # =====================================================
         analyze_strategy.delay(
             user_id=user_id,
             strategy_id=base_strategy["strategy_id"]
         )
 
+        # =====================================================
         # 6️⃣ SNAPSHOT
+        # =====================================================
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -785,16 +849,55 @@ def run_daily_strategy_snapshot(user_id: int):
 
         conn.commit()
 
-        logger.info("✅ Snapshot opgeslagen (strategy_id=%s)", base_strategy["strategy_id"])
+        logger.info("✅ Snapshot opgeslagen")
 
         # =====================================================
-        # 🔥 FIX — STRATEGY INSIGHT (LINKER CARD)
+        # 🔥 FIX — LINKER CARD DIRECT UPDATEN
         # =====================================================
-        from backend.ai_tasks.category_insight_task import generate_category_insight
+        summary = (
+            f"{analysis.get('comment', '')}\n\n"
+            f"{analysis.get('recommendation', '')}"
+        ).strip()
 
-        generate_category_insight.delay(user_id, "strategy")
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO ai_category_insights (
+                    user_id,
+                    category,
+                    avg_score,
+                    trend,
+                    bias,
+                    risk,
+                    summary,
+                    top_signals,
+                    date,
+                    created_at
+                )
+                VALUES (
+                    %s,
+                    'strategy',
+                    NULL,
+                    'actief',
+                    'plan actief',
+                    'gemiddeld',
+                    %s,
+                    %s,
+                    CURRENT_DATE,
+                    NOW()
+                )
+                ON CONFLICT (user_id, category, date)
+                DO UPDATE SET
+                    summary = EXCLUDED.summary,
+                    created_at = NOW();
+            """, (
+                user_id,
+                summary,
+                json.dumps([]),
+            ))
 
-        logger.info("🧠 Strategy insight update triggered")
+        conn.commit()
+
+        logger.info("🧠 Strategy insight direct geüpdatet")
 
     except Exception:
         logger.exception("❌ Daily strategy snapshot crash")
