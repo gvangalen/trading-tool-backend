@@ -596,10 +596,8 @@ def run_daily_strategy_snapshot(user_id: int):
         logger.error("❌ Geen databaseverbinding")
         return
 
-    # 🔥 helper
     def convert_decimals(obj):
         from decimal import Decimal
-
         if isinstance(obj, list):
             return [convert_decimals(i) for i in obj]
         elif isinstance(obj, dict):
@@ -655,7 +653,11 @@ def run_daily_strategy_snapshot(user_id: int):
 
             entry = safe_numeric(strategy.get("entry"))
             stop = safe_numeric(strategy.get("stop_loss"))
-            targets = [safe_numeric(t) for t in strategy.get("targets") or [] if safe_numeric(t) is not None]
+            targets = [
+                safe_numeric(t)
+                for t in strategy.get("targets") or []
+                if safe_numeric(t) is not None
+            ]
 
             base_amount = safe_numeric(strategy.get("base_amount"))
             if base_amount is None:
@@ -734,11 +736,10 @@ def run_daily_strategy_snapshot(user_id: int):
         if not analysis:
             raise RuntimeError("AI analyse failed")
 
-        # 🔥 FIX
         analysis = convert_decimals(analysis)
         market_context = convert_decimals(market_context)
 
-        # 🔥 LINKER CARD TRIGGER
+        # 🔹 Strategy AI explanation (bestaand)
         analyze_strategy.delay(
             user_id=user_id,
             strategy_id=base_strategy["strategy_id"]
@@ -785,6 +786,15 @@ def run_daily_strategy_snapshot(user_id: int):
         conn.commit()
 
         logger.info("✅ Snapshot opgeslagen (strategy_id=%s)", base_strategy["strategy_id"])
+
+        # =====================================================
+        # 🔥 FIX — STRATEGY INSIGHT (LINKER CARD)
+        # =====================================================
+        from backend.ai_tasks.category_insight_task import generate_category_insight
+
+        generate_category_insight.delay(user_id, "strategy")
+
+        logger.info("🧠 Strategy insight update triggered")
 
     except Exception:
         logger.exception("❌ Daily strategy snapshot crash")
