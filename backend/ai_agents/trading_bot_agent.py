@@ -1123,45 +1123,9 @@ def _persist_decision_and_order(
     confidence = _normalize_confidence(decision.get("confidence") or "low")
     symbol = (decision.get("symbol") or DEFAULT_SYMBOL).upper()
 
-    requested_amount = float(decision.get("requested_amount_eur") or 0.0)
     amount_eur = float(decision.get("amount_eur") or 0.0)
 
-    strategy_reason = decision.get("strategy_reason")
-    guardrail_reason = decision.get("guardrail_reason")
-
-    reasons = []
-    if guardrail_reason:
-        reasons.append(guardrail_reason)
-    elif strategy_reason:
-        reasons.append(strategy_reason)
-
-    watch_levels = decision.get("watch_levels") or {}
-    trade_plan = decision.get("trade_plan") or {}
-    guardrails_result = decision.get("guardrails_result") or {}
-    setup_match = decision.get("setup_match") or {}
-
-    # 🔥 SINGLE SOURCE: metrics
     metrics = decision.get("metrics") or {}
-
-    # 🔥 GEEN dubbele fallback chaos meer
-    market_pressure = float(metrics.get("market_pressure") or 0)
-    transition_risk = float(metrics.get("transition_risk") or 0)
-
-    # =====================================================
-    # 🔥 FIX: position_size (GEEN 'or' bug)
-    # =====================================================
-    raw_position_size = decision.get("position_size")
-
-    if raw_position_size is None:
-        raw_position_size = metrics.get("position_size")
-
-    if raw_position_size is None:
-        raw_position_size = 0.5
-
-    position_size = float(raw_position_size)
-    position_size = max(0.0, min(position_size, 1.0))
-
-    exposure_multiplier = float(decision.get("exposure_multiplier") or 1.0)
 
     scores_payload = {
         "macro": _clamp_score(scores.get("macro", 10)),
@@ -1169,42 +1133,22 @@ def _persist_decision_and_order(
         "market": _clamp_score(scores.get("market", 10)),
         "setup": _clamp_score(scores.get("setup", 10)),
 
+        # ✅ GEEN FAKE SCORE MEER
         "combined": _clamp_score(decision.get("score", 10)),
-        "trade_quality": decision.get("trade_quality"),
-
-        "setup_match": setup_match,
-
-        "strategy_reason": strategy_reason,
-        "guardrail_reason": guardrail_reason,
 
         "regime": decision.get("regime"),
         "risk_state": decision.get("risk_state"),
 
-        # 🔥 alleen metrics gebruiken
-        "market_pressure": market_pressure,
-        "transition_risk": transition_risk,
+        "market_pressure": metrics.get("market_pressure"),
+        "transition_risk": metrics.get("transition_risk"),
 
-        "volatility_state": decision.get("volatility_state"),
-        "trend_strength": decision.get("trend_strength"),
-        "structure_bias": decision.get("structure_bias"),
-
-        "base_amount": decision.get("base_amount"),
-        "execution_mode": decision.get("execution_mode"),
-
-        # 🔥 FIXED
-        "position_size": position_size,
-        "exposure_multiplier": exposure_multiplier,
-
+        "position_size": decision.get("position_size"),
         "amount_eur": amount_eur,
-        "requested_amount_eur": requested_amount,
 
-        "trade_plan": trade_plan,
-        "watch_levels": watch_levels,
-        "monitoring": bool(decision.get("monitoring", False)),
-        "alerts_active": bool(decision.get("alerts_active", False)),
-
-        "guardrails_result": guardrails_result,
-        "live_price": decision.get("live_price"),
+        "trade_plan": decision.get("trade_plan"),
+        "watch_levels": decision.get("watch_levels"),
+        "monitoring": decision.get("monitoring"),
+        "alerts_active": decision.get("alerts_active"),
     }
 
     with conn.cursor() as cur:
@@ -1222,7 +1166,6 @@ def _persist_decision_and_order(
                 confidence,
                 amount_eur,
                 scores_json,
-                reason_json,
                 status,
                 created_at,
                 updated_at
@@ -1232,19 +1175,10 @@ def _persist_decision_and_order(
                 %s,%s,
                 NOW(),
                 %s,%s,%s,
-                %s::jsonb,%s::jsonb,
+                %s::jsonb,
                 'planned',
                 NOW(), NOW()
             )
-            ON CONFLICT (user_id, bot_id, decision_date)
-            DO UPDATE SET
-                action        = EXCLUDED.action,
-                confidence    = EXCLUDED.confidence,
-                amount_eur    = EXCLUDED.amount_eur,
-                scores_json   = EXCLUDED.scores_json,
-                reason_json   = EXCLUDED.reason_json,
-                status        = 'planned',
-                updated_at    = NOW()
             RETURNING id
             """,
             (
@@ -1258,7 +1192,6 @@ def _persist_decision_and_order(
                 confidence,
                 amount_eur,
                 json.dumps(scores_payload),
-                json.dumps(reasons),
             ),
         )
 
@@ -1271,7 +1204,7 @@ def _persist_decision_and_order(
         decision_id=decision_id,
         symbol=symbol,
         side=action,
-        plan=trade_plan,
+        plan=decision.get("trade_plan"),
     )
 
     return decision_id
@@ -1312,23 +1245,19 @@ def run_trading_bot_agent(
 
         for bot in bots:
 
-            # =====================================================
-            # 🔥 FIX 1: symbol altijd consistent (bot → setup → brain)
-            # =====================================================
-            symbol = (
-                bot.get("symbol")
-                or DEFAULT_SYMBOL
-            )
-            symbol = symbol.upper()
+            # =========================
+            # SYMBOL
+            # =========================
+            symbol = (bot.get("symbol") or DEFAULT_SYMBOL).upper()
 
-            # =====================================================
-            # 🔥 LIVE PRICE
-            # =====================================================
+            # =========================
+            # LIVE PRICE
+            # =========================
             live_price = _get_live_price(conn, symbol)
 
-            # =====================================================
+            # =========================
             # SNAPSHOT
-            # =====================================================
+            # =========================
             snapshot = _get_active_strategy_snapshot(
                 conn,
                 user_id,
@@ -1336,9 +1265,9 @@ def run_trading_bot_agent(
                 report_date,
             )
 
-            # =====================================================
+            # =========================
             # SETUP PAYLOAD
-            # =====================================================
+            # =========================
             setup_payload = _get_strategy_setup_payload(
                 conn,
                 user_id=user_id,
@@ -1348,7 +1277,6 @@ def run_trading_bot_agent(
                 symbol=symbol,
             )
 
-            # 🔥 FIX 2: symbol sync met setup (belangrijk voor trade_plan)
             if setup_payload.get("symbol"):
                 symbol = setup_payload.get("symbol").upper()
 
@@ -1359,9 +1287,9 @@ def run_trading_bot_agent(
                     "targets": snapshot.get("targets"),
                 })
 
-            # =====================================================
-            # PORTFOLIO
-            # =====================================================
+            # =========================
+            # PORTFOLIO CONTEXT
+            # =========================
             today_spent_eur = get_today_spent_eur(
                 conn,
                 user_id,
@@ -1383,7 +1311,6 @@ def run_trading_bot_agent(
             )
 
             cash_available = max(0.0, cash_balance_eur)
-            total_invested = max(0.0, -cash_balance_eur)
 
             portfolio_value_eur = max(
                 current_asset_value_eur + cash_available,
@@ -1402,9 +1329,9 @@ def run_trading_bot_agent(
                 "live_price": live_price,
             }
 
-            # =====================================================
+            # =========================
             # BOT BRAIN
-            # =====================================================
+            # =========================
             brain = run_bot_brain(
                 user_id=user_id,
                 setup=setup_payload,
@@ -1419,72 +1346,46 @@ def run_trading_bot_agent(
 
             action = _normalize_action(brain.get("action"))
 
-            # =====================================================
+            # =========================
             # SETUP MATCH
-            # =====================================================
+            # =========================
             setup_match = _build_setup_match(
                 bot=bot,
                 scores=scores,
                 snapshot=snapshot,
             )
 
-            # =====================================================
-            # TRADE PLAN (GEEN SILENT FAIL)
-            # =====================================================
+            # =========================
+            # TRADE PLAN
+            # =========================
             trade_plan = brain.get("trade_plan")
 
-            if not trade_plan:
-                logger.error(
-                    "❌ Trade plan missing | bot=%s | action=%s | strategy=%s | snapshot=%s",
-                    bot["bot_id"],
-                    action,
-                    bot.get("strategy_type"),
-                    bool(snapshot),
-                )
-
+            if not trade_plan or not isinstance(trade_plan, dict):
                 trade_plan = _default_trade_plan(
                     symbol=symbol,
                     action=action,
-                    reason="fallback_missing_trade_plan",
+                    reason="fallback_trade_plan",
                     snapshot=snapshot,
                 )
 
-            elif not isinstance(trade_plan, dict):
-                logger.error(
-                    "❌ Trade plan invalid format | bot=%s | type=%s",
-                    bot["bot_id"],
-                    type(trade_plan),
-                )
-
-                trade_plan = _default_trade_plan(
-                    symbol=symbol,
-                    action=action,
-                    reason="fallback_invalid_trade_plan",
-                    snapshot=snapshot,
-                )
-
-            # =====================================================
+            # =========================
             # POSITION SIZE
-            # =====================================================
+            # =========================
             raw_position_size = brain.get("position_size")
-
             if raw_position_size is None:
-                raw_position_size = brain.get("metrics", {}).get("position_size")
-
-            if raw_position_size is None:
-                raw_position_size = 0.0
+                raw_position_size = brain.get("metrics", {}).get("position_size", 0.0)
 
             position_size = float(raw_position_size)
             position_size = max(0.0, min(position_size, 1.0))
 
-            # =====================================================
+            # =========================
             # METRICS
-            # =====================================================
+            # =========================
             metrics = brain.get("metrics") or {}
 
-            # =====================================================
-            # DECISION
-            # =====================================================
+            # =========================
+            # ✅ DECISION (FIXED)
+            # =========================
             decision = {
                 "bot_id": bot["bot_id"],
                 "symbol": symbol,
@@ -1504,8 +1405,8 @@ def run_trading_bot_agent(
                 "position_size": round(position_size, 2),
                 "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
 
-                "score": brain.get("trade_quality"),
-                "trade_quality": brain.get("trade_quality"),
+                # ✅ BELANGRIJKSTE FIX
+                "score": scores.get("setup"),
 
                 "strategy_reason": brain.get("reason"),
                 "regime": brain.get("regime"),
@@ -1532,6 +1433,9 @@ def run_trading_bot_agent(
                 "metrics": metrics,
             }
 
+            # =========================
+            # SAVE
+            # =========================
             decision_id = _persist_decision_and_order(
                 conn=conn,
                 user_id=user_id,
