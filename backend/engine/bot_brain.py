@@ -545,27 +545,23 @@ def run_bot_brain(
         )
 
     # -------------------------------------------------
-    # 9️⃣ Trade Quality
+    # 9️⃣ 🔥 CONTEXT (GEEN SCORE)
     # -------------------------------------------------
-    trade_quality = round(
-        (
-            risk_environment * 0.4
-            + trend_strength * 0.3
-            + (float(normalized_scores.get("setup_score", 10)) / 100.0) * 0.3
-        ) * 100.0,
-        1,
-    )
+    trade_context = {
+        "risk_environment": round(_clamp(risk_environment, 0.0, 1.0), 4),
+        "trend_strength_reference": round(_clamp(trend_strength, 0.0, 1.0), 4),
+        "setup_score_reference": float(normalized_scores.get("setup_score", 10.0)),
+    }
 
     # -------------------------------------------------
     # 🔟 Trade Plan
     # -------------------------------------------------
-    
     snapshot_payload = {
         "entry": entry_value,
         "stop_loss": stop_value,
         "targets": clean_targets,
     }
-    
+
     decision_payload = {
         "action": action,
         "symbol": (
@@ -576,7 +572,7 @@ def run_bot_brain(
         ),
         "live_price": live_price,
     }
-    
+
     bot_payload = {
         "min_rr": _safe_float(setup.get("min_rr"), 1.5) or 1.5,
         "max_risk_per_trade": _safe_float(
@@ -586,12 +582,12 @@ def run_bot_brain(
         ),
         "strategy_type": setup_type,
     }
-    
+
     brain_context = {
         "regime": regime_label,
         "reason": strategy_reason,
     }
-    
+
     try:
         trade_plan = build_trade_plan(
             snapshot=snapshot_payload,
@@ -602,7 +598,7 @@ def run_bot_brain(
     except Exception as e:
         logger.warning("Trade plan engine error: %s", e)
         trade_plan = None
-    
+
     # -------------------------------------------------
     # Final output
     # -------------------------------------------------
@@ -640,7 +636,8 @@ def run_bot_brain(
         "position_size": intent_position_size,
         "execution_position_size": execution_position_size,
 
-        "trade_quality": trade_quality,
+        # ✅ NIEUW: context, GEEN alternatieve score
+        "trade_context": trade_context,
 
         "watch_levels": levels,
         "monitoring": monitoring,
@@ -674,5 +671,6 @@ def run_bot_brain(
             "setup_intent_note": setup_intent_note,
             "snapshot": snapshot,
             "setup_result": setup_result,
+            "trade_context": trade_context,
         },
     }
