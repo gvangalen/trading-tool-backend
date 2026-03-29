@@ -1212,9 +1212,6 @@ def _persist_decision_and_order(
 # =====================================================
 # 🚀 Run Trading Bot Agent
 # =====================================================
-# =====================================================
-# 🚀 Run Trading Bot Agent (FINAL FIXED VERSION)
-# =====================================================
 def run_trading_bot_agent(
     user_id: int,
     report_date: Optional[date] = None,
@@ -1331,6 +1328,7 @@ def run_trading_bot_agent(
                 "total_budget_eur": bot["budget"].get("total_eur"),
                 "kill_switch": True,
                 "live_price": live_price,
+                "active_strategy": snapshot,
             }
 
             # =========================
