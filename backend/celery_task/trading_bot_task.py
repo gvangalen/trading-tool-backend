@@ -23,60 +23,37 @@ logger.setLevel(logging.INFO)
 )
 def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None):
 
-    # =========================
-    # DATE
-    # =========================
     try:
         run_date = date.fromisoformat(report_date) if report_date else date.today()
     except Exception:
         run_date = date.today()
 
-    logger.info(f"🤖 Trading Bot START | user_id={user_id} | date={run_date}")
+    logger.info(f"🤖 START | user={user_id} | date={run_date}")
 
     try:
-        # =========================
-        # 1️⃣ STRATEGY SNAPSHOT
-        # =========================
+        # 1️⃣ Strategy snapshot
         try:
-            logger.info(f"🧠 Strategy snapshot start | user_id={user_id}")
             run_daily_strategy_snapshot(user_id=user_id)
-            logger.info(f"🧠 Strategy snapshot DONE | user_id={user_id}")
         except Exception:
-            logger.exception(f"⚠️ Strategy snapshot FAILED | user_id={user_id}")
+            logger.exception("Strategy snapshot failed")
 
-        # =========================
-        # 2️⃣ BOT AGENT (DE ENIGE LOGIC)
-        # =========================
+        # 2️⃣ Bot agent (ALLE LOGIC HIERIN)
         result = run_trading_bot_agent(
             user_id=user_id,
             report_date=run_date,
         )
 
-        if not isinstance(result, dict):
-            logger.error("❌ Invalid bot result type")
-            return {"ok": False, "error": "invalid_result"}
-
         if not result.get("ok"):
-            logger.warning("⚠️ Bot returned not ok")
             return result
 
-        # =========================
-        # 3️⃣ PORTFOLIO SNAPSHOT
-        # =========================
+        # 3️⃣ Portfolio snapshot
         try:
-            logger.info(f"📊 Portfolio snapshot start | user_id={user_id}")
             snapshot_all_for_user(user_id, bucket="1h")
             snapshot_all_for_user(user_id, bucket="1d")
-            logger.info(f"📊 Portfolio snapshot DONE | user_id={user_id}")
         except Exception:
-            logger.exception(f"⚠️ Portfolio snapshot FAILED | user_id={user_id}")
+            logger.exception("Portfolio snapshot failed")
 
-        # =========================
-        # DONE
-        # =========================
-        logger.info(
-            f"✅ Trading Bot DONE | user_id={user_id} | bots={result.get('bots')} | decisions={len(result.get('decisions', []))}"
-        )
+        logger.info("✅ DONE")
 
         return {
             "ok": True,
@@ -87,9 +64,5 @@ def run_daily_trading_bot(self, user_id: int, report_date: Optional[str] = None)
         }
 
     except Exception as e:
-        logger.exception(f"❌ Trading Bot CRASH | user_id={user_id}")
-        return {
-            "ok": False,
-            "user_id": user_id,
-            "error": str(e),
-        }
+        logger.exception("❌ CRASH")
+        return {"ok": False, "error": str(e)}
