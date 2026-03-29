@@ -1212,6 +1212,9 @@ def _persist_decision_and_order(
 # =====================================================
 # 🚀 Run Trading Bot Agent
 # =====================================================
+# =====================================================
+# 🚀 Run Trading Bot Agent (FINAL FIXED VERSION)
+# =====================================================
 def run_trading_bot_agent(
     user_id: int,
     report_date: Optional[date] = None,
@@ -1240,6 +1243,7 @@ def run_trading_bot_agent(
             }
 
         scores = _get_daily_scores(conn, user_id, report_date)
+
         results = []
         touched_bot_ids = []
 
@@ -1356,7 +1360,7 @@ def run_trading_bot_agent(
             )
 
             # =========================
-            # TRADE PLAN
+            # TRADE PLAN (fallback safe)
             # =========================
             trade_plan = brain.get("trade_plan")
 
@@ -1384,7 +1388,7 @@ def run_trading_bot_agent(
             metrics = brain.get("metrics") or {}
 
             # =========================
-            # ✅ DECISION (FIXED)
+            # DECISION
             # =========================
             decision = {
                 "bot_id": bot["bot_id"],
@@ -1405,7 +1409,7 @@ def run_trading_bot_agent(
                 "position_size": round(position_size, 2),
                 "exposure_multiplier": float(brain.get("exposure_multiplier") or 1.0),
 
-                # ✅ BELANGRIJKSTE FIX
+                # V1: UI gebruikt setup score
                 "score": scores.get("setup"),
 
                 "strategy_reason": brain.get("reason"),
@@ -1434,7 +1438,7 @@ def run_trading_bot_agent(
             }
 
             # =========================
-            # SAVE
+            # SAVE DECISION
             # =========================
             decision_id = _persist_decision_and_order(
                 conn=conn,
@@ -1448,11 +1452,16 @@ def run_trading_bot_agent(
             )
 
             _clear_existing_pending_orders_for_day(
-                conn,
+                conn=conn,
                 user_id=user_id,
                 bot_id=bot["bot_id"],
                 decision_id=decision_id,
             )
+
+            # =========================
+            # ORDER + EXECUTION 🔥
+            # =========================
+            execution_status = None
 
             order = build_order_proposal(
                 conn=conn,
@@ -1471,8 +1480,27 @@ def run_trading_bot_agent(
                     order=order,
                 )
 
+                try:
+                    _auto_execute_decision(
+                        conn=conn,
+                        user_id=user_id,
+                        bot_id=bot["bot_id"],
+                        decision_id=decision_id,
+                        order=order,
+                    )
+                    execution_status = "filled"
+
+                except Exception as e:
+                    logger.exception("❌ Auto execution failed")
+                    execution_status = f"failed: {e}"
+            else:
+                execution_status = "no_order"
+
+            # =========================
+            # UPDATE LAST RUN
+            # =========================
             _touch_bot_last_run(
-                conn,
+                conn=conn,
                 user_id=user_id,
                 bot_id=bot["bot_id"],
             )
@@ -1485,6 +1513,7 @@ def run_trading_bot_agent(
                 "action": decision["action"],
                 "decision": decision,
                 "trade_plan": trade_plan,
+                "execution_status": execution_status,
             })
 
         conn.commit()
